@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" el
 from PySide6.QtCore import QEvent, QPoint, Qt, QThread
 from PySide6.QtGui import QPalette, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox, QStyle, QStyleOptionComboBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMenu, QMessageBox, QStyle, QStyleOptionComboBox
 from main.core.theme import Theme
 from main.qt import owner_ticket_dialog as portal
 from main.qt import toolbar as toolbar_module
@@ -832,6 +832,51 @@ class PortalChecks(unittest.TestCase):
         pump()
         self.assertIsInstance(self.dialog.cards_layout.itemAt(0).widget(), NeoCard)
         capture(self.dialog, "tickets-empty-neobrutalism")
+
+    def test_native_menus_and_recovery_dialog_use_the_portal_style(self):
+        self.sign_in()
+        category = self.dialog.category_filter
+        view = category.view()
+        view.window().setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        category.showPopup()
+        pump()
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Base).name(), "#ffffff")
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Text).name(), "#141414")
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Highlight).name(), "#ffe85b")
+        capture(view.window(), "category-popup")
+        category.hidePopup()
+
+        menu = QMenu(self.dialog)
+        menu.addAction("Edit ticket")
+        menu.addAction("Delete ticket")
+        self.addCleanup(menu.deleteLater)
+        self.addCleanup(menu.close)
+        show(menu)
+        self.assertEqual(menu.palette().color(QPalette.ColorRole.Window).name(), "#ffffff")
+        self.assertEqual(menu.palette().color(QPalette.ColorRole.WindowText).name(), "#141414")
+        capture(menu, "ticket-menu")
+        menu.close()
+
+        toolbar = PrimaryToolbar(None)
+        self.addCleanup(toolbar.deleteLater)
+        toolbar.restart_for_runtime_repair = Mock()
+        def inspect_message(box):
+            show(box)
+            self.assertEqual(box.palette().color(QPalette.ColorRole.Window).name(), "#fffdf5")
+            self.assertTrue(any(button.text() == "Repair and restart" for button in box.buttons()))
+            for action in box.buttons():
+                self.assertEqual(action.palette().color(QPalette.ColorRole.ButtonText).name(), "#141414")
+                if (action.text() in ("Retry", "Repair and restart")
+                        or box.standardButton(action) == QMessageBox.StandardButton.Close):
+                    self.assertFalse(action.icon().isNull())
+                self.assertTrue(box.rect().contains(action.mapTo(box, action.rect().center())))
+            self.assertFalse(box.iconPixmap().isNull())
+            capture(box, "runtime-recovery")
+            box.close()
+            return 0
+        with patch.object(QMessageBox, "exec", new=inspect_message):
+            toolbar._show_owner_ticket_error(ModuleNotFoundError("No module named 'PySide6.QtSvg'", name="PySide6.QtSvg"))
+        toolbar.restart_for_runtime_repair.assert_not_called()
 
 
 if __name__ == "__main__":

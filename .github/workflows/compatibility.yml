@@ -64,8 +64,12 @@ jobs:
       - name: Native Windows click, login, categories and recovery
         shell: pwsh
         run: |
-          python -B direct/verify_owner_tickets.py --render-dir temp/audit/developer-windows
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($scale in '1', '1.25', '1.5', '1.75', '2') {
+            $env:QT_SCALE_FACTOR = $scale
+            python -B direct/verify_owner_tickets.py --render-dir "temp/audit/developer-windows/scale-$scale"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Remove-Item Env:QT_SCALE_FACTOR
           python -B direct/verify_owner_ticket_service.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B direct/verify_offline_mode.py

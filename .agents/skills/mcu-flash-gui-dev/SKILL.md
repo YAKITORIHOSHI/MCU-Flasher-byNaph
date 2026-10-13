@@ -162,7 +162,9 @@ For explicitly requested assistant delegation, use the local
   handoff; check busy/other-window state before and after save, retain the project,
   clear inherited runtime markers, and preserve package mode during runtime repair.
   Native Windows CI runs the portal/service/restart verifiers with QT_QPA_PLATFORM=windows
-  across both supported Qt binding ranges; mocked Windows dispatch from Linux is
+  across both supported Qt binding ranges and fresh 100/125/150/175/200% processes.
+  Inspect actual combo/menu/recovery popup styling and action bounds as well as
+  the dashboard and forms. Mocked Windows dispatch from Linux is
   not native Windows execution evidence.
   Every Developer Access screen uses neobrutalism independently of the workspace
   theme: solid cream backdrops, NeoCard paper fills, 3px black outlines and hard
