@@ -511,8 +511,8 @@ Theme.apply_theme(_resolve_lib_req_theme())
 
 
 def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9, "bold")) -> tk.Button:
-    from src.modules.tk_glass import readable_foreground
-    btn = SvgButton(
+    from src.modules.tk_glass import readable_foreground, GlassButton
+    btn = GlassButton(
         parent, text=text, command=command,
         font=font, fg=readable_foreground(bg), bg=bg,
         activebackground=bg_hover, activeforeground=readable_foreground(bg_hover),
@@ -1673,11 +1673,9 @@ class BrowseTab:
         self._responsive_panes = ResponsivePanes(pane, left_card, detail_card)
 
         # Placeholder
-        self.lbl_placeholder = SvgLabel(
-            self.detail_frame, text="No Item Selected",
-            font=("Montserrat", 13), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="center"
-        )
-        self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
+        from src.modules.tk_glass import GlassEmptyState
+        self.lbl_placeholder = GlassEmptyState(self.detail_frame, Theme)
+        self.lbl_placeholder.pack(fill="both", expand=True)
 
         # Scrollable Canvas container for detail panel (Scrollable IF AND ONLY IF content overflows)
         self.detail_canvas = tk.Canvas(self.detail_frame, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0)
@@ -1757,7 +1755,7 @@ class BrowseTab:
         if hasattr(self, "detail_scroll"):
             self.detail_scroll.pack_forget()
             self._scroll_state["visible"] = False
-        self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
+        self.lbl_placeholder.pack(fill="both", expand=True)
         self._execute_search()
 
     def _row_icon(self, row):
@@ -2001,11 +1999,9 @@ class InstalledTab:
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
 
         # Placeholder
-        self.lbl_placeholder = SvgLabel(
-            self.detail_frame, text="No Local Item Selected",
-            font=("Montserrat", 13), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="center"
-        )
-        self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
+        from src.modules.tk_glass import GlassEmptyState
+        self.lbl_placeholder = GlassEmptyState(self.detail_frame, Theme, installed=True)
+        self.lbl_placeholder.pack(fill="both", expand=True)
         from src.modules.tk_glass import ResponsivePanes
         self._responsive_panes = ResponsivePanes(pane, left_card, detail_card)
 
@@ -2388,7 +2384,7 @@ class InstalledTab:
         # Hide detail if nothing
         if hasattr(self, "_details_view"):
             self._details_view.pack_forget()
-        self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
+        self.lbl_placeholder.pack(fill="both", expand=True)
         self._clear_examples()
         self._set_update_btn_state(False)
 
@@ -2738,6 +2734,10 @@ class ArduinoBrowser:
                         widget.configure(**{option: colors[value]})
                 except tk.TclError:
                     pass  # ttk delegates these colors to named styles below.
+            if isinstance(widget, tk.Listbox):
+                # Selection ink is tied to its highlight, not a reused palette
+                # color (Solarized's white text also occurs in selection).
+                widget.configure(selectforeground=readable_foreground(widget.cget("selectbackground")))
             if hasattr(widget, "_normal_bg"):
                 token = getattr(widget, "_bg_token", None)
                 widget._normal_bg = new.get(token, colors.get(widget._normal_bg, widget._normal_bg))
@@ -2791,13 +2791,16 @@ class ArduinoBrowser:
         style.configure("TFrame", background=Theme.BG_DARKEST)
         style.configure("TLabel", background=Theme.BG_DARKEST, foreground=Theme.TEXT)
         style.configure("TNotebook", background=Theme.BG_DARKEST, borderwidth=0, tabmargins=(0, 0, 0, 8),
-                        lightcolor=Theme.BORDER, darkcolor=Theme.BORDER, bordercolor=Theme.BORDER)
+                        lightcolor=Theme.BG_DARKEST, darkcolor=Theme.BG_DARKEST, bordercolor=Theme.BG_DARKEST)
         style.configure("TNotebook.Tab", font=("Montserrat", 10, "bold"), background=Theme.BG_MID,
                         foreground=Theme.TEXT_DIM, borderwidth=1, bordercolor=Theme.BORDER,
-                        lightcolor=Theme.BORDER, darkcolor=Theme.BORDER, padding=(16, 7))
+                        lightcolor=Theme.BORDER, darkcolor=Theme.BORDER, padding=(14, 2))
         style.map("TNotebook.Tab", background=[("selected", Theme.BG_LIGHT), ("active", Theme.BG_HOVER)],
                   foreground=[("selected", Theme.TEXT_BRIGHT), ("active", Theme.TEXT_BRIGHT)],
-                  bordercolor=[("selected", Theme.CYAN)], padding=[("selected", (16, 7)), ("!selected", (16, 7))])
+                  bordercolor=[("selected", Theme.CYAN)], padding=[("selected", (14, 2)), ("!selected", (14, 2))])
+
+        from src.modules.tk_glass import configure_glass_tabs
+        configure_glass_tabs(style, self.root, Theme)
 
         style.configure("TCombobox",
                          fieldbackground=Theme.BG_LIGHT,
@@ -2860,19 +2863,11 @@ class ArduinoBrowser:
 
         self._configure_styles()
 
-        # Static glass header; content stays opaque for legibility.
-        header = GlassCard(self.root, Theme)
+        # Paint title and circuit mark on the material itself; keep native actions.
+        from src.modules.tk_glass import BrowserHeader
+        header = BrowserHeader(self.root, Theme)
         header.pack(fill="x", padx=12, pady=(12, 8))
-        top_bar = header.body
-        title_col = tk.Frame(top_bar, bg=Theme.BG_MID)
-        title_col.grid(row=0, column=0, sticky="ew")
-        top_bar.grid_columnconfigure(0, weight=1)
-        actions = tk.Frame(top_bar, bg=Theme.BG_MID)
-        actions.grid(row=0, column=1, sticky="e")
-        SvgLabel(title_col, text="Libraries & boards", anchor="w",
-                 font=("Montserrat", 14, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID).pack(fill="x")
-        SvgLabel(title_col, text="MCU Flasher by Naph · Arduino packages", anchor="w",
-                 font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(fill="x", pady=(3, 0))
+        actions = header.actions
 
         self.quit_btn = make_flat_button(
             actions, "Quit", self._force_exit,
@@ -2888,19 +2883,6 @@ class ArduinoBrowser:
         self.sources_btn = make_flat_button(actions, "Board indexes", self._toggle_sources,
                                             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         self.sources_btn.pack(side="right", padx=(6, 6))
-        self._header_stacked = None
-
-        def reflow_header(event):
-            if event.widget is not top_bar:
-                return
-            stacked = event.width < title_col.winfo_reqwidth() + actions.winfo_reqwidth() + 16
-            if stacked != self._header_stacked:
-                actions.grid_configure(row=1 if stacked else 0, column=0 if stacked else 1,
-                                       columnspan=2 if stacked else 1, sticky="e", pady=(6, 0) if stacked else 0)
-                self._header_stacked = stacked
-                header._schedule()
-        top_bar.bind("<Configure>", reflow_header, add="+")
-
         # Download folder bar
         folder_card = GlassCard(self.root, Theme, padding=10)
         folder_card.pack(fill="x", padx=12, pady=(0, 8))

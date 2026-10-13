@@ -10,6 +10,19 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 For explicitly requested assistant delegation, use the local
 [`agy-delegation`](../agy-delegation/SKILL.md) workflow for bounded investigation.
 
+## Native browser glass
+
+`tk_glass.py` precomposes antialiased static materials using only the standard
+library. The browser title paints on the glass itself; buttons retain native
+Tk command/focus/state behavior and SVG marks, and rounded notebook skins retain
+native traversal. Keep the material's text contrast at least 4.5:1, including
+bright reflections, hover/disabled inks and selected package rows after themes.
+Large materials cache only their current size/theme; no animation timer or
+compositor dependency. Compact headers yield their subtitle before saved content
+fonts or the last complete detail line. Verify the browser at five native scales
+on Ubuntu and Windows via `direct/verify_downloader_appearance.py`; captures use
+isolated selected/empty catalogs and belong under `temp/audit/`.
+
 ## SVG action contract
 
 Use the local `src/assets/icons/actions/*.svg` family for application-owned marks.

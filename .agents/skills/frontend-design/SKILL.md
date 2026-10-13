@@ -25,6 +25,20 @@ Verify `direct/verify_svg_icons.py` and `--native-tk`, plus theme, panel, build,
 setup, downloader and editor fixtures. Native CI covers Windows Qt ranges and
 Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
 
+## Native browser material
+
+Paint the Library & Board Browser title directly on its static glass material.
+Use antialiased, smoothly faded reflections and one subtle rim; avoid stepped
+bevels, hard diagonal cuts and opaque title labels covering the surface.
+Keep native rounded SVG buttons and notebook keyboard navigation. The shared
+standard-library renderer serves Ubuntu and Windows; do not add blur, animation
+or image-package requirements. Retain one large material cache per surface.
+Reading panes stay opaque, and selection ink follows its actual highlight after
+palette changes. At narrow widths the header subtitle yields before saved
+package fonts or the last complete detail line. Check all three palettes at
+100–200% with `direct/verify_downloader_appearance.py`; optional `--render-dir`
+captures both selected and empty states, without live catalogs or hardware.
+
 ## MCU Flasher workspace contract
 
 Developer Access has its own neobrutalist identity on Windows and Ubuntu.

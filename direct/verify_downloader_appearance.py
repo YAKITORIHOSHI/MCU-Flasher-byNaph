@@ -19,6 +19,7 @@ from src.modules.ui_metrics import WorkArea
 from src.modules.ui_palette import contrast_ratio
 
 SCALE = 1.0
+RENDER_DIR = None
 
 
 class NativeWorkAreaChecks(unittest.TestCase):
@@ -155,6 +156,16 @@ class AppearanceChecks(TkDownloaderFixture):
                 self.assertEqual(app.lib_tab.search_var.get(), "Sensor")
                 self.assertEqual(app.lib_tab.version_var.get(), "1.0.0")
                 self.assertEqual(app.lib_tab.listbox.cget("font"), expected_font)
+                self.assertGreaterEqual(contrast_ratio(app.lib_tab.listbox.cget("selectforeground"),
+                                                      app.lib_tab.listbox.cget("selectbackground")), 4.5)
+                for button in (app.browse_btn, app.sources_btn, app.refresh_btn, app.quit_btn):
+                    image_name = str(button._svg_image)
+                    image_width = int(self.root.tk.call("image", "width", image_name))
+                    image_height = int(self.root.tk.call("image", "height", image_name))
+                    for y in (2, image_height // 2, image_height - 3):
+                        rgb = self.root.tk.call(image_name, "get", image_width // 2, y)
+                        material = "#" + "".join(f"{int(channel):02x}" for channel in rgb)
+                        self.assertGreaterEqual(contrast_ratio(button.cget("foreground"), material), 4.5)
                 self.assertIs(self.root.focus_get(), app.lib_tab.search_entry)
                 for control in (app.folder_entry, app.browse_btn, app.sources_btn, app.refresh_btn,
                                 app.quit_btn, app.lib_tab.version_combo, app.lib_tab.download_btn):
@@ -165,11 +176,39 @@ class AppearanceChecks(TkDownloaderFixture):
                 self.assertGreaterEqual(detail.winfo_height(), font.Font(root=self.root,
                     font=app.lib_tab.lbl_name.cget("font")).metrics("linespace"))
                 for card in (app.lib_tab._responsive_panes.left, app.lib_tab._responsive_panes.right):
-                    fills = {card.itemcget(item, "fill") for item in card.find_withtag("glass")}
-                    self.assertGreater(len(fills), 12, "Static glass needs visible surface depth")
-                    self.assertLessEqual(len(card.find_withtag("glass")), 170, "Resize painting must stay bounded")
+                    images = [item for item in card.find_withtag("glass") if card.type(item) == "image"]
+                    self.assertEqual(len(images), 1, "Glass is one antialiased material, not stacked hard bands")
+                    image_name = card.itemcget(images[0], "image")
+                    center = card.winfo_width() // 2
+                    top = self.root.tk.call(image_name, "get", center, 3)
+                    bottom = self.root.tk.call(image_name, "get", center, max(3, card.winfo_height() - 4))
+                    self.assertNotEqual(top, bottom, "The material must retain reflective depth")
+                    self.assertLessEqual(len(card.find_withtag("glass")), 2, "Resize painting must stay bounded")
                     self.assertIsNone(card._redraw_id, "A settled surface must have no paint timer")
                 self.assertGreaterEqual(contrast_ratio(self.module.Theme.TEXT_BRIGHT, self.module.Theme.BG_MID), 4.5)
+        if RENDER_DIR:
+            # Only this optional native capture uses Qt. The browser's glass
+            # and SVG rasterizers remain standard-library-only before setup.
+            import os
+            os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "xcb")
+            from PySide6.QtWidgets import QApplication
+            capture_app = QApplication.instance() or QApplication([])
+            for mode in ("default", "light", "solarized_dark"):
+                with patch.object(self.module, "_resolve_lib_req_theme", return_value=mode):
+                    app._apply_current_theme()
+                self.show()
+                capture_app.processEvents()
+                image = capture_app.primaryScreen().grabWindow(int(self.root.winfo_id()))
+                self.assertFalse(image.isNull())
+                self.assertTrue(image.save(str(RENDER_DIR / f"browser-{mode}-selected.png")))
+                app.lib_tab.detail_canvas.pack_forget()
+                app.lib_tab.detail_scroll.pack_forget()
+                app.lib_tab.lbl_placeholder.pack(fill="both", expand=True)
+                self.pump()
+                self.assertTrue(capture_app.primaryScreen().grabWindow(int(self.root.winfo_id())).save(
+                    str(RENDER_DIR / f"browser-{mode}-empty.png")))
+                app.lib_tab._on_select()
+                self.pump()
         self.show(480)
         app.sources_btn.invoke()
         self.pump()
@@ -216,8 +255,12 @@ class AppearanceChecks(TkDownloaderFixture):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--scale", type=float, choices=(1.0, 1.25, 1.5, 1.75, 2.0), default=1.0)
+    parser.add_argument("--render-dir", type=Path)
     args = parser.parse_args()
     SCALE = args.scale
+    RENDER_DIR = args.render_dir
+    if RENDER_DIR:
+        RENDER_DIR.mkdir(parents=True, exist_ok=True)
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
                                for cls in (NativeWorkAreaChecks, AppearanceChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
