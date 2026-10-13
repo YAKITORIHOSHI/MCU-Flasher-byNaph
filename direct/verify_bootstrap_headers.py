@@ -40,9 +40,22 @@ class BootstrapHeaderChecks(ControlChecks):
                 dialog._on_log(result, "ok")
             APP.processEvents()
             view = dialog.summary_edit
-            rules = list(view.heading_dividers())
+            # On native high-DPI Windows the fitted dialog may have a short
+            # viewport. Dividers paint only visible headings; inspect the full
+            # scrollable journal instead of assuming all stages fit at once.
+            scroll = view.verticalScrollBar()
+            original_scroll = scroll.value()
+            rules = {}
+            positions = list(range(0, scroll.maximum() + 1, max(1, scroll.pageStep()))) + [scroll.maximum()]
+            for position in positions:
+                scroll.setValue(position)
+                APP.processEvents()
+                for rule in view.heading_dividers():
+                    rules[rule[0]] = rule
+            scroll.setValue(original_scroll)
+            APP.processEvents()
             self.assertEqual(len(rules), 3)
-            for _, y, right, color, _ in rules:
+            for _, y, right, color, _ in rules.values():
                 self.assertGreaterEqual(y, 0)
                 self.assertLess(right, view.viewport().width())
                 self.assertEqual(color.name(), dialog._theme_pal["T_CYAN"])
@@ -106,8 +119,13 @@ class BootstrapHeaderChecks(ControlChecks):
                     for y in range(8, gutter.height() - 8, 19):
                         point = (round((rail_origin.x() + x) * rail_dpr),
                                  round((rail_origin.y() + y) * rail_dpr))
-                        self.assertEqual(with_gutter.pixelColor(*point), under_gutter.pixelColor(*point),
-                                         f"Setup SVG gutter covered the glass: {mode}, details={expanded}, {point}")
+                        actual, expected = with_gutter.pixelColor(*point), under_gutter.pixelColor(*point)
+                        # Fractional DPR background propagation can quantize a
+                        # gradient a few channel levels differently on Windows.
+                        # This small allowance still rejects an opaque rail.
+                        difference = max(abs(a - b) for a, b in zip(actual.getRgb(), expected.getRgb()))
+                        self.assertLessEqual(difference, 6,
+                                             f"Setup SVG gutter covered the glass: {mode}, details={expanded}, {point}")
                 # Capture the actual empty reading surface, including the card's
                 # gradient/reflections beneath this transparent viewport.
                 empty = dialog.grab().toImage()
