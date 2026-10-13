@@ -15,6 +15,12 @@ from PySide6.QtWidgets import QPushButton
 from main.core.theme import Theme
 
 PATHS = {
+    "mail": '<path d="M3 6h18v12H3V6Zm0 1 9 7 9-7M3 18l6-6m12 6-6-6"/>',
+    "key": '<circle cx="16" cy="8" r="5"/><path d="m12.5 11.5-9.5 9.5v-5h4v-4h4M16 6h.1"/>',
+    "unlock": '<path d="M7 10V7a5 5 0 0 1 9-3M5 10h14v10H5V10Zm7 4v3M2 14H1m20 0h2"/>',
+    "eye": '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+    "eye-off": '<path d="m3 3 18 18M9 5c7-2 13 7 13 7l-3 4M6 7l-4 5s4 7 10 7l4-1M10 10a3 3 0 0 0 4 4"/>',
+    "repair": '<path d="m14 3-3 5 5 5 5-3c1 5-4 9-8 6l-7 6-4-4 7-7C6 6 9 2 14 3ZM5 18h.1"/>',
     "brand": '<path d="M7 4h10l3 3v10l-3 3H7l-3-3V7l3-3ZM8 1v3m4-3v3m4-3v3M8 20v3m4-3v3m4-3v3M1 8h3m-3 4h3m-3 4h3m16-8h3m-3 4h3m-3 4h3"/><path d="M13 7l-5 6h4l-1 4 6-7h-4l1-3Z"/>',
     "compile": '<path d="m8 6-5 6 5 6m8-12 5 6-5 6M14 3l-4 18M2 3h3m14 18h3"/>',
     "upload": '<path d="M12 16V3m-4 4 4-4 4 4M4 14v5l2 2h12l2-2v-5M8 18h8"/>',

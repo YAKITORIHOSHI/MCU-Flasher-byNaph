@@ -348,6 +348,10 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(APP.clipboard().text(), literal)
 
     def test_login_keyboard_mask_and_lock(self):
+        self.assertTrue(self.dialog.auth_brand.renderer.isValid())
+        self.assertTrue(self.dialog.auth_trace.renderer.isValid())
+        self.assertFalse(self.dialog.btn_unlock.icon().isNull())
+        self.assertFalse(self.dialog.btn_toggle_eye.icon().isNull())
         capture(self.dialog, "login-default")
         self.dialog.txt_auth_email.setFocus()
         QTest.keyClick(self.dialog.txt_auth_email, Qt.Key.Key_Return)
@@ -572,7 +576,7 @@ class PortalChecks(unittest.TestCase):
             with self.subTest(repairable=repairable):
                 buttons = {}
                 def add_button(text, role):
-                    buttons[text] = object()
+                    buttons[text] = Mock()
                     return buttons[text]
                 box = Mock()
                 box.addButton.side_effect = add_button

@@ -124,6 +124,10 @@ def portal_stylesheet(mode: str) -> str:
         QWidget#developer-login-page QLineEdit:focus,
         QWidget#developer-login-page QTextEdit:focus,
         QWidget#developer-login-page QComboBox:focus {{ border: 2px solid #2667c9; }}
+        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="heading"],
+        QWidget#developer-login-page QTextEdit[wrappedLabel="true"][role="muted"] {{
+            background: transparent; border: none; padding: 0;
+        }}
         QWidget#developer-login-page QPushButton {{
             background: #ffffff; color: #141414; border: 2px solid #141414;
             border-radius: 2px; padding: 9px 12px; font-weight: 800;

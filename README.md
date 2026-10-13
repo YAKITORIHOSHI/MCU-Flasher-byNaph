@@ -120,6 +120,9 @@ computer. Narrow forms stack their fields; short windows scroll while edit and
 cloud actions stay visible. Theme changes retain drafts, search and filters.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
+Original SVG chip artwork and a compact circuit divider bring color to the
+login card. Email, access-key, password visibility and recovery actions use
+matching SVG icons, rendered at native display resolution.
 If Developer Access cannot open, **Retry** repeats the attempt and **Show Details**
 reveals the error. Missing runtime modules or Qt library loading failures also
 offer **Repair and restart**. This saves acknowledged editor contents, checks

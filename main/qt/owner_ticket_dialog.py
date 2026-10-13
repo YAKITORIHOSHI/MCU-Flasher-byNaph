@@ -11,6 +11,7 @@ from typing import Any, Dict
 from weakref import WeakKeyDictionary
 from PySide6.QtCore import Qt, QSize, QRectF, Signal, QTimer, QObject, Slot, QEvent
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QTextOption
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QLabel, QLineEdit, QTextEdit, QMessageBox, QFrame,
@@ -111,6 +112,21 @@ class _TaskPortal(PortalDialog):
 
     def _set_busy(self, busy):
         pass
+
+
+class DeveloperArtwork(QWidget):
+    """Static original vectors painted at the monitor's native resolution."""
+
+    def __init__(self, asset, parent=None):
+        super().__init__(parent)
+        self.renderer = QSvgRenderer(str(_assets_dir / "icons" / asset), self)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        self.renderer.render(painter, QRectF(self.rect()))
 
 
 class NeoLoginCard(QFrame):
@@ -665,24 +681,25 @@ class OwnerTicketDialog(_TaskPortal):
         identity_layout = QHBoxLayout(identity)
         identity_layout.setContentsMargins(0, 0, 0, 0)
         identity_layout.setSpacing(14)
-        brand = QLabel(identity)
-        brand.setFixedSize(54, 54)
-        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        brand.setPixmap(icon("brand", "#141414", size=40).pixmap(QSize(40, 40)))
-        brand.setStyleSheet("background: #ff91d5; border: 2px solid #141414; padding: 5px;")
-        identity_layout.addWidget(brand)
+        self.auth_brand = DeveloperArtwork("developer-access-chip.svg", identity)
+        self.auth_brand.setFixedSize(64, 64)
+        identity_layout.addWidget(self.auth_brand)
         title_box = QVBoxLayout()
         title_box.setSpacing(4)
         title_box.addWidget(label("Developer access", identity, "heading", wrap=True))
         title_box.addWidget(label("Sign in to manage your issue reports.", identity, "muted", wrap=True))
         identity_layout.addLayout(title_box, 1)
         form.addWidget(identity)
+        self.auth_trace = DeveloperArtwork("developer-access-trace.svg", self.auth_card)
+        self.auth_trace.setFixedHeight(24)
+        form.addWidget(self.auth_trace)
         self.connection_note = label("Checking connection…", self.auth_card, "muted", wrap=True)
         self.connection_note.setObjectName("developer-connection-note")
         self.connection_note.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addWidget(self.connection_note)
         self.txt_auth_email = QLineEdit(self.auth_card)
         self.txt_auth_email.setPlaceholderText("Email address")
+        self.txt_auth_email.addAction(icon("mail", "#141414"), QLineEdit.ActionPosition.LeadingPosition)
         self.txt_auth_email.returnPressed.connect(self._on_auth_email_return)
         form.addWidget(field("Email", self.txt_auth_email, self.auth_card))
         password = QWidget(self.auth_card)
@@ -692,6 +709,7 @@ class OwnerTicketDialog(_TaskPortal):
         self.txt_auth_pwd = QLineEdit(password)
         self.txt_auth_pwd.setEchoMode(QLineEdit.EchoMode.Password)
         self.txt_auth_pwd.setPlaceholderText("Password or local access key")
+        self.txt_auth_pwd.addAction(icon("key", "#141414"), QLineEdit.ActionPosition.LeadingPosition)
         self.txt_auth_pwd.returnPressed.connect(self._do_authenticate)
         password_row.addWidget(self.txt_auth_pwd, 1)
         self.btn_toggle_eye = button("Show", password, self._toggle_password_mask, role="quiet")
@@ -703,7 +721,7 @@ class OwnerTicketDialog(_TaskPortal):
         retone(self.lbl_auth_error, "fail")
         self.lbl_auth_error.hide()
         form.addWidget(self.lbl_auth_error)
-        self.btn_unlock = button("Sign in", self.auth_card, self._do_authenticate, role="primary")
+        self.btn_unlock = button("Sign in", self.auth_card, self._do_authenticate, role="primary", vector="unlock")
         form.addWidget(self.btn_unlock)
         actions = ResponsiveGrid([
             button("Check connection", self.auth_card, self._diagnose_cloud, role="quiet", vector="reload"),
@@ -741,6 +759,10 @@ class OwnerTicketDialog(_TaskPortal):
         # A textual control stays visible and readable in every palette.
         self.btn_toggle_eye.setText("Show" if is_masked else "Hide")
         self.btn_toggle_eye.setAccessibleName("Show access key" if is_masked else "Hide access key")
+        vector = "eye" if is_masked else "eye-off"
+        self.btn_toggle_eye.setProperty("vector", vector)
+        self.btn_toggle_eye.setIcon(icon(vector, "#141414"))
+        self.btn_toggle_eye.setIconSize(QSize(18, 18))
 
     def _on_auth_email_return(self) -> None:
         """Handle Enter key in email field by advancing to password or authenticating."""

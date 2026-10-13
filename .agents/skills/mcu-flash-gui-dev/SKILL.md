@@ -167,6 +167,9 @@ For explicitly requested assistant delegation, use the local
   The production
   sign-in uses one responsive neobrutalist card with the real Firebase/local-key
   controls; do not copy the prototype's illustration or sample credentials.
+  Keep original SVG chip/circuit artwork inside the sign-in card. Use the shared
+  SVG icon family for inputs, mask toggle and recovery actions; paint artwork in
+  Qt logical coordinates without polling/animation or applying monitor DPI twice.
   Category creation remains in the ticket forms: validate and save names in the
   per-user portal config off the GUI thread, preserve ticket-snapshot categories,
   and filter the cached ticket snapshot by status and category. The shared Qt

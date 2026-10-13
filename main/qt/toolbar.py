@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 # Constants (mirror main.core.constants defaults)
 # ─────────────────────────────────────────────────────────────────────────────
 from main.core.constants import MAX_BAUD_RATE
+from main.core.theme import Theme
 from main.qt.icons import ActionButton as QPushButton, icon
 
 DEFAULT_BAUD          = 115200
@@ -620,6 +621,10 @@ class PrimaryToolbar(QToolBar):
         box = QMessageBox(parent)
         box.setWindowTitle("Developer access unavailable")
         box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowIcon(icon("brand"))
+        box.setIconPixmap(icon("repair" if repairable else "warning",
+                               Theme.YELLOW if repairable else Theme.RED,
+                               size=48).pixmap(QSize(48, 48)))
         box.setText("The Developer Access window could not be opened.")
         box.setInformativeText(
             "A required runtime component could not load. Repair and restart saves your sketch, "
@@ -630,7 +635,11 @@ class PrimaryToolbar(QToolBar):
         box.setDetailedText(str(error))
         box.setStandardButtons(QMessageBox.StandardButton.Close)
         retry = box.addButton("Retry", QMessageBox.ButtonRole.ActionRole)
+        retry.setIcon(icon("reload"))
         repair = box.addButton("Repair and restart", QMessageBox.ButtonRole.ActionRole) if repairable else None
+        if repair is not None:
+            repair.setIcon(icon("repair"))
+        box.button(QMessageBox.StandardButton.Close).setIcon(icon("close"))
         box.exec()
         chosen = box.clickedButton()
         box.deleteLater()
