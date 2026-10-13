@@ -407,7 +407,7 @@ class PrimaryToolbar(QToolBar):
         rc_layout.addWidget(self.btn_cloud)
 
         # Download Boards/Libs button
-        self.btn_download = _make_action_btn("Boards & Libraries",
+        self.btn_download = _make_action_btn("Resources",
                                              "Download and manage Arduino boards and libraries",
                                              "btn-download", "#2d3748", "#3a4a60")
         self.btn_download.clicked.connect(self._open_download_manager)
@@ -926,7 +926,7 @@ class PrimaryToolbar(QToolBar):
             elif width < 1250:
                 self.lbl_sketch.setVisible(True)
                 self.btn_download.set_icon("download")
-                self.btn_download.setText("Boards & Libraries")
+                self.btn_download.setText("Resources")
                 self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
@@ -934,7 +934,7 @@ class PrimaryToolbar(QToolBar):
             else:
                 self.lbl_sketch.setVisible(True)
                 self.btn_download.set_icon("download")
-                self.btn_download.setText("Boards & Libraries")
+                self.btn_download.setText("Resources")
                 self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
@@ -955,7 +955,7 @@ class PrimaryToolbar(QToolBar):
 
             self.lbl_sketch.setVisible(True)
             self.btn_download.set_icon("download")
-            self.btn_download.setText("Boards & Libraries")
+            self.btn_download.setText("Resources")
             self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
             self.btn_download.setMinimumWidth(0)
             self.btn_download.setMaximumWidth(16777215)
