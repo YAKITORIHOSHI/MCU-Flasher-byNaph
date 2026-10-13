@@ -199,7 +199,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
     <div id="terminal-root">
         <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: __THEME_FG__; opacity: 0.5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; text-align: center; padding: 20px; box-sizing: border-box; user-select: none;">
             <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px; color: __THEME_FG__;">No Terminal Session Open</div>
-            <div>Click <b>[▾]</b> in the top toolbar to open a new PowerShell or Command Prompt terminal.</div>
+            <div>Use the <b>New terminal session</b> menu above to open PowerShell or Command Prompt.</div>
         </div>
     </div>
     <script>

@@ -136,6 +136,10 @@ class BootstrapDialog(QDialog):
         icon_checked_dim = (icons_dir / "checkbox_checked_disabled.svg").as_posix()
 
         pal, mode = self._context.resolve_theme()
+        from src.modules.svg_icons import control_assets
+        controls = control_assets(mode)
+        icon_checked, icon_checked_hover = controls["hover"], controls["setup-hover"]
+        icon_checked_dim = controls["disabled"]
         pal = setup_text_palette(pal, glass=True)
         self._theme_pal = pal
         self._theme_mode = mode
@@ -322,7 +326,7 @@ class BootstrapDialog(QDialog):
             QCheckBox::indicator:checked:hover {{
                 background-color: {border_lit};
                 border-color: {cyan};
-                image: url("ICON_CHECKED");
+                image: url("ICON_CHECKED_HOVER");
             }}
             QCheckBox::indicator:checked:pressed {{
                 background-color: {cyan};
@@ -354,7 +358,7 @@ class BootstrapDialog(QDialog):
             }}
         """
         self.setStyleSheet(
-            base_style.replace("ICON_CHECKED_DIM", icon_checked_dim).replace("ICON_CHECKED", icon_checked)
+            base_style.replace("ICON_CHECKED_DIM", icon_checked_dim).replace("ICON_CHECKED_HOVER", icon_checked_hover).replace("ICON_CHECKED", icon_checked)
         )
 
         # Cached painted cards provide the same quiet depth as the workspace.
@@ -448,6 +452,9 @@ class BootstrapDialog(QDialog):
         layout.addWidget(activity, 1)
         self._follow = LogFollow(self.log_edit, resume_on_release=True)
         self._summary_follow = LogFollow(self.summary_edit, resume_on_release=True)
+        from main.qt.svg_gutter import SvgLogGutter
+        self._raw_svg_gutter = SvgLogGutter(self.log_edit, self._log_icon)
+        self._summary_svg_gutter = SvgLogGutter(self.summary_edit, self._log_icon)
         self._step_start_cursor = QTextCursor(self.log_edit.document())
         self._step_start_cursor.setKeepPositionOnInsert(True)
         self._summary_step_start = QTextCursor(self.summary_edit.document())
@@ -792,6 +799,15 @@ class BootstrapDialog(QDialog):
             t_str = f"{m:02d}:{s:02d}"
         self.timer_lbl.setText(t_str)
         self.timer_lbl.adjustSize()
+
+    def _log_icon(self, block):
+        from src.modules.svg_icons import status_name
+        color = block.charFormat().foreground().color().name()
+        palette = self._theme_pal
+        for key, tag in (("T_GREEN", "ok"), ("T_RED", "fail"), ("T_YELLOW", "warn"), ("T_CYAN", "section")):
+            if color == palette.get(key):
+                return status_name(tag), color
+        return "", color
 
     def _tick_spinner(self):
         pass  # Status is a static vector; actual progress drives its state.

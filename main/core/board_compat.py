@@ -5,6 +5,8 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
+
+
 import os
 import re
 from pathlib import Path
@@ -12,6 +14,23 @@ from typing import Any
 
 
 from main.core.board_catalog import SUPPORTED_BOARDS, _normalize_board_identity
+
+SOFT_WARNING_PREFIX = "[Warning] "
+
+
+def is_compat_warning(reason):
+    value = str(reason)
+    return value.startswith(SOFT_WARNING_PREFIX) or value.startswith("\u26a0")
+
+
+def plain_compat_reason(reason):
+    value = str(reason)
+    if value.startswith(SOFT_WARNING_PREFIX):
+        return value[len(SOFT_WARNING_PREFIX):]
+    if value.startswith("\u26a0"):
+        return value[1:].lstrip("\ufe0f ")
+    return value
+
 
 def find_board_for_platform(platform: str, variant_hint: str = "") -> str | None:
     """Return the safest resolved board for a platform / MCU-family hint.
@@ -440,7 +459,7 @@ def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
         no_psram = [b for b in boards if not SUPPORTED_BOARDS.get(b, {}).get("has_psram")]
         if no_psram:
             exclusions.append(
-                f"⚠ Sketch uses PSRAM (ps_malloc / esp_psram.h) → requires a "
+                f"{SOFT_WARNING_PREFIX}Sketch uses PSRAM (ps_malloc / esp_psram.h) → requires a "
                 f"board variant with PSRAM populated; {len(no_psram)} board(s) "
                 f"lack it (e.g., {', '.join(sorted(no_psram)[:3])}...) — "
                 f"may fail at runtime"
@@ -501,13 +520,13 @@ def detect_board_compatibility(sketch_dir: Path) -> tuple[set[str], list[str]]:
     for (pin, ctx, msg_type), board_names in warnings_summary.items():
         if len(board_names) > 3:
             exclusions.append(
-                f"⚠ GPIO {pin} ({ctx}) is reserved for {msg_type} on {len(board_names)} boards "
+                f"{SOFT_WARNING_PREFIX}GPIO {pin} ({ctx}) is reserved for {msg_type} on {len(board_names)} boards "
                 f"(e.g., {', '.join(sorted(board_names)[:3])}...) — may cause instability"
             )
         else:
             for board in board_names:
                 exclusions.append(
-                    f"⚠ GPIO {pin} ({ctx}) is reserved for {msg_type} on most {board.split()[0]} modules — may cause instability"
+                    f"{SOFT_WARNING_PREFIX}GPIO {pin} ({ctx}) is reserved for {msg_type} on most {board.split()[0]} modules — may cause instability"
                 )
 
     return boards, exclusions

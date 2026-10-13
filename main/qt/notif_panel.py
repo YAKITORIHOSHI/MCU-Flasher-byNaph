@@ -22,13 +22,15 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QTextBrowser, QFrame, QApplication, QSizePolicy
 )
-from main.qt.icons import ActionButton as QPushButton
+from main.qt.icons import ActionButton as QPushButton, icon
 from main.qt.log_follow import LogFollow, preserve_log_view
 from main.qt.log_buffer import LogBuffer, display_text
 from main.qt.log_colors import contrast_ratio, themed_log_colors
 
 from src.dbs import dbs_read, dbs_delete
 
+
+from main.qt.icons import IconLabel as QLabel
 
 class NotifPanel(QWidget):
     """
@@ -72,7 +74,7 @@ class NotifPanel(QWidget):
         hl.setSpacing(8)
         self._header_layout = hl
 
-        lbl = QLabel("🔔 Notifications")
+        lbl = QLabel("Notifications", icon_name="alerts")
         self._title_lbl = lbl
         hl.addWidget(lbl)
 
@@ -82,7 +84,7 @@ class NotifPanel(QWidget):
         hl.addWidget(lbl_filter)
 
         self._filter_combo = QComboBox()
-        self._filter_combo.addItems(["All", "📦 Boards & Libraries", "🔌 USB Devices", "✖ Errors"])
+        self._filter_combo.addItems(["All", "Boards & Libraries", "USB Devices", "Errors"])
         self._filter_combo.setFixedWidth(160)
         self._filter_combo.setStyleSheet("QComboBox { font-size: 11px; padding: 2px 6px; }")
         self._filter_combo.currentTextChanged.connect(self._on_filter_changed)
@@ -141,7 +143,8 @@ class NotifPanel(QWidget):
         self._current_responsive_width = width
         if width >= 1100:
             self._is_ultra_compact = False
-            self._title_lbl.setText("🔔 Notifications")
+            self._title_lbl.set_icon("alerts")
+            self._title_lbl.setText("Notifications")
             self._lbl_filter.setVisible(True)
             self._filter_combo.setFixedWidth(160)
             self._btn_clear.setText("Clear")
@@ -150,7 +153,8 @@ class NotifPanel(QWidget):
                 self._header_layout.setSpacing(8)
         elif width >= 850:
             self._is_ultra_compact = False
-            self._title_lbl.setText("🔔 Alerts")
+            self._title_lbl.set_icon("alerts")
+            self._title_lbl.setText("Alerts")
             self._lbl_filter.setVisible(False)
             self._filter_combo.setFixedWidth(130)
             self._btn_clear.setText("Clear")
@@ -159,11 +163,14 @@ class NotifPanel(QWidget):
                 self._header_layout.setSpacing(5)
         else:
             self._is_ultra_compact = True
-            self._title_lbl.setText("🔔")
+            self._title_lbl.set_icon("alerts")
+            self._title_lbl.setText("")
             self._lbl_filter.setVisible(False)
             self._filter_combo.setFixedWidth(95)
-            self._btn_clear.setText("🗑")
-            self._btn_copy.setText("⧉")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("")
+            self._btn_copy.set_icon("copy")
+            self._btn_copy.setText("")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
 
@@ -183,6 +190,8 @@ class NotifPanel(QWidget):
         bg = pal.get("BG_DARKEST", "#0a0e14")
         fg = pal.get("TEXT", "#e0e6ed")
         self._palette = pal
+        for index, name in enumerate(("filter", "package", "usb", "error")):
+            self._filter_combo.setItemIcon(index, icon(name, pal["TEXT"]))
         reading_background = min((bg, pal["BG_DARK"], pal["BG_MID"]),
                                  key=lambda background: contrast_ratio(fg, background))
         self._card_colors = themed_log_colors(theme_name, background=reading_background)
@@ -349,11 +358,11 @@ class NotifPanel(QWidget):
 
     def _matches_filter(self, record: dict) -> bool:
         label = self._filter_combo.currentText()
-        if label == "📦 Boards & Libraries":
+        if label == "Boards & Libraries":
             return record["category"] in ("board_install", "library_install")
-        if label == "🔌 USB Devices":
+        if label == "USB Devices":
             return record["category"] in ("usb", "device")
-        if label == "✖ Errors":
+        if label == "Errors":
             return record["level"].lower() == "error"
         return True
 
@@ -475,7 +484,9 @@ class NotifPanel(QWidget):
         cb = QApplication.clipboard()
         if cb:
             cb.setText(text)
-            self._btn_copy.setText("✔ Copied")
+            self._btn_copy.set_icon("check")
+            self._btn_copy.setText("Copied")
             def _restore_btn():
-                self._btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "Copy")
+                self._btn_copy.set_icon("copy")
+                self._btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copy")
             QTimer.singleShot(1500, _restore_btn)

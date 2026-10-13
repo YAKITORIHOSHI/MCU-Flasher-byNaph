@@ -60,7 +60,7 @@ class UploadLog:
         self._started = True
         self._emit("", "normal")
         self._emit("=" * 50, "header")
-        self._emit(f"  ⬆  UPLOADING ({self.backend})", "header")
+        self._emit(f"   UPLOADING ({self.backend})", "header")
         self._emit("=" * 50, "header")
         fields = [("Board", self.board_name or "Selected target")]
         target = self.info.get("arduino_fqbn") if self.backend == "Arduino CLI" else ":".join(
@@ -86,9 +86,9 @@ class UploadLog:
             return
         self._connection = status
         text, tag = {
-            "connecting": ("  🔌 Connecting to bootloader…", "magenta"),
-            "connected": (f"  ✔ Connected to {self.board_name or 'board'}", "success"),
-            "failed": ("  ✖ Connection failed", "error"),
+            "connecting": ("  Connecting to bootloader…", "magenta"),
+            "connected": (f"  Connected to {self.board_name or 'board'}", "success"),
+            "failed": ("  Connection failed", "error"),
             "stopped": ("  ■ Connection stopped", "info"),
         }[status]
         key = f"{getattr(self.api, '_op_session_id', 0)}:upload-connection"
@@ -121,7 +121,7 @@ class UploadLog:
         self._bars[label] = record
         filled = int(percent * 24 / 100)
         bar = "▰" * filled + "▱" * (24 - filled)
-        icon = "✔" if percent >= 100 else "⚙"
+        icon = "" if percent >= 100 else ""
         suffix = f" | {detail}" if detail else ""
         self._emit(f"  {icon} {label:<14} [ {bar} ] {percent:5.1f}%{suffix}",
                    "success" if percent >= 100 else "info",
@@ -195,11 +195,11 @@ class UploadLog:
             elif "verify" in low:
                 self._phase_row("verifying", "  ◇ Verifying firmware…")
             else:
-                self._phase_row("writing", "  ⚙ Programming flash…")
+                self._phase_row("writing", "  Programming flash…")
             return True
         if re.fullmatch(r"(?:Write|Writing|Program|Programming|Verify|Verifying)(?: flash| memory)?(?:\.\.\.|:)?", clean, re.I):
             verifying = low.startswith("verif")
-            self._phase_row("verifying" if verifying else "writing", f"  {'◇' if verifying else '⚙'} {clean}")
+            self._phase_row("verifying" if verifying else "writing", f"  {'◇' if verifying else ''} {clean}")
             return True
         return False
 
@@ -272,13 +272,13 @@ class UploadLog:
             return True
         if re.fullmatch(r"Changing baud rate to \d+\.{0,3}|Changed\.", clean, re.IGNORECASE):
             if clean.lower().startswith("changing"):
-                self._emit(f"  ⚙ {clean}", "dim")
+                self._emit(f"  {clean}", "dim")
             return True
         if re.fullmatch(r"Configuring flash size\.{3}|SHA digest in image updated", clean, re.IGNORECASE):
             return True
         if re.fullmatch(r"Flash will be erased from 0x[0-9a-f]+ to 0x[0-9a-f]+\.{3}", clean, re.IGNORECASE):
             self._show_chip()
-            self._phase_row("erasing", "  ⚡ Erasing selected flash regions…")
+            self._phase_row("erasing", "  Erasing selected flash regions…")
             return True
         legacy_progress = re.fullmatch(
             r"Writing at (0x[0-9a-f]+)\.{3}\s*\(\s*\d+(?:\.\d+)?\s*%\s*\)",
@@ -294,10 +294,10 @@ class UploadLog:
             return True
         if re.fullmatch(r"Hash of data verified\.", clean, re.IGNORECASE):
             self._verified = True
-            self._phase_row("verified", "  ✔ Flash data verified.", "success")
+            self._phase_row("verified", "  Flash data verified.", "success")
             return True
         if re.fullmatch(r"Hard resetting via (?:RTS|DTR) pin\.{0,3}", clean, re.IGNORECASE):
-            self._phase_row("resetting", f"  ✔ {clean}", "success")
+            self._phase_row("resetting", f"  {clean}", "success")
             return True
         if clean == "Leaving...":
             return True
@@ -317,11 +317,11 @@ class UploadLog:
         if not success:
             if self._connection == "connecting":
                 self._connection_row("failed")
-            self._emit("  ✖ Upload failed.", "error")
+            self._emit("  Upload failed.", "error")
             return
         self._emit("", "normal")
         board_label = f" {self.board_name}" if self.board_name else ""
-        self._emit(f"  ✔ Upload successful!{board_label}", "success")
+        self._emit(f"  Upload successful!{board_label}", "success")
         fields: list[tuple[str, str]] = [("Board", self.board_name or "Selected target"),
                                        ("Uploader", self.backend),
                                        ("Result", "Written and verified" if self._verified else "Uploader completed successfully")]

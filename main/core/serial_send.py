@@ -152,7 +152,7 @@ class SerialSendQueue:
                 with self.api._serial_lock:
                     matches = self._matches(request)
                 if matches:
-                    self._log(f"❯ {text}", generation=generation, tag="dim")
+                    self._log(f"{text}", generation=generation, tag="dim")
             except Exception as exc:
                 self._failed(request, exc)
             finally:

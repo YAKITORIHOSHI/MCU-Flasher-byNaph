@@ -292,6 +292,8 @@ DEFAULT_DOWNLOAD_DIR = os.path.join(
 
 
 
+from src.modules.tk_svg import SvgButton, SvgLabel, SvgListbox
+
 class Theme:
     PALETTES = {
         "default": {
@@ -510,7 +512,7 @@ Theme.apply_theme(_resolve_lib_req_theme())
 
 def make_flat_button(parent, text, command, bg, bg_hover, font=("Montserrat", 9, "bold")) -> tk.Button:
     from src.modules.tk_glass import readable_foreground
-    btn = tk.Button(
+    btn = SvgButton(
         parent, text=text, command=command,
         font=font, fg=readable_foreground(bg), bg=bg,
         activebackground=bg_hover, activeforeground=readable_foreground(bg_hover),
@@ -555,7 +557,7 @@ class CircularLoadingOverlay(tk.Frame):
         )
         self.canvas.pack(pady=(0, 12))
 
-        self.title_label = tk.Label(
+        self.title_label = SvgLabel(
             self.center_frame,
             text=title,
             font=("Montserrat", 11, "bold"),
@@ -564,7 +566,7 @@ class CircularLoadingOverlay(tk.Frame):
         )
         self.title_label.pack(pady=(0, 4))
 
-        self.sub_label = tk.Label(
+        self.sub_label = SvgLabel(
             self.center_frame,
             text=subtitle,
             font=("Montserrat", 9),
@@ -1619,7 +1621,7 @@ class BrowseTab:
         top = tk.Frame(parent, bg=Theme.BG_DARKEST, pady=4)
         top.pack(fill="x")
 
-        tk.Label(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
+        SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
         self.search_var = tk.StringVar()
         self.search_entry = tk.Entry(
             top, textvariable=self.search_var,
@@ -1629,7 +1631,7 @@ class BrowseTab:
             highlightthickness=1, highlightcolor=Theme.CYAN,
             highlightbackground=Theme.BORDER
         )
-        self.lbl_search_status = tk.Label(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
+        self.lbl_search_status = SvgLabel(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
         self.lbl_search_status.pack(side="right", padx=(10, 0))
         self.search_entry.pack(side="left", padx=(8, 10), fill="x", expand=True)
         self.search_entry.bind("<KeyRelease>", self._on_search)
@@ -1646,8 +1648,8 @@ class BrowseTab:
         pane.add(left_card, minsize=200)
         left = left_card.body
 
-        self.listbox = tk.Listbox(
-            left, font=("Consolas", 10),
+        self.listbox = SvgListbox(
+            left, icon_for=self._row_icon, font=("Consolas", 10),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
             highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
@@ -1671,7 +1673,7 @@ class BrowseTab:
         self._responsive_panes = ResponsivePanes(pane, left_card, detail_card)
 
         # Placeholder
-        self.lbl_placeholder = tk.Label(
+        self.lbl_placeholder = SvgLabel(
             self.detail_frame, text="No Item Selected",
             font=("Montserrat", 13), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="center"
         )
@@ -1758,11 +1760,20 @@ class BrowseTab:
         self.lbl_placeholder.pack(fill="both", expand=True, padx=10, pady=10)
         self._execute_search()
 
+    def _row_icon(self, row):
+        if row >= len(self.filtered_names):
+            return ""
+        name = self.filtered_names[row]
+        installed = (getattr(self.app, "_installed_map", None) or {}).get(name.lower())
+        if installed:
+            return "upload" if installed.get("update_available") else "check"
+        return "usb" if self is self.app.board_tab else "book"
+
     def _display_item_name(self, name: str) -> str:
         inst_map = getattr(self.app, "_installed_map", None)
         if inst_map and name.lower() in inst_map:
             inst = inst_map[name.lower()]
-            return f"⬆ {name}" if inst.get("update_available") else f"{'↓' if self is self.app.board_tab else '✔'} {name}"
+            return name
         return name
 
     def refresh_listbox_labels(self):
@@ -1810,7 +1821,7 @@ class BrowseTab:
         else:
             if total == 0:
                 if not getattr(self.app, "_is_online", True) and not self.all_items:
-                    self.lbl_search_status.config(text="⚠ Offline Mode: Connect to internet to browse catalog")
+                    self.lbl_search_status.config(text="Offline Mode: Connect to internet to browse catalog")
                 else:
                     self.lbl_search_status.config(text="No matches found")
             else:
@@ -1899,11 +1910,17 @@ class InstalledTab:
     @staticmethod
     def _item_icon(item: dict) -> str:
         """Return the Installed-tab icon for a library or board platform."""
-        return "📖" if str(item.get("type", "")).casefold() == "library" else "🔌"
+        return "book" if str(item.get("type", "")).casefold() == "library" else "usb"
+
+    def _row_icon(self, row):
+        if row >= len(self.filtered_items):
+            return ""
+        item = self.filtered_items[row]
+        return "upload" if item.get("update_available") else self._item_icon(item)
 
     def _display_item_name(self, item: dict) -> str:
         """Decorate a displayed name without changing its searchable value."""
-        return f"{self._item_icon(item)} {item['name']}"
+        return str(item['name'])
 
     def __init__(self, parent: ttk.Frame, app: "ArduinoBrowser"):
         self.app = app
@@ -1935,9 +1952,9 @@ class InstalledTab:
         top = tk.Frame(parent, bg=Theme.BG_DARKEST, pady=4)
         top.pack(fill="x")
 
-        tk.Label(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
+        SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
         # Reserve the count before the expanding entry so it stays readable.
-        self.lbl_search_status = tk.Label(top, text="0 installed", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
+        self.lbl_search_status = SvgLabel(top, text="0 installed", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
         self.lbl_search_status.pack(side="right", padx=(8, 0))
         self.search_var = tk.StringVar()
         self.search_entry = tk.Entry(
@@ -1961,8 +1978,8 @@ class InstalledTab:
         pane.add(left_card, minsize=200)
         left = left_card.body
 
-        self.listbox = tk.Listbox(
-            left, font=("Consolas", 10),
+        self.listbox = SvgListbox(
+            left, icon_for=self._row_icon, font=("Consolas", 10),
             bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
             highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
@@ -1984,7 +2001,7 @@ class InstalledTab:
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
 
         # Placeholder
-        self.lbl_placeholder = tk.Label(
+        self.lbl_placeholder = SvgLabel(
             self.detail_frame, text="No Local Item Selected",
             font=("Montserrat", 13), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="center"
         )
@@ -2012,11 +2029,11 @@ class InstalledTab:
         self._top_info.pack(fill="x", expand=False)
 
         # Labels inside detail content
-        self.lbl_name = tk.Label(self._top_info, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_name = SvgLabel(self._top_info, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_name.pack(anchor="w", fill="x", pady=(0, 4))
         self._wrapping_labels.append(self.lbl_name)
 
-        self.lbl_type = tk.Label(self._top_info, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_type = SvgLabel(self._top_info, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_type.pack(anchor="w", fill="x")
         self._wrapping_labels.append(self.lbl_type)
 
@@ -2024,24 +2041,24 @@ class InstalledTab:
         ver_frame = tk.Frame(self._top_info, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
-        self.lbl_installed_ver = tk.Label(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_installed_ver = SvgLabel(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_installed_ver.pack(anchor="w")
-        self.lbl_latest_ver = tk.Label(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_latest_ver = SvgLabel(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_latest_ver.pack(anchor="w")
-        self.lbl_update_status = tk.Label(ver_frame, text="", font=("Montserrat", 9, "bold"), bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_update_status = SvgLabel(ver_frame, text="", font=("Montserrat", 9, "bold"), bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_update_status.pack(anchor="w", pady=(4, 0))
 
-        self.lbl_size = tk.Label(self._top_info, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_size = SvgLabel(self._top_info, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_size.pack(anchor="w", fill="x")
         self._wrapping_labels.append(self.lbl_size)
 
         sep = tk.Frame(self._top_info, bg=Theme.BORDER, height=1)
         sep.pack(fill="x", pady=5)
 
-        self.lbl_path_header = tk.Label(self._top_info, text="Location on Disk:", font=("Montserrat", 9, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_path_header = SvgLabel(self._top_info, text="Location on Disk:", font=("Montserrat", 9, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_path_header.pack(anchor="w", fill="x")
 
-        self.lbl_path = tk.Label(self._top_info, text="", font=("Consolas", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        self.lbl_path = SvgLabel(self._top_info, text="", font=("Consolas", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         self.lbl_path.pack(anchor="w", fill="x", pady=(1, 4))
         self._wrapping_labels.append(self.lbl_path)
 
@@ -2053,19 +2070,19 @@ class InstalledTab:
         btn_frame.pack(anchor="w", fill="x", pady=2)
 
         self.open_btn = make_flat_button(
-            btn_frame, "📂 Open Folder", self._open_folder,
+            btn_frame, "Open Folder", self._open_folder,
             Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
         )
         self.open_btn.pack(side="left", padx=(0, 10))
 
         self.update_btn = make_flat_button(
-            btn_frame, "⬇ Update", self._update_item,
+            btn_frame, "Update", self._update_item,
             Theme.BTN_COMPILE, Theme.BTN_COMPILE_H
         )
         self.update_btn.pack(side="left", padx=(0, 10))
 
         self.delete_btn = make_flat_button(
-            btn_frame, "❌ Delete", self._delete_item,
+            btn_frame, "Delete", self._delete_item,
             Theme.BTN_STOP, Theme.BTN_STOP_H
         )
         self.delete_btn.pack(side="left")
@@ -2078,13 +2095,13 @@ class InstalledTab:
         sep3 = tk.Frame(self._examples_section, bg=Theme.BORDER, height=1)
         sep3.pack(fill="x", pady=5)
 
-        self.lbl_examples_header = tk.Label(
+        self.lbl_examples_header = SvgLabel(
             self._examples_section, text="Sample Codes (Examples):",
             font=("Montserrat", 9, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w"
         )
         self.lbl_examples_header.pack(anchor="w", fill="x")
 
-        self.lbl_examples_hint = tk.Label(
+        self.lbl_examples_hint = SvgLabel(
             self._examples_section, text="Double-click a sketch to view its code",
             font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w"
         )
@@ -2094,8 +2111,8 @@ class InstalledTab:
         examples_search_wrap = tk.Frame(self._examples_section, bg=Theme.BG_DARKEST)
         examples_search_wrap.pack(anchor="w", fill="x", pady=(0, 4))
 
-        tk.Label(
-            examples_search_wrap, text="🔍 Filter:",
+        SvgLabel(
+            examples_search_wrap, text="Filter:", icon_name="filter",
             font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST
         ).pack(side="left", padx=(0, 4))
 
@@ -2183,7 +2200,7 @@ class InstalledTab:
         self.examples_listbox.insert(tk.END, message)
         self.examples_listbox.config(state=tk.DISABLED)
 
-    _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    _SPINNER_FRAMES = ["", "", "", "", "", "", "", "", "", ""]
 
     def _start_loading_animation(self, req_id: int, frame_idx: int = 0):
         self._animation_after_id = None
@@ -2355,7 +2372,7 @@ class InstalledTab:
         self.lbl_search_status.config(text=f"{len(self.filtered_items)} installed")
 
         self.listbox.delete(0, tk.END)
-        labels = [f"{'⬆ ' if item.get('update_available') else ''}{self._display_item_name(item)} ({item['installed_version']})"
+        labels = [f"{'' if item.get('update_available') else ''}{self._display_item_name(item)} ({item['installed_version']})"
                   for item in self.filtered_items]
         if labels:
             self.listbox.insert(tk.END, *labels)
@@ -2386,7 +2403,7 @@ class InstalledTab:
                 bg=Theme.BTN_COMPILE,
                 activebackground=Theme.BTN_COMPILE_H,
                 fg=Theme.TEXT_BRIGHT,
-                text="⬇ Update",
+                text="Update",
                 command=self._update_item,
             )
         else:
@@ -2396,7 +2413,7 @@ class InstalledTab:
                 bg=Theme.BG_MID,
                 activebackground=Theme.BG_MID,
                 fg=Theme.TEXT_DIM,
-                text="⬇ Update",
+                text="Update",
                 command=self._update_item,
             )
 
@@ -2431,6 +2448,7 @@ class InstalledTab:
         if not self._details_view.winfo_ismapped():
             self._details_view.pack(fill="both", expand=True, padx=10, pady=8)
 
+        self.lbl_name.set_icon(self._item_icon(item))
         self.lbl_name.config(text=self._display_item_name(item))
         self.lbl_type.config(text=f"Type: {item['type']}")
 
@@ -2438,13 +2456,16 @@ class InstalledTab:
         self.lbl_latest_ver.config(text=f"Latest version:    {item['latest_version']}")
 
         if item.get("update_available"):
-            self.lbl_update_status.config(text="⬆ Update available", fg=Theme.YELLOW)
+            self.lbl_update_status.set_icon("upload")
+            self.lbl_update_status.config(text="Update available", fg=Theme.YELLOW)
             self._set_update_btn_state(True)
         elif item.get("latest_version") in ("—", "— (Offline)", item.get("installed_version")):
-            self.lbl_update_status.config(text="✓ Installed", fg=Theme.GREEN)
+            self.lbl_update_status.set_icon("check")
+            self.lbl_update_status.config(text="Installed", fg=Theme.GREEN)
             self._set_update_btn_state(False)
         else:
-            self.lbl_update_status.config(text="✓ Up‑to‑date", fg=Theme.GREEN)
+            self.lbl_update_status.set_icon("check")
+            self.lbl_update_status.config(text="Up‑to‑date", fg=Theme.GREEN)
             self._set_update_btn_state(False)
 
         self.lbl_path.config(text=item["path"])
@@ -2457,10 +2478,10 @@ class InstalledTab:
             self.lbl_examples_hint.config(text="Supported microcontrollers inside this downloaded platform package")
 
         # Show immediate loading state with animated spinner
-        self.lbl_size.config(text="Size on Disk: Calculating ⠋...")
+        self.lbl_size.config(text="Size on Disk: Calculating ...")
         self.examples_listbox.config(state=tk.NORMAL)
         self.examples_listbox.delete(0, tk.END)
-        self.examples_listbox.insert(tk.END, "  ⏳ Scanning disk content in background...")
+        self.examples_listbox.insert(tk.END, "  Scanning disk content in background...")
         self.examples_listbox.config(state=tk.DISABLED)
 
         # Start loading animation spinner
@@ -2848,9 +2869,9 @@ class ArduinoBrowser:
         top_bar.grid_columnconfigure(0, weight=1)
         actions = tk.Frame(top_bar, bg=Theme.BG_MID)
         actions.grid(row=0, column=1, sticky="e")
-        tk.Label(title_col, text="Libraries & boards", anchor="w",
+        SvgLabel(title_col, text="Libraries & boards", anchor="w",
                  font=("Montserrat", 14, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID).pack(fill="x")
-        tk.Label(title_col, text="MCU Flasher by Naph · Arduino packages", anchor="w",
+        SvgLabel(title_col, text="MCU Flasher by Naph · Arduino packages", anchor="w",
                  font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID).pack(fill="x", pady=(3, 0))
 
         self.quit_btn = make_flat_button(
@@ -2885,7 +2906,7 @@ class ArduinoBrowser:
         folder_card.pack(fill="x", padx=12, pady=(0, 8))
         folder_bar = folder_card.body
 
-        folder_label = tk.Label(folder_bar, text="Download folder:",
+        folder_label = SvgLabel(folder_bar, text="Download folder:",
                                 font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
 
         self.folder_var = tk.StringVar(value=self._download_dir)
@@ -2914,7 +2935,7 @@ class ArduinoBrowser:
         board_url_bar = tk.Frame(self._sources_card.body, bg=Theme.BG_MID)
         board_url_bar.pack(fill="x")
 
-        urls_label = tk.Label(
+        urls_label = SvgLabel(
             board_url_bar, text="Vendor URLs:",
             font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
         )
@@ -2935,14 +2956,14 @@ class ArduinoBrowser:
         )
         self._urls_row = FieldRow(board_url_bar, urls_label, self.board_urls_entry, self.board_urls_apply_btn)
 
-        sources_hint = tk.Label(
+        sources_hint = SvgLabel(
             self._sources_card.body,
             text="Add vendor index URLs separated by commas or new lines. Each source is checked independently.",
             font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID,
             anchor="w", justify="left", pady=4,
         )
         sources_hint.pack(fill="x")
-        self.sources_status = tk.Label(self._sources_card.body, text="", font=("Montserrat", 8),
+        self.sources_status = SvgLabel(self._sources_card.body, text="", font=("Montserrat", 8),
                                       fg=Theme.TEXT_DIM, bg=Theme.BG_MID, justify="left", anchor="w")
         self.sources_status.pack(fill="x", pady=(2, 4))
         def wrap_sources(event):
@@ -2954,7 +2975,7 @@ class ArduinoBrowser:
             "https://github.com/arduino/Arduino/wiki/"
             "Unofficial-list-of-3rd-party-boards-support-urls"
         )
-        third_party_boards_link = tk.Label(
+        third_party_boards_link = SvgLabel(
             self._sources_card.body,
             text="Find third-party board index URLs ↗",
             font=("Montserrat", 8, "underline"),
@@ -3015,7 +3036,7 @@ class ArduinoBrowser:
         self.progress.pack(side="left")
 
         self.status_var = tk.StringVar(value="Starting…")
-        status = tk.Label(bottom, textvariable=self.status_var, font=("Montserrat", 9),
+        status = SvgLabel(bottom, textvariable=self.status_var, font=("Montserrat", 9),
                           fg=Theme.TEXT_DIM, bg=Theme.BG_MID, justify="left", anchor="w")
         status.pack(side="left", padx=10, fill="x", expand=True)
         bottom.bind("<Configure>", lambda event: status.configure(
@@ -3171,46 +3192,46 @@ class ArduinoBrowser:
         dc = tab._detail_content
         dc.configure(bg=Theme.BG_DARKEST)
 
-        tab.lbl_name = tk.Label(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_name = SvgLabel(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 2))
         tab._wrapping_labels.append(tab.lbl_name)
 
-        tab.lbl_status_badge = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_status_badge = SvgLabel(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_status_badge.pack(anchor="w", fill="x", pady=(0, 4))
         tab._wrapping_labels.append(tab.lbl_status_badge)
 
-        tab.lbl_author = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_author = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_author.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_author)
 
-        tab.lbl_category = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_category = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_category.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_category)
 
-        tab.lbl_arch = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_arch = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_arch.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_arch)
 
         sep = tk.Frame(dc, bg=Theme.BORDER, height=1)
         sep.pack(fill="x", pady=8)
 
-        tab.lbl_sentence = tk.Label(dc, text="", font=("Montserrat", 10), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        tab.lbl_sentence = SvgLabel(dc, text="", font=("Montserrat", 10), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         tab.lbl_sentence.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_sentence)
 
-        tab.lbl_paragraph = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        tab.lbl_paragraph = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         tab.lbl_paragraph.pack(anchor="w", fill="x", pady=(2, 6))
         tab._wrapping_labels.append(tab.lbl_paragraph)
 
         link_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
         link_frame.pack(anchor="w", pady=2)
 
-        tab.link_website = tk.Label(link_frame, text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
+        tab.link_website = SvgLabel(link_frame, icon_name="globe", text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
         tab.link_website.pack(anchor="w")
         tab.link_website.bind("<Button-1>",
                               lambda e: self._open_link(tab, "website"))
 
-        tab.link_repo = tk.Label(link_frame, text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
+        tab.link_repo = SvgLabel(link_frame, icon_name="package", text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
         tab.link_repo.pack(anchor="w")
         tab.link_repo.bind("<Button-1>",
                            lambda e: self._open_link(tab, "repo"))
@@ -3221,23 +3242,23 @@ class ArduinoBrowser:
         ver_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
-        version_label = tk.Label(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
+        version_label = SvgLabel(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
         tab.version_var = tk.StringVar()
         tab.version_combo = ttk.Combobox(ver_frame,
                                          textvariable=tab.version_var,
                                          state="readonly", width=20)
 
-        tab.download_btn = make_flat_button(ver_frame, "⬇ Download",
+        tab.download_btn = make_flat_button(ver_frame, "Download",
                                             lambda: self._download(tab), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
         from src.modules.tk_glass import FieldRow
         tab._version_row = FieldRow(ver_frame, version_label, tab.version_combo, tab.download_btn, minimum=130)
 
-        tab.lbl_available = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
+        tab.lbl_available = SvgLabel(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
                                      bg=Theme.BG_DARKEST, anchor="w", justify="left")
         tab.lbl_available.pack(fill="x", pady=2)
         tab._wrapping_labels.append(tab.lbl_available)
 
-        tab.lbl_size = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_size = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_size.pack(anchor="w", pady=2)
 
     def _on_library_select(self, tab: BrowseTab, lib: dict):
@@ -3258,10 +3279,10 @@ class ArduinoBrowser:
         tab._current_website = lib.get("website", "")
         tab._current_repo = lib.get("repository", "")
         tab.link_website.config(
-            text=f"🌐 {tab._current_website}" if tab._current_website else ""
+            text=f"{tab._current_website}" if tab._current_website else ""
         )
         tab.link_repo.config(
-            text=f"📦 {tab._current_repo}" if tab._current_repo else ""
+            text=f"{tab._current_repo}" if tab._current_repo else ""
         )
 
         ver_labels = [v["version"] for v in lib["versions"]]
@@ -3281,49 +3302,49 @@ class ArduinoBrowser:
         dc = tab._detail_content
         dc.configure(bg=Theme.BG_DARKEST)
 
-        tab.lbl_name = tk.Label(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_name = SvgLabel(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 2))
         tab._wrapping_labels.append(tab.lbl_name)
 
-        tab.lbl_status_badge = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_status_badge = SvgLabel(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_status_badge.pack(anchor="w", fill="x", pady=(0, 4))
         tab._wrapping_labels.append(tab.lbl_status_badge)
 
-        tab.lbl_package = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_package = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_package.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_package)
 
-        tab.lbl_maintainer = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_maintainer = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_maintainer.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_maintainer)
 
-        tab.lbl_arch = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_arch = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_arch.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_arch)
 
-        tab.lbl_category = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_category = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_category.pack(anchor="w", fill="x")
         tab._wrapping_labels.append(tab.lbl_category)
 
         sep = tk.Frame(dc, bg=Theme.BORDER, height=1)
         sep.pack(fill="x", pady=8)
 
-        tab.lbl_boards_header = tk.Label(dc, text="Supported Boards:", font=("Montserrat", 10, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_boards_header = SvgLabel(dc, text="Supported Boards:", font=("Montserrat", 10, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_boards_header.pack(anchor="w", fill="x")
 
-        tab.lbl_boards = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
+        tab.lbl_boards = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         tab.lbl_boards.pack(anchor="w", fill="x", pady=(2, 6))
         tab._wrapping_labels.append(tab.lbl_boards)
 
         link_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
         link_frame.pack(anchor="w", pady=2)
 
-        tab.link_website = tk.Label(link_frame, text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
+        tab.link_website = SvgLabel(link_frame, icon_name="globe", text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
         tab.link_website.pack(anchor="w")
         tab.link_website.bind("<Button-1>",
                               lambda e: self._open_link(tab, "website"))
 
-        tab.link_help = tk.Label(link_frame, text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
+        tab.link_help = SvgLabel(link_frame, icon_name="book", text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
         tab.link_help.pack(anchor="w")
         tab.link_help.bind("<Button-1>",
                            lambda e: self._open_link(tab, "help"))
@@ -3334,23 +3355,23 @@ class ArduinoBrowser:
         ver_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
-        version_label = tk.Label(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
+        version_label = SvgLabel(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
         tab.version_var = tk.StringVar()
         tab.version_combo = ttk.Combobox(ver_frame,
                                          textvariable=tab.version_var,
                                          state="readonly", width=20)
 
-        tab.download_btn = make_flat_button(ver_frame, "⬇ Download",
+        tab.download_btn = make_flat_button(ver_frame, "Download",
                                             lambda: self._download(tab), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H)
         from src.modules.tk_glass import FieldRow
         tab._version_row = FieldRow(ver_frame, version_label, tab.version_combo, tab.download_btn, minimum=130)
 
-        tab.lbl_available = tk.Label(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
+        tab.lbl_available = SvgLabel(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN,
                                      bg=Theme.BG_DARKEST, anchor="w", justify="left")
         tab.lbl_available.pack(fill="x", pady=2)
         tab._wrapping_labels.append(tab.lbl_available)
 
-        tab.lbl_size = tk.Label(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_size = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_size.pack(anchor="w", pady=2)
 
         prepare_row = tk.Frame(dc, bg=Theme.BG_DARKEST)
@@ -3366,7 +3387,7 @@ class ArduinoBrowser:
             lambda: self._edit_arduino_cli_boards(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
         tab.arduino_cli_btn.pack(anchor="w", pady=(5, 0))
         tab.arduino_cli_btn.configure(state="disabled")
-        hint = tk.Label(dc, text="Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. All other boards use PlatformIO.",
+        hint = SvgLabel(dc, text="Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. All other boards use PlatformIO.",
                         font=("Montserrat", 8), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w", justify="left")
         hint.pack(fill="x", pady=(2, 4))
         tab._wrapping_labels.append(hint)
@@ -3384,10 +3405,10 @@ class ArduinoBrowser:
         tab._current_website = board.get("website", "")
         tab._current_help = board.get("help_url", "")
         tab.link_website.config(
-            text=f"🌐 {tab._current_website}" if tab._current_website else ""
+            text=f"{tab._current_website}" if tab._current_website else ""
         )
         tab.link_help.config(
-            text=f"📖 {tab._current_help}" if tab._current_help else ""
+            text=f"{tab._current_help}" if tab._current_help else ""
         )
 
         ver_labels = [v["version"] for v in board["versions"]]
@@ -3468,14 +3489,14 @@ class ArduinoBrowser:
         gap = max(4, round(7 * scale))
         header = GlassCard(dialog, Theme, padding=10)
         header.pack(fill='x', padx=pad, pady=(pad, gap))
-        heading = tk.Label(header.body, text=item['name'], font=('Montserrat', 12, 'bold'), fg=Theme.TEXT_BRIGHT,
+        heading = SvgLabel(header.body, text=item['name'], font=('Montserrat', 12, 'bold'), fg=Theme.TEXT_BRIGHT,
                            bg=Theme.BG_MID, anchor='w', justify='left')
         heading.pack(fill='x')
         header.body.bind('<Configure>', lambda event: heading.configure(wraplength=max(1, event.width)), add='+')
         footer = GlassCard(dialog, Theme, padding=10)
         # Reserve actions before the expanding form consumes the short screen.
         footer.pack(side='bottom', fill='x', padx=pad, pady=(gap, pad))
-        status = tk.Label(footer.body, text='', fg=Theme.TEXT_DIM, bg=Theme.BG_MID, font=('Montserrat', 8),
+        status = SvgLabel(footer.body, text='', fg=Theme.TEXT_DIM, bg=Theme.BG_MID, font=('Montserrat', 8),
                           anchor='w', justify='left')
         buttons = tk.Frame(footer.body, bg=Theme.BG_MID)
         buttons.pack(fill='x')
@@ -3489,22 +3510,22 @@ class ArduinoBrowser:
         scroll = ScrollForm(card.body, Theme.BG_MID)
         scroll.pack(fill='both', expand=True)
         body = scroll.body
-        hint = tk.Label(body, text="Use your vendor's PlatformIO platform for custom boards. Clear both fields to restore automatic matching.",
+        hint = SvgLabel(body, text="Use your vendor's PlatformIO platform for custom boards. Clear both fields to restore automatic matching.",
                         font=('Montserrat', 9), fg=Theme.TEXT, bg=Theme.BG_MID, justify='left', anchor='w')
         hint.pack(fill='x', pady=(0, gap))
-        tk.Label(body, text='Platform specification', fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID,
+        SvgLabel(body, text='Platform specification', fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID,
                  font=('Montserrat', 9, 'bold'), anchor='w').pack(fill='x')
         platform = tk.StringVar(value=configuration.get('platform', ''))
         entry = tk.Entry(body, textvariable=platform, bg=Theme.BG_DARKEST, fg=Theme.TEXT,
                          insertbackground=Theme.CYAN, font=('Montserrat', 10), relief='flat',
                          highlightbackground=Theme.BORDER, highlightcolor=Theme.CYAN, highlightthickness=1)
         entry.pack(fill='x', pady=(4, 4), ipady=round(3 * scale))
-        platform_help = tk.Label(body, text='owner/platform@version or an HTTPS platform source', font=('Montserrat', 8),
+        platform_help = SvgLabel(body, text='owner/platform@version or an HTTPS platform source', font=('Montserrat', 8),
                                  fg=Theme.TEXT_DIM, bg=Theme.BG_MID, anchor='w', justify='left')
         platform_help.pack(fill='x')
-        tk.Label(body, text='Optional exact board IDs', font=('Montserrat', 9, 'bold'),
+        SvgLabel(body, text='Optional exact board IDs', font=('Montserrat', 9, 'bold'),
                  fg=Theme.TEXT_BRIGHT, bg=Theme.BG_MID, anchor='w').pack(fill='x', pady=(12, 0))
-        mappings_help = tk.Label(body, text='One mapping per line: Arduino declaration ID = PlatformIO board ID',
+        mappings_help = SvgLabel(body, text='One mapping per line: Arduino declaration ID = PlatformIO board ID',
                                  font=('Montserrat', 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID, anchor='w', justify='left')
         mappings_help.pack(fill='x', pady=(2, 4))
         editor = tk.Frame(body, bg=Theme.BG_MID)
@@ -3751,7 +3772,7 @@ class ArduinoBrowser:
             tab.lbl_available.config(text="")
             if hasattr(tab, "lbl_status_badge"):
                 tab.lbl_status_badge.config(text="")
-            tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
+            tab.download_btn.config(text="Cancel", command=self._cancel_download, state="normal")
             return
 
         if installed_info is not None:
@@ -3761,14 +3782,14 @@ class ArduinoBrowser:
 
             if ver in all_inst_vers:
                 curr_info = all_inst_vers[ver]
-                badge_text = f"Downloaded files (v{ver})" if tab is self.board_tab else f"✔ Already Available (v{ver})"
+                badge_text = f"Downloaded files (v{ver})" if tab is self.board_tab else f"Already Available (v{ver})"
                 tab.lbl_available.config(text=badge_text, fg=Theme.GREEN)
                 if hasattr(tab, "lbl_status_badge"):
                     tab.lbl_status_badge.config(text=badge_text, fg=Theme.GREEN)
 
                 if curr_info["has_folder"]:
                     tab.download_btn.config(
-                        text="⬇ Download (ZIP)",
+                        text="Download (ZIP)",
                         command=lambda t=tab: self._download(t, already_available=True),
                         state="normal",
                         bg=Theme.BTN_CLEAR,
@@ -3777,7 +3798,7 @@ class ArduinoBrowser:
                     )
                 else:
                     tab.download_btn.config(
-                        text="⬇ Download",
+                        text="Download",
                         command=lambda t=tab: self._download(t, already_available=False),
                         state="normal",
                         bg=Theme.BTN_COMPILE,
@@ -3786,7 +3807,7 @@ class ArduinoBrowser:
                     )
 
             elif _version_key(ver) > _version_key(inst_ver):
-                badge_text = f"⬆ Update Available (Installed: v{inst_ver})"
+                badge_text = f"Update Available (Installed: v{inst_ver})"
                 tab.lbl_available.config(text=badge_text, fg=Theme.YELLOW)
                 if hasattr(tab, "lbl_status_badge"):
                     tab.lbl_status_badge.config(text=badge_text, fg=Theme.YELLOW)
@@ -3796,7 +3817,7 @@ class ArduinoBrowser:
                     best_info.get("archive") or os.path.basename(best_info.get("archive_path", "")),
                 )
                 tab.download_btn.config(
-                    text=f"⬆ Update to v{ver}",
+                    text=f"Update to v{ver}",
                     command=lambda t=tab, cl=cleanup_target: self._download(t, cleanup_old=cl, already_available=False),
                     state="normal",
                     bg=Theme.BTN_COMPILE,
@@ -3811,7 +3832,7 @@ class ArduinoBrowser:
                     tab.lbl_status_badge.config(text=badge_text, fg=Theme.TEXT_DIM)
 
                 tab.download_btn.config(
-                    text=f"⬇ Download v{ver}",
+                    text=f"Download v{ver}",
                     command=lambda t=tab: self._download(t, already_available=False),
                     state="normal",
                     bg=Theme.BTN_COMPILE,
@@ -3824,7 +3845,7 @@ class ArduinoBrowser:
                 tab.lbl_status_badge.config(text="")
 
             tab.download_btn.config(
-                text="⬇ Download",
+                text="Download",
                 command=lambda t=tab: self._download(t, already_available=False),
                 state="normal",
                 bg=Theme.BTN_COMPILE,
@@ -4349,7 +4370,7 @@ class ArduinoBrowser:
         self._downloading_item_name = name
         self._cancel_event.clear()
         tab.prepare_btn.configure(state="disabled")
-        tab.download_btn.configure(text="✕ Cancel", command=self._cancel_download, state="normal")
+        tab.download_btn.configure(text="Cancel", command=self._cancel_download, state="normal")
         self._set_status("Checking downloaded board package…")
         self.progress.configure(mode="indeterminate")
         self.progress.start(self._progress_interval)
@@ -4405,7 +4426,7 @@ class ArduinoBrowser:
         else:
             title_text = f"Choose format for:\n{archive_name}"
 
-        lbl = tk.Label(
+        lbl = SvgLabel(
             dialog,
             text=title_text,
             font=("Montserrat", 10), justify="center", anchor="center", wraplength=700,
@@ -4422,21 +4443,21 @@ class ArduinoBrowser:
 
         if already_available:
             btn_folder = make_flat_button(
-                btn_frame, "̶📁̶ ̶E̶x̶t̶r̶a̶c̶t̶e̶d̶ (Already Available)",
+                btn_frame, "Extracted (Already Available)",
                 lambda: None, Theme.BG_MID, Theme.BG_MID
             )
             btn_folder.config(state="disabled", cursor="arrow")
             btn_folder.pack(side="left", padx=8, expand=True, fill="x")
 
             btn_both = make_flat_button(
-                btn_frame, "̶📦̶ ̶B̶o̶t̶h̶ (Already Available)",
+                btn_frame, "Both (Already Available)",
                 lambda: None, Theme.BG_MID, Theme.BG_MID
             )
             btn_both.config(state="disabled", cursor="arrow")
             btn_both.pack(side="left", padx=8, expand=True, fill="x")
 
             btn_zip = make_flat_button(
-                btn_frame, "🗜 Archive Only (ZIP)",
+                btn_frame, "Archive Only (ZIP)",
                 lambda: select_option("zip"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H
             )
             btn_zip.pack(side="left", padx=8, expand=True, fill="x")
@@ -4444,19 +4465,19 @@ class ArduinoBrowser:
             dialog.bind("<Return>", lambda e: select_option("zip"))
         else:
             btn_folder = make_flat_button(
-                btn_frame, "📁 Folder / Extracted (Default)",
+                btn_frame, "Folder / Extracted (Default)",
                 lambda: select_option("folder"), Theme.BTN_COMPILE, Theme.BTN_COMPILE_H
             )
             btn_folder.pack(side="left", padx=8, expand=True, fill="x")
 
             btn_both = make_flat_button(
-                btn_frame, "📦 Both (ZIP & Folder)",
+                btn_frame, "Both (ZIP & Folder)",
                 lambda: select_option("both"), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
             )
             btn_both.pack(side="left", padx=8, expand=True, fill="x")
 
             btn_zip = make_flat_button(
-                btn_frame, "🗜 Archive Only",
+                btn_frame, "Archive Only",
                 lambda: select_option("zip"), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
             )
             btn_zip.pack(side="left", padx=8, expand=True, fill="x")
@@ -4520,7 +4541,7 @@ class ArduinoBrowser:
         self._downloading_item_name = name
         self._cancel_event.clear()
         self._begin_package_job(name)
-        tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
+        tab.download_btn.config(text="Cancel", command=self._cancel_download, state="normal")
         status_action = "Updating" if cleanup_old else "Downloading"
         self._set_status(f"{status_action} {archive}…")
         self.progress.config(mode="indeterminate")
@@ -4570,9 +4591,9 @@ class ArduinoBrowser:
         self._cancel_event.clear()
         self._begin_package_job(name)
 
-        tab.download_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
+        tab.download_btn.config(text="Cancel", command=self._cancel_download, state="normal")
         if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="✕ Cancel", command=self._cancel_download, state="normal")
+            self.installed_tab.update_btn.config(text="Cancel", command=self._cancel_download, state="normal")
 
         self._set_status(f"Downloading update {archive}…")
         self.progress.config(mode="indeterminate")
@@ -4740,11 +4761,11 @@ class ArduinoBrowser:
         if getattr(self, "_package_tracking_error", None):
             self._set_status(f"{self.status_var.get()}; package tracking could not be saved")
         self._busy = False
-        tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+        tab.download_btn.config(text="Download", command=lambda t=tab: self._download(t), state="normal")
         if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
             self.installed_tab.refresh_update_button_state()
         elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item, state="disabled")
+            self.installed_tab.update_btn.config(text="Update", command=self.installed_tab._update_item, state="disabled")
         self._active_download_tab = None
         self._downloading_item_name = None
         
@@ -4767,11 +4788,11 @@ class ArduinoBrowser:
         self.progress.config(mode="determinate", value=0)
         self._set_status("Download cancelled")
         self._busy = False
-        tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+        tab.download_btn.config(text="Download", command=lambda t=tab: self._download(t), state="normal")
         if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
             self.installed_tab.refresh_update_button_state()
         elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item, state="disabled")
+            self.installed_tab.update_btn.config(text="Update", command=self.installed_tab._update_item, state="disabled")
         self._active_download_tab = None
         self._downloading_item_name = None
         
@@ -4783,11 +4804,11 @@ class ArduinoBrowser:
         self.progress.config(mode="determinate", value=0)
         self._set_status("Download failed")
         self._busy = False
-        tab.download_btn.config(text="⬇ Download", command=lambda t=tab: self._download(t), state="normal")
+        tab.download_btn.config(text="Download", command=lambda t=tab: self._download(t), state="normal")
         if hasattr(self, "installed_tab") and hasattr(self.installed_tab, "refresh_update_button_state"):
             self.installed_tab.refresh_update_button_state()
         elif hasattr(self, "installed_tab") and hasattr(self.installed_tab, "update_btn"):
-            self.installed_tab.update_btn.config(text="⬇ Update", command=self.installed_tab._update_item, state="disabled")
+            self.installed_tab.update_btn.config(text="Update", command=self.installed_tab._update_item, state="disabled")
         self._active_download_tab = None
         self._downloading_item_name = None
         

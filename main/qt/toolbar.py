@@ -49,6 +49,8 @@ VALID_BAUD_RATES      = [b for b in [9600, 19200, 38400, 57600, 74880, 115200, 2
 UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if s <= MAX_BAUD_RATE]
 
 
+from main.qt.icons import IconLabel as QLabel
+
 class _DeveloperLogoLabel(QLabel):
     """Logo label that reports one activation for each completed left click."""
 
@@ -293,26 +295,26 @@ class PrimaryToolbar(QToolBar):
 
 
         # Compile (Green)
-        self.btn_compile = _make_action_btn("⚙ Compile", "Compile sketch (Ctrl+R)", "btn-compile",
+        self.btn_compile = _make_action_btn("Compile", "Compile sketch (Ctrl+R)", "btn-compile",
                                             "#1a5c3a", "#216e46")
         self.btn_compile.clicked.connect(self._do_compile)
         ac_layout.addWidget(self.btn_compile)
 
         # Upload (Blue/Purple)
-        self.btn_upload = _make_action_btn("⚡ Upload", "Compile & Upload (Ctrl+U)", "btn-upload",
+        self.btn_upload = _make_action_btn("Upload", "Compile & Upload (Ctrl+U)", "btn-upload",
                                            "#1a4a6e", "#1f5a88")
         self.btn_upload.clicked.connect(self._do_upload)
         ac_layout.addWidget(self.btn_upload)
 
         # Stop (Red)
-        self.btn_stop = _make_action_btn("■ Stop", "Cancel current operation", "btn-stop",
+        self.btn_stop = _make_action_btn("Stop", "Cancel current operation", "btn-stop",
                                          "#6e2020", "#882828")
         self.btn_stop.clicked.connect(self._do_stop)
         self.btn_stop.setEnabled(False)
         ac_layout.addWidget(self.btn_stop)
 
         # Clean (Dark Gray)
-        self.btn_clean = _make_action_btn("🧹 Clean", "Clean build cache", "btn-clean",
+        self.btn_clean = _make_action_btn("Clean", "Clean build cache", "btn-clean",
                                           "#2d3748", "#3a4a60")
         self.btn_clean.clicked.connect(self._do_clean)
         ac_layout.addWidget(self.btn_clean)
@@ -326,32 +328,32 @@ class PrimaryToolbar(QToolBar):
         self._action_sep = sep
 
         # Save (Green)
-        self.btn_save = _make_action_btn("💾 Save", "Save current file (Ctrl+S)", "btn-save",
+        self.btn_save = _make_action_btn("Save", "Save current file (Ctrl+S)", "btn-save",
                                          "#1a5c3a", "#216e46")
         self.btn_save.clicked.connect(self._do_save)
         ac_layout.addWidget(self.btn_save)
 
         # Save All (Blue)
-        self.btn_save_all = _make_action_btn("💾 Save All", "Save all open files (Ctrl+Shift+S)", "btn-save-all",
+        self.btn_save_all = _make_action_btn("Save All", "Save all open files (Ctrl+Shift+S)", "btn-save-all",
                                              "#1a4a6e", "#1f5a88")
         self.btn_save_all.clicked.connect(self._do_save_all)
         ac_layout.addWidget(self.btn_save_all)
 
         # Reload (Dark Gray)
-        self.btn_reload = _make_action_btn("↺ Reload", "Reload current file from disk", "btn-reload",
+        self.btn_reload = _make_action_btn("Reload", "Reload current file from disk", "btn-reload",
                                            "#2d3748", "#3a4a60")
         self.btn_reload.clicked.connect(self._do_reload)
         ac_layout.addWidget(self.btn_reload)
 
         # Modify (Teal)
-        self.btn_modify = _make_action_btn("🛠 Modify", "Add, rename, or delete project files", "btn-modify",
+        self.btn_modify = _make_action_btn("Modify", "Add, rename, or delete project files", "btn-modify",
                                            "#1a7a70", "#219a8d")
         self.btn_modify.clicked.connect(self._do_modify)
         ac_layout.addWidget(self.btn_modify)
 
         # Compact Actions dropdown button (visible when width < 1200)
         self.btn_actions_dropdown = _make_action_btn(
-            "Actions ▾",
+            "Actions ",
             "More actions (Stop, Clean, Save, Reload, Modify)",
             "btn-actions-dropdown",
             "#2d3748", "#3a4a60"
@@ -395,7 +397,7 @@ class PrimaryToolbar(QToolBar):
         rc_layout.addWidget(self.lbl_sketch)
 
         # Project
-        self.btn_project = _make_action_btn("📁 Project", "Choose where to open a project (Ctrl+O)", "btn-project",
+        self.btn_project = _make_action_btn("Project", "Choose where to open a project (Ctrl+O)", "btn-project",
                                             "#2d3748", "#3a4a60")
         self.btn_project.clicked.connect(self._on_new_project)
         rc_layout.addWidget(self.btn_project)
@@ -405,7 +407,7 @@ class PrimaryToolbar(QToolBar):
         rc_layout.addWidget(self.btn_cloud)
 
         # Download Boards/Libs button
-        self.btn_download = _make_action_btn("⬇ Boards & Libraries",
+        self.btn_download = _make_action_btn("Boards & Libraries",
                                              "Download and manage Arduino boards and libraries",
                                              "btn-download", "#2d3748", "#3a4a60")
         self.btn_download.clicked.connect(self._open_download_manager)
@@ -502,7 +504,7 @@ class PrimaryToolbar(QToolBar):
             if op in ("flash", "reset") or phase in ("flashing", "writing", "resetting", "erasing"):
                 return
             self.btn_stop.setEnabled(False)
-            self.btn_stop.setText("■ Stopping...")
+            self.btn_stop.setText("Stopping...")
             self._backend.stop_operation()
 
     def _do_clean(self) -> None:
@@ -739,37 +741,53 @@ class PrimaryToolbar(QToolBar):
                 self.btn_stop.setCursor(Qt.CursorShape.ArrowCursor)
             else:
                 self.btn_stop.setEnabled(True)
-                self.btn_stop.setText("■ Stop")
+                self.btn_stop.setText("Stop")
                 self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
 
             # Visual labels so user knows which op is active
             if phase == "compile" or (op == "compile" and phase not in ("flash", "flashing")):
                 if op == "upload":
-                    self.btn_compile.setText("⚙ Compile")
-                    self.btn_upload.setText("⚙ Building...")
+                    self.btn_compile.set_icon("compile")
+                    self.btn_compile.setText("Compile")
+                    self.btn_upload.set_icon("compile")
+                    self.btn_upload.setText("Building...")
                 else:
-                    self.btn_compile.setText("⚙ Compiling...")
-                    self.btn_upload.setText("⚡ Upload")
+                    self.btn_compile.set_icon("compile")
+                    self.btn_compile.setText("Compiling...")
+                    self.btn_upload.set_icon("upload")
+                    self.btn_upload.setText("Upload")
             elif phase in ("flash", "flashing", "upload") or op in ("upload", "flash"):
-                self.btn_compile.setText("⚙ Compile")
-                self.btn_upload.setText("⚡ Uploading...")
+                self.btn_compile.set_icon("compile")
+                self.btn_compile.setText("Compile")
+                self.btn_upload.set_icon("upload")
+                self.btn_upload.setText("Uploading...")
             elif phase in ("reset", "resetting", "hard_reset", "soft_reset") or op in ("reset", "hard_reset", "soft_reset"):
-                self.btn_compile.setText("⚙ Compile")
+                self.btn_compile.set_icon("compile")
+                self.btn_compile.setText("Compile")
                 if op == "hard_reset" or phase == "hard_reset":
-                    self.btn_upload.setText("⚡ Hard Resetting...")
+                    self.btn_upload.set_icon("upload")
+                    self.btn_upload.setText("Hard Resetting...")
                 elif op == "soft_reset" or phase == "soft_reset":
-                    self.btn_upload.setText("⚡ Soft Resetting...")
+                    self.btn_upload.set_icon("upload")
+                    self.btn_upload.setText("Soft Resetting...")
                 else:
-                    self.btn_upload.setText("⚡ Resetting...")
+                    self.btn_upload.set_icon("upload")
+                    self.btn_upload.setText("Resetting...")
             elif phase in ("clean", "cleaning") or op == "clean":
-                self.btn_compile.setText("⚙ Compile")
-                self.btn_upload.setText("⚡ Upload")
-                self.btn_clean.setText("🧹 Cleaning...")
+                self.btn_compile.set_icon("compile")
+                self.btn_compile.setText("Compile")
+                self.btn_upload.set_icon("upload")
+                self.btn_upload.setText("Upload")
+                self.btn_clean.set_icon("clean")
+                self.btn_clean.setText("Cleaning...")
         else:
-            self.btn_compile.setText("⚙ Compile")
-            self.btn_upload.setText("⚡ Upload")
-            self.btn_stop.setText("■ Stop")
-            self.btn_clean.setText("🧹 Clean")
+            self.btn_compile.set_icon("compile")
+            self.btn_compile.setText("Compile")
+            self.btn_upload.set_icon("upload")
+            self.btn_upload.setText("Upload")
+            self.btn_stop.setText("Stop")
+            self.btn_clean.set_icon("clean")
+            self.btn_clean.setText("Clean")
             self.btn_stop.setEnabled(False)
             self.btn_stop.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_clean.setEnabled(True)
@@ -895,7 +913,8 @@ class PrimaryToolbar(QToolBar):
 
             if width < 1000:
                 self.lbl_sketch.setVisible(False)
-                self.btn_download.setText("⬇")
+                self.btn_download.set_icon("download")
+                self.btn_download.setText("")
                 self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setFixedWidth(28)
                 if width < 520:
@@ -906,14 +925,16 @@ class PrimaryToolbar(QToolBar):
                     self.logo.setText("MCU Flasher by Naph")
             elif width < 1250:
                 self.lbl_sketch.setVisible(True)
-                self.btn_download.setText("⬇ Boards & Libraries")
+                self.btn_download.set_icon("download")
+                self.btn_download.setText("Boards & Libraries")
                 self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
                 self.logo.setText("MCU Flasher by Naph")
             else:
                 self.lbl_sketch.setVisible(True)
-                self.btn_download.setText("⬇ Boards & Libraries")
+                self.btn_download.set_icon("download")
+                self.btn_download.setText("Boards & Libraries")
                 self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
                 self.btn_download.setMinimumWidth(0)
                 self.btn_download.setMaximumWidth(16777215)
@@ -933,7 +954,8 @@ class PrimaryToolbar(QToolBar):
                 self._actions_popup = None
 
             self.lbl_sketch.setVisible(True)
-            self.btn_download.setText("⬇ Boards & Libraries")
+            self.btn_download.set_icon("download")
+            self.btn_download.setText("Boards & Libraries")
             self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
             self.btn_download.setMinimumWidth(0)
             self.btn_download.setMaximumWidth(16777215)
@@ -951,7 +973,7 @@ class PrimaryToolbar(QToolBar):
         self.lbl_sketch_icon.setVisible(width >= 680)
         # A half-screen workspace can be narrower than 400 logical pixels.
         micro = width < 420
-        self.btn_actions_dropdown.setText("" if micro else "Actions ▾")
+        self.btn_actions_dropdown.setText("" if micro else "Actions ")
         self.btn_actions_dropdown.setIcon(icon("settings") if micro else QIcon())
         self.btn_actions_dropdown.setMinimumWidth(30 if micro else 100)
         self.btn_actions_dropdown.setMaximumWidth(30 if micro else 16777215)
@@ -973,7 +995,7 @@ class PrimaryToolbar(QToolBar):
 
         # Stop (Red)
         popup.add_button(
-            self.btn_stop.text() or "■ Stop",
+            self.btn_stop.text() or "Stop",
             self.btn_stop.click,
             Theme.BTN_STOP,
             Theme.BTN_STOP_H,
@@ -981,7 +1003,7 @@ class PrimaryToolbar(QToolBar):
         )
         # Clean (Dark Gray)
         popup.add_button(
-            "🧹 Clean",
+            "Clean",
             self.btn_clean.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
@@ -989,7 +1011,7 @@ class PrimaryToolbar(QToolBar):
         )
         # Save (Green)
         popup.add_button(
-            "💾 Save",
+            "Save",
             self.btn_save.click,
             Theme.BTN_COMPILE,
             Theme.BTN_COMPILE_H,
@@ -997,7 +1019,7 @@ class PrimaryToolbar(QToolBar):
         )
         # Save All (Blue)
         popup.add_button(
-            "💾 Save All",
+            "Save All",
             self.btn_save_all.click,
             Theme.BTN_UPLOAD,
             Theme.BTN_UPLOAD_H,
@@ -1005,7 +1027,7 @@ class PrimaryToolbar(QToolBar):
         )
         # Reload (Dark Gray)
         popup.add_button(
-            "↺ Reload",
+            "Reload",
             self.btn_reload.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
@@ -1013,7 +1035,7 @@ class PrimaryToolbar(QToolBar):
         )
         # Modify (Teal)
         popup.add_button(
-            "🛠 Modify",
+            "Modify",
             self.btn_modify.click,
             Theme.BTN_MONITOR,
             Theme.BTN_MONITOR_H,
@@ -1415,7 +1437,7 @@ class ControlsBar(QWidget):
         self.board_selector.setMaximumWidth(max(400, int(adaptive_w * 1.6)))
         self.board_selector.clicked.connect(self._open_board_search_dialog)
 
-        self.btn_search_board = QPushButton("🔍")
+        self.btn_search_board = QPushButton("", icon_name="search")
         self.btn_search_board.setObjectName("btn-search-board")
         self.btn_search_board.setFixedSize(26, 26)
         self.btn_search_board.setToolTip("Search & Select MCU Board")
@@ -1517,14 +1539,14 @@ class ControlsBar(QWidget):
         self.btn_toggle_monitors.clicked.connect(self._toggle_monitors_pane)
         opt_row.addWidget(self.btn_toggle_monitors)
 
-        self.btn_settings = QPushButton("⚙ Settings")
+        self.btn_settings = QPushButton("Settings", icon_name="settings")
         self.btn_settings.setFixedHeight(26)
         self.btn_settings.setObjectName("btn-settings")
         self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_settings.clicked.connect(self._open_settings)
         opt_row.addWidget(self.btn_settings)
 
-        self.btn_ai = QPushButton("🤖 AI Assistant")
+        self.btn_ai = QPushButton("AI Assistant", icon_name="ai")
         self.btn_ai.setFixedHeight(26)
         self.btn_ai.setObjectName("btn-ai-assistant")
         self.btn_ai.setCheckable(True)
@@ -1533,7 +1555,7 @@ class ControlsBar(QWidget):
         opt_row.addWidget(self.btn_ai)
 
         # Compact Options dropdown button (visible when width < 1350)
-        self.btn_opt_dropdown = QPushButton("Options ▾")
+        self.btn_opt_dropdown = QPushButton("Options ")
         self.btn_opt_dropdown.setObjectName("btn-options-dropdown")
         self.btn_opt_dropdown.setFixedHeight(26)
         self.btn_opt_dropdown.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1773,7 +1795,8 @@ class ControlsBar(QWidget):
                 window.restart_for_offline_mode(dlg.offline_mode_previous)
 
     def _toggle_ai_panel(self, checked: bool) -> None:
-        self.btn_ai.setText("🤖 Hide AI" if checked else "🤖 AI Assistant")
+        self.btn_ai.set_icon("ai")
+        self.btn_ai.setText("Hide AI" if checked else "AI Assistant")
         mw = self.window()
         if hasattr(mw, "toggle_ai_panel"):
             mw.toggle_ai_panel(checked)
@@ -1781,7 +1804,8 @@ class ControlsBar(QWidget):
     def set_ai_panel_visible(self, visible: bool) -> None:
         self.btn_ai.blockSignals(True)
         self.btn_ai.setChecked(visible)
-        self.btn_ai.setText("🤖 Hide AI" if visible else "🤖 AI Assistant")
+        self.btn_ai.set_icon("ai")
+        self.btn_ai.setText("Hide AI" if visible else "AI Assistant")
         self.btn_ai.blockSignals(False)
 
     def _toggle_editor_detachment(self) -> None:
@@ -2081,7 +2105,7 @@ class ControlsBar(QWidget):
             self.port_combo.setMinimumWidth(100)
         self._grid.setContentsMargins(*(8, 2, 8, 2) if short else (10, 4, 10, 4))
         self._grid.setSpacing(3 if short else 6)
-        self.btn_opt_dropdown.setText("" if short else "Options ▾")
+        self.btn_opt_dropdown.setText("" if short else "Options ")
         self.btn_opt_dropdown.setIcon(icon("settings") if short else QIcon())
         self.btn_opt_dropdown.setAccessibleName("Workspace options")
         self.btn_opt_dropdown.setMinimumWidth(30 if short else 0)
@@ -2207,7 +2231,7 @@ class ControlsBar(QWidget):
         if self._row_mode == 5:
             for label, checkbox in (("Timestamps", self.cb_timestamp), ("Skip Compile", self.cb_skip_compile)):
                 popup.add_button(
-                    ("✓ " if checkbox.isChecked() else "") + label,
+                    ("" if checkbox.isChecked() else "") + label,
                     checkbox.click, Theme.BG_LIGHT, Theme.BG_HOVER,
                     enabled=checkbox.isEnabled(),
                 )
@@ -2249,7 +2273,7 @@ class ControlsBar(QWidget):
 
         # 4. Settings
         popup.add_button(
-            "⚙ Settings",
+            "Settings",
             self.btn_settings.click,
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
@@ -2258,7 +2282,7 @@ class ControlsBar(QWidget):
 
         # 5. AI Assistant
         ai_active = getattr(mw, "_ai_visible", False) or self.btn_ai.isChecked()
-        ai_text = "🤖 Hide AI" if ai_active else "🤖 AI Assistant"
+        ai_text = "Hide AI" if ai_active else "AI Assistant"
         ai_bg = Theme.CYAN_DIM if ai_active else Theme.BTN_CLEAR
         ai_hover = Theme.CYAN if ai_active else Theme.BTN_CLEAR_H
         popup.add_button(

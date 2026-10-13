@@ -148,11 +148,20 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
                      troughcolor=theme.BG_DARKEST, bordercolor=theme.BG_DARKEST, arrowcolor=theme.TEXT_DIM,
                      lightcolor=theme.BG_MID, darkcolor=theme.BG_MID, arrowsize=max(12, round(12 * scale)))
     style.map('ArduinoChoices.Horizontal.TScrollbar', background=[('active', theme.BG_HOVER)])
-    tree = ttk.Treeview(listing, columns=('allowed', 'board'), show='headings', selectmode='browse',
+    from src.modules.tk_svg import photo
+    from src.modules.ui_palette import contrast_ratio, readable_foreground
+    def ink(preferred, background):
+        return preferred if contrast_ratio(preferred, background) >= 3 else readable_foreground(background)
+    images = {(enabled, selected): photo(dialog, "check" if enabled else "choice_off",
+              ink(theme.GREEN if enabled else theme.TEXT_DIM,
+                  theme.CYAN_DIM if selected else theme.BG_DARKEST),
+              max(16, round(16*scale)))
+              for enabled in (False, True) for selected in (False, True)}
+    tree = ttk.Treeview(listing, columns=('board',), show='tree headings', selectmode='browse',
                         style='ArduinoChoices.Treeview', height=7)
-    tree.heading('allowed', text='CLI')
+    tree.heading('#0', text='CLI')
     tree.heading('board', text='Board name / exact ID')
-    tree.column('allowed', width=max(44, round(44 * scale)), minwidth=40, stretch=False, anchor='center')
+    tree.column('#0', width=max(44, round(44 * scale)), minwidth=40, stretch=False, anchor='center')
     tree.column('board', width=400, minwidth=80)
     tree.grid(row=0, column=0, sticky='nsew')
     vertical = ttk.Scrollbar(listing, orient='vertical', command=tree.yview)
@@ -175,7 +184,7 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
         for number, (identifier, name) in enumerate(matches[:250]):
             row = str(number)
             visible[row] = identifier
-            tree.insert('', 'end', iid=row, values=('✓' if identifier in chosen else '', f'{name}  [{identifier}]'))
+            tree.insert('', 'end', iid=row, image=images[(identifier in chosen, False)], values=(f'{name}  [{identifier}]',))
         if loaded and not saving:
             extra = ' Refine the search to see more.' if len(matches) > 250 else ''
             status.configure(text=f'{len(chosen)} allowed; {min(250, len(matches))} of {len(matches)} shown.{extra}')
@@ -192,13 +201,21 @@ def open_board_chooser(app, tab, metadata, folder, *, theme, button, load_settin
             chosen.remove(identifier)
         else:
             chosen.add(identifier)
-        values = list(tree.item(row, 'values'))
-        values[0] = '✓' if identifier in chosen else ''
-        tree.item(row, values=values)
+        tree.item(row, image=images[(identifier in chosen, False)])
         status.configure(text=f'{len(chosen)} board(s) allowed. Click a board or press Space to change it.')
 
+    painted_selection = set()
+    def refresh_selection(_event=None):
+        current = set(tree.selection())
+        for row in painted_selection | current:
+            if row in visible:
+                tree.item(row, image=images[(visible[row] in chosen, row in current)])
+        painted_selection.clear()
+        painted_selection.update(current)
+    tree.bind('<<TreeviewSelect>>', refresh_selection, add='+')
+
     def click(event):
-        if tree.identify_region(event.x, event.y) == 'cell':
+        if tree.identify_region(event.x, event.y) in ('cell', 'tree'):
             toggle(tree.identify_row(event.y))
 
     tree.bind('<ButtonRelease-1>', click)

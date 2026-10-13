@@ -327,6 +327,28 @@ already included and the builder skips adding it again. Setup displays
 stage in the summary. The original message remains in the full builder log.
 Missing-image warnings, other diagnostics and failed builds retain their meaning.
 
+### SVG action icons
+
+Workspace, Developer Access, setup, downloader, diagnostics and terminal controls
+use the original circuit SVG family in `src/assets/icons/actions/`. Text labels
+contain no decorative emoji. Icons follow the active text/semantic ink and retain
+normal, active, disabled and compact states in Glass Dark, Frosted Light and
+Solarized Dark. Developer Access retains its solid paper palette.
+
+Qt reads the same local SVG assets on Windows and Ubuntu. Cold Tk setup uses a
+bounded standard-library renderer of those assets, with no Qt, Pillow, external
+icon font, network request or live animation requirement. Native window icons
+retain the OS-required ICO/PNG formats. Log marks live beside copyable text;
+user sketches, received serial/terminal Unicode and saved content are preserved.
+Compatibility severity and Arduino CLI selections use explicit state rather
+than displayed glyphs.
+
+`direct/verify_svg_icons.py` checks the SVG geometry, theme/state contrast,
+compact Windows terminal controls, copy behavior and emoji-free production
+sources. `--native-tk` verifies the dependency-free renderer and list selection.
+`--render-dir temp/...` writes the four-palette icon gallery. Dedicated CI runs
+native Windows on both Qt ranges and native Ubuntu at 100–200% scaling.
+
 Maintenance utilities in [cleaner/](cleaner/README.md) and `DANGER-ZONE/` preview
 their targets by default. Windows and Ubuntu use separate resource plans;
 applying a plan requires an explicit flag and confirmation. Close running app,

@@ -795,6 +795,20 @@
       box-sizing: border-box;
     }
 
+    .review-title-icon, .definition-icon {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      background-color: currentColor;
+      mask: var(--review-icon, url('../assets/icons/actions/ai.svg')) center / contain no-repeat;
+      -webkit-mask: var(--review-icon, url('../assets/icons/actions/ai.svg')) center / contain no-repeat;
+    }
+    .definition-icon {
+      --review-icon: url('../assets/icons/actions/link.svg');
+      margin-right: 6px;
+      vertical-align: -3px;
+    }
     #ai-diff-banner .review-title {
       display: inline-flex;
       flex: 0 0 auto;
@@ -1108,7 +1122,7 @@
     <div id="editor-container" role="tabpanel" aria-label="Source editor">
       <div id="monaco-anchor"></div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
-        <span id="ai-review-title" class="review-title" title="AI Review"><span class="review-title-icon" aria-hidden="true">⚡</span><span class="review-title-label">AI Review</span></span>
+        <span id="ai-review-title" class="review-title" title="AI Review"><span class="review-title-icon" aria-hidden="true"></span><span class="review-title-label">AI Review</span></span>
         <span id="ai-review-source" class="review-source" aria-label="Unknown source" title="Unknown source"><span class="review-source-label">Unknown</span><span class="review-source-short" aria-hidden="true">?</span></span>
         <span id="ai-review-file" class="review-file"></span>
         <span id="ai-review-position" class="review-position"></span>
@@ -2314,6 +2328,10 @@
         const available = hasAiBannerContent();
         const visible = available && !aiBannerHidden;
         if (banner) {
+          if (!visible && banner.contains(document.activeElement)) {
+            if (window.editorInstance && window.editorInstance.focus) window.editorInstance.focus();
+            else document.activeElement.blur();
+          }
           banner.style.display = visible ? 'flex' : 'none';
           banner.setAttribute('aria-hidden', String(!visible));
           // Compact panes keep full metadata available on hover and to assistive
@@ -2393,7 +2411,9 @@
       function setAiBannerTitle(text, icon) {
         const title = document.getElementById('ai-review-title');
         if (!title) return;
-        title.querySelector('.review-title-icon').textContent = icon;
+        const mark = title.querySelector('.review-title-icon');
+        mark.textContent = '';
+        mark.style.setProperty('--review-icon', `url('../assets/icons/actions/${icon === 'undo' ? 'undo' : 'ai'}.svg')`);
         title.querySelector('.review-title-label').textContent = text;
         title.title = text;
         const banner = document.getElementById('ai-diff-banner');
@@ -2452,7 +2472,7 @@
       }
 
       function setBannerReviewMode() {
-        setAiBannerTitle('AI Review', '⚡');
+        setAiBannerTitle('AI Review', 'ai');
         setVisible(document.getElementById('ai-diff-add-count'), true);
         setVisible(document.getElementById('ai-diff-modify-count'), true);
         setVisible(document.getElementById('ai-diff-remove-count'), true);
@@ -2543,7 +2563,7 @@
           }
           lastAiHistoryState = state;
 
-          setAiBannerTitle('AI History', '↶');
+          setAiBannerTitle('AI History', 'undo');
           setAiBannerSource(activeEntry);
           setVisible(document.getElementById('ai-review-previous'), false);
           setVisible(document.getElementById('ai-review-next'), false);
@@ -4237,7 +4257,7 @@
           html += `
             <div class="hover-footer">
               <button class="hover-goto-btn" onclick="window.jumpToDefinitionWord('${escapeHtml(word)}')">
-                <span>👉 Go to Definition</span>
+                <span><span class="definition-icon" aria-hidden="true"></span>Go to Definition</span>
                 <kbd style="font-size:10px; opacity:0.85; margin-left:4px; background:var(--hover-code-bg); padding:1px 5px; border-radius:3px; border:1px solid var(--hover-border);">F12</kbd>
               </button>
               <span style="font-size:10px; color:var(--text-dim);">Ctrl+Click / F12 to jump</span>
@@ -4419,7 +4439,7 @@
                 }
 
                 const encodedWord = encodeURIComponent(JSON.stringify([sym.name]));
-                lines.push(`[👉 Go to Definition (F12)](command:gotoDefinitionWord?${encodedWord})`);
+                lines.push(`[Go to Definition (F12)](command:gotoDefinitionWord?${encodedWord})`);
 
                 return {
                   range: new monaco.Range(position.lineNumber, wordInfo.startColumn, position.lineNumber, wordInfo.endColumn),

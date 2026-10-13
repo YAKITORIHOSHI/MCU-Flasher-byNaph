@@ -59,6 +59,9 @@ _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
 
 
+from main.qt.icons import IconLabel as QLabel
+
+
 class MCUMainWindow(QMainWindow):
     """
     Main application window for MCU Flasher by Naph (PySide6).
@@ -743,6 +746,8 @@ class MCUMainWindow(QMainWindow):
         else:
             self._status_base_text = text
             self._status_label.setStyleSheet("")
+        from src.modules.svg_icons import action_name, status_name
+        self._status_label.set_icon(status_name(notification_type) if notification_type else action_name(text))
         self._status_label.setText(text)
 
     def _setup_shortcuts(self) -> None:
@@ -918,7 +923,7 @@ class MCUMainWindow(QMainWindow):
             }
             effective_key = (op or phase).lower()
             display_phase = phase_map.get(effective_key, phase_map.get(phase.lower(), phase.replace("_", " ").title()))
-            self._set_status_text(f"⚙ {display_phase}…")
+            self._set_status_text(f"{display_phase}…")
             self._progress_bar.setRange(0, 0)
             self._progress_bar.setTextVisible(False)
             self._progress_bar.setVisible(True)
@@ -1065,8 +1070,6 @@ class MCUMainWindow(QMainWindow):
 
             if not (display_action.endswith("…") or display_action.endswith("...")):
                 display_action = f"{display_action}…"
-            if not display_action.startswith("⚙ "):
-                display_action = f"⚙ {display_action}"
             self._set_status_text(display_action)
 
     def _trigger_temporary_action(self, action_name: str, duration_ms: int = 700) -> None:
@@ -1077,8 +1080,6 @@ class MCUMainWindow(QMainWindow):
         display_text = action_name.strip()
         if not (display_text.endswith("…") or display_text.endswith("...")):
             display_text = f"{display_text}…"
-        if not display_text.startswith("⚙ "):
-            display_text = f"⚙ {display_text}"
 
         self._set_status_text(display_text)
         self._status_base_text = "Ready"
@@ -1523,7 +1524,7 @@ class MCUMainWindow(QMainWindow):
         self._sync_ai_and_editor_layout()
         if self._editor_had_focus_before_detach:
             self._editor_panel.restore_input_focus()
-        self._on_notification({"type": "info", "message": "✓ Code editor detached to separate window."})
+        self._on_notification({"type": "info", "message": "Code editor detached to separate window."})
 
     def attach_editor(self) -> None:
         """Re-embed the detached Monaco editor back into the main window."""
@@ -1568,9 +1569,9 @@ class MCUMainWindow(QMainWindow):
                 self._editor_panel.restore_input_focus()
 
             if self._editor_pane_visible:
-                self._on_notification({"type": "info", "message": "✓ Code editor re-attached to main window."})
+                self._on_notification({"type": "info", "message": "Code editor re-attached to main window."})
             else:
-                self._on_notification({"type": "info", "message": "✓ Code editor re-attached (pane hidden — use Show Editor)."})
+                self._on_notification({"type": "info", "message": "Code editor re-attached (pane hidden — use Show Editor)."})
         finally:
             self._is_attaching_editor = False
 

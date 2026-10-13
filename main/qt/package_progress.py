@@ -7,6 +7,8 @@ from main.core.theme import Theme
 from src.modules.package_jobs import TERMINAL
 
 
+from main.qt.icons import ActionButton as QPushButton
+
 class PackageProgressCard(QFrame):
     details_requested = Signal()
 
@@ -30,7 +32,7 @@ class PackageProgressCard(QFrame):
         self.title.setTextFormat(Qt.TextFormat.PlainText)
         self.title.setObjectName("package-title")
         header.addWidget(self.title, 1)
-        hide = QPushButton("×", self)
+        hide = QPushButton("", self)
         hide.setFixedSize(24, 24)
         hide.setToolTip("Hide progress; preparation continues")
         hide.setAccessibleName("Hide package progress")

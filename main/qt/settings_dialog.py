@@ -45,6 +45,8 @@ from main.qt.signals import signals
 from main.qt.responsive import fit_dialog, ScreenWatcher
 
 
+from main.qt.icons import IconLabel as QLabel
+
 class SettingsDialog(QDialog):
     """
     Comprehensive application settings dialog.
@@ -553,9 +555,9 @@ class SettingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         hard_reset_label = (
-            "⚡ Hard Reset (Erase Flash)"
+            "Hard Reset (Erase Flash)"
             if reset_caps.get("hard_strategy") == "esp8266_erase"
-            else "⚡ Hard Reset (Bootloader)"
+            else "Hard Reset (Bootloader)"
         )
         self.btn_hard_reset = QPushButton(hard_reset_label)
         self.btn_hard_reset.setFixedHeight(30)
@@ -586,7 +588,7 @@ class SettingsDialog(QDialog):
         self.btn_hard_reset.clicked.connect(self._run_hard_reset)
         btn_row.addWidget(self.btn_hard_reset)
 
-        self.btn_soft_reset = QPushButton("🔄 Soft Reset (Reset Flash)")
+        self.btn_soft_reset = QPushButton("Soft Reset (Reset Flash)", icon_name="reload")
         self.btn_soft_reset.setFixedHeight(30)
         self.btn_soft_reset.setStyleSheet("""
             QPushButton:enabled {
@@ -637,7 +639,8 @@ class SettingsDialog(QDialog):
                     f"Hard Reset (bootloader flash) is not supported for {board_name or 'this board'}.\n"
                     "Only ESP32 and ESP8266 boards support this operation."
                 )
-                self.btn_hard_reset.setText("⚡ Hard Reset (Not Supported)")
+                self.btn_hard_reset.set_icon("erase")
+                self.btn_hard_reset.setText("Hard Reset (Not Supported)")
             if not can_soft:
                 self.btn_soft_reset.setEnabled(False)
                 self.btn_soft_reset.setCursor(Qt.CursorShape.ArrowCursor)

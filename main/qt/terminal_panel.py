@@ -7,8 +7,8 @@ Faithfully aligned with the original native architecture:
   • Child process isolation: runs src/modules/project_terminal.py with a local HTTP/WS server
   • Real interactive ConPTY sessions (PowerShell & Command Prompt) via pywinpty + xterm.js
   • Clean Win32 HWND embedding (SetParent) into a native Qt widget container
-  • True multi-session tabs: sleek VS Code-style tabs ([ pwsh ✕ ], [ cmd ✕ ], [+])
-  • Compact toolbar controls: [•], [⌧ Clear], [🗑 Kill] (red)
+  • True multi-session tabs: sleek VS Code-style tabs ([ pwsh ], [ cmd ], [+])
+  • Compact toolbar controls: [•], [Clear], [Kill] (red)
   • Active theme synchronization: live updates xterm.js colors when theme changes
   • Seamless resizing: dynamically updates terminal geometry without corrupting DirectComposition
 """
@@ -55,8 +55,12 @@ except ImportError:
 
 _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
-_SPIN_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_SPIN_CHARS = ["", "", "", "", "", "", "", "", "", ""]
 
+
+from main.qt.icons import IconLabel as QLabel
+
+from main.qt.icons import ActionButton as QPushButton, icon
 
 class _EmbedContainer(QWidget):
     """Native window embedding container with automatic geometry synchronization."""
@@ -211,7 +215,7 @@ class TerminalPanel(QWidget):
         hl.setSpacing(4)
         self._header_layout = hl
 
-        # ── Left: Session Tabs ([ pwsh ✕ ] [ cmd ✕ ]) ─────────────────────────
+        # ── Left: Session Tabs ([ pwsh ] [ cmd ]) ─────────────────────────
         self._tab_bar = _SessionTabBar(header)
         self._tab_bar.setObjectName("terminal-session-tabs")
         self._tab_bar.setTabsClosable(True)
@@ -247,7 +251,9 @@ class TerminalPanel(QWidget):
 
         # A single compact chooser requires an explicit shell selection.
         self._btn_add_tab = QToolButton(header)
-        self._btn_add_tab.setText("+")
+        self._btn_add_tab.setText("")
+        self._btn_add_tab.setIcon(icon("add"))
+        self._btn_add_tab.setAccessibleName("New terminal session")
         self._btn_add_tab.setObjectName("btn-terminal-add")
         self._btn_add_tab.setFixedSize(24, 22)
         self._btn_add_tab.setToolTip("New terminal: choose PowerShell or Command Prompt")
@@ -274,12 +280,13 @@ class TerminalPanel(QWidget):
 
         hl.addStretch()
 
-        # ── Right Toolbar Controls ([•] [⌧ Clear] [🗑 Kill]) ──────────────────
+        # ── Right Toolbar Controls ([•] [Clear] [Kill]) ──────────────────
         # Status dot indicator
-        self._status_dot = QLabel("●")
+        self._status_dot = QLabel("", icon_name="disconnected")
         self._status_dot.setObjectName("terminal-status-dot")
-        self._status_dot.setFixedSize(14, 20)
+        self._status_dot.setFixedSize(20, 20)
         self._status_dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_dot.set_icon("disconnected")
         self._status_dot.setToolTip("Project Terminal: No active sessions")
         self._status_dot.setStyleSheet("""
             QLabel#terminal-status-dot {
@@ -289,8 +296,8 @@ class TerminalPanel(QWidget):
         """)
         hl.addWidget(self._status_dot)
 
-        # ⌧ Clear button
-        self._btn_clear = QPushButton("⌧ Clear")
+        # Clear button
+        self._btn_clear = QPushButton("Clear", icon_name="clear")
         self._btn_clear.setObjectName("btn-terminal-clear")
         self._btn_clear.setToolTip("Clear active terminal display")
         self._btn_clear.setFixedHeight(22)
@@ -310,8 +317,8 @@ class TerminalPanel(QWidget):
         self._btn_clear.clicked.connect(self._clear_active_session)
         hl.addWidget(self._btn_clear)
 
-        # 🗑 Kill button (prominent red styling just like RECENT-WORKING-MCU-FLASHER)
-        self._btn_kill = QPushButton("🗑 Kill")
+        # Kill button (prominent red styling just like RECENT-WORKING-MCU-FLASHER)
+        self._btn_kill = QPushButton("Kill", icon_name="clear")
         self._btn_kill.setObjectName("btn-terminal-kill")
         self._btn_kill.setToolTip("Kill active terminal session")
         self._btn_kill.setFixedHeight(22)
@@ -348,7 +355,7 @@ class TerminalPanel(QWidget):
         lv.setSpacing(6)
         lv.addStretch()
 
-        self._spin_lbl = QLabel("⠋")
+        self._spin_lbl = QLabel("", icon_name="terminal")
         self._spin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._spin_lbl.setStyleSheet("font-size: 20px; color: #56cfbf;")
         lv.addWidget(self._spin_lbl)
@@ -434,11 +441,15 @@ class TerminalPanel(QWidget):
     def set_responsive_width(self, width: int) -> None:
         """Dynamically adapt terminal header buttons based on width."""
         if width < 700:
-            self._btn_clear.setText("⌧")
-            self._btn_kill.setText("🗑")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("")
+            self._btn_kill.set_icon("clear")
+            self._btn_kill.setText("")
         else:
-            self._btn_clear.setText("⌧ Clear")
-            self._btn_kill.setText("🗑 Kill")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("Clear")
+            self._btn_kill.set_icon("clear")
+            self._btn_kill.setText("Kill")
         if width < 480:
             self._btn_open_pwsh.setText("+ PowerShell")
             self._btn_open_cmd.setText("+ CMD")
@@ -493,10 +504,10 @@ class TerminalPanel(QWidget):
         self._status_dot.setStyleSheet(
             "QLabel#terminal-status-dot { background: transparent; border: none; color: #f1c40f; font-size: 10px; margin-right: 2px; }"
         )
+        self._status_dot.set_icon("time")
         self._status_dot.setToolTip("Project Terminal: Initializing ConPTY engine…")
         self._load_title.setText("Initializing Project Terminal…")
         self._load_sub.setText("Preparing ConPTY terminal engine & environment…")
-        self._spin_timer.start()
 
         cmd = [
             str(py_exe),
@@ -521,6 +532,7 @@ class TerminalPanel(QWidget):
             self._status_dot.setStyleSheet(
                 "QLabel#terminal-status-dot { background: transparent; border: none; color: #e74c3c; font-size: 10px; margin-right: 2px; }"
             )
+            self._status_dot.set_icon("error")
             self._status_dot.setToolTip("Project Terminal: Startup error")
             self._load_title.setText("Terminal Startup Error")
             self._load_sub.setText(f"Failed to start Project Terminal: {e}")
@@ -550,6 +562,7 @@ class TerminalPanel(QWidget):
                 self._status_dot.setStyleSheet(
                     "QLabel#terminal-status-dot { background: transparent; border: none; color: #e74c3c; font-size: 10px; margin-right: 2px; }"
                 )
+                self._status_dot.set_icon("warning")
                 self._status_dot.setToolTip("Project Terminal: Connection timed out")
                 self._load_title.setText("Connection Timed Out")
                 self._load_sub.setText("Could not attach to the Project Terminal window.")
@@ -622,6 +635,7 @@ class TerminalPanel(QWidget):
                 self._status_dot.setStyleSheet(
                     "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
                 )
+                self._status_dot.set_icon("connected")
                 self._status_dot.setToolTip("Project Terminal: Ready")
             self._update_buttons_state()
         except Exception as e:
@@ -637,6 +651,7 @@ class TerminalPanel(QWidget):
             self._status_dot.setStyleSheet(
                 "QLabel#terminal-status-dot { background: transparent; border: none; color: #e74c3c; font-size: 10px; margin-right: 2px; }"
             )
+            self._status_dot.set_icon("disconnected")
             self._status_dot.setToolTip("Project Terminal: Exited")
             self._load_title.setText("Terminal Exited")
             self._load_sub.setText("The terminal subprocess terminated unexpectedly.")
@@ -674,6 +689,7 @@ class TerminalPanel(QWidget):
             self._status_dot.setStyleSheet(
                 f"QLabel#terminal-status-dot {{ background: transparent; border: none; color: {status_color}; font-size: 10px; margin-right: 2px; }}"
             )
+            self._status_dot.set_icon("connected" if has_sessions else "disconnected")
             self._status_dot.setToolTip("Project Terminal: Ready" if has_sessions else "Project Terminal: No active sessions")
             self._update_buttons_state()
 
@@ -713,6 +729,7 @@ class TerminalPanel(QWidget):
         self._status_dot.setStyleSheet(
             "QLabel#terminal-status-dot { background: transparent; border: none; color: #4ec994; font-size: 10px; margin-right: 2px; }"
         )
+        self._status_dot.set_icon("connected")
         self._status_dot.setToolTip(f"Project Terminal: Running ({title})")
         self._update_buttons_state()
 
@@ -729,7 +746,7 @@ class TerminalPanel(QWidget):
             QTimer.singleShot(50, self.focus_terminal)
 
     def _on_tab_close_requested(self, index: int) -> None:
-        """Handle user clicking close button (✕) on a session tab."""
+        """Handle user clicking close button () on a session tab."""
         if index < 0 or index >= self._tab_bar.count():
             return
         session_id = self._tab_bar.tabData(index)
@@ -779,6 +796,7 @@ class TerminalPanel(QWidget):
             self._status_dot.setStyleSheet(
                 "QLabel#terminal-status-dot { background: transparent; border: none; color: #64748b; font-size: 10px; margin-right: 2px; }"
             )
+            self._status_dot.set_icon("disconnected")
             self._status_dot.setToolTip("Project Terminal: No active sessions")
 
     # ── Control Message Protocol ─────────────────────────────────────────────
@@ -839,6 +857,7 @@ class TerminalPanel(QWidget):
                 return
 
     def _on_control_failed(self, message):
+        self._status_dot.set_icon("error")
         self._status_dot.setToolTip(message)
         if self._backend and hasattr(self._backend, "emit"):
             self._backend.emit("console:log", {"text": message, "tag": "error", "newline": True})

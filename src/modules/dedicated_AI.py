@@ -398,7 +398,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 <body>
     <div id="terminal-container"></div>
     <div id="fallback-container">
-        <div id="fallback-output">🤖 MCU Flash GUI — OpenCode AI Terminal\n---------------------------------------\nConnecting to PTY Session...\n</div>
+        <div id="fallback-output">MCU Flash GUI — OpenCode AI Terminal\n---------------------------------------\nConnecting to PTY Session...\n</div>
         <div id="fallback-input-row">
             <span id="fallback-prompt">&gt;</span>
             <input type="text" id="fallback-input" autofocus placeholder="Type command here and press Enter..." />
@@ -563,6 +563,8 @@ def get_ai_html() -> str:
         .replace("__THEME_SELECTION__", t["selection"])
     )
 
+
+from src.modules.tk_svg import SvgButton, SvgLabel
 
 class TerminalServer:
     def __init__(self, port=8765, target_dir=None, command=None):
@@ -1136,7 +1138,7 @@ class AIController:
         self.anim_job = None
         self.monitor_job = None
         self.anim_index = 0
-        self.anim_frames = ["⏳ Starting AI", "⚡ Starting AI.", "⏳ Starting AI..", "⚡ Starting AI..."]
+        self.anim_frames = ["Starting AI", "Starting AI.", "Starting AI..", "Starting AI..."]
         self._file_mtimes = {}
         self._file_contents = {}
         self._last_signal_mtime = 0
@@ -1443,13 +1445,13 @@ class AIController:
         if not getattr(self, "disclaimer_accepted", False):
             disclaimer_title = "OpenCode AI Assistant (Beta Test)"
             disclaimer_msg = (
-                "🤖 OpenCode AI Assistant\n"
+                "OpenCode AI Assistant\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "📌 Notice & Disclaimer:\n"
+                "Notice & Disclaimer:\n"
                 "• OpenCode AI integration in this project is currently in BETA TESTING.\n"
                 "• MCU Flash GUI does not claim any copyright, trademark, or ownership of OpenCode AI. "
                 "All rights, trademarks, and intellectual property belong to their respective creators.\n\n"
-                "🛡️ System Permission:\n"
+                "System Permission:\n"
                 "• Clicking 'Yes' will launch OpenCode in a native Python desktop window "
                 "to assist you with fixing, explaining, and debugging code.\n\n"
                 "Do you want to proceed and launch OpenCode AI Assistant?"
@@ -1522,7 +1524,7 @@ class AIController:
         else:
             for b in self.buttons:
                 try:
-                    b.configure(text="🤖 Hide AI")
+                    b.configure(text="Hide AI")
                 except Exception:
                     pass
 
@@ -1531,7 +1533,7 @@ class AIController:
         for b in self.buttons:
             try:
                 b.configure(
-                    text="🤖 AI Assistant", 
+                    text="AI Assistant",
                     state=tk.NORMAL,
                     bg="#252526", 
                     activebackground="#3e3e42",
@@ -1760,9 +1762,9 @@ class DedicatedAIApp(tk.Tk if tk else object):
         header_frame.pack(fill=tk.X, side=tk.TOP)
         header_frame.pack_propagate(False)
 
-        lbl_header = tk.Label(
+        lbl_header = SvgLabel(
             header_frame,
-            text="🛡️ OpenCode AI Assistant Controller",
+            text="OpenCode AI Assistant Controller",
             font=("Segoe UI", 12, "bold"),
             fg="#007acc",
             bg="#252526"
@@ -1778,7 +1780,7 @@ class DedicatedAIApp(tk.Tk if tk else object):
             "Click below to start OpenCode AI inside a dedicated native window."
         )
 
-        lbl_info = tk.Label(
+        lbl_info = SvgLabel(
             body_frame,
             text=info_text,
             font=("Segoe UI", 10),
@@ -1788,9 +1790,9 @@ class DedicatedAIApp(tk.Tk if tk else object):
         )
         lbl_info.pack(anchor="w", pady=(0, 20))
 
-        self.btn_ai = tk.Button(
+        self.btn_ai = SvgButton(
             body_frame,
-            text="🤖 AI Assistant",
+            text="AI Assistant",
             bg="#252526",
             fg="#ffffff",
             font=("Segoe UI", 11, "bold"),

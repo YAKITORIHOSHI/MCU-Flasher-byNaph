@@ -24,6 +24,8 @@ from main.qt.log_follow import LogFollow, preserve_log_view
 _MONO_FONT     = QFont("Consolas", 11)
 
 
+from main.qt.icons import IconLabel as QLabel
+
 class CompatPanel(QWidget):
     """
     Compatible Devices panel with header, search bar, and text view.
@@ -53,7 +55,7 @@ class CompatPanel(QWidget):
         self.lbl_status.setProperty("role", "dim")
         h.addWidget(self.lbl_status, stretch=1)
 
-        self.btn_copy = QPushButton("⧉ Copy")
+        self.btn_copy = QPushButton("Copy", icon_name="copy")
         self.btn_copy.setFixedHeight(26)
         self.btn_copy.setToolTip("Copy compatible devices list to clipboard")
         self.btn_copy.clicked.connect(self._copy_output)
@@ -68,14 +70,14 @@ class CompatPanel(QWidget):
         sb.setSpacing(6)
         self._search_layout = sb
 
-        sb.addWidget(QLabel("🔍"))
+        sb.addWidget(QLabel("", icon_name="search"))
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Filter compatible devices…")
         self.search_input.textChanged.connect(self._apply_filter)
         sb.addWidget(self.search_input, stretch=1)
 
-        btn_clear_search = QPushButton("✕ Clear")
+        btn_clear_search = QPushButton("Clear", icon_name="close")
         btn_clear_search.setFixedHeight(24)
         btn_clear_search.setToolTip("Clear search filter")
         btn_clear_search.clicked.connect(lambda: self.search_input.clear())
@@ -116,20 +118,26 @@ class CompatPanel(QWidget):
             self._is_ultra_compact = False
             if not self._full_text:
                 self.lbl_status.setText("Please compile to see the list of compatible devices")
-            self.btn_copy.setText("⧉ Copy")
-            self.btn_clear_search.setText("✕ Clear")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("Copy")
+            self.btn_clear_search.set_icon("close")
+            self.btn_clear_search.setText("Clear")
         elif width >= 850:
             self._is_ultra_compact = False
             if not self._full_text:
                 self.lbl_status.setText("Compile to see compatible devices")
-            self.btn_copy.setText("⧉ Copy")
-            self.btn_clear_search.setText("✕")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("Copy")
+            self.btn_clear_search.set_icon("close")
+            self.btn_clear_search.setText("")
         else:
             self._is_ultra_compact = True
             if not self._full_text:
                 self.lbl_status.setText("Compatible devices")
-            self.btn_copy.setText("⧉")
-            self.btn_clear_search.setText("✕")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("")
+            self.btn_clear_search.set_icon("close")
+            self.btn_clear_search.setText("")
 
     def set_content(self, entries: list[tuple[str, str]]) -> None:
         """Set the full compatible devices content as (text, tag) pairs."""
@@ -179,9 +187,11 @@ class CompatPanel(QWidget):
         # pyrefly: ignore [missing-import]
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(self._output.toPlainText())
-        self.btn_copy.setText("✔ Copied!")
+        self.btn_copy.set_icon("check")
+        self.btn_copy.setText("Copied!")
         def _restore_btn():
-            self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copy")
         QTimer.singleShot(1500, _restore_btn)
 
     def connect_signals(self, sig_bus, *, connect_theme=True) -> None:

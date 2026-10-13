@@ -103,7 +103,7 @@ class ConsolePanelHeader(QWidget):
         self._btn_options.hide()
 
         # Copy button
-        btn_copy = QPushButton("⧉ Copy", self)
+        btn_copy = QPushButton("Copy", self)
         btn_copy.setObjectName("btn-copy-console")
         btn_copy.setFixedHeight(26)
         btn_copy.setToolTip("Copy all retained build messages, including hidden warnings")
@@ -113,7 +113,7 @@ class ConsolePanelHeader(QWidget):
         layout.addWidget(btn_copy)
 
         # Clear button
-        btn_clear = QPushButton("🗑 Clear", self)
+        btn_clear = QPushButton("Clear", self)
         btn_clear.setObjectName("btn-clear-console")
         btn_clear.setFixedHeight(26)
         btn_clear.setToolTip("Clear build console output buffer")
@@ -140,8 +140,10 @@ class ConsolePanelHeader(QWidget):
             self.cb_auto_clear.setText("Clear on Action")
             self.cb_auto_clear_serial.setText("Clear Serial on Action")
             self.cb_autoscroll.setText("Auto-scroll")
-            self._btn_copy.setText("⧉ Copy")
-            self._btn_clear.setText("🗑 Clear")
+            self._btn_copy.set_icon("copy")
+            self._btn_copy.setText("Copy")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("Clear")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(8)
                 self._header_layout.setContentsMargins(10, 4, 10, 4)
@@ -151,8 +153,10 @@ class ConsolePanelHeader(QWidget):
             self.cb_auto_clear.setText("Clr Action")
             self.cb_auto_clear_serial.setText("Clr Serial")
             self.cb_autoscroll.setText("Auto")
-            self._btn_copy.setText("⧉ Copy")
-            self._btn_clear.setText("🗑 Clear")
+            self._btn_copy.set_icon("copy")
+            self._btn_copy.setText("Copy")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("Clear")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(5)
                 self._header_layout.setContentsMargins(6, 4, 6, 4)
@@ -162,8 +166,10 @@ class ConsolePanelHeader(QWidget):
             self.cb_auto_clear.setText("Clr Act")
             self.cb_auto_clear_serial.setText("Clr Ser")
             self.cb_autoscroll.setText("Auto")
-            self._btn_copy.setText("⧉")
-            self._btn_clear.setText("🗑")
+            self._btn_copy.set_icon("copy")
+            self._btn_copy.setText("")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
                 self._header_layout.setContentsMargins(4, 4, 4, 4)
@@ -240,9 +246,11 @@ class ConsolePanelHeader(QWidget):
         # pyrefly: ignore [missing-import]
         from PySide6.QtWidgets import QApplication
         QApplication.clipboard().setText(text)
-        self._btn_copy.setText("✔" if getattr(self, "_is_ultra_compact", False) else "✔ Copied!")
+        self._btn_copy.set_icon("check")
+        self._btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copied!")
         def _restore_btn_copy():
-            self._btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
+            self._btn_copy.set_icon("copy")
+            self._btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copy")
         QTimer.singleShot(1500, _restore_btn_copy)
 
 
@@ -290,6 +298,8 @@ class ConsolePanel(QPlainTextEdit):
         self._keyed_progress = {}
         self._autoscroll = True
         self._follow = LogFollow(self, hold_to_pause=True)
+        from main.qt.svg_gutter import SvgLogGutter
+        self._svg_gutter = SvgLogGutter(self, self._gutter_icon)
         self._timestamp_enabled = bool(load_gui_config().get("timestamp_enabled", False))
         self._hide_warnings = bool(get_hide_build_console_warnings())
         self.set_font_size(get_monitor_font_size())
@@ -365,6 +375,16 @@ class ConsolePanel(QPlainTextEdit):
             from PySide6.QtWidgets import QApplication
             QApplication.clipboard().setText(cursor.selectedText().replace("\u2029", "\n"))
 
+    def _gutter_icon(self, block):
+        from src.modules.svg_icons import action_name, status_name
+        text = block.text().strip()
+        if not text or re.fullmatch(r"[=─━═┄┈\- ]+", text):
+            return "", self._tag_colors["normal"]
+        data = block.userData()
+        tag = getattr(data, "tag", "")
+        name = (action_name(text) if tag in ("header", "purple_header") else "") or status_name(tag)
+        return name, self._tag_colors.get(tag, self._tag_colors["normal"])
+
     def _format(self, tag):
         tag = tag if tag in self._tag_colors else "normal"
         if tag not in self._formats:
@@ -406,12 +426,15 @@ class ConsolePanel(QPlainTextEdit):
             cursor.movePosition(QTextCursor.MoveOperation.End)
             if entry["newline"] and self.document().characterCount() > 1:
                 cursor.insertText("\n", QTextCharFormat())
+        event_block = cursor.block()
         if self._timestamp_enabled and entry["ts"]:
             cursor.insertText(entry["ts"] + " ", self._format("timestamp"))
         _insert_with_bar_styling(cursor, entry["text"], self._format(entry["tag"]))
+        if entry["newline"] or event_block.userData() is None:
+            event_block.setUserData(_ProgressBlockData(entry["id"], entry["tag"]))
         if entry.get("replace_pattern") or entry.get("progress_key"):
             if "\n" not in entry["text"] and entry["newline"]:
-                data = _ProgressBlockData(entry["id"])
+                data = _ProgressBlockData(entry["id"], entry["tag"])
                 cursor.block().setUserData(data)
                 self._progress_blocks[entry["id"]] = cursor.block()
                 if len(self._progress_blocks) > 128:
@@ -566,9 +589,10 @@ class ConsolePanel(QPlainTextEdit):
 
 
 class _ProgressBlockData(QTextBlockUserData):
-    def __init__(self, entry_id):
+    def __init__(self, entry_id, tag=""):
         super().__init__()
         self.entry_id = entry_id
+        self.tag = tag
 
 
 class ConsolePanelContainer(QWidget):

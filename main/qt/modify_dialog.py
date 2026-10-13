@@ -20,10 +20,12 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QLineEdit, QComboBox,
     QMessageBox, QScrollArea, QFrame,
 )
-from main.qt.icons import ActionButton as QPushButton
+from main.qt.icons import ActionButton as QPushButton, icon
 
 ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".hpp", ".c", ".txt"]
 
+
+from main.qt.icons import IconLabel as QLabel
 
 class ModifyFilesDialog(QDialog):
     """
@@ -293,12 +295,12 @@ class ModifyFilesDialog(QDialog):
 
         layout.addStretch()
 
-        self._btn_add = QPushButton("✚ Create File")
+        self._btn_add = QPushButton("Create File", icon_name="add")
         self._btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_add.clicked.connect(self._on_add_file)
         actions.addWidget(self._btn_add, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self._tabs.addTab(tab, "✚ Add")
+        self._tabs.addTab(tab, icon("add"), "Add")
 
     def _setup_rename_tab(self) -> None:
         tab, layout, actions = self._file_tab()
@@ -324,12 +326,12 @@ class ModifyFilesDialog(QDialog):
 
         layout.addStretch()
 
-        self._btn_rename = QPushButton("✏ Rename File")
+        self._btn_rename = QPushButton("Rename File", icon_name="modify")
         self._btn_rename.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_rename.clicked.connect(self._on_rename_file)
         actions.addWidget(self._btn_rename, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self._tabs.addTab(tab, "✏ Rename")
+        self._tabs.addTab(tab, icon("modify"), "Rename")
 
     def _setup_delete_tab(self) -> None:
         tab, layout, actions = self._file_tab()
@@ -341,7 +343,7 @@ class ModifyFilesDialog(QDialog):
         self._delete_combo = QComboBox()
         layout.addWidget(self._delete_combo)
 
-        warn_lbl = QLabel("⚠️ Deleted files cannot be restored from the Recycle Bin.")
+        warn_lbl = QLabel("Deleted files cannot be restored from the Recycle Bin.", icon_name="warning")
         warn_lbl.setWordWrap(True)
         warn_lbl.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
         layout.addWidget(warn_lbl)
@@ -353,12 +355,12 @@ class ModifyFilesDialog(QDialog):
 
         layout.addStretch()
 
-        self._btn_delete = QPushButton("🗑 Delete File")
+        self._btn_delete = QPushButton("Delete File", icon_name="clear")
         self._btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_delete.clicked.connect(self._on_delete_file)
         actions.addWidget(self._btn_delete, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self._tabs.addTab(tab, "🗑 Delete")
+        self._tabs.addTab(tab, icon("clear"), "Delete")
 
     # ── Helpers & Actions ────────────────────────────────────────────────────
 
@@ -418,12 +420,14 @@ class ModifyFilesDialog(QDialog):
             return
         if self._is_busy():
             self._add_status.setStyleSheet("color: #e74c3c;")
-            self._add_status.setText("✖ Modifying files is not allowed while an action is in progress.")
+            self._add_status.set_icon("error")
+            self._add_status.setText("Modifying files is not allowed while an action is in progress.")
             return
         raw = self._add_name_edit.text().strip()
         if not raw:
             self._add_status.setStyleSheet("color: #e74c3c;")
-            self._add_status.setText("✖ Please enter a file name.")
+            self._add_status.set_icon("error")
+            self._add_status.setText("Please enter a file name.")
             return
 
         ext = self._add_ext_combo.currentText()
@@ -435,52 +439,61 @@ class ModifyFilesDialog(QDialog):
         res = self._backend.add_project_file(filename)
         if res.get("success"):
             self._add_status.setStyleSheet("color: #4ec994;")
-            self._add_status.setText(f"✔ File '{filename}' created successfully.")
+            self._add_status.set_icon("check")
+            self._add_status.setText(f"File '{filename}' created successfully.")
             self._reset_default_name()
             self._refresh_file_lists()
         else:
             self._add_status.setStyleSheet("color: #e74c3c;")
-            self._add_status.setText(f"✖ {res.get('error', 'Failed to create file')}")
+            self._add_status.set_icon("error")
+            self._add_status.setText(f"{res.get('error', 'Failed to create file')}")
 
     def _on_rename_file(self) -> None:
         if not self._backend:
             return
         if self._is_busy():
             self._rename_status.setStyleSheet("color: #e74c3c;")
-            self._rename_status.setText("✖ Modifying files is not allowed while an action is in progress.")
+            self._rename_status.set_icon("error")
+            self._rename_status.setText("Modifying files is not allowed while an action is in progress.")
             return
         old_name = self._rename_combo.currentText().strip()
         new_name = self._rename_edit.text().strip()
         if not old_name:
             self._rename_status.setStyleSheet("color: #e74c3c;")
-            self._rename_status.setText("✖ No file selected to rename.")
+            self._rename_status.set_icon("error")
+            self._rename_status.setText("No file selected to rename.")
             return
         if not new_name:
             self._rename_status.setStyleSheet("color: #e74c3c;")
-            self._rename_status.setText("✖ Please enter a new file name.")
+            self._rename_status.set_icon("error")
+            self._rename_status.setText("Please enter a new file name.")
             return
 
         res = self._backend.rename_project_file(old_name, new_name)
         if res.get("success"):
             self._rename_status.setStyleSheet("color: #4ec994;")
-            self._rename_status.setText(f"✔ Renamed '{old_name}' → '{new_name}'.")
+            self._rename_status.set_icon("check")
+            self._rename_status.setText(f"Renamed '{old_name}' → '{new_name}'.")
             self._rename_edit.clear()
             self._refresh_file_lists()
         else:
             self._rename_status.setStyleSheet("color: #e74c3c;")
-            self._rename_status.setText(f"✖ {res.get('error', 'Failed to rename file')}")
+            self._rename_status.set_icon("error")
+            self._rename_status.setText(f"{res.get('error', 'Failed to rename file')}")
 
     def _on_delete_file(self) -> None:
         if not self._backend:
             return
         if self._is_busy():
             self._delete_status.setStyleSheet("color: #e74c3c;")
-            self._delete_status.setText("✖ Modifying files is not allowed while an action is in progress.")
+            self._delete_status.set_icon("error")
+            self._delete_status.setText("Modifying files is not allowed while an action is in progress.")
             return
         target = self._delete_combo.currentText().strip()
         if not target:
             self._delete_status.setStyleSheet("color: #e74c3c;")
-            self._delete_status.setText("✖ No file selected to delete.")
+            self._delete_status.set_icon("error")
+            self._delete_status.setText("No file selected to delete.")
             return
 
         confirm = QMessageBox.question(
@@ -496,8 +509,10 @@ class ModifyFilesDialog(QDialog):
         res = self._backend.delete_project_file(target)
         if res.get("success"):
             self._delete_status.setStyleSheet("color: #4ec994;")
-            self._delete_status.setText(f"✔ Deleted '{target}'.")
+            self._delete_status.set_icon("check")
+            self._delete_status.setText(f"Deleted '{target}'.")
             self._refresh_file_lists()
         else:
             self._delete_status.setStyleSheet("color: #e74c3c;")
-            self._delete_status.setText(f"✖ {res.get('error', 'Failed to delete file')}")
+            self._delete_status.set_icon("error")
+            self._delete_status.setText(f"{res.get('error', 'Failed to delete file')}")

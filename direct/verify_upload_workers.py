@@ -321,10 +321,10 @@ class UploadWorkerChecks(unittest.TestCase):
         self.assertEqual(len(self.processes), 1)
         rows = self.retained_status_rows()
         status = rows[self.api._upload_status_key("connection")]
-        self.assertIn("✔ Connected", status["text"])
+        self.assertIn("Connected", status["text"])
         self.assertEqual(status["tag"], "success")
         hint = rows[self.api._upload_status_key("boot-hint")]["text"]
-        self.assertEqual(hint.strip(), "✔ Bootloader synced.")
+        self.assertEqual(hint.strip(), "Bootloader synced.")
         self.assertNotIn("keep polling", hint)
         self.assertFalse(self.api._upload_connection_pending)
         self.assert_upload_caller_completed(success=True)
@@ -358,7 +358,7 @@ class UploadWorkerChecks(unittest.TestCase):
         self.assertEqual(len(self.processes), 9)
         rows = self.retained_status_rows()
         status = rows[self.api._upload_status_key("connection")]
-        self.assertIn("✔ Connected", status["text"])
+        self.assertIn("Connected", status["text"])
         self.assertEqual(status["tag"], "success")
         hint = rows[self.api._upload_status_key("boot-hint")]["text"]
         self.assertIn("release", hint.lower())

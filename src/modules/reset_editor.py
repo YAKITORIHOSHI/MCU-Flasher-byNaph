@@ -27,7 +27,7 @@ def load_config() -> dict:
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception as e:
-            print(f"⚠ Could not parse existing config ({e}). Starting fresh.")
+            print(f"Could not parse existing config ({e}). Starting fresh.")
             return {}
     return {}
 
@@ -57,13 +57,13 @@ def main():
     try:
         save_config(data)
     except Exception as e:
-        print(f"✖ Failed to write config: {e}")
+        print(f"Failed to write config: {e}")
         sys.exit(1)
 
     if previous_mode == "monaco":
-        print("✔ Editor was set to Monaco — it has been reset to Default.")
+        print("Editor was set to Monaco — it has been reset to Default.")
     else:
-        print("✔ Editor was already set to Default. Sentinel cleared, nothing else to do.")
+        print("Editor was already set to Default. Sentinel cleared, nothing else to do.")
 
     print()
     print("Legacy settings updated. Current Qt renderer recovery uses the editor Reload control.")

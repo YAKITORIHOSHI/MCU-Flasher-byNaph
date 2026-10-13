@@ -75,6 +75,10 @@ def register_fonts() -> None:
 def build_stylesheet(theme_mode: str = "default") -> str:
     """Return a complete QApplication stylesheet for the given theme mode."""
     pal = get_palette(theme_mode)
+    from src.modules.svg_icons import control_assets
+    controls = control_assets(theme_mode)
+    _icon_checked, _icon_checked_hover = controls["checked"], controls["hover"]
+    _icon_checked_dim, _icon_arrow = controls["disabled"], controls["chevron"]
 
     bg_darkest  = pal.get("BG_DARKEST", "#0d1117")
     bg_dark     = pal.get("BG_DARK", "#151922")
@@ -827,7 +831,7 @@ QCheckBox::indicator:checked {{
 QCheckBox::indicator:checked:hover {{
     background-color: {cyan};
     border-color: {border_lit};
-    image: url("{_icon_checked}");
+    image: url("{_icon_checked_hover}");
 }}
 QCheckBox::indicator:disabled {{
     background: {bg_dark};

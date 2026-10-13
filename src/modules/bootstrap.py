@@ -1209,7 +1209,7 @@ _gui: Any = None   # set when the window is live
 # How long (in seconds) to wait after the final "All dependencies ready!" line
 # (or any other finish/launch/launch-failed path) before the bootstrap window
 # actually closes. Gives the user a beat to read the success message and see
-# the spinner land on ✔ before the window disappears. 0 = close immediately.
+# the spinner land on before the window disappears. 0 = close immediately.
 BOOTSTRAP_CLOSE_DELAY_S: float = 2.5
 
 # ─────────────────────────────────────────────────────────────
@@ -1483,7 +1483,7 @@ class BootstrapGUI:
 
     def log_banner(self):
         self._append("=" * 56, "section")
-        self._append("  ⚡ MCU Flasher by Naph — Setup & Verification", "section")
+        self._append("  MCU Flasher by Naph — Setup & Verification", "section")
         self._append("=" * 56, "section")
         self._append("")
 
@@ -1501,22 +1501,22 @@ class BootstrapGUI:
         self._append(f"    {line}", "dim")
 
     def log_status(self, msg: str):
-        self._append(f"  ▸ {msg}", "normal")
+        self._append(f"  {msg}", "normal")
 
     def log_ok(self, msg: str):
-        self._append(f"  ✔ {msg}", "ok")
+        self._append(f"  {msg}", "ok")
 
     def log_warn(self, msg: str):
-        self._append(f"  ⚠ {msg}", "warn")
+        self._append(f"  {msg}", "warn")
 
     def log_fail(self, msg: str):
-        self._append(f"  ✖ {msg}", "fail")
+        self._append(f"  {msg}", "fail")
 
     def log_update_notice(self, pkg: str, current: str, latest: str):
         self._append(f"  ↑  {pkg}: {current} → {latest}", "update")
 
     def log_up_to_date(self, pkg: str, version: str):
-        self._append(f"  ✔ {pkg} {version} is up to date", "dim")
+        self._append(f"  {pkg} {version} is up to date", "dim")
 
     def log_dim(self, msg: str):
         self._append(f"  – {msg}", "dim")
@@ -1681,7 +1681,7 @@ def banner():
         _record_bootstrap_log("SECTION", "MCU Flasher by Naph - Bootstrap")
         os.system("")
         print(f"\n{CYAN}{BOLD}{'=' * 56}")
-        print("  ⚡  MCU Flasher by Naph — Bootstrap")
+        print("   MCU Flasher by Naph — Bootstrap")
         print(f"{'=' * 56}{RESET}\n")
 
 def status(msg: str, color: str = CYAN):
@@ -1689,28 +1689,28 @@ def status(msg: str, color: str = CYAN):
         _gui.log_status(msg)
     else:
         _record_bootstrap_log("STATUS", msg)
-        print(f"  {color}▸{RESET} {msg}")
+        print(f"  {color}{RESET} {msg}")
 
 def ok(msg: str):
     if _gui:
         _gui.log_ok(msg)
     else:
         _record_bootstrap_log("OK", msg)
-        print(f"  {GREEN}✔{RESET} {msg}")
+        print(f"  {GREEN}{RESET} {msg}")
 
 def warn(msg: str):
     if _gui:
         _gui.log_warn(msg)
     else:
         _record_bootstrap_log("WARN", msg)
-        print(f"  {YELLOW}⚠{RESET} {msg}")
+        print(f"  {YELLOW}{RESET} {msg}")
 
 def fail(msg: str):
     if _gui:
         _gui.log_fail(msg)
     else:
         _record_bootstrap_log("FAIL", msg)
-        print(f"  {RED}✖{RESET} {msg}")
+        print(f"  {RED}{RESET} {msg}")
 
 def section(title: str):
     if _gui:
@@ -1731,7 +1731,7 @@ def up_to_date(pkg: str, version: str):
         _gui.log_up_to_date(pkg, version)
     else:
         _record_bootstrap_log("OK", f"{pkg} {version} is up to date")
-        print(f"  {GREEN}✔{RESET} {pkg} {DIM}{version}{RESET} is up to date")
+        print(f"  {GREEN}{RESET} {pkg} {DIM}{version}{RESET} is up to date")
 
 
 def dim(msg: str):
@@ -2158,7 +2158,7 @@ def run_update_checks(auto_update: bool = False):
         else:
             try:
                 answer = input(
-                    f"  {YELLOW}▸{RESET} {len(updates_found)} update(s) available. "
+                    f"  {YELLOW}{RESET} {len(updates_found)} update(s) available. "
                     f"Install now? [{GREEN}y{RESET}/{RED}n{RESET}]: "
                 ).strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -3004,7 +3004,7 @@ def ensure_pip_packages_parallel(
     pkg_states = {
         spec["id"]: {
             "name": spec["name"],
-            "status": "⏳ Checking...",
+            "status": "Checking...",
             "pct": 0,
             "done": False,
             "ok": False,
@@ -3096,12 +3096,12 @@ def ensure_pip_packages_parallel(
     with table_lock:
         for spec, installed in zip(active_specs, installed_flags):
             if installed:
-                pkg_states[spec["id"]]["status"] = "✔ Installed"
+                pkg_states[spec["id"]]["status"] = "Installed"
                 pkg_states[spec["id"]]["pct"] = 100
                 pkg_states[spec["id"]]["done"] = True
                 pkg_states[spec["id"]]["ok"] = True
             else:
-                pkg_states[spec["id"]]["status"] = "⏳ Waiting..."
+                pkg_states[spec["id"]]["status"] = "Waiting..."
                 pkg_states[spec["id"]]["pct"] = 0
                 pkg_states[spec["id"]]["done"] = False
                 pkg_states[spec["id"]]["ok"] = False
@@ -3126,7 +3126,7 @@ def ensure_pip_packages_parallel(
     if not _is_network_reachable(timeout=2.0):
         missing_names = ", ".join(s["name"] for s in missing_specs)
         for s in missing_specs:
-            _set_state(s["id"], status_text="✖ Offline (missing)", pct=0, done=True, ok_value=False)
+            _set_state(s["id"], status_text="Offline (missing)", pct=0, done=True, ok_value=False)
         if gui:
             gui.commit_pip_table_block()
             gui.log_fail(f"Internet connection is required to download missing Python dependencies: {missing_names}")
@@ -3212,7 +3212,7 @@ def ensure_pip_packages_parallel(
                 # Show retry status in the per-package row.
                 _set_state(
                     sid,
-                    status_text=f"⟳ Retrying ({attempt + 1}/{max_attempts})...",
+                    status_text=f"Retrying ({attempt + 1}/{max_attempts})...",
                     pct=5,
                 )
                 _update_bottom_from_rows()
@@ -3227,7 +3227,7 @@ def ensure_pip_packages_parallel(
                 # Brief pause before retry to let transient issues settle.
                 time.sleep(2)
             else:
-                _set_state(sid, status_text="⬇ Downloading...", pct=5)
+                _set_state(sid, status_text="Downloading...", pct=5)
                 _update_bottom_from_rows()
                 status(f"Downloading {spec['name']} ({', '.join(spec['pip_args'])})...")
 
@@ -3291,21 +3291,21 @@ def ensure_pip_packages_parallel(
                             # real resolver/download phases and never claims fake bytes.
                             if low.startswith("collecting "):
                                 phase_events += 1
-                                _set_state(sid, status_text="⚙ Resolving...", pct=min(28, 10 + phase_events * 2))
+                                _set_state(sid, status_text="Resolving...", pct=min(28, 10 + phase_events * 2))
                                 status(f"{spec['name']}: {line.strip()}")
                             elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
                                 phase_events += 1
-                                _set_state(sid, status_text="⚙ Reading metadata...", pct=min(38, 24 + phase_events * 2))
+                                _set_state(sid, status_text="Reading metadata...", pct=min(38, 24 + phase_events * 2))
                                 status(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("downloading ") or low.startswith("using cached "):
                                 phase_events += 1
-                                _set_state(sid, status_text="⬇ Downloading...", pct=min(68, 34 + phase_events * 3))
+                                _set_state(sid, status_text="Downloading...", pct=min(68, 34 + phase_events * 3))
                                 status(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("saved "):
-                                _set_state(sid, status_text="⬇ Saving packages...", pct=70)
+                                _set_state(sid, status_text="Saving packages...", pct=70)
                                 status(f"{spec['name']}: {line.strip()}")
                             elif low.startswith("successfully downloaded"):
-                                _set_state(sid, status_text="✔ Downloaded", pct=75)
+                                _set_state(sid, status_text="Downloaded", pct=75)
                                 ok(f"Downloaded {spec['name']} successfully.")
                             _update_bottom_from_rows()
                     except _queue.Empty:
@@ -3347,7 +3347,7 @@ def ensure_pip_packages_parallel(
                     return_code = -1
 
                 if return_code == 0:
-                    _set_state(sid, status_text="✔ Downloaded", pct=75)
+                    _set_state(sid, status_text="Downloaded", pct=75)
                     _update_bottom_from_rows()
                     ok(f"Downloaded {spec['name']} successfully.")
                     return sid, True, worker_dir, ""
@@ -3412,7 +3412,7 @@ def ensure_pip_packages_parallel(
                     completed_downloads += 1
                     _set_state(
                         result_sid,
-                        status_text="✔ Downloaded; waiting for remaining downloads",
+                        status_text="Downloaded; waiting for remaining downloads",
                         pct=75,
                     )
                     if gui:
@@ -3433,8 +3433,8 @@ def ensure_pip_packages_parallel(
                     _set_state(
                         result_sid,
                         status_text=(
-                            "⚠ Download timed out; retrying unified install"
-                            if timed_out else "⏳ Unified install"
+                            "Download timed out; retrying unified install"
+                            if timed_out else "Unified install"
                         ),
                         pct=65,
                     )
@@ -3451,7 +3451,7 @@ def ensure_pip_packages_parallel(
                     seen.add(key)
                     install_args.append(arg)
 
-        _set_all(missing_specs, "⚙ Installing...", 80)
+        _set_all(missing_specs, "Installing...", 80)
         _update_bottom_from_rows()
         pkg_names_str = ", ".join(s["name"] for s in missing_specs)
         status(f"Installing {len(missing_specs)} Python dependencies via pip ({pkg_names_str})...")
@@ -3461,10 +3461,10 @@ def ensure_pip_packages_parallel(
         def _install_line_callback(line: str):
             low = line.strip().lower()
             if low.startswith("installing collected packages:"):
-                _set_all(missing_specs, "⚙ Installing...", 86)
+                _set_all(missing_specs, "Installing...", 86)
                 status(line.strip())
             elif low.startswith("successfully installed"):
-                _set_all(missing_specs, "⚙ Verifying...", 95)
+                _set_all(missing_specs, "Verifying...", 95)
                 ok(line.strip())
             elif any(low.startswith(p) for p in ("running setup.py", "building wheel", "created wheel", "installing")):
                 status(f"  {line.strip()}")
@@ -3509,7 +3509,7 @@ def ensure_pip_packages_parallel(
         # or permission-locked shared cache).  Retry once without cache rather
         # than doing an expected offline->online second pass every first run.
         if not install_ok:
-            _set_all(missing_specs, "⚙ Retrying without cache...", 90)
+            _set_all(missing_specs, "Retrying without cache...", 90)
             if gui:
                 gui.set_status("Retrying Python dependency installation without pip cache...")
             # A complete wheelhouse is deliberately installed offline on the
@@ -3537,11 +3537,11 @@ def ensure_pip_packages_parallel(
             sid = spec["id"]
             verified = _check(spec)
             if verified:
-                _set_state(sid, status_text="✔ Installed", pct=100, done=True, ok_value=True)
+                _set_state(sid, status_text="Installed", pct=100, done=True, ok_value=True)
                 ok(f"{spec['name']} installed and verified.")
             else:
                 remaining.append(spec)
-                _set_state(sid, status_text="⚙ Repairing...", pct=95, done=False, ok_value=False)
+                _set_state(sid, status_text="Repairing...", pct=95, done=False, ok_value=False)
                 warn(f"{spec['name']} verification failed; will repair individually.")
         _update_bottom_from_rows()
 
@@ -3569,7 +3569,7 @@ def ensure_pip_packages_parallel(
                 progress_end=98,
                 line_callback=lambda line, _sid=sid: _set_state(
                     _sid,
-                    status_text="⚙ Repairing...",
+                    status_text="Repairing...",
                     pct=97 if line.strip().lower().startswith("installing collected packages:") else 95,
                 ),
             )
@@ -3578,12 +3578,12 @@ def ensure_pip_packages_parallel(
             _ensure_pywin32_system32_dlls()
             verified = repair_ok and _check(spec)
             if verified:
-                _set_state(sid, status_text="✔ Installed", pct=100, done=True, ok_value=True)
+                _set_state(sid, status_text="Installed", pct=100, done=True, ok_value=True)
                 ok(f"{spec['name']} repaired and verified.")
             else:
                 if _LAST_PIP_ERROR:
                     failure_details[sid] = _LAST_PIP_ERROR
-                _set_state(sid, status_text="✖ Install Failed", pct=100, done=True, ok_value=False)
+                _set_state(sid, status_text="Install Failed", pct=100, done=True, ok_value=False)
                 fail(f"Failed to verify {spec['name']} after repair.")
             _update_bottom_from_rows()
 
@@ -3593,9 +3593,9 @@ def ensure_pip_packages_parallel(
         for spec in active_specs:
             verified = _check(spec)
             if verified:
-                _set_state(spec["id"], status_text="✔ Installed", pct=100, done=True, ok_value=True)
+                _set_state(spec["id"], status_text="Installed", pct=100, done=True, ok_value=True)
             else:
-                _set_state(spec["id"], status_text="✖ Install Failed", pct=100, done=True, ok_value=False)
+                _set_state(spec["id"], status_text="Install Failed", pct=100, done=True, ok_value=False)
                 final_failed.append(spec)
 
         if gui:

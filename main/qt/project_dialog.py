@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QFrame, QApplication, QMessageBox, QScrollArea, QSizePolicy, QLayout,
     QAbstractItemView, QStyledItemDelegate,
 )
-from main.qt.icons import ActionButton as QPushButton, icon
+from main.qt.icons import ActionButton as QPushButton, IconLabel as QLabel, icon
 from main.qt.setup_components import GlassCard
 from main.qt.glass import WorkspaceTabBar
 from src.modules.ui_palette import readable_foreground, setup_text_palette
@@ -947,7 +947,8 @@ class ProjectDialog(QDialog):
             folder = p.parent if p.is_file() else p
             if is_application_codebase_dir(folder):
                 self._set_label_tone(self._existing_status, "error")
-                self._existing_status.setText("✖ Cannot select MCU Flasher application folder.")
+                self._existing_status.set_icon("error")
+                self._existing_status.setText("Cannot select MCU Flasher application folder.")
                 return
             self._open_path_edit.setText(str(p))
 
@@ -960,7 +961,8 @@ class ProjectDialog(QDialog):
     def _open_existing(self) -> None:
         if self._is_busy():
             self._set_label_tone(self._existing_status, "error")
-            self._existing_status.setText("✖ Changing project is not allowed while an action is in progress.")
+            self._existing_status.set_icon("error")
+            self._existing_status.setText("Changing project is not allowed while an action is in progress.")
             QMessageBox.warning(
                 self,
                 "Action in Progress",
@@ -971,7 +973,8 @@ class ProjectDialog(QDialog):
         path = self._open_path_edit.text().strip()
         if not path:
             self._set_label_tone(self._existing_status, "error")
-            self._existing_status.setText("✖ Please select a folder path.")
+            self._existing_status.set_icon("error")
+            self._existing_status.setText("Please select a folder path.")
             return
         requested_path = Path(path).expanduser()
         try:
@@ -985,16 +988,19 @@ class ProjectDialog(QDialog):
         path = str(p)
         if is_application_codebase_dir(p):
             self._set_label_tone(self._existing_status, "error")
-            self._existing_status.setText("✖ The MCU Flasher application folder cannot be opened as a project.")
+            self._existing_status.set_icon("error")
+            self._existing_status.setText("The MCU Flasher application folder cannot be opened as a project.")
             return
         if not p.is_dir():
             self._set_label_tone(self._existing_status, "error")
-            self._existing_status.setText("✖ The specified folder does not exist.")
+            self._existing_status.set_icon("error")
+            self._existing_status.setText("The specified folder does not exist.")
             return
         validation = self._validate_existing_project_folder(p)
         if not validation.get("success"):
             self._set_label_tone(self._existing_status, "error")
-            self._existing_status.setText(f"✖ {validation.get('error', 'Could not open project.')}")
+            self._existing_status.set_icon("error")
+            self._existing_status.setText(f"{validation.get('error', 'Could not open project.')}")
             return
 
         self._dispatch_project_action(
@@ -1010,7 +1016,8 @@ class ProjectDialog(QDialog):
     def _create_project(self) -> None:
         if self._is_busy():
             self._set_label_tone(self._new_status, "error")
-            self._new_status.setText("✖ Creating or changing project is not allowed while an action is in progress.")
+            self._new_status.set_icon("error")
+            self._new_status.setText("Creating or changing project is not allowed while an action is in progress.")
             QMessageBox.warning(
                 self,
                 "Action in Progress",
@@ -1022,11 +1029,13 @@ class ProjectDialog(QDialog):
         parent = self._new_parent_edit.text().strip()
         if not name or not parent:
             self._set_label_tone(self._new_status, "error")
-            self._new_status.setText("✖ Project name and location are required.")
+            self._new_status.set_icon("error")
+            self._new_status.setText("Project name and location are required.")
             return
         if is_application_codebase_dir(parent):
             self._set_label_tone(self._new_status, "error")
-            self._new_status.setText("✖ Cannot create sketch inside MCU Flasher application folder.")
+            self._new_status.set_icon("error")
+            self._new_status.setText("Cannot create sketch inside MCU Flasher application folder.")
             return
 
         clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
@@ -1088,7 +1097,7 @@ class ProjectDialog(QDialog):
         if not path:
             return
         if is_application_codebase_dir(path):
-            self._recent_preview_lbl.setText(f"Path: {path}\n⛔ Application codebase (invalid project)")
+            self._recent_preview_lbl.setText(f"Path: {path}\nApplication codebase (invalid project)")
             return
         files = _get_project_files_fast(path)
         if files:
@@ -1101,7 +1110,8 @@ class ProjectDialog(QDialog):
 
     def _open_selected_recent(self, item: QListWidgetItem | None = None) -> None:
         if self._is_busy():
-            self._recent_preview_lbl.setText("✖ Changing project is not allowed while an action is in progress.")
+            self._recent_preview_lbl.set_icon("error")
+            self._recent_preview_lbl.setText("Changing project is not allowed while an action is in progress.")
             QMessageBox.warning(
                 self,
                 "Action in Progress",
@@ -1118,14 +1128,17 @@ class ProjectDialog(QDialog):
             return
         p = Path(path)
         if not p.is_dir():
-            self._recent_preview_lbl.setText(f"⚠️ Folder no longer exists: {path}")
+            self._recent_preview_lbl.set_icon("warning")
+            self._recent_preview_lbl.setText(f"Folder no longer exists: {path}")
             return
         if is_application_codebase_dir(p):
-            self._recent_preview_lbl.setText("✖ The MCU Flasher application folder cannot be opened as a project.")
+            self._recent_preview_lbl.set_icon("error")
+            self._recent_preview_lbl.setText("The MCU Flasher application folder cannot be opened as a project.")
             return
         validation = self._validate_existing_project_folder(p)
         if not validation.get("success"):
-            self._recent_preview_lbl.setText(f"✖ {validation.get('error', 'Could not open project.')}")
+            self._recent_preview_lbl.set_icon("error")
+            self._recent_preview_lbl.setText(f"{validation.get('error', 'Could not open project.')}")
             return
 
         self._dispatch_project_action(
@@ -1286,7 +1299,8 @@ class ProjectDialog(QDialog):
         status_label: QLabel,
     ) -> None:
         if self._is_busy():
-            status_label.setText("✖ Changing project is not allowed while an action is in progress.")
+            status_label.set_icon("error")
+            status_label.setText("Changing project is not allowed while an action is in progress.")
             return
         in_new_window = self._choose_project_window(project_name)
         if in_new_window is None:
@@ -1326,7 +1340,8 @@ class ProjectDialog(QDialog):
             end_wait()
             message = error or (result or {}).get("error", "Could not open project")
             self._set_label_tone(status_label, "error")
-            status_label.setText(f"✖ {message}")
+            status_label.set_icon("error")
+            status_label.setText(f"{message}")
             if result and result.get("already_open"):
                 QMessageBox.information(
                     self,

@@ -1825,7 +1825,7 @@ def _format_upload_progress_row(label: str, stage: int, stage_total: int,
     filled = max(0, min(width, int(round(width * pct / 100.0))))
     bar = "▰" * filled + "▱" * (width - filled)
     complete = pct >= 99.95
-    status = "✔ Flashed" if complete else "⚡ Flashing"
+    status = "Flashed" if complete else "Flashing"
     row = f"  {status} [{stage}/{stage_total}] {label} [ {bar} ] | {pct:.1f}%"
     if written is not None and total is not None:
         row += f" | {int(written):,}/{int(total):,} bytes"

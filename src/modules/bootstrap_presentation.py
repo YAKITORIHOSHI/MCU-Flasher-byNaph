@@ -15,7 +15,7 @@ from src.modules.bootstrap_output import known_builder_notice
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _PERCENT = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*%")
 _DIVIDER = re.compile(r"^[\s─━═┄┈=\-]+$")
-_PREFIX = re.compile(r"^[\s▸▹►▶✔✓⚠✖✕×↑⬇⏳⚙⟳•–]+")
+_PREFIX = re.compile(r"^[\s▸▹►▶\u2714\u2713\u26a0\u2716\u2715×↑\u2b07\u23f3\u2699⟳•–]+")
 _BAR = re.compile(r"^[\s▰▱█░▓▒■□▮▯#=\[\]>|]+")
 _PHASE = re.compile(
     r"^(?:(?P<label>.+?):\s*)?"
@@ -128,7 +128,7 @@ def parse_package_rows(block_type, text):
                     continue
             else:
                 # Legacy fixtures and shorter external blocks may omit padding.
-                marked = re.split(r"\s+(?=[✔✓✖⚠⬇⏳⚙⟳])", header, maxsplit=1)
+                marked = re.split(r"\s+(?=[\u2714\u2713\u2716\u26a0\u2b07\u23f3\u2699⟳])", header, maxsplit=1)
                 name, status = marked if len(marked) == 2 else (header, "Preparing")
             pct = _percent(header)
             detail = ""

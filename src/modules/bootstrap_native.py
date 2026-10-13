@@ -21,6 +21,8 @@ from src.modules.ui_metrics import WorkArea, fit_rect
 from src.modules.ui_palette import mix
 
 
+from src.modules.tk_svg import SvgButton, SvgLabel, TkLogGutter, photo
+
 class _GlassCard(tk.Canvas):
     """Rounded static glass rim around an opaque, readable content surface."""
 
@@ -107,24 +109,20 @@ class _GlassCard(tk.Canvas):
         self.tag_lower("glass", self._body_item)
 
 
-class _CircuitMark(tk.Canvas):
-    """The setup's etched-circuit mark, drawn without a font or image asset."""
+class _CircuitMark(tk.Label):
+    """The shared SVG chip, rendered without Qt during cold setup."""
 
     def __init__(self, parent, palette):
         scale = ui_scale(parent)
-        super().__init__(parent, width=round(48 * scale), height=round(48 * scale),
-                         bg=palette["T_BG_MID"], bd=0, highlightthickness=0)
-        line = mix(palette["T_CYAN"], palette["T_TEXT_DIM"], .20)
-        def path(points):
-            self.create_line(*(round((8 + value * 4 / 3) * scale, 2) for value in points),
-                             fill=line, width=max(1, 1.65 * scale), capstyle="round", joinstyle="round")
-        path((7, 4, 17, 4, 20, 7, 20, 17, 17, 20, 7, 20, 4, 17, 4, 7, 7, 4))
-        path((13, 7, 8, 13, 12, 13, 11, 17, 17, 10, 13, 10, 14, 7, 13, 7))
-        for points in ((8, 1, 8, 4), (12, 1, 12, 4), (16, 1, 16, 4),
-                       (8, 20, 8, 23), (12, 20, 12, 23), (16, 20, 16, 23),
-                       (1, 8, 4, 8), (1, 12, 4, 12), (1, 16, 4, 16),
-                       (20, 8, 23, 8), (20, 12, 23, 12), (20, 16, 23, 16)):
-            path(points)
+        self._mark = photo(parent, "brand", palette["T_CYAN"], min(64, round(40*scale)))
+        super().__init__(parent, image=self._mark, bg=palette["T_BG_MID"], bd=0)
+        self._svg_size = min(64, round(40*scale))
+        self._svg_color = palette["T_CYAN"]
+
+    def scale(self, tag, x, y, xscale, yscale):
+        self._svg_size = max(8, min(64, round(self._svg_size*xscale)))
+        self._mark = photo(self, "brand", self._svg_color, self._svg_size)
+        self.configure(image=self._mark)
 
 
 class _LinearProgress(tk.Canvas):
@@ -312,7 +310,7 @@ class NativeBootstrapWindow:
     """Same setup header, reading surface and footer before PySide6 exists."""
     DISPLAY_CHARS = 256000
     DISPLAY_LINES = 2500
-    SPINNER = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    SPINNER = ("", "", "", "", "", "", "", "", "", "")
 
     def __init__(self, gui, palette, load_config, save_config, record_exception, *, dispatcher=None):
         self.gui, self.palette = gui, palette
@@ -397,13 +395,13 @@ class NativeBootstrapWindow:
         self._chip_mark = _CircuitMark(header, p)
         self._chip_size = 48
         self._chip_mark.grid(row=0, column=0, rowspan=2, padx=(0, pad))
-        tk.Label(header, text="MCU Flasher by Naph", bg=p["T_BG_MID"], fg=p["T_TEXT_BRIGHT"],
+        SvgLabel(header, text="MCU Flasher by Naph", bg=p["T_BG_MID"], fg=p["T_TEXT_BRIGHT"],
                  font=(font_name, 15, "bold"), anchor="w").grid(row=0, column=1, sticky="w")
-        subtitle = tk.Label(header, text="Runtime setup · Prepare dependencies and board tools",
+        subtitle = SvgLabel(header, text="Runtime setup · Prepare dependencies and board tools",
                             bg=p["T_BG_MID"], fg=p["T_TEXT_DIM"], font=(font_name, 9), anchor="w", justify="left")
         subtitle.grid(row=1, column=1, sticky="ew", pady=(round(4 * scale), 0))
         self._subtitle = subtitle
-        self.clock = tk.Label(header, text="00:00", bg=p["T_BG_DARKEST"], fg=p["T_CYAN"],
+        self.clock = SvgLabel(header, text="00:00", bg=p["T_BG_DARKEST"], fg=p["T_CYAN"],
                               font=(mono, 10, "bold"), padx=pad, pady=round(8 * scale))
         self.clock.grid(row=0, column=2, rowspan=2, padx=(pad, 0))
         header.bind("<Configure>", self._wrap_header, add="+")
@@ -416,9 +414,9 @@ class NativeBootstrapWindow:
         self._activity_heading = activity_heading
         activity_heading.grid(row=0, column=0, sticky="ew", pady=(0, round(8 * scale)))
         activity_heading.columnconfigure(0, weight=1)
-        tk.Label(activity_heading, text="Setup activity", bg=p["T_BG_MID"], fg=p["T_TEXT_BRIGHT"],
+        SvgLabel(activity_heading, text="Setup activity", bg=p["T_BG_MID"], fg=p["T_TEXT_BRIGHT"],
                  font=(font_name, 10, "bold"), anchor="w").grid(row=0, column=0, sticky="w")
-        self.details_button = tk.Button(activity_heading, text="Show technical details", command=self._toggle_details,
+        self.details_button = SvgButton(activity_heading, text="Show technical details", command=self._toggle_details,
                                         bg=p["T_BG_MID"], fg=p["T_TEXT_DIM"], activebackground=p["T_BG_LIGHT"],
                                         activeforeground=p["T_TEXT_BRIGHT"], font=(font_name, 8), bd=0,
                                         highlightthickness=1, highlightbackground=p["T_BORDER"],
@@ -491,6 +489,8 @@ class NativeBootstrapWindow:
                                              font=(font_name, 11 if tag == "section" else 10 if tag == "subsection" else 9,
                                                    "bold" if tag in ("section", "subsection", "ok", "fail") else "normal"))
         self.summary_edit.tag_configure("failed_step", foreground=p["T_RED"])
+        self._summary_gutter = TkLogGutter(self.summary_edit)
+        self._raw_gutter = TkLogGutter(self.log_edit)
         self.summary_edit.tag_raise("failed_step")
         self.summary_edit.mark_set("summary_step_start", "1.0")
         self.summary_edit.mark_gravity("summary_step_start", "left")
@@ -499,12 +499,12 @@ class NativeBootstrapWindow:
         footer = card(2)
         self._footer = footer
         footer.columnconfigure(1, weight=1)
-        self.spinner = tk.Label(footer, text="●", bg=p["T_BG_MID"], fg=p["T_CYAN"], font=(mono, 9))
+        self.spinner = SvgLabel(footer, text="", icon_name="setup", icon_only=True, bg=p["T_BG_MID"], fg=p["T_CYAN"], font=(mono, 9))
         self.spinner.grid(row=0, column=0, padx=(0, round(8 * scale)), pady=(0, round(8 * scale)))
-        self.status = tk.Label(footer, text=self.gui._status_text, bg=p["T_BG_MID"], fg=p["T_TEXT_BRIGHT"],
+        self.status = SvgLabel(footer, text=self.gui._status_text, bg=p["T_BG_MID"], fg=p["T_TEXT_BRIGHT"],
                                font=(font_name, 9, "bold"), anchor="w", justify="left")
         self.status.grid(row=0, column=1, sticky="ew", pady=(0, round(8 * scale)))
-        self.percent = tk.Label(footer, text="0%", bg=p["T_BG_MID"], fg=p["T_CYAN"], font=(font_name, 9))
+        self.percent = SvgLabel(footer, text="0%", bg=p["T_BG_MID"], fg=p["T_CYAN"], font=(font_name, 9))
         self.percent.grid(row=0, column=2, padx=(pad, 0), pady=(0, round(8 * scale)))
         style = ttk.Style(self.root)
         style.theme_use("clam")
@@ -659,7 +659,7 @@ class NativeBootstrapWindow:
     def _tick_spinner(self):
         # A static circuit status light avoids a perpetual cold-start animation.
         if self.gui._spinning:
-            self.spinner.configure(text="●", fg=self.palette["T_CYAN"])
+            self.spinner.configure(text="", fg=self.palette["T_CYAN"])
 
     def _toggle_details(self):
         self._set_details_expanded(not self._details_expanded)
@@ -855,7 +855,8 @@ class NativeBootstrapWindow:
         self.percent.configure(text=f"{value}%")
 
     def _on_stop_spinner(self, text, ok):
-        self.spinner.configure(text="✔" if ok else "✖", fg=self.palette["T_GREEN" if ok else "T_RED"])
+        self.spinner.set_icon("check" if ok else "error")
+        self.spinner.configure(text="", fg=self.palette["T_GREEN" if ok else "T_RED"])
         self._on_status(text)
 
     def _request_close(self):

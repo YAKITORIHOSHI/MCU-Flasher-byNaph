@@ -155,13 +155,13 @@ class ThemeReadabilityChecks(unittest.TestCase):
         window._active_operation = "compile"
         window._on_console_progress({"action": "Compiling"})
         QTest.qWait(120)
-        self.assertEqual(window._status_label.text(), "⚙ Compiling…")
+        self.assertEqual(window._status_label.text(), "Compiling…")
         self.assertEqual(window._status_label.styleSheet(), "")
         window._on_notification({"message": "Compiling diagnostic"})
         deadline = time.monotonic() + 1.0
-        while window._status_label.text() != "⚙ Compiling…" and time.monotonic() < deadline:
+        while window._status_label.text() != "Compiling…" and time.monotonic() < deadline:
             QTest.qWait(10)
-        self.assertEqual(window._status_label.text(), "⚙ Compiling…")
+        self.assertEqual(window._status_label.text(), "Compiling…")
 
     def test_temporary_action_cannot_clear_a_new_notification(self):
         window = self.status_window()

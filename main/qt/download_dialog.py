@@ -45,7 +45,7 @@ def launch_download_manager(parent: Optional[QWidget] = None) -> bool:
         from src.modules.ubuntu_download_manager import request
         if request(ROOT, "wake"):
             sig_bus.notification.emit({
-                "message": "⚡ Restored Download Manager instantly from memory.",
+                "message": "Restored Download Manager instantly from memory.",
                 "type": "info",
             })
             return True
@@ -90,7 +90,7 @@ def launch_download_manager(parent: Optional[QWidget] = None) -> bool:
 
         try:
             sig_bus.notification.emit({
-                "message": "⚡ Restored Download Manager instantly from memory.",
+                "message": "Restored Download Manager instantly from memory.",
                 "type": "info",
             })
         except Exception:
@@ -135,7 +135,7 @@ def launch_download_manager(parent: Optional[QWidget] = None) -> bool:
 
         try:
             sig_bus.notification.emit({
-                "message": "✔ Launched Download Boards & Libraries Manager.",
+                "message": "Launched Download Boards & Libraries Manager.",
                 "type": "success",
             })
         except Exception:

@@ -49,6 +49,8 @@ def _visible_serial_controls(text: str) -> str:
     return _SERIAL_CONTROLS_RE.sub(escape, text.replace("\r\n", "\n"))
 
 
+from main.qt.icons import IconLabel as QLabel
+
 class _SerialAnsiParser:
     """Bounded incremental terminal controls for an append-only serial log.
 
@@ -657,14 +659,14 @@ class SerialPanel(QWidget):
         h.addWidget(title, 0, 0)
 
         # Reset MCU button
-        self.btn_reset = QPushButton("↺ Reset")
+        self.btn_reset = QPushButton("Reset", icon_name="reload")
         self.btn_reset.setFixedHeight(26)
         self.btn_reset.setToolTip("Hardware reboot microcontroller via DTR/RTS reset pulse")
         self.btn_reset.clicked.connect(self._on_reset)
         h.addWidget(self.btn_reset, 0, 1)
 
         # Pause button
-        self.btn_pause = QPushButton("⏸ Pause")
+        self.btn_pause = QPushButton("Pause", icon_name="pause")
         self.btn_pause.setFixedHeight(26)
         self.btn_pause.setCheckable(True)
         self.btn_pause.setToolTip("Pause / resume serial stream display")
@@ -710,7 +712,7 @@ class SerialPanel(QWidget):
         if self._backend and getattr(self._backend, "serial_running", False):
             initial_connected = True
 
-        self.lbl_status = QLabel("● Connected" if initial_connected else "● Disconnected")
+        self.lbl_status = QLabel("Connected" if initial_connected else "Disconnected", icon_name="connected" if initial_connected else "disconnected")
         self._connection_text = self.lbl_status.text()
         self._connection_color_tag = "success" if initial_connected else "error"
         h.addWidget(self.lbl_status, 0, 7)
@@ -748,7 +750,7 @@ class SerialPanel(QWidget):
         h.addWidget(self.baud_container, 0, 9)
 
         # Copy button
-        self.btn_copy = QPushButton("⧉ Copy")
+        self.btn_copy = QPushButton("Copy", icon_name="copy")
         self.btn_copy.setFixedHeight(26)
         self.btn_copy.setToolTip("Copy serial monitor output to clipboard")
         self.btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -756,7 +758,7 @@ class SerialPanel(QWidget):
         h.addWidget(self.btn_copy, 0, 10)
 
         # Clear button
-        self.btn_clear = QPushButton("🗑 Clear")
+        self.btn_clear = QPushButton("Clear", icon_name="clear")
         self.btn_clear.setFixedHeight(26)
         self.btn_clear.setToolTip("Clear serial monitor output buffer")
         self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -883,8 +885,10 @@ class SerialPanel(QWidget):
         if width >= 1100:
             self._is_ultra_compact = False
             self._title_lbl.setText("Serial monitor")
-            self.btn_reset.setText("↺ Reset")
-            self.btn_pause.setText("▶ Resume" if self._paused else "⏸ Pause")
+            self.btn_reset.set_icon("reload")
+            self.btn_reset.setText("Reset")
+            self.btn_pause.set_icon("resume" if self._paused else "pause")
+            self.btn_pause.setText("Resume" if self._paused else "Pause")
             self.cb_autoscroll.setText("Auto-scroll")
             self.cb_auto_clear.setText("Clear on Action")
             self.cb_ansi_clear.setText("Clear-screen")
@@ -892,16 +896,20 @@ class SerialPanel(QWidget):
                 self._lbl_baud.setVisible(True)
                 self._lbl_baud.setText("Baud rate")
             self.baud_combo.setFixedWidth(baud_w)
-            self.btn_copy.setText("⧉ Copy")
-            self.btn_clear.setText("🗑 Clear")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("Copy")
+            self.btn_clear.set_icon("clear")
+            self.btn_clear.setText("Clear")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(8)
                 self._header_layout.setContentsMargins(10, 4, 10, 4)
         elif width >= 850:
             self._is_ultra_compact = False
             self._title_lbl.setText("Serial")
-            self.btn_reset.setText("↺ Reset")
-            self.btn_pause.setText("▶ Resume" if self._paused else "⏸ Pause")
+            self.btn_reset.set_icon("reload")
+            self.btn_reset.setText("Reset")
+            self.btn_pause.set_icon("resume" if self._paused else "pause")
+            self.btn_pause.setText("Resume" if self._paused else "Pause")
             self.cb_autoscroll.setText("Auto")
             self.cb_auto_clear.setText("Clr Action")
             self.cb_ansi_clear.setText("ANSI")
@@ -909,24 +917,30 @@ class SerialPanel(QWidget):
                 self._lbl_baud.setVisible(True)
                 self._lbl_baud.setText("BAUD")
             self.baud_combo.setFixedWidth(baud_w)
-            self.btn_copy.setText("⧉ Copy")
-            self.btn_clear.setText("🗑 Clear")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("Copy")
+            self.btn_clear.set_icon("clear")
+            self.btn_clear.setText("Clear")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(5)
                 self._header_layout.setContentsMargins(6, 4, 6, 4)
         else:
             self._is_ultra_compact = True
             self._title_lbl.setText("Serial")
-            self.btn_reset.setText("↺")
-            self.btn_pause.setText("▶" if self._paused else "⏸")
+            self.btn_reset.set_icon("reload")
+            self.btn_reset.setText("")
+            self.btn_pause.set_icon("resume" if self._paused else "pause")
+            self.btn_pause.setText("")
             self.cb_autoscroll.setText("Auto")
             self.cb_auto_clear.setText("Clr Act")
             self.cb_ansi_clear.setText("ANSI")
             if hasattr(self, "_lbl_baud"):
                 self._lbl_baud.setVisible(False)
             self.baud_combo.setFixedWidth(baud_w)
-            self.btn_copy.setText("⧉")
-            self.btn_clear.setText("🗑")
+            self.btn_copy.set_icon("copy")
+            self.btn_copy.setText("")
+            self.btn_clear.set_icon("clear")
+            self.btn_clear.setText("")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
                 self._header_layout.setContentsMargins(4, 4, 4, 4)
@@ -965,7 +979,7 @@ class SerialPanel(QWidget):
             mode = "short"
             h.setContentsMargins(4, 2, 4, 2)
         compact_options = mode in ("micro", "short")
-        self.lbl_status.setText("●" if compact_options else self._connection_text)
+        self.lbl_status.setText("" if compact_options else self._connection_text)
         self.lbl_status.setToolTip(self._connection_text)
         self.lbl_status.setAccessibleName(self._connection_text)
         if mode != self._header_mode:
@@ -1025,9 +1039,11 @@ class SerialPanel(QWidget):
         self._paused = checked
         self._output.set_paused(checked)
         if getattr(self, "_is_ultra_compact", False):
-            self.btn_pause.setText("▶" if checked else "⏸")
+            self.btn_pause.set_icon("resume" if checked else "pause")
+            self.btn_pause.setText("")
         else:
-            self.btn_pause.setText("▶ Resume" if checked else "⏸ Pause")
+            self.btn_pause.set_icon("resume" if checked else "pause")
+            self.btn_pause.setText("Resume" if checked else "Pause")
 
     def _on_baud_changed(self, baud_str: str) -> None:
         try:
@@ -1051,7 +1067,8 @@ class SerialPanel(QWidget):
         self._copy_snapshot = text
         self._copy_attempts = 0
         self._copy_active = True
-        self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "Copying…")
+        self.btn_copy.set_icon("copy")
+        self.btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copying…")
         self.btn_copy.setToolTip("Copying retained serial output to the clipboard")
         self._attempt_copy_output(self._copy_generation)
 
@@ -1071,7 +1088,8 @@ class SerialPanel(QWidget):
         self._copy_feedback_timer.timeout.connect(self._restore_copy_button)
 
     def _restore_copy_button(self) -> None:
-        self.btn_copy.setText("⧉" if getattr(self, "_is_ultra_compact", False) else "⧉ Copy")
+        self.btn_copy.set_icon("copy")
+        self.btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copy")
         self.btn_copy.setToolTip("Copy serial monitor output to clipboard")
 
     def _cancel_copy_output(self) -> None:
@@ -1102,7 +1120,8 @@ class SerialPanel(QWidget):
             self._copy_active = False
             self._copy_snapshot = ""
             self._copy_retry_timer.stop()
-            self.btn_copy.setText("✔" if getattr(self, "_is_ultra_compact", False) else "✔ Copied!")
+            self.btn_copy.set_icon("check")
+            self.btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copied!")
             self.btn_copy.setToolTip("Retained serial output copied to clipboard")
             self._copy_feedback_timer.start()
         elif self._copy_attempts < 3:
@@ -1112,7 +1131,8 @@ class SerialPanel(QWidget):
             self._copy_active = False
             self._copy_snapshot = ""
             self._copy_retry_timer.stop()
-            self.btn_copy.setText("⚠" if getattr(self, "_is_ultra_compact", False) else "Copy failed")
+            self.btn_copy.set_icon("warning")
+            self.btn_copy.setText("" if getattr(self, "_is_ultra_compact", False) else "Copy failed")
             self.btn_copy.setToolTip("The system clipboard did not accept the text. Try Copy again.")
 
     def _output_clear(self) -> None:
@@ -1204,13 +1224,16 @@ class SerialPanel(QWidget):
         state: str = payload.get("state", "connected" if connected else "disconnected")
         is_conn = bool(connected or state == "connected")
         if is_conn:
-            self.lbl_status.setText("● Connected")
+            self.lbl_status.set_icon("connected")
+            self.lbl_status.setText("Connected")
             self._connection_color_tag = "success"
         elif state == "reconnecting":
-            self.lbl_status.setText("● Reconnecting...")
+            self.lbl_status.set_icon("time")
+            self.lbl_status.setText("Reconnecting...")
             self._connection_color_tag = "warning"
         else:
-            self.lbl_status.setText("● Disconnected")
+            self.lbl_status.set_icon("disconnected")
+            self.lbl_status.setText("Disconnected")
             self._connection_color_tag = "error"
         self._apply_connection_color()
         self._connection_text = self.lbl_status.text()
@@ -1235,7 +1258,8 @@ class SerialPanel(QWidget):
         if not is_conn and self._paused:
             self._paused = False
             self.btn_pause.setChecked(False)
-            self.btn_pause.setText("⏸ Pause")
+            self.btn_pause.set_icon("pause")
+            self.btn_pause.setText("Pause")
             self._output.set_paused(False)
 
         if hasattr(self, "btn_send") and self.btn_send:

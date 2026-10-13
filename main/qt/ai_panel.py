@@ -37,8 +37,12 @@ from main.core.config import _load_raw_config, _save_raw_config
 
 _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
-_SPIN_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+_SPIN_CHARS = ["", "", "", "", "", "", "", "", "", ""]
 
+
+from main.qt.icons import IconLabel as QLabel
+
+from main.qt.icons import ActionButton as QPushButton
 
 class _AIEmbedContainer(QWidget):
     """Native window embedding container with automatic geometry synchronization."""
@@ -107,7 +111,7 @@ class AIPanel(QWidget):
         hl.setContentsMargins(12, 4, 12, 4)
         hl.setSpacing(8)
 
-        lbl = QLabel("⚡ OPENCODE AI ASSISTANT")
+        lbl = QLabel("OPENCODE AI ASSISTANT", icon_name="ai")
         self._title_lbl = lbl
         lbl.setStyleSheet("""
             QLabel {
@@ -120,7 +124,7 @@ class AIPanel(QWidget):
         """)
         hl.addWidget(lbl)
 
-        self._status_badge = QLabel("● Initializing…")
+        self._status_badge = QLabel("Initializing…", icon_name="time")
         self._status_badge.setStyleSheet("""
             QLabel {
                 color: #f1c40f;
@@ -137,7 +141,7 @@ class AIPanel(QWidget):
 
         hl.addStretch()
 
-        self._btn_close = QPushButton("✕")
+        self._btn_close = QPushButton("", icon_name="close")
         self._btn_close.setToolTip("Hide AI Assistant")
         self._btn_close.setFixedSize(24, 24)
         self._btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -172,7 +176,7 @@ class AIPanel(QWidget):
         lv.setSpacing(14)
         lv.addStretch()
 
-        self._spin_lbl = QLabel("⠋")
+        self._spin_lbl = QLabel("", icon_name="ai")
         self._spin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._spin_lbl.setStyleSheet("font-size: 32px; color: #00e5ff;")
         lv.addWidget(self._spin_lbl)
@@ -206,18 +210,21 @@ class AIPanel(QWidget):
     def set_responsive_width(self, width: int) -> None:
         if hasattr(self, "_title_lbl") and self._title_lbl:
             if width >= 340:
-                self._title_lbl.setText("🤖 OPENCODE AI ASSISTANT")
+                self._title_lbl.set_icon("ai")
+                self._title_lbl.setText("OPENCODE AI ASSISTANT")
             elif width >= 270:
-                self._title_lbl.setText("🤖 AI Assistant")
+                self._title_lbl.set_icon("ai")
+                self._title_lbl.setText("AI Assistant")
             else:
-                self._title_lbl.setText("🤖 AI")
+                self._title_lbl.set_icon("ai")
+                self._title_lbl.setText("AI")
 
     def _tick_spinner(self) -> None:
         self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)
         self._spin_lbl.setText(_SPIN_CHARS[self._spin_idx])
 
     def _on_close_clicked(self) -> None:
-        """Handle the panel ✕ button to hide the AI Assistant side panel."""
+        """Handle the panel button to hide the AI Assistant side panel."""
         mw = self.window()
         if mw and hasattr(mw, "toggle_ai_panel"):
             mw.toggle_ai_panel(False)
@@ -238,13 +245,13 @@ class AIPanel(QWidget):
 
         disclaimer_title = "OpenCode AI Assistant (Beta Test)"
         disclaimer_msg = (
-            "🤖 OpenCode AI Assistant\n"
+            "OpenCode AI Assistant\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "📌 Notice & Disclaimer:\n"
+            "Notice & Disclaimer:\n"
             "• OpenCode AI integration in this project is currently in BETA TESTING.\n"
             "• MCU Flash GUI does not claim any copyright, trademark, or ownership of OpenCode AI. "
             "All rights, trademarks, and intellectual property belong to their respective creators.\n\n"
-            "🛡️ System Permission:\n"
+            "System Permission:\n"
             "• Clicking 'Yes' will launch OpenCode in an elevated terminal to assist you with "
             "fixing, explaining, and debugging code.\n\n"
             "Do you want to proceed and launch OpenCode AI as Administrator?"
@@ -350,11 +357,11 @@ class AIPanel(QWidget):
         self._ready_poll_timer.stop()
         self._ready_poll_attempts = 0
         self._stack.setCurrentWidget(self._loader_card)
-        self._status_badge.setText("● Initializing…")
+        self._status_badge.set_icon("time")
+        self._status_badge.setText("Initializing…")
         self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
         self._load_title.setText("Initializing OpenCode AI Assistant…")
         self._load_sub.setText("Preparing ConPTY terminal & project environment…")
-        self._spin_timer.start()
 
         cmd = [str(py_exe), str(script_path), "--launch-ai", target_dir]
 
@@ -369,7 +376,8 @@ class AIPanel(QWidget):
             self._embed_poll_timer.start()
         except Exception as e:
             self._spin_timer.stop()
-            self._status_badge.setText("● Offline")
+            self._status_badge.set_icon("disconnected")
+            self._status_badge.setText("Offline")
             self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
             self._load_title.setText("AI Assistant Error")
             self._load_sub.setText(f"Failed to start AI Assistant: {e}")
@@ -388,7 +396,8 @@ class AIPanel(QWidget):
             if self._poll_attempts > 240:  # ~15 seconds timeout
                 self._embed_poll_timer.stop()
                 self._spin_timer.stop()
-                self._status_badge.setText("● Timeout")
+                self._status_badge.set_icon("warning")
+                self._status_badge.setText("Timeout")
                 self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
                 self._load_title.setText("Connection Timed Out")
                 self._load_sub.setText("Could not attach to the OpenCode AI terminal window.")
@@ -444,7 +453,8 @@ class AIPanel(QWidget):
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
                 self._resize_embedded_ai(show=True)
                 self._stack.setCurrentWidget(self._embed_container)
-                self._status_badge.setText("● Active")
+                self._status_badge.set_icon("connected")
+                self._status_badge.setText("Active")
                 self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
         except Exception as e:
             print(f"[MCU Flasher] Error embedding AI window: {e}")
@@ -457,7 +467,8 @@ class AIPanel(QWidget):
         if self._proc and self._proc.poll() is not None:
             self._ready_poll_timer.stop()
             self._spin_timer.stop()
-            self._status_badge.setText("● Stopped")
+            self._status_badge.set_icon("stop")
+            self._status_badge.setText("Stopped")
             self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
             self._load_title.setText("AI Assistant Exited")
             self._load_sub.setText("The OpenCode process terminated unexpectedly.")
@@ -487,7 +498,8 @@ class AIPanel(QWidget):
                 self._resize_embedded_ai(show=True)
 
             self._stack.setCurrentWidget(self._embed_container)
-            self._status_badge.setText("● Active")
+            self._status_badge.set_icon("connected")
+            self._status_badge.setText("Active")
             self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
 
             # Deferred resize passes for smooth layout sync
@@ -577,12 +589,12 @@ class AIPanel(QWidget):
 
         # Show loader while the new session spins up
         self._stack.setCurrentWidget(self._loader_card)
-        self._status_badge.setText("● Realigning…")
+        self._status_badge.set_icon("reload")
+        self._status_badge.setText("Realigning…")
         self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
         proj_name = Path(new_project_dir).name if new_project_dir else "Project"
         self._load_title.setText("Realigning AI to New Project…")
         self._load_sub.setText(f"Switching AI workspace to {proj_name}…")
-        self._spin_timer.start()
 
         # Sync hardware state for new project folder
         self._sync_project_hardware_state(custom_dir=new_project_dir)

@@ -733,7 +733,7 @@ class BoardListItemDelegate(QStyledItemDelegate):
         self._fm_title_bold = QFontMetrics(self._f_title_bold)
         self._fm_badge = QFontMetrics(self._f_badge)
         self._fm_sub = QFontMetrics(self._f_sub)
-        self._star_width = self._fm_title.horizontalAdvance("★ ")
+        self._star_width = 22
         self._star_color = QColor("#f1c40f")
 
         self._badge_cache: dict[tuple[str, bool], tuple[QBrush, QPen, QColor]] = {}
@@ -752,6 +752,12 @@ class BoardListItemDelegate(QStyledItemDelegate):
         self._c_cyan = QColor(self.pal.get("CYAN", "#00d2ff"))
         self._c_text_bright = QColor(self.pal.get("TEXT_BRIGHT", "#ffffff"))
         self._c_text_dim = QColor(self.pal.get("TEXT_DIM", "#8fa1b3"))
+        from main.core.theme import Theme
+        from main.core.log_colors import themed_log_colors
+        mode = next((name for name, colors in Theme.PALETTES.items()
+                     if colors["BG_DARKEST"] == self._c_bg_darkest.name()), "default")
+        self._recent_inks = {False: themed_log_colors(mode, background=self._c_bg_darkest.name())["warning"],
+                             True: themed_log_colors(mode, background=self._c_bg_hover.name())["warning"]}
         self._badge_cache.clear()
 
     def _get_badge_styling(self, family: str, is_selected: bool) -> tuple[QBrush, QPen, QColor]:
@@ -826,7 +832,8 @@ class BoardListItemDelegate(QStyledItemDelegate):
 
         if is_recent:
             painter.setPen(self._star_color)
-            painter.drawText(left_margin, title_y, "★ ")
+            from main.qt.icons import icon
+            icon("recent", self._recent_inks[bool(is_selected or is_hover)], size=16).paint(painter, left_margin, title_y - 14, 16, 16)
             left_margin += self._star_width
             painter.setPen(self._c_cyan if is_selected else self._c_text_bright)
 
@@ -1163,7 +1170,7 @@ class BoardSearchDialog(QDialog):
             ("ESP8266", "ESP8266"),
             ("RP2040", "RP2040"),
             ("STM32", "STM32"),
-            ("RECENT", "★ Recent"),
+            ("RECENT", "Recent"),
         ]
         self._chip_group = QButtonGroup(self)
         self._chip_group.setExclusive(True)

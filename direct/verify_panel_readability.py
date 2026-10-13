@@ -195,7 +195,7 @@ class PanelReadabilityChecks(unittest.TestCase):
         ]
         with patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=records) as load:
             panel = self.widget(NotifPanel())
-            panel._filter_combo.setCurrentText("📦 Boards & Libraries")
+            panel._filter_combo.setCurrentText("Boards & Libraries")
             self.assertIn("board persisted", panel._browser.toPlainText())
             self.assertIn("library persisted", panel._browser.toPlainText())
             self.assertNotIn("device persisted", panel._browser.toPlainText())
@@ -206,12 +206,12 @@ class PanelReadabilityChecks(unittest.TestCase):
             self.assertNotIn("uncategorized live", panel._browser.toPlainText())
             self.assertIn("library live", panel._browser.toPlainText())
             panel.apply_theme("light")
-            panel._filter_combo.setCurrentText("🔌 USB Devices")
+            panel._filter_combo.setCurrentText("USB Devices")
             self.assertIn("usb live", panel._browser.toPlainText())
             self.assertIn("device persisted", panel._browser.toPlainText())
             self.assertNotIn("library live", panel._browser.toPlainText())
             panel._append_notification_card({"category": "board_install", "type": "error", "message": "board error live"})
-            panel._filter_combo.setCurrentText("✖ Errors")
+            panel._filter_combo.setCurrentText("Errors")
             self.assertIn("error persisted", panel._browser.toPlainText())
             self.assertIn("board error live", panel._browser.toPlainText())
             self.assertNotIn("usb live", panel._browser.toPlainText())
@@ -222,7 +222,7 @@ class PanelReadabilityChecks(unittest.TestCase):
     def test_notification_clear_failure_preserves_history_and_reports_the_error(self):
         with patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=[{"category": "board_install", "message": "preserved history"}]):
             panel = self.widget(NotifPanel())
-        panel._filter_combo.setCurrentText("📦 Boards & Libraries")
+        panel._filter_combo.setCurrentText("Boards & Libraries")
         for outcome in (False, OSError("Read-only database")):
             with patch("main.qt.notif_panel.dbs_delete.clear_all_notifications", return_value=outcome if outcome is False else None,
                        side_effect=outcome if isinstance(outcome, Exception) else None):
@@ -231,7 +231,7 @@ class PanelReadabilityChecks(unittest.TestCase):
             self.assertIn("Notifications could not be cleared", panel._browser.toPlainText())
             self.assertNotIn("All notifications cleared", panel._browser.toPlainText())
             self.assertEqual(len(panel._records), 1)
-            self.assertEqual(panel._filter_combo.currentText(), "📦 Boards & Libraries")
+            self.assertEqual(panel._filter_combo.currentText(), "Boards & Libraries")
             for mode in MODES:
                 panel.apply_theme(mode)
                 self.assert_readable(rendered_color(panel._browser, "Notifications could not be cleared"), get_palette(mode)["BG_DARK"])
@@ -260,14 +260,14 @@ class PanelReadabilityChecks(unittest.TestCase):
         second_path = str(ROOT / "temp" / "audit" / "notifications-second")
         with patch("main.qt.notif_panel.dbs_read.get_notifications", side_effect=[first, second]) as load:
             panel = self.widget(NotifPanel(SimpleNamespace(sketch_dir_path=first_path)))
-            panel._filter_combo.setCurrentText("📦 Boards & Libraries")
+            panel._filter_combo.setCurrentText("Boards & Libraries")
             panel._append_notification_card({"category": "library_install", "message": "first project live"})
             panel._on_project_updated({"path": first_path})
             self.assertEqual(load.call_count, 1)
             panel._on_project_updated({"path": second_path})
             APP.processEvents()
             self.assertEqual(load.call_count, 2)
-            self.assertEqual(panel._filter_combo.currentText(), "📦 Boards & Libraries")
+            self.assertEqual(panel._filter_combo.currentText(), "Boards & Libraries")
             self.assertIn("second project notification", panel._browser.toPlainText())
             self.assertNotIn("first project notification", panel._browser.toPlainText())
             self.assertNotIn("first project live", panel._browser.toPlainText())

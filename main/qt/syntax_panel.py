@@ -25,13 +25,15 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame, QAbstractItemView,
     QComboBox, QLineEdit, QGridLayout, QSizePolicy
 )
-from main.qt.icons import ActionButton as QPushButton
+from main.qt.icons import ActionButton as QPushButton, icon
 from main.qt.log_colors import contrast_ratio, themed_log_colors
 
 from src import syntax_checker
 from main.core.file_utils import get_project_root_source_files
 from main.qt.signals import signals as sig_bus
 
+
+from main.qt.icons import IconLabel as QLabel
 
 class SyntaxPanel(QWidget):
     """
@@ -98,18 +100,18 @@ class SyntaxPanel(QWidget):
         hl.setSpacing(8)
         self._header_layout = hl
 
-        lbl = QLabel("🔍 Syntax Diagnostics")
+        lbl = QLabel("Syntax Diagnostics", icon_name="search")
         self._title_lbl = lbl
         hl.addWidget(lbl, 0, 0)
 
         # Count badges
-        self._badge_errors = QLabel("✖ 0")
+        self._badge_errors = QLabel("0", icon_name="error")
         self._badge_errors.setStyleSheet(
             "background: #3d1c24; color: #f7768e; border: 1px solid #7a2d3c; border-radius: 9px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
         )
         hl.addWidget(self._badge_errors, 0, 1)
 
-        self._badge_warnings = QLabel("⚠ 0")
+        self._badge_warnings = QLabel("0", icon_name="warning")
         self._badge_warnings.setStyleSheet(
             "background: #3d321c; color: #e0af68; border: 1px solid #7a632d; border-radius: 9px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
         )
@@ -122,7 +124,7 @@ class SyntaxPanel(QWidget):
         hl.addWidget(lbl_filter, 0, 3)
 
         self._filter_combo = QComboBox()
-        self._filter_combo.addItems(["All Issues", "✖ Errors Only", "⚠ Warnings Only"])
+        self._filter_combo.addItems(["All Issues", "Errors Only", "Warnings Only"])
         self._filter_combo.setFixedWidth(125)
         self._filter_combo.setStyleSheet("QComboBox { font-size: 11px; padding: 2px 6px; }")
         self._filter_combo.currentTextChanged.connect(self._apply_filters)
@@ -147,7 +149,7 @@ class SyntaxPanel(QWidget):
         hl.addWidget(self._lbl_status, 0, 6)
         hl.setColumnStretch(6, 1)
 
-        btn_run = QPushButton("▶ Run Check")
+        btn_run = QPushButton("Run Check", icon_name="resume")
         btn_run.setFixedHeight(22)
         btn_run.setToolTip("Run real-time syntax and diagnostics analysis")
         btn_run.setStyleSheet(
@@ -203,35 +205,42 @@ class SyntaxPanel(QWidget):
         self._current_responsive_width = width
         if width >= 1100:
             self._is_ultra_compact = False
-            self._title_lbl.setText("🔍 Syntax Diagnostics")
+            self._title_lbl.set_icon("search")
+            self._title_lbl.setText("Syntax Diagnostics")
             self._lbl_filter.setVisible(True)
             self._filter_combo.setFixedWidth(125)
             self._search_input.setFixedWidth(160)
             self._search_input.setPlaceholderText("Filter by file or text…")
-            self._btn_run.setText("▶ Run Check")
+            self._btn_run.set_icon("resume")
+            self._btn_run.setText("Run Check")
             self._btn_clear.setText("Clear")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(8)
         elif width >= 850:
             self._is_ultra_compact = False
-            self._title_lbl.setText("🔍 Syntax")
+            self._title_lbl.set_icon("search")
+            self._title_lbl.setText("Syntax")
             self._lbl_filter.setVisible(False)
             self._filter_combo.setFixedWidth(115)
             self._search_input.setFixedWidth(120)
             self._search_input.setPlaceholderText("Filter…")
-            self._btn_run.setText("▶ Check")
+            self._btn_run.set_icon("resume")
+            self._btn_run.setText("Check")
             self._btn_clear.setText("Clear")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(5)
         else:
             self._is_ultra_compact = True
-            self._title_lbl.setText("🔍")
+            self._title_lbl.set_icon("search")
+            self._title_lbl.setText("")
             self._lbl_filter.setVisible(False)
             self._filter_combo.setFixedWidth(90)
             self._search_input.setFixedWidth(80)
             self._search_input.setPlaceholderText("Filter…")
-            self._btn_run.setText("▶")
-            self._btn_clear.setText("🗑")
+            self._btn_run.set_icon("resume")
+            self._btn_run.setText("")
+            self._btn_clear.set_icon("clear")
+            self._btn_clear.setText("")
             if hasattr(self, "_header_layout"):
                 self._header_layout.setSpacing(4)
         # Preserve all diagnostics controls at half-width scaled monitors.
@@ -373,12 +382,14 @@ class SyntaxPanel(QWidget):
         err_count = sum(1 for d in self._all_diagnostics if "err" in str(d.get("severity", "")).lower())
         warn_count = sum(1 for d in self._all_diagnostics if "warn" in str(d.get("severity", "")).lower())
 
-        self._badge_errors.setText(f"✖ {err_count}")
-        self._badge_warnings.setText(f"⚠ {warn_count}")
+        self._badge_errors.set_icon("error")
+        self._badge_errors.setText(f"{err_count}")
+        self._badge_warnings.set_icon("warning")
+        self._badge_warnings.setText(f"{warn_count}")
         self._lbl_status.setToolTip("")
 
         if not self._all_diagnostics:
-            self._lbl_status.setText("Clean ✔")
+            self._lbl_status.setText("Clean ")
             self._status_kind = "success"
         else:
             self._lbl_status.setText(f"{err_count} err, {warn_count} warn")
@@ -426,11 +437,11 @@ class SyntaxPanel(QWidget):
             msg = str(diag.get("message", diag.get("desc", "")))
 
             if "err" in sev:
-                sev_text = "✖ Error"
+                sev_text = "Error"
             elif "warn" in sev:
-                sev_text = "⚠ Warning"
+                sev_text = "Warning"
             else:
-                sev_text = "ℹ Note"
+                sev_text = "Note"
             sev_color = self._semantic_colors[self._severity_kind(sev)]
 
             item_file = QTableWidgetItem(fname)
@@ -441,6 +452,7 @@ class SyntaxPanel(QWidget):
             item_line = QTableWidgetItem(str(line))
             item_line.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             item_sev = QTableWidgetItem(sev_text)
+            item_sev.setIcon(icon("error" if "err" in sev else "warning" if "warn" in sev else "info", sev_color))
             item_sev.setForeground(QBrush(QColor(sev_color)))
             item_desc = QTableWidgetItem(msg)
 
@@ -745,8 +757,10 @@ class SyntaxPanel(QWidget):
         self._last_buffer_revision = None
         self._all_diagnostics.clear()
         self._table.setRowCount(0)
-        self._badge_errors.setText("✖ 0")
-        self._badge_warnings.setText("⚠ 0")
+        self._badge_errors.set_icon("error")
+        self._badge_errors.setText("0")
+        self._badge_warnings.set_icon("warning")
+        self._badge_warnings.setText("0")
         self._lbl_status.setText("Ready")
         self._status_kind = "dim"
         self._refresh_status_color()

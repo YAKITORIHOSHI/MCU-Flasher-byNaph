@@ -10,6 +10,25 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 For explicitly requested assistant delegation, use the local
 [`agy-delegation`](../agy-delegation/SKILL.md) workflow for bounded investigation.
 
+## SVG action contract
+
+Use the local `src/assets/icons/actions/*.svg` family for application-owned marks.
+Keep geometry original: chamfered silhouettes, routed strokes and open terminals.
+Keep text and SVG state separate; no decorative emoji or icon-font glyphs in
+controls, generated app messages or editor chrome. Retain accessible action names
+when compact buttons hide text. Render normal/active/disabled inks from the actual
+widget palette, including colored action fills; Developer Access retains its
+paper inks. Qt and cold Tk read identical assets. The Tk renderer must remain
+bounded, cached and standard-library-only so first-run setup works before Qt.
+Preserve native listbox selection/scroll callbacks and explicit CLI board choices.
+Compatibility warnings use `SOFT_WARNING_PREFIX` and the shared classifier,
+including older stored cautions; never infer severity from an empty prefix.
+Log status marks paint beside literal text and never enter copied journals.
+Preserve user Unicode in sketches and serial/terminal input/output.
+Verify `direct/verify_svg_icons.py` and `--native-tk`, plus theme, panel, build,
+setup, downloader and editor fixtures. Native CI covers Windows Qt ranges and
+Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
+
 ## Search, review and preparation modes
 
 - Use `main/core/upload_log.py` for every upload backend on both hosts. Preserve

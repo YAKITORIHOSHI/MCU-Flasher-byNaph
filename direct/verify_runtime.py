@@ -493,9 +493,9 @@ class RuntimeChecks(unittest.TestCase):
 
     def test_vector_controls_have_readable_labels(self):
         from main.qt.icons import ActionButton
-        button = ActionButton("⚡ Upload")
+        button = ActionButton("Upload", icon_name="upload")
         button.setObjectName("btn-upload")
-        button.setText("⚡ Uploading...")
+        button.setText("Uploading...")
         self.assertEqual(button.text(), "Uploading...")
         self.assertFalse(button.icon().isNull())
 

@@ -625,7 +625,7 @@ class MCUWebBackendAPI:
         count = len(reviews)
         noun = "edit" if count == 1 else "edits"
         self.emit("console:log", {
-            "text": f"⚠ {action_name} paused: please review and accept/decline {count} pending AI {noun} first.",
+            "text": f"{action_name} paused: please review and accept/decline {count} pending AI {noun} first.",
             "tag": "warning",
             "newline": True,
         })
@@ -1332,7 +1332,7 @@ class MCUWebBackendAPI:
                             mapping_log_key = (drive_spec, share_root.lower().rstrip("\\"))
                             if getattr(self, "_last_unc_mapping_log_key", None) != mapping_log_key:
                                 self.emit("console:log", {
-                                    "text": f"  🌐 Using existing drive mapping {drive_spec} → {share_root}",
+                                    "text": f"  Using existing drive mapping {drive_spec} → {share_root}",
                                     "tag": "info", "newline": True
                                 })
                                 self._last_unc_mapping_log_key = mapping_log_key
@@ -1351,7 +1351,7 @@ class MCUWebBackendAPI:
 
         if mapped_letter is None:
             self.emit("console:log", {
-                "text": "  ⚠ Could not find a free drive letter for the network share — accessing via UNC directly.",
+                "text": "  Could not find a free drive letter for the network share — accessing via UNC directly.",
                 "tag": "warning", "newline": True
             })
             return project
@@ -1365,7 +1365,7 @@ class MCUWebBackendAPI:
             )
             if map_result.returncode != 0:
                 self.emit("console:log", {
-                    "text": f"  ⚠ Could not map {share_root} → {drive_spec} ({map_result.stderr.strip()}) — accessing via UNC directly.",
+                    "text": f"  Could not map {share_root} → {drive_spec} ({map_result.stderr.strip()}) — accessing via UNC directly.",
                     "tag": "warning", "newline": True
                 })
                 return project
@@ -1373,7 +1373,7 @@ class MCUWebBackendAPI:
             self._unc_mapped_drive = drive_spec
             self._last_unc_mapping_log_key = (drive_spec, share_root.lower().rstrip("\\"))
             self.emit("console:log", {
-                "text": f"  🌐 Mapped network share → {drive_spec} (temporary, for this build session)",
+                "text": f"  Mapped network share → {drive_spec} (temporary, for this build session)",
                 "tag": "info", "newline": True
             })
 
@@ -1384,7 +1384,7 @@ class MCUWebBackendAPI:
             return Path(f"{drive_spec}{relative_part}")
         except Exception as exc:
             self.emit("console:log", {
-                "text": f"  ⚠ Drive-mapping failed ({exc}) — accessing via UNC directly.",
+                "text": f"  Drive-mapping failed ({exc}) — accessing via UNC directly.",
                 "tag": "warning", "newline": True
             })
             return project
@@ -1403,7 +1403,7 @@ class MCUWebBackendAPI:
                 creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
             )
             self.emit("console:log", {
-                "text": f"  🌐 Unmapped temporary drive {drive_spec}",
+                "text": f"  Unmapped temporary drive {drive_spec}",
                 "tag": "dim", "newline": True
             })
         except Exception:
@@ -1979,7 +1979,7 @@ class MCUWebBackendAPI:
 
             if not hasattr(esptool, "get_default_connected_device"):
                 self.emit("console:log", {
-                    "text": "  ⚠ esptool version too old for chip probe (need ≥ 4.x).",
+                    "text": "  esptool version too old for chip probe (need ≥ 4.x).",
                     "tag": "warning",
                     "newline": True,
                 })
@@ -2078,7 +2078,7 @@ class MCUWebBackendAPI:
             return True
         except Exception as e:
             self.emit("console:log", {
-                "text": f"  ⚠ Chip probe failed: {e}",
+                "text": f"  Chip probe failed: {e}",
                 "tag": "warning",
                 "newline": True,
             })
@@ -2145,7 +2145,7 @@ class MCUWebBackendAPI:
             initial_lines = [
                 ("", "normal"),
                 ("  ℹ Compatible devices are detected when this project is compiled.", "dim"),
-                ("  👉 Click '⚙ Compile' (or 'Upload') to generate the list.", "dim"),
+                ("  Click 'Compile' (or 'Upload') to generate the list.", "dim"),
             ]
             self.emit("compat_devices:updated", {
                 "lines": initial_lines,
@@ -2159,7 +2159,7 @@ class MCUWebBackendAPI:
         except Exception:
             current_hash = ""
         stale = cached.get("hash", "") != current_hash
-        status = "Please recompile to update the list" if stale else f"✔ {len(cached['boards'])}/{len(SUPPORTED_BOARDS)} · {cached.get('updated_at', '')}"
+        status = "Please recompile to update the list" if stale else f"{len(cached['boards'])}/{len(SUPPORTED_BOARDS)} · {cached.get('updated_at', '')}"
         state = {
             "boards": cached["boards"],
             "reasons": cached["reasons"],
@@ -2200,19 +2200,19 @@ class MCUWebBackendAPI:
             lines.append((text, tag))
 
         _add("  " + "─" * 46, "dim")
-        _add(f"  🔧 COMPATIBLE DEVICES — {sketch_name}", "system")
+        _add(f"  COMPATIBLE DEVICES — {sketch_name}", "system")
         if stale:
             cache_state = getattr(self, "_compat_cache", None) or {}
             last = updated_at or cache_state.get("updated_at") or "-"
-            _add(f"  ⚠ Sources changed since the last compile — recompile to refresh. (last: {last})", "warning")
+            _add(f"  Sources changed since the last compile — recompile to refresh. (last: {last})", "warning")
         if needle:
             filter_str = (filter_text or "").strip()
             if filtered:
-                _add(f"  🔍 {len(filtered)} of {len(boards)} boards match '{filter_str}'.", "dim")
+                _add(f"  {len(filtered)} of {len(boards)} boards match '{filter_str}'.", "dim")
             else:
-                _add(f"  ✖ No boards match '{filter_str}'.", "error")
+                _add(f"  No boards match '{filter_str}'.", "error")
         else:
-            _add(f"  ✔ {len(boards)} of {total} supported boards pass the static check.",
+            _add(f"  {len(boards)} of {total} supported boards pass the static check.",
                  "success" if boards else "error")
         if not reasons and len(boards) == total:
             _add("  ℹ No platform-specific APIs detected — likely portable across all boards.", "dim")
@@ -2220,24 +2220,24 @@ class MCUWebBackendAPI:
         _add("")
 
         if not filtered:
-            _add("  ✖ No compatible boards found.", "error")
+            _add("  No compatible boards found.", "error")
         else:
             for fam in family_order:
                 if fam not in groups:
                     continue
                 names = groups.pop(fam)
-                _add(f"  ✔ {fam}  ({len(names)})", "success")
+                _add(f"  {fam}  ({len(names)})", "success")
                 for name in names:
                     _add(f"      • {name}", "normal")
                 _add("")
             for fam, names in groups.items():
-                _add(f"  ✔ {fam}  ({len(names)})", "success")
+                _add(f"  {fam}  ({len(names)})", "success")
                 for name in names:
                     _add(f"      • {name}", "normal")
                 _add("")
 
         if reasons:
-            _add("  ⚠ Excluded / cautioned because:", "warning")
+            _add("  Excluded / cautioned because:", "warning")
             for r in reasons:
                 _add(f"      - {r}", "warning")
             _add("")
@@ -2281,11 +2281,11 @@ class MCUWebBackendAPI:
         self.emit("compat_devices:updated", {
             "lines": [
                 ("", "normal"),
-                ("  ⏳ Analyzing sketch compatibility in background...", "dim"),
+                ("  Analyzing sketch compatibility in background...", "dim"),
             ],
             "content": [
                 ("", "normal"),
-                ("  ⏳ Analyzing sketch compatibility in background...", "dim"),
+                ("  Analyzing sketch compatibility in background...", "dim"),
             ],
             "status": "Analyzing compatible devices...",
         })
@@ -2319,13 +2319,13 @@ class MCUWebBackendAPI:
         if result.get("error"):
             self._compat_full_state = None
             err_lines = [
-                ("  ✖ Compatibility analysis failed:", "error"),
+                ("  Compatibility analysis failed:", "error"),
                 (f"  {result['error']}", "error"),
             ]
             self.emit("compat_devices:updated", {
                 "lines": err_lines,
                 "content": err_lines,
-                "status": "✖ Analysis failed",
+                "status": "Analysis failed",
             })
             return
 
@@ -2338,7 +2338,7 @@ class MCUWebBackendAPI:
             "hash": result.get("hash", ""),
             "updated_at": now,
         }
-        status = f"✔ {len(boards)}/{len(SUPPORTED_BOARDS)} · {now}"
+        status = f"{len(boards)}/{len(SUPPORTED_BOARDS)} · {now}"
         self._compat_full_state = {
             "boards": boards,
             "reasons": reasons,
@@ -3858,7 +3858,7 @@ class MCUWebBackendAPI:
             self.clear_serial_output()
 
         if not self.current_board:
-            self.emit("console:log", {"text": "✖ Compile error: No board selected. Please select a board first.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Compile error: No board selected. Please select a board first.", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Compile Failed", "message": "No board selected.", "type": "warning"})
             return
         self.is_busy = True
@@ -4030,7 +4030,7 @@ class MCUWebBackendAPI:
 
         self.emit("console:log", {"text": "", "newline": True})
         self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
-        self.emit("console:log", {"text": f"  ⚙  COMPILING ({compiler_name})", "tag": "header", "newline": True})
+        self.emit("console:log", {"text": f"   COMPILING ({compiler_name})", "tag": "header", "newline": True})
         self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
         self.emit("console:log", {"text": f"  Sketch : {self.sketch_dir_path}", "tag": "dim", "newline": True})
         if self.current_board:
@@ -4041,7 +4041,7 @@ class MCUWebBackendAPI:
 
         if is_upload:
             self.emit("console:log", {
-                "text": "  🔄 Sources changed or no prior build — compiling firmware before upload.",
+                "text": "  Sources changed or no prior build — compiling firmware before upload.",
                 "tag": "info",
                 "newline": True
             })
@@ -4051,11 +4051,11 @@ class MCUWebBackendAPI:
         if is_remote:
             effective_sketch_dir = self._map_unc_for_build(self.sketch_dir_path)
             _share = _unc_share_root(self.sketch_dir_path) or str(self.sketch_dir_path)
-            self.emit("console:log", {"text": f"  🌐 Source  : Network share ({_share})", "tag": "info", "newline": True})
+            self.emit("console:log", {"text": f"  Source  : Network share ({_share})", "tag": "info", "newline": True})
 
         cache_root = self._board_workspace_dir(build_board)
         if is_remote:
-            self.emit("console:log", {"text": f"  🌐 Workspace: Local fast storage ({cache_root.name})", "tag": "info", "newline": True})
+            self.emit("console:log", {"text": f"  Workspace: Local fast storage ({cache_root.name})", "tag": "info", "newline": True})
 
         # Check the actual env build directory — not just the .pio root — so the
         # "Incremental build" message is only shown when compiled objects really exist.
@@ -4066,7 +4066,7 @@ class MCUWebBackendAPI:
         )
         if is_fresh_board:
             self.emit("console:log", {
-                "text": "  🔧 First build for this board — creating its isolated workspace.",
+                "text": "  First build for this board — creating its isolated workspace.",
                 "tag": "info",
                 "newline": True
             })
@@ -4083,7 +4083,7 @@ class MCUWebBackendAPI:
         try:
             pio_cmd = find_pio_executable()
             if not pio_cmd:
-                self.emit("console:log", {"text": "✖ PlatformIO executable not found.", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": "PlatformIO executable not found.", "tag": "error", "newline": True})
                 self.is_busy = False
                 self.active_operation = self._current_op_phase = None
                 self.emit("operation:phase", {"phase": "idle", "is_busy": False})
@@ -4112,7 +4112,7 @@ class MCUWebBackendAPI:
             entry_ok, entry_details = self._validate_entry_points() if "arduino" in framework.lower().split(",") else (True, "")
             if entry_details:
                 self.emit("console:log", {
-                    "text": f"  {'✔' if entry_ok else '⚠'} Arduino entry points — {entry_details}",
+                    "text": f"  {'' if entry_ok else ''} Arduino entry points — {entry_details}",
                     "tag": "success" if entry_ok else "warning",
                     "newline": True
                 })
@@ -4214,7 +4214,7 @@ class MCUWebBackendAPI:
             logical_processors = max(1, os.cpu_count() or jobs)
             reserved_processors = max(1, logical_processors - jobs) if logical_processors > jobs else 1
             reserved_word = "Processor" if reserved_processors == 1 else "Processors"
-            text_part = f"⚡ Running Parallel Compilation on {jobs} Logical Processors"
+            text_part = f"Running Parallel Compilation on {jobs} Logical Processors"
             inner_w = max(73, len(text_part) + 4)
 
             top = " ╔" + "═" * inner_w + "╗"
@@ -4234,7 +4234,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "  ℹ Selected-board workspace is isolated from every other board.", "tag": "info", "newline": True})
             self.emit("console:log", {"text": "    PlatformIO will compile only missing or changed units.", "tag": "dim", "newline": True})
             self.emit("console:log", {"text": "", "newline": True})
-            self.emit("console:log", {"text": "  ⚙ Starting PlatformIO build process...", "tag": "purple", "newline": True})
+            self.emit("console:log", {"text": "  Starting PlatformIO build process...", "tag": "purple", "newline": True})
 
             cmd = pio_cmd + ["run", "-j", str(jobs)]
 
@@ -4407,7 +4407,7 @@ class MCUWebBackendAPI:
                         "note": "Note",
                     }.get(kind, kind.title())
                     tag = "warning" if kind == "warning" else "info" if kind == "note" else "error"
-                    icon = "⚠" if kind == "warning" else "ℹ" if kind == "note" else "✖"
+                    icon = "" if kind == "warning" else "ℹ" if kind == "note" else ""
                     location = _diagnostic_location(diagnostic.group("file"))
                     location += f":{diagnostic.group('line')}"
                     if diagnostic.group("column"):
@@ -4574,7 +4574,7 @@ class MCUWebBackendAPI:
                 # Route line display
                 if is_linker_error:
                     _ensure_post_deps_divider()
-                    self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean}", "tag": "error", "newline": True})
                     _in_error_block[0] = False
                 elif is_gcc_diagnostic or is_context_header:
                     _ensure_post_deps_divider()
@@ -4583,7 +4583,7 @@ class MCUWebBackendAPI:
                         self.emit("console:log", {"text": f"{prefix}{line_clean}", "tag": _error_block_type[0], "newline": True})
                 elif is_scons_wrapper:
                     _ensure_post_deps_divider()
-                    self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean}", "tag": "error", "newline": True})
                     _in_error_block[0] = False
                 elif _in_error_block[0]:
                     prefix = "    " if is_context_header else "      "
@@ -4595,15 +4595,15 @@ class MCUWebBackendAPI:
                 elif is_build_mode:
                     _ensure_post_deps_divider()
                     self.emit("console:log", {
-                        "text": f"  ⚙ {line_clean}" + ("" if line_clean.endswith("...") else "..."),
+                        "text": f"  {line_clean}" + ("" if line_clean.endswith("...") else "..."),
                         "tag": "info", "newline": True,
                     })
                 elif is_generic_error:
                     _ensure_post_deps_divider()
-                    self.emit("console:log", {"text": f"  ✖ {line_clean}", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean}", "tag": "error", "newline": True})
                 elif is_generic_warning:
                     _ensure_post_deps_divider()
-                    self.emit("console:log", {"text": f"  ⚠ {line_clean}", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean}", "tag": "warning", "newline": True})
                 elif re.match(r'^Processing\s+\S+\s*\(', line_clean, re.IGNORECASE):
                     self.emit("console:log", {"text": f"    {line_clean}", "tag": "purple", "newline": True})
                     if not _first_divider_printed[0]:
@@ -4623,7 +4623,7 @@ class MCUWebBackendAPI:
                     if "installing" in low:
                         if item not in _framework_logged_installs:
                             _framework_logged_installs.add(item)
-                            self.emit("console:log", {"text": f"  🔎 Checking {manager_kind}: {item}", "tag": "info", "newline": True})
+                            self.emit("console:log", {"text": f"  Checking {manager_kind}: {item}", "tag": "info", "newline": True})
                             _deps_content_printed[0] = True
                     elif "installed" in low:
                         if item not in _framework_logged_done:
@@ -4631,12 +4631,12 @@ class MCUWebBackendAPI:
                             item_label = item if len(item) <= 44 else item[:41] + "..."
                             full_bar = "▰" * 30
                             self.emit("console:log", {
-                                "text": f"  ✔ Unpacking   [{item_label}]  {full_bar}  100%",
+                                "text": f"  Unpacking   [{item_label}]  {full_bar}  100%",
                                 "tag": "success",
                                 "replace_pattern": rf"(?:Downloading|Unpacking)\s+\[{re.escape(item_label)}\]",
                                 "newline": True
                             })
-                            self.emit("console:log", {"text": f"  ✔ Installed {manager_kind}: {item}", "tag": "success", "newline": True})
+                            self.emit("console:log", {"text": f"  Installed {manager_kind}: {item}", "tag": "success", "newline": True})
                             _deps_content_printed[0] = True
                     else:
                         self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
@@ -4658,7 +4658,7 @@ class MCUWebBackendAPI:
                         _framework_banner_shown[0] = True
                         self.emit("console:log", {"text": "", "newline": True})
                         self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
-                        self.emit("console:log", {"text": "  ⚠ Preparing required core framework & toolchain packages...", "tag": "warning", "newline": True})
+                        self.emit("console:log", {"text": "  Preparing required core framework & toolchain packages...", "tag": "warning", "newline": True})
                         self.emit("console:log", {"text": "    A required shared PlatformIO package is actually being downloaded/unpacked.", "tag": "info", "newline": True})
                         self.emit("console:log", {"text": "    Keep the application open until package preparation finishes.", "tag": "info", "newline": True})
                         self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
@@ -4672,7 +4672,7 @@ class MCUWebBackendAPI:
                         act_name = "Downloading" if "downloading" in low else "Unpacking"
                         item = _current_framework_item[0] or "core framework package"
                         item_label = item if len(item) <= 44 else item[:41] + "..."
-                        icon = "✔ " if pct >= 100 else "  "
+                        icon = "" if pct >= 100 else "  "
                         progress_text = f"  {icon}{act_name:<11} [{item_label}]  {bar}  {pct:3d}%"
                         self.emit("console:log", {
                             "text": progress_text,
@@ -4687,28 +4687,28 @@ class MCUWebBackendAPI:
                     _prog_text = None
                     _prog_tag = "dim"
                     if progress_action == "linking":
-                        _prog_text, _prog_tag = "  🔗 Linking...", "dim"
+                        _prog_text, _prog_tag = "  Linking...", "dim"
                     elif progress_action in ("checking size", "retrieving maximum program size"):
-                        _prog_text, _prog_tag = "  📏 Checking firmware size...", "dim"
+                        _prog_text, _prog_tag = "  Checking firmware size...", "dim"
                     elif progress_action == "compiling":
                         filename = progress_target.rsplit("/", 1)[-1]
-                        _prog_text = f"  ⚙ Compiling {filename}..."
+                        _prog_text = f"  Compiling {filename}..."
                         _prog_tag = "info"
                     elif progress_action == "archiving":
-                        _prog_text, _prog_tag = "  📦 Archiving...", "dim"
+                        _prog_text, _prog_tag = "  Archiving...", "dim"
                     elif progress_action in ("building", "generating partitions"):
                         target_name = progress_target.rsplit("/", 1)[-1]
                         if "bootloader" in target_name.lower():
-                            _prog_text = f"  ⚡ Building bootloader image ({target_name})..."
+                            _prog_text = f"  Building bootloader image ({target_name})..."
                             _prog_tag = "info"
                         elif progress_action == "generating partitions" or "partition" in target_name.lower():
-                            _prog_text = f"  ⚡ Building partition table ({target_name})..."
+                            _prog_text = f"  Building partition table ({target_name})..."
                             _prog_tag = "info"
                         elif "firmware" in target_name.lower() or target_name.endswith((".bin", ".hex")):
-                            _prog_text = f"  ⚡ Building firmware image ({target_name})..."
+                            _prog_text = f"  Building firmware image ({target_name})..."
                             _prog_tag = "info"
                         else:
-                            _prog_text = f"  ⚙ Building {target_name}..."
+                            _prog_text = f"  Building {target_name}..."
                             _prog_tag = "info"
 
                     if _prog_text and (progress_action == "compiling" or _prog_text != _last_progress_text[0]):
@@ -4734,7 +4734,7 @@ class MCUWebBackendAPI:
                 self._clean_temporary_compile_artifacts(cache_root)
                 self.emit("console:log", {"text": "", "newline": True})
                 self.emit("console:log", {"text": "  ■ Compilation stopped safely by user.", "tag": "warning", "newline": True})
-                self.emit("console:log", {"text": "  ♻ Temporary build artifacts cleared. Project is ready to be rebuilt.", "tag": "info", "newline": True})
+                self.emit("console:log", {"text": "  Temporary build artifacts cleared. Project is ready to be rebuilt.", "tag": "info", "newline": True})
                 self.is_busy = False
                 self.active_operation = None
                 self._current_op_phase = None
@@ -4806,10 +4806,10 @@ class MCUWebBackendAPI:
                         fw_kb = round(fw_file.stat().st_size / 1024, 1)
                         binfo = self._resolve_board_info(self.current_board)
                         chip_label = str(binfo.get("board", "")).upper() or self.current_board
-                        self.emit("console:log", {"text": f"  ✔ Successfully created {chip_label} image ({fw_file.name})", "tag": "success", "newline": True})
-                        self.emit("console:log", {"text": f"  📦 Binary artifact: {fw_file.name} ({fw_kb} KB) ready for upload", "tag": "success", "newline": True})
+                        self.emit("console:log", {"text": f"  Successfully created {chip_label} image ({fw_file.name})", "tag": "success", "newline": True})
+                        self.emit("console:log", {"text": f"  Binary artifact: {fw_file.name} ({fw_kb} KB) ready for upload", "tag": "success", "newline": True})
                     if bl_file.exists() and pt_file.exists():
-                        self.emit("console:log", {"text": "  📦 Bootloader & partitions verified OK", "tag": "dim", "newline": True})
+                        self.emit("console:log", {"text": "  Bootloader & partitions verified OK", "tag": "dim", "newline": True})
                 except Exception:
                     pass
 
@@ -4830,7 +4830,7 @@ class MCUWebBackendAPI:
                     ]
                     self._print_info_box("Compilation Time Breakdown", breakdown_fields)
                     self.emit("console:log", {
-                        "text": f"  ✔ Compilation successful! (Build: {build_sec}s | Tools Download: {tool_dl_sec}s | Total: {total_sec}s)",
+                        "text": f"  Compilation successful! (Build: {build_sec}s | Tools Download: {tool_dl_sec}s | Total: {total_sec}s)",
                         "tag": "success",
                         "newline": True
                     })
@@ -4841,14 +4841,14 @@ class MCUWebBackendAPI:
                     ]
                     self._print_info_box("Compilation Time Breakdown", breakdown_fields)
                     self.emit("console:log", {
-                        "text": f"  ✔ Compilation successful! ({total_sec}s)",
+                        "text": f"  Compilation successful! ({total_sec}s)",
                         "tag": "success",
                         "newline": True
                     })
 
                 self._refresh_compatible_devices(force=True)
                 self.emit("console:log", {
-                    "text": "  ℹ Compatible devices analysis updated → see the '🔧 Compatible Devices' tab.",
+                    "text": "  ℹ Compatible devices analysis updated → see the 'Compatible Devices' tab.",
                     "tag": "dim",
                     "newline": True
                 })
@@ -4866,7 +4866,7 @@ class MCUWebBackendAPI:
                             max_gpio = 48 if is_s3_selected else 39
 
                             self.emit("console:log", {"text": "", "newline": True})
-                            self.emit("console:log", {"text": "  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "tag": "severe_alert", "newline": True})
+                            self.emit("console:log", {"text": "  ", "tag": "severe_alert", "newline": True})
                             self.emit("console:log", {"text": "  ════════════════════════════════════════════════════════════════════════════", "tag": "severe_alert", "newline": True})
                             self.emit("console:log", {"text": "  CRITICAL HARDWARE INCOMPATIBILITY DETECTED ON SELECTED BOARD!", "tag": "severe_alert", "newline": True})
                             self.emit("console:log", {"text": "  ════════════════════════════════════════════════════════════════════════════", "tag": "severe_alert", "newline": True})
@@ -4886,7 +4886,7 @@ class MCUWebBackendAPI:
                             self.emit("console:log", {"text": "  - CHANGE THE PIN IN YOUR CODE TO AN ACCESSIBLE GPIO (E.G., GPIO 2, 4, 16, 17), OR", "tag": "severe_alert", "newline": True})
                             self.emit("console:log", {"text": "  - SWITCH SELECTED BOARD TO ESP32-S3 DEV MODULE IF YOUR PHYSICAL BOARD USES AN S3 CHIP!", "tag": "severe_alert", "newline": True})
                             self.emit("console:log", {"text": "  ════════════════════════════════════════════════════════════════════════════", "tag": "severe_alert", "newline": True})
-                            self.emit("console:log", {"text": "  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "tag": "severe_alert", "newline": True})
+                            self.emit("console:log", {"text": "  ", "tag": "severe_alert", "newline": True})
                             self.emit("console:log", {"text": "", "newline": True})
                 except Exception:
                     pass
@@ -4904,15 +4904,15 @@ class MCUWebBackendAPI:
                 failure_kind = classify_platformio_failure(output_lines)
                 if failure_kind == "cache" and not is_clean_retry:
                     self.emit("console:log", {"text": "", "newline": True})
-                    self.emit("console:log", {"text": "  ⚠ Selected-board build cache inconsistency detected.", "tag": "warning", "newline": True})
-                    self.emit("console:log", {"text": "  ♻ Automatically repairing workspace cache and retrying build...", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "  Selected-board build cache inconsistency detected.", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "  Automatically repairing workspace cache and retrying build...", "tag": "info", "newline": True})
                     self._clean_board_cache(self.current_board)
                     return self._compile_worker(is_upload=is_upload, is_clean_retry=True)
                 elif failure_kind == "cache":
-                    self.emit("console:log", {"text": "  ⚠ Selected-board cache repair was already attempted once; preserving diagnostics and stopping.", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "  Selected-board cache repair was already attempted once; preserving diagnostics and stopping.", "tag": "warning", "newline": True})
 
                 self.emit("console:log", {"text": "", "newline": True})
-                self.emit("console:log", {"text": f"  ✖ Compilation FAILED after {duration}s:", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": f"  Compilation FAILED after {duration}s:", "tag": "error", "newline": True})
 
                 parsed_errors = []
                 err_pattern = re.compile(
@@ -4960,11 +4960,11 @@ class MCUWebBackendAPI:
                     )
                     compat_summary = ", ".join(family_names) if family_names else "other boards"
                     self.emit("console:log", {"text": "", "newline": True})
-                    self.emit("console:log", {"text": "  ⚠ This sketch is NOT compatible with the selected board.", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "  This sketch is NOT compatible with the selected board.", "tag": "warning", "newline": True})
                     self.emit("console:log", {"text": f"     Selected board : {selected_board}", "tag": "warning", "newline": True})
                     self.emit("console:log", {"text": f"     Compatible with: {compat_summary}", "tag": "info", "newline": True})
                     self.emit("console:log", {"text": "", "newline": True})
-                    self.emit("console:log", {"text": "  💡 Please select a compatible board and try again.", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "  Please select a compatible board and try again.", "tag": "info", "newline": True})
                 elif parsed_errors:
                     seen_issues = set()
                     errors_by_file: dict[str, list[dict]] = {}
@@ -4979,15 +4979,15 @@ class MCUWebBackendAPI:
                         for e in parsed_errors
                     )
                     header_tag = "error" if has_real_errors else "warning"
-                    self.emit("console:log", {"text": "⚠️  ISSUES LISTED BY FILE:", "tag": header_tag, "newline": True})
+                    self.emit("console:log", {"text": " ISSUES LISTED BY FILE:", "tag": header_tag, "newline": True})
                     self.emit("console:log", {"text": "─" * 50, "tag": header_tag, "newline": True})
 
                     for fname, errs in errors_by_file.items():
-                        self.emit("console:log", {"text": f"  📁 {fname}", "tag": "warning", "newline": True})
+                        self.emit("console:log", {"text": f"  {fname}", "tag": "warning", "newline": True})
                         for e in errs:
                             severity = e["type"].lower().strip()
                             tag = "info" if "note" in severity else ("warning" if "warning" in severity else "error")
-                            bullet = "•" if tag == "error" else ("⚠" if tag == "warning" else "ℹ")
+                            bullet = "•" if tag == "error" else ("" if tag == "warning" else "ℹ")
                             self.emit("console:log", {
                                 "text": f"     {bullet} Line {e['line']} (Col {e['col']}): {severity} — {e['msg']}",
                                 "tag": tag,
@@ -5004,7 +5004,7 @@ class MCUWebBackendAPI:
                 return False
 
         except Exception as e:
-            self.emit("console:log", {"text": f"✖ Fatal compile error: {e}", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": f"Fatal compile error: {e}", "tag": "error", "newline": True})
             self.is_busy = False
             self.active_operation = None
             self._current_op_phase = None
@@ -5271,13 +5271,13 @@ class MCUWebBackendAPI:
             text = "  ■ Connection stopped"
             tag = "info"
         elif failed:
-            text = f"  ✖ {failure_reason or 'Connection failed'}"
+            text = f"  {failure_reason or 'Connection failed'}"
             tag = "error"
         elif connected:
-            text = "  ✔ Connected"
+            text = "  Connected"
             tag = "success"
         else:
-            text = f"  🔌 Connecting [ {bar} ] | {current}/{total}"
+            text = f"  Connecting [ {bar} ] | {current}/{total}"
             tag = "magenta"
 
         self._upload_connection_pending = not (connected or failed or stopped)
@@ -5316,7 +5316,7 @@ class MCUWebBackendAPI:
         pct = max(0.0, min(100.0, float(percent)))
         filled = int(pct / 100.0 * bar_width)
         bar = "▰" * filled + "▱" * max(0, bar_width - filled)
-        icon = "✔" if pct >= 100.0 else "⚙"
+        icon = "" if pct >= 100.0 else ""
         stage_str = f"[{stage}/{stage_total}] " if stage_total > 1 else ""
         size_label = ""
         if written is not None and total is not None:
@@ -5563,8 +5563,8 @@ class MCUWebBackendAPI:
     def _wait_for_port_reconnect(self, port: str, timeout: float = 10.0) -> bool:
         """Wait up to timeout seconds for a disconnected COM port to reappear."""
         self.emit("console:log", {"text": "", "newline": True})
-        self.emit("console:log", {"text": "  ⚠ MCU disconnected — COM port is no longer available.", "tag": "warning", "newline": True})
-        self.emit("console:log", {"text": f"  ⏳ Waiting {int(timeout)} seconds for MCU reconnection… Press ■ STOP to cancel.", "tag": "info", "newline": True})
+        self.emit("console:log", {"text": "  MCU disconnected — COM port is no longer available.", "tag": "warning", "newline": True})
+        self.emit("console:log", {"text": f"  Waiting {int(timeout)} seconds for MCU reconnection… Press ■ STOP to cancel.", "tag": "info", "newline": True})
         poll_interval = 0.5
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -5572,7 +5572,7 @@ class MCUWebBackendAPI:
                 break
             time.sleep(poll_interval)
             if self._is_port_present(port):
-                self.emit("console:log", {"text": f"  ✔ MCU reconnected on {port} — resuming upload.", "tag": "success", "newline": True})
+                self.emit("console:log", {"text": f"  MCU reconnected on {port} — resuming upload.", "tag": "success", "newline": True})
                 return True
         return False
 
@@ -5808,7 +5808,7 @@ class MCUWebBackendAPI:
                 stopped=bool(getattr(self, "_stop_requested", False)),
                 reason="Board mismatch" if mismatch else "",
                 hint=(
-                    f"  💡 Detected {mismatch[0]}; selected target is {mismatch[1]}. "
+                    f"  Detected {mismatch[0]}; selected target is {mismatch[1]}. "
                     "Select the matching board in Controls, then upload again."
                     if mismatch else ""
                 ),
@@ -5864,8 +5864,8 @@ class MCUWebBackendAPI:
                 connection_poll_count[0], _MAX_CONNECT_RETRIES, connected=True
             )
             self._append_upload_boot_hint(
-                ("  ✔ Bootloader synced — you may release the BOOT button now."
-                 if connection_poll_count[0] > 1 else "  ✔ Bootloader synced."),
+                ("  Bootloader synced — you may release the BOOT button now."
+                 if connection_poll_count[0] > 1 else "  Bootloader synced."),
                 "success",
             )
 
@@ -6055,7 +6055,7 @@ class MCUWebBackendAPI:
                                 and not completed_images):
                             timed_out = True
                             self.emit("console:log", {
-                                "text": f"  ⚠ Bootloader connection timed out after {_WATCHDOG_SECS}s — retrying.",
+                                "text": f"  Bootloader connection timed out after {_WATCHDOG_SECS}s — retrying.",
                                 "tag": "warning",
                                 "newline": True,
                             })
@@ -6066,7 +6066,7 @@ class MCUWebBackendAPI:
                                 and silent_for > _SILENCE_WATCHDOG_SECS
                                 and not completed_images):
                             self.emit("console:log", {
-                                "text": f"  ⚠ Uploader silent for {_SILENCE_WATCHDOG_SECS}s during write — aborting attempt.",
+                                "text": f"  Uploader silent for {_SILENCE_WATCHDOG_SECS}s during write — aborting attempt.",
                                 "tag": "warning",
                                 "newline": True,
                             })
@@ -6111,7 +6111,7 @@ class MCUWebBackendAPI:
                         })
                     else:
                         self.emit("console:log", {
-                            "text": "  ⚠ Process did not exit cleanly — force killing.",
+                            "text": "  Process did not exit cleanly — force killing.",
                             "tag": "warning",
                             "newline": True,
                         })
@@ -6235,30 +6235,30 @@ class MCUWebBackendAPI:
                             _fld = int(_pct / 100.0 * _bar_w)
                             _sbar = "▰" * _fld + "▱" * max(0, _bar_w - _fld)
                             self.emit("console:log", {
-                                "text": f"  ✖ Flashing {_stage_str}{_rlabel} [ {_sbar} ] | {_pct:5.1f}% (stalled)",
+                                "text": f"  Flashing {_stage_str}{_rlabel} [ {_sbar} ] | {_pct:5.1f}% (stalled)",
                                 "tag": "warning",
                                 "replace_pattern": rf"Flashing\s+{re.escape(_stage_str + _rlabel)}\s*\[",
                                 "newline": True,
                             })
                         self.emit("console:log", {
-                            "text": f"  ⚠ Serial data stalled at {chosen_speed} baud.",
+                            "text": f"  Serial data stalled at {chosen_speed} baud.",
                             "tag": "warning",
                             "newline": True,
                         })
                     else:
                         self.emit("console:log", {
-                            "text": f"  ⚠ Upload failed at {chosen_speed} baud — device did not respond.",
+                            "text": f"  Upload failed at {chosen_speed} baud — device did not respond.",
                             "tag": "warning",
                             "newline": True,
                         })
 
                     self.emit("console:log", {
-                        "text": f"  🔄 Retrying at {chosen_speed} baud (your selected upload speed)…",
+                        "text": f"  Retrying at {chosen_speed} baud (your selected upload speed)…",
                         "tag": "info",
                         "newline": True,
                     })
                     self._append_upload_boot_hint(
-                        "  💡 Hold the 'BOOT' button now if your board requires manual download mode.",
+                        "  Hold the 'BOOT' button now if your board requires manual download mode.",
                     )
 
                     # Give the bootloader a moment, then retry with a fresh connection budget.
@@ -6280,7 +6280,7 @@ class MCUWebBackendAPI:
                     self.emit("console:log", {"text": "", "newline": True})
                     if rc != 0:
                         self.emit("console:log", {
-                            "text": "  ⚠ Esptool returned an error after every image was written and hash-verified. Treating upload as successful.",
+                            "text": "  Esptool returned an error after every image was written and hash-verified. Treating upload as successful.",
                             "tag": "warning",
                             "newline": True,
                         })
@@ -6289,7 +6289,7 @@ class MCUWebBackendAPI:
                             output_lines=output_lines, error="post-flash exit after all images verified",
                         )
                     self.emit("console:log", {
-                        "text": "  ✔ Flash write and verification completed. Reset will continue through the Serial Monitor.",
+                        "text": "  Flash write and verification completed. Reset will continue through the Serial Monitor.",
                         "tag": "success",
                         "newline": True,
                     })
@@ -6304,7 +6304,7 @@ class MCUWebBackendAPI:
 
                 if attempt_connected and writing_started and not all_images_verified:
                     self.emit("console:log", {
-                        "text": "  ⚠ Flash erase/write had begun before communication failed. Automatic retry was stopped to avoid replaying flash commands.",
+                        "text": "  Flash erase/write had begun before communication failed. Automatic retry was stopped to avoid replaying flash commands.",
                         "tag": "warning",
                         "newline": True,
                     })
@@ -6548,7 +6548,7 @@ class MCUWebBackendAPI:
         added_symlinks = new_symlinks - old_symlinks
         if added_symlinks:
             self.emit("console:log", {
-                "text": f"  📝 Adding dependencies: {', '.join(sorted(added_symlinks))}",
+                "text": f"  Adding dependencies: {', '.join(sorted(added_symlinks))}",
                 "tag": "warning",
                 "newline": True
             })
@@ -6559,7 +6559,7 @@ class MCUWebBackendAPI:
             })
         elif not old_content and detected_symlinks:
             self.emit("console:log", {
-                "text": f"  📝 Adding dependencies: {', '.join(detected_symlinks)}",
+                "text": f"  Adding dependencies: {', '.join(detected_symlinks)}",
                 "tag": "warning",
                 "newline": True
             })
@@ -6570,12 +6570,12 @@ class MCUWebBackendAPI:
             old_content and f"platform = {platform}" not in old_content
         ):
             self.emit("console:log", {
-                "text": "  📝 Serial upload protocol updated; PlatformIO will reconcile the selected board incrementally.",
+                "text": "  Serial upload protocol updated; PlatformIO will reconcile the selected board incrementally.",
                 "tag": "info",
                 "newline": True
             })
         self.emit("console:log", {
-            "text": "  ✔ Updated platformio.ini successfully.",
+            "text": "  Updated platformio.ini successfully.",
             "tag": "success",
             "newline": True
         })
@@ -6598,12 +6598,12 @@ class MCUWebBackendAPI:
             self.clear_serial_output()
 
         if not self.current_board:
-            self.emit("console:log", {"text": "✖ Upload error: No board selected. Please select a board first.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Upload error: No board selected. Please select a board first.", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Upload Failed", "message": "No board selected.", "type": "warning"})
             return
         from main.core.target_profile import upload_target_ready
         if not upload_target_ready(self._resolve_board_info(), self.current_port):
-            self.emit("console:log", {"text": "✖ Upload error: No COM port selected. Please select a port first.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Upload error: No COM port selected. Please select a port first.", "tag": "error", "newline": True})
             self.emit("notification", {"title": "Upload Failed", "message": "No port selected.", "type": "warning"})
             return
 
@@ -6822,7 +6822,7 @@ class MCUWebBackendAPI:
             if code:
                 if write_started:
                     self.emit("console:log", {
-                        "text": "  ⚠ Flash erase/write began before communication failed. The firmware may be incomplete; MCU Flasher did not replay the upload or reset the board.",
+                        "text": "  Flash erase/write began before communication failed. The firmware may be incomplete; MCU Flasher did not replay the upload or reset the board.",
                         "tag": "warning", "newline": True,
                     })
                     self.emit("console:log", {
@@ -7273,7 +7273,7 @@ class MCUWebBackendAPI:
         jobs = self._get_jobs()
         cmd = pio_path + ["run", "-e", "mcu_flash", "-j", str(jobs)]
         self.emit("console:log", {
-            "text": f"  🔧 First Hard/Soft Reset for {board_name} — preparing exact-board recovery binaries…",
+            "text": f"  First Hard/Soft Reset for {board_name} — preparing exact-board recovery binaries…",
             "tag": "info",
             "newline": True,
         })
@@ -7339,7 +7339,7 @@ class MCUWebBackendAPI:
 
         images, error = self._locate_hard_reset_recovery_images(board_name, board_info)
         if images:
-            self.emit("console:log", {"text": "  ✔ Exact-board recovery binaries ready and saved.", "tag": "success", "newline": True})
+            self.emit("console:log", {"text": "  Exact-board recovery binaries ready and saved.", "tag": "success", "newline": True})
         return images, error
 
     def _emit_boot_connection_progress(self, step: int = 0, *, connected: bool = False, failed: bool = False, cancelled: bool = False):
@@ -7347,12 +7347,12 @@ class MCUWebBackendAPI:
         step = max(0, int(step or 0))
         if connected:
             bar = "▰" * width
-            text = f"  ✔ Boot connection [ {bar} ] | Connected — release BOOT"
+            text = f"  Boot connection [ {bar} ] | Connected — release BOOT"
             tag = "success"
         elif failed or cancelled:
             bar = "▱" * width
             suffix = "Cancelled" if cancelled else "FAILED — hold BOOT and try again"
-            text = f"  ✖ Boot connection [ {bar} ] | {suffix}"
+            text = f"  Boot connection [ {bar} ] | {suffix}"
             tag = "warning" if cancelled else "error"
         else:
             block = 6
@@ -7363,7 +7363,7 @@ class MCUWebBackendAPI:
                 pos = cycle - pos
             bar = "▱" * pos + "▰" * block + "▱" * (width - pos - block)
             dots = "." * ((step % 4) + 1)
-            text = f"  🔌 Boot connection [ {bar} ] | Hold BOOT{dots}"
+            text = f"  Boot connection [ {bar} ] | Hold BOOT{dots}"
             tag = "warning"
         self.emit("console:log", {
             "text": text,
@@ -7378,13 +7378,13 @@ class MCUWebBackendAPI:
             return True
         owner_pid = port_occupied_owner(port)
         if owner_pid:
-            self.emit("console:log", {"text": f"  ⚠ Reset(DTR/RTS) blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "tag": "warning", "newline": True})
+            self.emit("console:log", {"text": f"  Reset(DTR/RTS) blocked: Port '{port}' is in use by another window (PID {owner_pid}).", "tag": "warning", "newline": True})
             return False
         b_name = board_name or self.current_board or ""
         b_info = board_info or self._resolve_board_info(b_name)
         platform = str(b_info.get("platform", "")).lower()
         is_uno = ("avr" in platform)
-        self.emit("console:log", {"text": f"  🔄 Rebooting board on {port}...", "tag": "info", "newline": True})
+        self.emit("console:log", {"text": f"  Rebooting board on {port}...", "tag": "info", "newline": True})
         try:
             # 1. Native USB-CDC (ESP32-S3 / RP2040 / SAMD) 1200-baud touch reset fallback
             if not is_uno and (self._is_native_usb_port(port) or platform in ("raspberrypi", "samd")):
@@ -7426,10 +7426,10 @@ class MCUWebBackendAPI:
                     conn.rts = False
                     conn.dtr = False
                 time.sleep(0.05)
-            self.emit("console:log", {"text": "  ✔ Reset pulse completed successfully.", "tag": "success", "newline": True})
+            self.emit("console:log", {"text": "  Reset pulse completed successfully.", "tag": "success", "newline": True})
             return True
         except Exception as e:
-            self.emit("console:log", {"text": f"  ⚠ Could not complete Reset(DTR/RTS): {e}", "tag": "warning", "newline": True})
+            self.emit("console:log", {"text": f"  Could not complete Reset(DTR/RTS): {e}", "tag": "warning", "newline": True})
             return False
 
     def _release_port_lines(self, port: str, pulse_reset: bool = False):
@@ -7498,7 +7498,7 @@ class MCUWebBackendAPI:
         ─ Detailed success / failure banners with timing info
         """
         if not self.current_port:
-            self.emit("console:log", {"text": "✖ Upload error: No COM port selected.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Upload error: No COM port selected.", "tag": "error", "newline": True})
             self.is_busy = False
             self.active_operation = self._current_op_phase = None
             self.emit("operation:phase", {"phase": "idle", "is_busy": False})
@@ -7509,7 +7509,7 @@ class MCUWebBackendAPI:
         owner_pid = port_occupied_owner(port)
         if owner_pid:
             self.emit("console:log", {
-                "text": f"  ⚠ Upload blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
+                "text": f"  Upload blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
                 "tag": "warning",
                 "newline": True,
             })
@@ -7535,7 +7535,7 @@ class MCUWebBackendAPI:
                 if not self._is_port_present(port):
                     mcu_detached_during_compile[0] = True
                     self.emit("console:log", {
-                        "text": f"  ⚠ MCU disconnected from {port} while compiling!\n    Compilation continues to populate cache, but upload will be skipped.",
+                        "text": f"  MCU disconnected from {port} while compiling!\n    Compilation continues to populate cache, but upload will be skipped.",
                         "tag": "warning",
                         "newline": True,
                     })
@@ -7550,10 +7550,10 @@ class MCUWebBackendAPI:
             if not recompile_needed:
                 # Reuse only when the user requested it and identity is valid.
                 need_compile = False
-                skip_reason_msg = "  ✔ Sources unchanged — skipping recompile (using cached firmware)"
+                skip_reason_msg = "  Sources unchanged — skipping recompile (using cached firmware)"
             else:
                 self.emit("console:log", {
-                    "text": f"  🔄 Recompile needed: {reason}",
+                    "text": f"  Recompile needed: {reason}",
                     "tag": "warning",
                     "newline": True,
                 })
@@ -7592,7 +7592,7 @@ class MCUWebBackendAPI:
                 or self.current_board != getattr(self, "_active_board_name", self.current_board)
                 or not self._is_port_present(port)):
             self.emit("console:log", {
-                "text": f"  ⚠ Upload skipped: the target or port changed, or MCU on {port} disconnected.\n  💡 Select the intended board and stable port, then click Upload again.",
+                "text": f"  Upload skipped: the target or port changed, or MCU on {port} disconnected.\n  Select the intended board and stable port, then click Upload again.",
                 "tag": "warning",
                 "newline": True,
             })
@@ -7607,6 +7607,7 @@ class MCUWebBackendAPI:
         selected_board = str(self.current_board or "")
         compat_boards, compat_reasons = self._get_compat_analysis()
 
+        from main.core.board_compat import is_compat_warning, plain_compat_reason
         has_warnings = False
         warnings_list: list[str] = []
         if compat_boards and selected_board not in compat_boards:
@@ -7621,7 +7622,7 @@ class MCUWebBackendAPI:
             relevant_reasons = []
             for r in compat_reasons:
                 if selected_board in compat_boards:
-                    if r.startswith("⚠"):
+                    if is_compat_warning(r):
                         board_prefix = selected_board.split()[0].lower()
                         if board_prefix in r.lower() or selected_board.lower() in r.lower():
                             relevant_reasons.append(r)
@@ -7634,25 +7635,25 @@ class MCUWebBackendAPI:
 
         if has_warnings:
             self.emit("console:log", {"text": "  Waiting for compatibility confirmation...", "tag": "warning", "newline": True})
-            severe_reasons = [r for r in warnings_list if not r.startswith("⚠")]
-            soft_reasons = [r for r in warnings_list if r.startswith("⚠")]
+            severe_reasons = [r for r in warnings_list if not is_compat_warning(r)]
+            soft_reasons = [r for r in warnings_list if is_compat_warning(r)]
 
             self.emit("console:log", {"text": "", "newline": True})
             if severe_reasons:
-                self.emit("console:log", {"text": "  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "tag": "severe_alert", "newline": True})
+                self.emit("console:log", {"text": "  ", "tag": "severe_alert", "newline": True})
                 self.emit("console:log", {"text": "  ════════════════════════════════════════════════════════════════════════════", "tag": "severe_alert", "newline": True})
-                self.emit("console:log", {"text": "  ⚠ COMPATIBILITY ISSUE DETECTED — CONTINUING MAY DAMAGE YOUR BOARD OR FIRMWARE! ⚠", "tag": "severe_alert", "newline": True})
+                self.emit("console:log", {"text": "  COMPATIBILITY ISSUE DETECTED — CONTINUING MAY DAMAGE YOUR BOARD OR FIRMWARE! ", "tag": "severe_alert", "newline": True})
                 self.emit("console:log", {"text": "  ════════════════════════════════════════════════════════════════════════════", "tag": "severe_alert", "newline": True})
                 for reason in severe_reasons:
-                    self.emit("console:log", {"text": f"  ✖ {reason}", "tag": "severe_alert", "newline": True})
+                    self.emit("console:log", {"text": f"  {reason}", "tag": "severe_alert", "newline": True})
                 self.emit("console:log", {"text": "  ════════════════════════════════════════════════════════════════════════════", "tag": "severe_alert", "newline": True})
-                self.emit("console:log", {"text": "  🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨", "tag": "severe_alert", "newline": True})
+                self.emit("console:log", {"text": "  ", "tag": "severe_alert", "newline": True})
             else:
-                self.emit("console:log", {"text": "  ⚠ Compatibility warning(s) detected:", "tag": "warning", "newline": True})
+                self.emit("console:log", {"text": "  Compatibility warning(s) detected:", "tag": "warning", "newline": True})
             for reason in soft_reasons:
                 clean = re.sub(
                     r"\s+on \d+ boards \(e\.g\., .*\)", "",
-                    reason[2:].lstrip() if reason.startswith("⚠") else reason,
+                    plain_compat_reason(reason),
                 )
                 self.emit("console:log", {"text": f"  • {clean}", "tag": "warning", "newline": True})
             self.emit("console:log", {"text": "", "newline": True})
@@ -7746,12 +7747,12 @@ class MCUWebBackendAPI:
             if fast_bins is not None:
                 if (is_s3_board(str(binfo.get("board", ""))) or "s3" in board_name.lower()) and self._is_native_usb_port(port):
                     fast_bins["before"] = "usb-reset"
-                self.emit("console:log", {"text": "  ⚡ Fast upload: polling the bootloader now…", "tag": "info", "newline": True})
-                self.emit("console:log", {"text": f"  ⚙ Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
+                self.emit("console:log", {"text": "  Fast upload: polling the bootloader now…", "tag": "info", "newline": True})
+                self.emit("console:log", {"text": f"  Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
                 self.emit("console:log", {"text": "", "newline": True})
                 self._append_connecting_progress(1, _MAX_CONNECT_RETRIES)
                 self._append_upload_boot_hint(
-                    "  💡 Hold BOOT now — the uploader will keep polling the bootloader.",
+                    "  Hold BOOT now — the uploader will keep polling the bootloader.",
                 )
 
                 fast_ok, fast_error, fast_attempts = self._soft_reset_esptool_write(fast_bins, port)
@@ -7775,53 +7776,53 @@ class MCUWebBackendAPI:
                     failure_kind = getattr(self, "_last_fast_upload_failure_kind", "")
                     if failure_kind == "connection":
                         self.emit("console:log", {
-                            "text": f"  ✖ Failed to connect to {board_name} on {port} after {fast_attempts}/{_MAX_CONNECT_RETRIES} attempts.",
+                            "text": f"  Failed to connect to {board_name} on {port} after {fast_attempts}/{_MAX_CONNECT_RETRIES} attempts.",
                             "tag": "error",
                             "newline": True,
                         })
                         self.emit("console:log", {
-                            "text": "  ✔ Safe state: Existing firmware on your MCU was NOT erased or modified.",
+                            "text": "  Safe state: Existing firmware on your MCU was NOT erased or modified.",
                             "tag": "success",
                             "newline": True,
                         })
                         if any(token in str(fast_error).lower() for token in ("not functioning", "write timeout", "cannot configure port", "permissionerror")):
                             self.emit("console:log", {
-                                "text": "  💡 USB driver stalled (Windows error 31): Please unplug your board's USB cable, plug it back in, and retry.",
+                                "text": "  USB driver stalled (Windows error 31): Please unplug your board's USB cable, plug it back in, and retry.",
                                 "tag": "warning",
                                 "newline": True,
                             })
                         platform_str = str(binfo.get("platform", "")).lower()
                         if platform_str == "espressif8266":
-                            self.emit("console:log", {"text": "  💡 ESP8266: hold BOOT/GPIO0 LOW, press RESET/EN, then release BOOT after Connected.", "tag": "info", "newline": True})
+                            self.emit("console:log", {"text": "  ESP8266: hold BOOT/GPIO0 LOW, press RESET/EN, then release BOOT after Connected.", "tag": "info", "newline": True})
                         else:
                             self.emit("console:log", {
-                                "text": "  💡 ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.",
+                                "text": "  ESP32 / ESP32-S3 boards: hold BOOT, press RESET, release BOOT.",
                                 "tag": "info",
                                 "newline": True,
                             })
-                        self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
+                        self.emit("console:log", {"text": "  Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
                     elif failure_kind == "flash" and getattr(self, "_last_fast_upload_write_started", False):
                         self.emit("console:log", {"text": "", "newline": True})
                         self.emit("console:log", {
-                            "text": "  ⚠ Flashing stopped after erase/write began. MCU Flasher did not restart the flash automatically.",
+                            "text": "  Flashing stopped after erase/write began. MCU Flasher did not restart the flash automatically.",
                             "tag": "warning",
                             "newline": True,
                         })
                         self.emit("console:log", {
-                            "text": "  💡 Reconnect the board, select a stable port, lower Upload Speed (try 115200), then click Upload once. Clean is not required.",
+                            "text": "  Reconnect the board, select a stable port, lower Upload Speed (try 115200), then click Upload once. Clean is not required.",
                             "tag": "info",
                             "newline": True,
                         })
                     else:
                         self.emit("console:log", {"text": "", "newline": True})
-                        self.emit("console:log", {"text": f"  ✖ Fast upload failed: {fast_error}", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": f"  Fast upload failed: {fast_error}", "tag": "error", "newline": True})
                         if failure_kind != "target" and str(upload_speed) in ("921600", "512000"):
                             self.emit("console:log", {
-                                "text": f"  💡 High upload speed ({upload_speed} baud) may exceed hardware limits for this USB bridge or cable. Try selecting 460800 or 115200 baud in the toolbar.",
+                                "text": f"  High upload speed ({upload_speed} baud) may exceed hardware limits for this USB bridge or cable. Try selecting 460800 or 115200 baud in the toolbar.",
                                 "tag": "warning",
                                 "newline": True,
                             })
-                    self.emit("console:log", {"text": f"  ✖ Upload FAILED after {upload_duration}s", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"  Upload FAILED after {upload_duration}s", "tag": "error", "newline": True})
                     self.emit("console:log", {
                         "text": "  ℹ Compiled output and board caches were preserved; upload failures do not require Clean.",
                         "tag": "info",
@@ -7838,16 +7839,16 @@ class MCUWebBackendAPI:
                     probed_ok = bool(self._probe_chip_info(port))
                 except Exception:
                     probed_ok = False
-                self.emit("console:log", {"text": "  ⚡ PlatformIO upload: polling the bootloader now…", "tag": "info", "newline": True})
-                self.emit("console:log", {"text": f"  ⚙ Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
+                self.emit("console:log", {"text": "  PlatformIO upload: polling the bootloader now…", "tag": "info", "newline": True})
+                self.emit("console:log", {"text": f"  Esptool baud: {upload_speed} (selected upload speed)", "tag": "dim", "newline": True})
                 self.emit("console:log", {"text": "", "newline": True})
                 self._append_connecting_progress(_connect_retry[0], _MAX_CONNECT_RETRIES)
                 self._append_upload_boot_hint(
-                    "  💡 Hold BOOT now — the uploader will keep polling the bootloader.",
+                    "  Hold BOOT now — the uploader will keep polling the bootloader.",
                 )
             pio_cmd = find_pio_executable()
             if not pio_cmd:
-                self.emit("console:log", {"text": "✖ PlatformIO not available for upload.", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": "PlatformIO not available for upload.", "tag": "error", "newline": True})
                 return
             cache_root = self._board_workspace_dir()
             # Ensure platformio.ini and build directories exist before invoking PlatformIO!
@@ -7957,7 +7958,7 @@ class MCUWebBackendAPI:
                     _pending_pre_box.clear()
 
             def _flip_to_connected_bar():
-                """Re-render the last progress line as a green '✔ Connected' bar."""
+                """Re-render the last progress line as a green 'Connected' bar."""
                 if is_esp and not _connected_bar_flipped[0]:
                     _connected_bar_flipped[0] = True
                     _current_phase[0] = "Connected"
@@ -7965,8 +7966,8 @@ class MCUWebBackendAPI:
                         _connect_retry[0], _MAX_CONNECT_RETRIES, connected=True
                     )
                     self._append_upload_boot_hint(
-                        ("  ✔ Bootloader synced — you may release the BOOT button now."
-                         if _connect_retry[0] > 1 else "  ✔ Bootloader synced."),
+                        ("  Bootloader synced — you may release the BOOT button now."
+                         if _connect_retry[0] > 1 else "  Bootloader synced."),
                         "success",
                     )
 
@@ -7979,7 +7980,7 @@ class MCUWebBackendAPI:
                     self._finish_upload_connection_status(
                         reason="Board mismatch" if mismatch else "",
                         hint=(
-                            f"  💡 Detected {mismatch[0]}; selected target is {mismatch[1]}. "
+                            f"  Detected {mismatch[0]}; selected target is {mismatch[1]}. "
                             "Select the matching board in Controls, then upload again."
                             if mismatch else ""
                         ),
@@ -8017,7 +8018,7 @@ class MCUWebBackendAPI:
                 if is_esp and (mismatch := self._esptool_chip_mismatch(line_clean)):
                     _target_mismatch[0] = mismatch
                     _flip_to_failed_bar()
-                    self.emit("console:log", {"text": f"  ✖ {_stripped}", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"  {_stripped}", "tag": "error", "newline": True})
                     continue
                 upload_line_action, verdict = _classify_platformio_upload_line(line_clean)
                 if upload_line_action == "outcome":
@@ -8096,7 +8097,7 @@ class MCUWebBackendAPI:
                     bar_width = 30
                     filled = int(pct / 100.0 * bar_width)
                     bar = "▰" * filled + "▱" * max(0, bar_width - filled)
-                    icon = "✔" if pct >= 100.0 else "⚙"
+                    icon = "" if pct >= 100.0 else ""
                     size_label = f" | {written}/{total}" if written and total else ""
                     progress_text = f"  {icon} Flashing {part_label} [ {bar} ] | {pct:5.1f}%{size_label}"
                     self.emit("console:log", {
@@ -8155,7 +8156,7 @@ class MCUWebBackendAPI:
                         _flip_to_connected_bar()
                         _maybe_show_chip_info_box()
                     _current_phase[0] = "Erasing"
-                    self.emit("console:log", {"text": f"  ⚡ {line_clean.strip()}", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "info", "newline": True})
                     continue
 
                 # ── Writing / Wrote ─────────────────────────────────
@@ -8164,7 +8165,7 @@ class MCUWebBackendAPI:
                     continue  # Handled by _parse_esptool_write_progress above
                 if "wrote" in low:
                     _current_phase[0] = "Writing"
-                    self.emit("console:log", {"text": f"  ✔ {line_clean.strip()}", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "success", "newline": True})
                     continue
 
                 # ── Verifying ───────────────────────────────────────
@@ -8173,20 +8174,20 @@ class MCUWebBackendAPI:
                     continue
                 if "verifying" in low:
                     _current_phase[0] = "Verifying"
-                    self.emit("console:log", {"text": f"  ✔ {line_clean.strip()}", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "success", "newline": True})
                     continue
 
                 # ── Hard resetting ──────────────────────────────────
                 if "hard resetting" in low:
                     _current_phase[0] = "Resetting"
-                    self.emit("console:log", {"text": f"  ✔ {line_clean.strip()}", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "success", "newline": True})
                     continue
 
                 # ── Creating image ──────────────────────────────────
                 if "creating" in low and "image" in low and "created" not in low:
                     chip_match = re.search(r'creating (\w+) image', low)
                     chip_name = chip_match.group(1).upper() if chip_match else "MCU"
-                    self.emit("console:log", {"text": f"  ⚙ Creating {chip_name} image...", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": f"  Creating {chip_name} image...", "tag": "info", "newline": True})
                     continue
 
                 # ── Successfully created image ──────────────────────
@@ -8195,7 +8196,7 @@ class MCUWebBackendAPI:
                     chip_name = chip_match.group(1).upper() if chip_match else "MCU"
                     _flash_image_count[0] += 1
                     label = "Bootloader" if _flash_image_count[0] == 1 else "Application"
-                    self.emit("console:log", {"text": f"  ✔ Successfully created {chip_name} image ({label})", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": f"  Successfully created {chip_name} image ({label})", "tag": "success", "newline": True})
                     continue
 
                 # ── Suppress RAM/Flash during upload (already logged during compile) ─
@@ -8228,12 +8229,12 @@ class MCUWebBackendAPI:
                 # ── Error / failure lines ───────────────────────────
                 if "error" in low or "failed" in low:
                     _flip_to_failed_bar()
-                    self.emit("console:log", {"text": f"  ✖ {line_clean.strip()}", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "error", "newline": True})
                     continue
 
                 # ── Warning lines ───────────────────────────────────
                 if "warning" in low:
-                    self.emit("console:log", {"text": f"  ⚠ {line_clean.strip()}", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "warning", "newline": True})
                     continue
 
                 # ── Fallthrough: print generic info ─────────────────
@@ -8277,16 +8278,16 @@ class MCUWebBackendAPI:
                 elif is_esp and not _connected_bar_flipped[0]:
                     _flip_to_failed_bar()
                     self.emit("console:log", {
-                        "text": "  ✔ Safe state: Existing firmware on your MCU was NOT erased or modified.",
+                        "text": "  Safe state: Existing firmware on your MCU was NOT erased or modified.",
                         "tag": "success",
                         "newline": True,
                     })
                     platform_str = str(binfo.get("platform", "")).lower()
                     if platform_str == "espressif8266":
-                        self.emit("console:log", {"text": "  💡 ESP8266: hold BOOT/GPIO0 LOW, press RESET/EN, then release BOOT after Connected.", "tag": "info", "newline": True})
+                        self.emit("console:log", {"text": "  ESP8266: hold BOOT/GPIO0 LOW, press RESET/EN, then release BOOT after Connected.", "tag": "info", "newline": True})
                     else:
                         self.emit("console:log", {
-                            "text": "  💡 Manual Bootloader Mode (ESP32 Dev Module):",
+                            "text": "  Manual Bootloader Mode (ESP32 Dev Module):",
                             "tag": "warning",
                             "newline": True,
                         })
@@ -8301,22 +8302,22 @@ class MCUWebBackendAPI:
                             "newline": True,
                         })
                         self.emit("console:log", {
-                            "text": "     3. Release 'BOOT' as soon as '✔ Bootloader synced' appears in console.",
+                            "text": "     3. Release 'BOOT' as soon as 'Bootloader synced' appears in console.",
                             "tag": "info",
                             "newline": True,
                         })
-                    self.emit("console:log", {"text": "  💡 Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "  Or: unplug & replug the USB cable, then try again.", "tag": "info", "newline": True})
                 elif is_avr:
                     self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {
-                        "text": "  💡 Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
+                        "text": "  Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
                         "tag": "info",
                         "newline": True,
                     })
                 elif _chip_stopped_responding[0]:
                     self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {
-                        "text": "  💡 The MCU stopped responding mid-flash (UART communication loss or power droop):",
+                        "text": "  The MCU stopped responding mid-flash (UART communication loss or power droop):",
                         "tag": "warning",
                         "newline": True,
                     })
@@ -8336,7 +8337,7 @@ class MCUWebBackendAPI:
                         "newline": True,
                     })
 
-                self.emit("console:log", {"text": f"  ✖ Upload FAILED after {upload_duration}s (exit code {rc})", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": f"  Upload FAILED after {upload_duration}s (exit code {rc})", "tag": "error", "newline": True})
                 self.emit("console:log", {
                     "text": "  ℹ Compiled output and board caches were preserved; upload failures do not require Clean.",
                     "tag": "info",
@@ -8346,7 +8347,7 @@ class MCUWebBackendAPI:
 
         except Exception as e:
             self._finish_upload_connection_status(stopped=bool(self._stop_requested))
-            self.emit("console:log", {"text": f"✖ Upload error: {e}", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": f"Upload error: {e}", "tag": "error", "newline": True})
         finally:
             process = getattr(self, "_active_process", None)
             if process is not None and process.poll() is None:
@@ -8387,7 +8388,7 @@ class MCUWebBackendAPI:
     def reset_mcu(self):
         """Perform a hardware reboot of the connected microcontroller via DTR/RTS without dropping the serial monitor."""
         if self.is_busy and self.active_operation != "compile":
-            self.emit("serial:log", {"text": "--- ⚠ Cannot reset MCU: Operation currently in progress. ---", "tag": "warning", "newline": True})
+            self.emit("serial:log", {"text": "--- Cannot reset MCU: Operation currently in progress. ---", "tag": "warning", "newline": True})
             return
         if not self._check_target("Reset", log_event="serial:log"):
             return
@@ -8402,7 +8403,7 @@ class MCUWebBackendAPI:
             self.clear_serial_output()
 
         if not self.current_port:
-            self.emit("serial:log", {"text": "--- ✖ Cannot reset MCU: No COM port selected. ---", "tag": "error", "newline": True})
+            self.emit("serial:log", {"text": "--- Cannot reset MCU: No COM port selected. ---", "tag": "error", "newline": True})
             return
 
         def _worker():
@@ -8416,7 +8417,7 @@ class MCUWebBackendAPI:
                 is_s3_or_cdc = "s3" in board_id or platform in ("raspberrypi", "samd")
 
                 self.emit("serial:log", {
-                    "text": f"--- ↺ Triggering pin reset (DTR/RTS) on {self.current_port}... ---",
+                    "text": f"--- Triggering pin reset (DTR/RTS) on {self.current_port}... ---",
                     "tag": "info",
                     "newline": True,
                 })
@@ -8452,14 +8453,14 @@ class MCUWebBackendAPI:
                             time.sleep(0.05)
 
                         self.emit("serial:log", {
-                            "text": "--- ✔ Pin reset (DTR/RTS) completed successfully ---",
+                            "text": "--- Pin reset (DTR/RTS) completed successfully ---",
                             "tag": "success",
                             "newline": True,
                         })
                         return
                     except Exception as ex:
                         self.emit("serial:log", {
-                            "text": f"--- ⚠ In-place reset pulse error: {ex}, attempting direct port reset... ---",
+                            "text": f"--- In-place reset pulse error: {ex}, attempting direct port reset... ---",
                             "tag": "warning",
                             "newline": True,
                         })
@@ -8512,13 +8513,13 @@ class MCUWebBackendAPI:
                             time.sleep(0.05)
 
                     self.emit("serial:log", {
-                        "text": "--- ✔ Pin reset (DTR/RTS) completed successfully ---",
+                        "text": "--- Pin reset (DTR/RTS) completed successfully ---",
                         "tag": "success",
                         "newline": True,
                     })
                 except Exception as e:
                     self.emit("serial:log", {
-                        "text": f"--- ✖ Could not complete Reset(DTR/RTS): {e} ---",
+                        "text": f"--- Could not complete Reset(DTR/RTS): {e} ---",
                         "tag": "error",
                         "newline": True,
                     })
@@ -8590,10 +8591,10 @@ class MCUWebBackendAPI:
             self.clear_serial_output()
 
         if not self.current_board:
-            self.emit("console:log", {"text": "✖ Hard Reset error: No board selected.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Hard Reset error: No board selected.", "tag": "error", "newline": True})
             return
         if not self.current_port:
-            self.emit("console:log", {"text": "✖ Hard Reset error: No COM port selected.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Hard Reset error: No COM port selected.", "tag": "error", "newline": True})
             return
 
         port, board_name = self.current_port, self.current_board
@@ -8612,7 +8613,7 @@ class MCUWebBackendAPI:
             owner_pid = port_occupied_owner(port)
             if owner_pid:
                 self.emit("console:log", {
-                    "text": f"  ⚠ Hard reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
+                    "text": f"  Hard reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
                     "tag": "warning",
                     "newline": True,
                 })
@@ -8621,7 +8622,7 @@ class MCUWebBackendAPI:
             reset_cache_lock = _try_acquire_reset_cache_lock()
             if reset_cache_lock is None:
                 self.emit("console:log", {
-                    "text": "  ⚠ Hard Reset blocked: another window is using the shared reset cache.",
+                    "text": "  Hard Reset blocked: another window is using the shared reset cache.",
                     "tag": "warning",
                     "newline": True,
                 })
@@ -8642,15 +8643,15 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": "", "newline": True})
                 self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
                 header_title = (
-                    "  🔥 ERASING ESP8266 FLASH (Hard Reset)"
+                    "  ERASING ESP8266 FLASH (Hard Reset)"
                     if reset_strategy == "esp8266_erase"
-                    else "  🔥 BURNING BOOTLOADER / FULL RECOVERY (Hard Reset)"
+                    else "  BURNING BOOTLOADER / FULL RECOVERY (Hard Reset)"
                 )
                 self.emit("console:log", {"text": header_title, "tag": "header", "newline": True})
                 self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
                 self.emit("console:log", {"text": f"  Port  : {port}", "tag": "info", "newline": True})
                 self.emit("console:log", {"text": f"  Board : {board_name}", "tag": "dim", "newline": True})
-                self.emit("console:log", {"text": "  💡 Press and HOLD the BOOT button when prompted below.", "tag": "warning", "newline": True})
+                self.emit("console:log", {"text": "  Press and HOLD the BOOT button when prompted below.", "tag": "warning", "newline": True})
                 self.emit("console:log", {"text": "", "newline": True})
 
                 if reset_strategy == "avr_bootloader":
@@ -8659,7 +8660,7 @@ class MCUWebBackendAPI:
                     if not pio_path:
                         pio_path = find_pio_executable()
                     if not pio_path:
-                        self.emit("console:log", {"text": "  ✖ PlatformIO is unavailable.", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": "  PlatformIO is unavailable.", "tag": "error", "newline": True})
                         return
                     cache_root = get_project_build_cache_root(self.sketch_dir_path)
                     jobs = self._get_jobs()
@@ -8702,11 +8703,11 @@ class MCUWebBackendAPI:
                     proc.wait()
                     self._active_process = None
                     if proc.returncode != 0:
-                        self.emit("console:log", {"text": f"  ✖ Bootloader burn failed with code {proc.returncode}.", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": f"  Bootloader burn failed with code {proc.returncode}.", "tag": "error", "newline": True})
                         return
                     time.sleep(0.25)
                     self._trigger_actual_board_reset(port, board_name, binfo)
-                    self.emit("console:log", {"text": "  ✔ Bootloader burn completed successfully.", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  Bootloader burn completed successfully.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Hard Reset Complete", "message": "Bootloader burned successfully.", "type": "success"})
                     hard_reset_success = True
                     return
@@ -8759,18 +8760,18 @@ class MCUWebBackendAPI:
                                     connected = True
                                     self._emit_boot_connection_progress(connection_step, connected=True)
                             if "erasing flash" in low:
-                                self.emit("console:log", {"text": "  🔥 Erasing entire ESP8266 flash memory...", "tag": "warning", "newline": True})
+                                self.emit("console:log", {"text": "  Erasing entire ESP8266 flash memory...", "tag": "warning", "newline": True})
                             elif "erased successfully" in low:
-                                self.emit("console:log", {"text": "  ✔ Flash memory erased successfully.", "tag": "success", "newline": True})
+                                self.emit("console:log", {"text": "  Flash memory erased successfully.", "tag": "success", "newline": True})
                             elif any(k in low for k in ("error", "failed", "fatal")):
-                                self.emit("console:log", {"text": f"  ✖ {line}", "tag": "error", "newline": True})
+                                self.emit("console:log", {"text": f"  {line}", "tag": "error", "newline": True})
                     proc.wait()
                     self._active_process = None
                     if proc.returncode != 0:
                         self._emit_boot_connection_progress(connection_step, failed=True)
-                        self.emit("console:log", {"text": f"  ✖ ESP8266 flash erase failed (exit code {proc.returncode}).", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": f"  ESP8266 flash erase failed (exit code {proc.returncode}).", "tag": "error", "newline": True})
                         return
-                    self.emit("console:log", {"text": "  ✔ ESP8266 full flash erase completed successfully.", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  ESP8266 full flash erase completed successfully.", "tag": "success", "newline": True})
                     time.sleep(0.75)
                     self._trigger_actual_board_reset(port, board_name, binfo)
                     self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP8266 flash erased successfully.", "type": "success"})
@@ -8797,9 +8798,9 @@ class MCUWebBackendAPI:
                     is_native = bool(self._is_native_usb_port(port))
                     before_reset = "usb-reset" if is_native else "default-reset"
                     if is_native:
-                        self.emit("console:log", {"text": "  ⚡ Native USB detected — using usb-reset strategy.", "tag": "dim", "newline": True})
+                        self.emit("console:log", {"text": "  Native USB detected — using usb-reset strategy.", "tag": "dim", "newline": True})
                     else:
-                        self.emit("console:log", {"text": "  💡 Hold BOOT button now if your board requires manual download mode.", "tag": "info", "newline": True})
+                        self.emit("console:log", {"text": "  Hold BOOT button now if your board requires manual download mode.", "tag": "info", "newline": True})
                     self._emit_boot_connection_progress(0)
 
                     target_mcu, _ = self._esptool_target(board_name, binfo)
@@ -8855,18 +8856,18 @@ class MCUWebBackendAPI:
                             if not connected:
                                 connected = True
                                 self._emit_boot_connection_progress(connection_step, connected=True)
-                                self.emit("console:log", {"text": "  ✔ ESP32 connected — release the BOOT button now.", "tag": "success", "newline": True})
+                                self.emit("console:log", {"text": "  ESP32 connected — release the BOOT button now.", "tag": "success", "newline": True})
                         if "erasing flash" in low or "chip erase" in low:
                             erase_started = True
                             self.emit("console:progress", {"action": "Erasing flash"})
-                            self.emit("console:log", {"text": "  🔥 Erasing entire flash memory (this may take a while)...", "tag": "warning", "newline": True})
+                            self.emit("console:log", {"text": "  Erasing entire flash memory (this may take a while)...", "tag": "warning", "newline": True})
                         elif "erased successfully" in low:
                             erase_completed = True
-                            self.emit("console:log", {"text": "  ✔ Flash memory erased successfully.", "tag": "success", "newline": True})
+                            self.emit("console:log", {"text": "  Flash memory erased successfully.", "tag": "success", "newline": True})
                         elif "hard resetting" in low or "hard reset" in low:
-                            self.emit("console:log", {"text": "  🔄 Hard resetting via RTS pin...", "tag": "info", "newline": True})
+                            self.emit("console:log", {"text": "  Hard resetting via RTS pin...", "tag": "info", "newline": True})
                         elif any(k in low for k in ("error", "failed", "fatal")):
-                            self.emit("console:log", {"text": f"  ✖ {line}", "tag": "error", "newline": True})
+                            self.emit("console:log", {"text": f"  {line}", "tag": "error", "newline": True})
                         else:
                             self.emit("console:log", {"text": f"  {line}", "tag": "info", "newline": True})
 
@@ -8885,17 +8886,17 @@ class MCUWebBackendAPI:
                     if proc.returncode != 0:
                         if not connected:
                             self._emit_boot_connection_progress(connection_step, failed=True)
-                        self.emit("console:log", {"text": f"  ✖ Hard Reset failed with code {proc.returncode}.", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": f"  Hard Reset failed with code {proc.returncode}.", "tag": "error", "newline": True})
                         return
 
-                    self.emit("console:log", {"text": "  ✔ ESP32 flash erased completely.", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  ESP32 flash erased completely.", "tag": "success", "newline": True})
                     self.emit("console:progress", {"action": "Writing recovery bootloader"})
                     recovery_bins["before"] = before_reset
                     restored, error, _attempts = self._soft_reset_esptool_write(recovery_bins, port)
                     if not restored:
                         raise RuntimeError(f"Flash erased, but bootloader recovery failed: {error}")
                     self._trigger_actual_board_reset(port, board_name, binfo)
-                    self.emit("console:log", {"text": "  ✔ Recovery bootloader and partition metadata restored. Use Upload to install your sketch.", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  Recovery bootloader and partition metadata restored. Use Upload to install your sketch.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 erased and recovery bootloader restored. Ready for a fresh upload.", "type": "success"})
                     hard_reset_success = True
                 else:
@@ -8904,7 +8905,7 @@ class MCUWebBackendAPI:
                     # That cheats the user. Fail loudly so they know nothing was wiped.
                     self.emit("console:log", {
                         "text": (
-                            f"  ✖ Hard Reset is not supported for board '{board_name}' "
+                            f"  Hard Reset is not supported for board '{board_name}' "
                             f"(platform: '{plat}'). No flash was erased or modified."
                         ),
                         "tag": "error",
@@ -8923,7 +8924,7 @@ class MCUWebBackendAPI:
                     # hard_reset_success stays False — no cheat
 
             except Exception as e:
-                self.emit("console:log", {"text": f"✖ Hard Reset error: {e}", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": f"Hard Reset error: {e}", "tag": "error", "newline": True})
             finally:
                 _release_reset_cache_lock(reset_cache_lock)
                 self._active_process = None
@@ -8961,13 +8962,13 @@ class MCUWebBackendAPI:
             self.clear_serial_output()
 
         if not self.current_board:
-            self.emit("console:log", {"text": "✖ Soft Reset error: No board selected.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Soft Reset error: No board selected.", "tag": "error", "newline": True})
             return
         binfo = dict(self._resolve_board_info(self.current_board))
         from main.core.target_profile import requires_upload_port
         needs_port = requires_upload_port(binfo)
         if needs_port and not self.current_port:
-            self.emit("console:log", {"text": "✖ Soft Reset error: No COM port selected.", "tag": "error", "newline": True})
+            self.emit("console:log", {"text": "Soft Reset error: No COM port selected.", "tag": "error", "newline": True})
             return
 
         port = self.current_port or ""
@@ -8986,7 +8987,7 @@ class MCUWebBackendAPI:
             owner_pid = port_occupied_owner(port) if port else None
             if owner_pid:
                 self.emit("console:log", {
-                    "text": f"  ⚠ Soft reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
+                    "text": f"  Soft reset blocked: Port '{port}' is in use by another window (PID {owner_pid}).",
                     "tag": "warning",
                     "newline": True,
                 })
@@ -8995,7 +8996,7 @@ class MCUWebBackendAPI:
             reset_cache_lock = _try_acquire_reset_cache_lock()
             if reset_cache_lock is None:
                 self.emit("console:log", {
-                    "text": "  ⚠ Soft Reset blocked: another window is using the shared reset cache.",
+                    "text": "  Soft Reset blocked: another window is using the shared reset cache.",
                     "tag": "warning",
                     "newline": True,
                 })
@@ -9005,7 +9006,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "", "newline": True})
             self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
             self.emit("console:log", {
-                "text": f"  🔄 SOFT RESET ({board_name})",
+                "text": f"  SOFT RESET ({board_name})",
                 "tag": "header",
                 "newline": True
             })
@@ -9014,7 +9015,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": f"  Port  : {port_label}", "tag": "info", "newline": True})
             self.emit("console:log", {"text": f"  Board : {board_name}", "tag": "dim", "newline": True})
             if is_esp:
-                self.emit("console:log", {"text": "  💡 Tip: On Desktop PCs, some ESP modules may need BOOT held during connection.", "tag": "dim", "newline": True})
+                self.emit("console:log", {"text": "  Tip: On Desktop PCs, some ESP modules may need BOOT held during connection.", "tag": "dim", "newline": True})
             elif is_avr:
                 self.emit("console:log", {"text": "  ℹ AVR reset/upload behavior follows the selected board and bootloader.", "tag": "dim", "newline": True})
             elif not needs_port:
@@ -9049,17 +9050,17 @@ class MCUWebBackendAPI:
                     ini_path.write_text(ini_content, encoding="utf-8")
                     cpp_path.write_text(cpp_content, encoding="utf-8")
                     if is_first_time:
-                        self.emit("console:log", {"text": "  🔧 First-time setup for this board — this may take a minute. Subsequent Soft Resets will be instant.", "tag": "warning", "newline": True})
+                        self.emit("console:log", {"text": "  First-time setup for this board — this may take a minute. Subsequent Soft Resets will be instant.", "tag": "warning", "newline": True})
                     else:
-                        self.emit("console:log", {"text": "  ✔ Reset project updated; its existing incremental objects were preserved.", "tag": "dim", "newline": True})
+                        self.emit("console:log", {"text": "  Reset project updated; its existing incremental objects were preserved.", "tag": "dim", "newline": True})
                 else:
-                    self.emit("console:log", {"text": "  ✔ Using cached build (no recompilation needed).", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  Using cached build (no recompilation needed).", "tag": "success", "newline": True})
 
                 pio_cmd = find_pio_executable()
                 if not pio_cmd:
                     pio_cmd = find_pio_executable()
                 if not pio_cmd:
-                    self.emit("console:log", {"text": "✖ PlatformIO core not available for Soft Reset.", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": "PlatformIO core not available for Soft Reset.", "tag": "error", "newline": True})
                     return
 
                 jobs = self._get_jobs()
@@ -9087,13 +9088,13 @@ class MCUWebBackendAPI:
                     )
 
                 if fast_bins is not None:
-                    self.emit("console:log", {"text": "  ⚡ Cached build found — flashing directly with esptool (skipping PlatformIO).", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  Cached build found — flashing directly with esptool (skipping PlatformIO).", "tag": "success", "newline": True})
                     self.emit("console:progress", {"action": "Flashing recovery sketch"})
                     fast_bins.update(board_name=board_name, board_info=binfo, before="usb-reset" if self._is_native_usb_port(port) else "default-reset")
                     ok, err_msg, _attempts = self._soft_reset_esptool_write(fast_bins, port)
                 elif is_esp:
                     # ESP board without valid fast_bins: compile first so COM port is never touched during compilation!
-                    self.emit("console:log", {"text": f"  🔨 Compiling clean recovery sketch for {board_name}...", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": f"  Compiling clean recovery sketch for {board_name}...", "tag": "info", "newline": True})
                     self.emit("console:progress", {"action": "Compiling recovery sketch"})
                     compile_cmd = pio_cmd + [
                         "run", "-e", "mcu_flash",
@@ -9160,18 +9161,18 @@ class MCUWebBackendAPI:
                                 if "installing" in low:
                                     if item not in _logged_installs:
                                         _logged_installs.add(item)
-                                        self.emit("console:log", {"text": f"  🔎 Checking {manager_kind}: {item}", "tag": "info", "newline": True})
+                                        self.emit("console:log", {"text": f"  Checking {manager_kind}: {item}", "tag": "info", "newline": True})
                                 elif "installed" in low:
                                     if item not in _logged_done:
                                         _logged_done.add(item)
                                         full_bar = "▰" * 30
                                         self.emit("console:log", {
-                                            "text": f"  ✔ Unpacking   [{item_label}]  {full_bar}  100%",
+                                            "text": f"  Unpacking   [{item_label}]  {full_bar}  100%",
                                             "tag": "success",
                                             "replace_pattern": rf"(?:Downloading|Unpacking)\s+\[{re.escape(item_label)}\]",
                                             "newline": True
                                         })
-                                        self.emit("console:log", {"text": f"  ✔ Installed {manager_kind}: {item}", "tag": "success", "newline": True})
+                                        self.emit("console:log", {"text": f"  Installed {manager_kind}: {item}", "tag": "success", "newline": True})
                                 continue
 
                             # Downloading / Unpacking progress
@@ -9184,7 +9185,7 @@ class MCUWebBackendAPI:
                                     act_name = "Downloading" if "downloading" in low else "Unpacking"
                                     item = _current_tool_item[0] or "tool-package"
                                     item_label = item if len(item) <= 44 else item[:41] + "..."
-                                    icon = "✔ " if pct >= 100 else "  "
+                                    icon = "" if pct >= 100 else "  "
                                     progress_text = f"  {icon}{act_name:<11} [{item_label}]  {bar}  {pct:3d}%"
                                     self.emit("console:log", {
                                         "text": progress_text,
@@ -9208,7 +9209,7 @@ class MCUWebBackendAPI:
                     self._active_process = None
 
                     if proc.returncode == 0:
-                        self.emit("console:log", {"text": "  ✔ Recovery sketch compiled successfully.", "tag": "success", "newline": True})
+                        self.emit("console:log", {"text": "  Recovery sketch compiled successfully.", "tag": "success", "newline": True})
                         # Pass build_dir explicitly and skip mtime check — we know compile just
                         # finished so the source files (just rewritten) will have newer mtimes
                         # than firmware.bin on some filesystems, causing a false staleness hit.
@@ -9230,11 +9231,11 @@ class MCUWebBackendAPI:
                         else:
                             ok = False
                             err_msg = "Could not locate compiled binaries for soft reset flash."
-                            self.emit("console:log", {"text": f"  ✖ {err_msg}", "tag": "error", "newline": True})
+                            self.emit("console:log", {"text": f"  {err_msg}", "tag": "error", "newline": True})
                     else:
                         ok = False
                         err_msg = f"Compilation failed with exit code {proc.returncode}"
-                        self.emit("console:log", {"text": f"  ✖ {err_msg}", "tag": "error", "newline": True})
+                        self.emit("console:log", {"text": f"  {err_msg}", "tag": "error", "newline": True})
 
                 else:
                     # Non-ESP (e.g. AVR/Arduino UNO): run PlatformIO upload
@@ -9332,7 +9333,7 @@ class MCUWebBackendAPI:
                             err_msg = f"Upload failed with exit code {rc}"
                             if is_avr_target:
                                 self.emit("console:log", {
-                                    "text": "  💡 Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
+                                    "text": "  Arduino UNO does not have a BOOT button. Press the physical RESET button on the board once if the bootloader did not respond, then retry.",
                                     "tag": "info",
                                     "newline": True,
                                     })
@@ -9344,15 +9345,15 @@ class MCUWebBackendAPI:
                     time.sleep(0.5)
                     if port:
                         self._trigger_actual_board_reset(port, board_name, binfo)
-                    self.emit("console:log", {"text": "✔ Soft Reset successful! Board restored to clean recovery state.", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "Soft Reset successful! Board restored to clean recovery state.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Soft Reset Complete", "message": "Recovery sketch flashed successfully.", "type": "success"})
                 else:
-                    self.emit("console:log", {"text": f"✖ Soft Reset failed: {err_msg or 'Upload error'}", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": f"Soft Reset failed: {err_msg or 'Upload error'}", "tag": "error", "newline": True})
                     self.emit("notification", {"title": "Soft Reset Failed", "message": err_msg or "Soft Reset failed", "type": "error"})
 
             except Exception as e:
                 ok = False
-                self.emit("console:log", {"text": f"✖ Soft Reset exception: {e}", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": f"Soft Reset exception: {e}", "tag": "error", "newline": True})
             finally:
                 _release_reset_cache_lock(reset_cache_lock)
                 self._active_process = None
@@ -9379,7 +9380,7 @@ class MCUWebBackendAPI:
     def clean_cache(self):
         """Clean intermediate build files, temporary directories, and generated configs matching LATEST-WORKING-MCU- FLASHER."""
         if self.is_busy or self.active_operation or self._operation_worker_alive():
-            self.emit("console:log", {"text": "⚠ Wait for the previous operation and its worker to finish before Clean.", "tag": "warning", "newline": True})
+            self.emit("console:log", {"text": "Wait for the previous operation and its worker to finish before Clean.", "tag": "warning", "newline": True})
             return
 
         sketch = self.sketch_dir_path
@@ -9395,7 +9396,7 @@ class MCUWebBackendAPI:
         if getattr(self, "clear_console_on_action", cfg.get("clear_console_on_action", True)):
             self.emit("console:clear", None)
 
-        self.emit("console:log", {"text": "🧹 Cleaning build cache...", "tag": "header", "newline": True})
+        self.emit("console:log", {"text": "Cleaning build cache...", "tag": "header", "newline": True})
 
         def _worker():
             sketch_name = sketch.name if sketch else "Project"
@@ -9463,7 +9464,7 @@ class MCUWebBackendAPI:
 
                 if removed:
                     clean_msg = f"Clean completed successfully: removed {len(removed)} cached items."
-                    self.emit("console:log", {"text": f"✔ {clean_msg}", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": f"{clean_msg}", "tag": "success", "newline": True})
                     self.emit("notification", {
                         "title": "Clean Complete",
                         "message": f"Build cache cleaned for '{sketch_name}': removed {len(removed)} cached items.",
@@ -9473,7 +9474,7 @@ class MCUWebBackendAPI:
                     })
                 else:
                     clean_msg = "Project is already clean. Ready to rebuild from scratch."
-                    self.emit("console:log", {"text": f"✔ {clean_msg}", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": f"{clean_msg}", "tag": "success", "newline": True})
                     self.emit("notification", {
                         "title": "Clean Complete",
                         "message": f"Build cache for '{sketch_name}' is already clean. Ready to rebuild from scratch.",
@@ -9484,7 +9485,7 @@ class MCUWebBackendAPI:
                 self.emit("console:log", {"text": "  Ready. Compile or Upload to rebuild from scratch.", "tag": "dim", "newline": True})
             except Exception as e:
                 err_msg = f"Clean error: {e}"
-                self.emit("console:log", {"text": f"✖ {err_msg}", "tag": "error", "newline": True})
+                self.emit("console:log", {"text": f"{err_msg}", "tag": "error", "newline": True})
                 self.emit("notification", {
                     "title": "Clean Failed",
                     "message": f"Clean error for '{sketch_name}': {e}",
@@ -9522,7 +9523,7 @@ class MCUWebBackendAPI:
             return
         if getattr(self, "active_operation", None) in ("flash", "reset", "hard_reset", "soft_reset") or getattr(self, "_current_op_phase", None) in ("flashing", "writing", "resetting", "erasing"):
             self.emit("console:log", {
-                "text": "  ⚠ Stop rejected: Firmware upload / flash write is currently in progress.\n    Interrupting flash writes can permanently brick or corrupt your MCU.",
+                "text": "  Stop rejected: Firmware upload / flash write is currently in progress.\n    Interrupting flash writes can permanently brick or corrupt your MCU.",
                 "tag": "warning",
                 "newline": True,
             })
@@ -9538,7 +9539,7 @@ class MCUWebBackendAPI:
         operation = self.active_operation
         process = getattr(self, "_active_process", None)
         worker = getattr(self, "_operation_worker", None)
-        self.emit("console:log", {"text": "⏹ Stopping the active operation...", "tag": "warning", "newline": True})
+        self.emit("console:log", {"text": "Stopping the active operation...", "tag": "warning", "newline": True})
 
         def _kill_bg():
             if (getattr(self, "_op_session_id", 0) != session_id
@@ -9570,7 +9571,7 @@ class MCUWebBackendAPI:
                 self._current_op_phase = None
                 self.emit("operation:phase", {"phase": "idle", "is_busy": False})
                 self.emit("window:closable", {"closable": True})
-                self.emit("console:log", {"text": "  ⚠ Busy state cleared by failsafe timer.", "tag": "warning", "newline": True})
+                self.emit("console:log", {"text": "  Busy state cleared by failsafe timer.", "tag": "warning", "newline": True})
 
         try:
             threading.Thread(target=_kill_bg, name="MCU_StopWorker", daemon=True).start()
