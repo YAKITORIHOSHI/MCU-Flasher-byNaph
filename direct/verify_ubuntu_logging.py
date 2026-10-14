@@ -77,7 +77,7 @@ class UbuntuLoggingChecks(unittest.TestCase):
         log.start()
         logs = api.logs()
         self.assertEqual([row["text"] for row in logs[:4]],
-                         ["", "=" * 50, "  ⬆  UPLOADING (PlatformIO)", "=" * 50])
+                         ["", "=" * 50, "   UPLOADING (PlatformIO)", "=" * 50])
         self.assertEqual(logs[2]["tag"], "header")
         details = dict(api.boxes[0][1])
         self.assertEqual(api.boxes[0][0], "Upload Target")

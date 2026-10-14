@@ -308,7 +308,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         )
         records = self.route(*chatter, "Compiling .pio/build/native/src/Main.cpp.o")
         self.assertEqual(records, [{
-            "text": "  ⚙ Compiling Main.cpp.o...", "tag": "info", "newline": True,
+            "text": "  Compiling Main.cpp.o...", "tag": "info", "newline": True,
         }])
 
     def test_dependency_graph_is_hidden_and_following_build_status_is_kept(self):
@@ -327,7 +327,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         self.assertNotIn("FastAccelStepper @ 1.2.7", text)
         self.assertNotIn("HX711 @ 0.6.4", text)
         self.assertIn("────────────────", text)
-        self.assertIn("  ⚙ Building in release mode...", text)
+        self.assertIn("  Building in release mode...", text)
 
     def test_boilerplate_matching_is_narrow_and_diagnostic_context_wins(self):
         similar_custom_lines = (
@@ -361,7 +361,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         self.assertIn("Merged 1 ELF section", text)
         self.assertIn("LDF Modes: Finder ~ chain, Compatibility ~ soft", text)
         self.assertIn("RAM: [==       ] 20.0% (used 20 bytes from 100 bytes)", text)
-        self.assertEqual(records[-1]["text"], "  ⚙ Compiling Main.cpp.o...")
+        self.assertEqual(records[-1]["text"], "  Compiling Main.cpp.o...")
 
     def test_phase_dividers_and_each_compiling_file_are_retained(self):
         records = self.route(
@@ -375,10 +375,10 @@ class BuildLogRoutingChecks(unittest.TestCase):
         )
         texts = [record["text"] for record in records]
         self.assertEqual(sum("─" * 10 in text for text in texts), 2)
-        self.assertIn("  ⚙ Building in release mode...", texts)
-        self.assertEqual(texts.count("  ⚙ Compiling Main.cpp.o..."), 2)
-        self.assertIn("  ⚡ Building partition table (partitions.bin)...", texts)
-        self.assertEqual(texts[-1], "  🔗 Linking...")
+        self.assertIn("  Building in release mode...", texts)
+        self.assertEqual(texts.count("  Compiling Main.cpp.o..."), 2)
+        self.assertIn("  Building partition table (partitions.bin)...", texts)
+        self.assertEqual(texts[-1], "  Linking...")
 
     def test_local_symlink_library_manager_messages_are_preserved_as_dependency_setup(self):
         linked_path = "Library Manager: Linking symlink://C:/Users/example/Arduino/libraries/NimBLE-Arduino"
@@ -420,8 +420,8 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Generating partitions failed to create table partitions.bin",
         )
         self.assertEqual([record["text"] for record in records], [
-            "  ⚡ Building partition table (custom.bin)...",
-            "  ⚡ Building bootloader image (Bootloader.bin)...",
+            "  Building partition table (custom.bin)...",
+            "  Building bootloader image (Bootloader.bin)...",
             "Generating partitions failed to create table partitions.bin",
         ])
 
@@ -459,7 +459,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         )
         self.assertEqual(records[-1]["text"], "after-build: generated symbols successfully")
         self.assertEqual(records[-1]["tag"], "dim")
-        self.assertEqual(records[-2]["text"], "  ⚙ Compiling Main.cpp.o...")
+        self.assertEqual(records[-2]["text"], "  Compiling Main.cpp.o...")
         self.assertEqual(records[-2]["tag"], "info")
 
     def test_linker_executable_prefix_is_separate_from_custom_build_status(self):
