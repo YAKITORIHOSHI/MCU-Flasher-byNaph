@@ -68,6 +68,11 @@ Use `SvgLogGutter(..., transparent=True)` for transparent setup journals; never
 fill them from an inherited Base palette. Retain the opaque default for normal
 Build Console logs. Check the composited gutter against its underlying glass in
 both setup views and all themes with `direct/verify_bootstrap_headers.py`.
+Read setup status ink from the first visible text fragment, never the paragraph
+separator's inherited format. Blank blocks carry no mark. Position marks from
+each block's first QTextLine geometry, including mixed heading/result fonts,
+wrapping, scrolling, restored journals and failed-stage recoloring. Check every
+visible marked row against the native cursor rectangle at all five scales.
 Preserve user Unicode in sketches and serial/terminal input/output.
 Verify `direct/verify_svg_icons.py` and `--native-tk`, plus theme, panel, build,
 setup, downloader and editor fixtures. Native CI covers Windows Qt ranges and

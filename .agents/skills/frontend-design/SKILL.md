@@ -109,6 +109,9 @@ Make each setup stage a larger, bold header with a gap before the group and
 indented results. Use static circuit dividers sized to the visible journal pane,
 without inserting decorative glyphs into copied text. Preserve header markers
 through native-to-Qt restoration and make failed-stage dividers follow red text.
+Setup SVG status marks follow their own text fragment's ink and first rendered
+line height. Leave blank separators clear; validate heading/result alignment
+after wrapping, scrolling and restoration on both native hosts at five scales.
 Derive setup reading inks against gradient/reflection bounds and selection
 surfaces, retaining semantic hues and at least 4.5:1 contrast. Keep the shared
 workspace palette and static glass geometry intact.

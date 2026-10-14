@@ -27,6 +27,94 @@ class BootstrapHeaderChecks(ControlChecks):
         APP.processEvents()
         return dialog
 
+    def assert_marks_follow_text(self, dialog, view, gutter):
+        """Check the actual paint rectangles against native text cursor rows."""
+        self.assertGreaterEqual(gutter.height(), view.viewport().height())
+        expected = set()
+        block = view.document().firstBlock()
+        while block.isValid():
+            name, color = dialog._log_icon(block)
+            if not block.text().strip():
+                self.assertEqual(name, "", "Blank separators must not inherit a status mark")
+            else:
+                fragment = block.begin().fragment()
+                self.assertEqual(color, fragment.charFormat().foreground().color().name(),
+                                 "The mark must use this line's ink, not the preceding paragraph")
+                if name and view.cursorRect(QTextCursor(block)).intersects(view.viewport().rect()):
+                    expected.add(block.blockNumber())
+            block = block.next()
+        painted = set()
+        for block, rect, name, color in gutter.visible_marks():
+            painted.add(block.blockNumber())
+            cursor_rect = view.cursorRect(QTextCursor(block))
+            text_center = view.viewport().y() + cursor_rect.center().y() - gutter.y()
+            self.assertLessEqual(abs(rect.center().y() - text_center), 1,
+                                 (block.text(), name, rect, cursor_rect))
+        self.assertEqual(painted, expected, "Every visible status line needs its own SVG mark")
+
+    def test_svg_marks_align_with_each_checking_heading_and_result(self):
+        stages = (
+            ("Checking Arduino-CLI", "Arduino-CLI is already installed"),
+            ("Checking CP210x Driver", "USB serial driver is installed or staged"),
+            ("Checking OpenCode AI Assistant", "OpenCode AI Assistant is verified and ready"),
+            ("Checking for updates", "All utilities are up to date"),
+        )
+        for mode in Theme.PALETTES:
+            dialog = self.dialog(mode)
+            for title, result in stages:
+                dialog._on_log(title, "section")
+                dialog._on_log(result, "ok")
+            for expanded in (False, True):
+                dialog._set_details_expanded(expanded)
+                APP.processEvents()
+                view = dialog.log_edit if expanded else dialog.summary_edit
+                gutter = dialog._raw_svg_gutter if expanded else dialog._summary_svg_gutter
+                raw = view.toPlainText()
+                for title, result in stages:
+                    self.assertEqual(dialog._log_icon(view.document().find(title).block()),
+                                     ("setup", dialog._theme_pal["T_CYAN"]))
+                    self.assertEqual(dialog._log_icon(view.document().find(result).block()),
+                                     ("check", dialog._theme_pal["T_GREEN"]))
+                bar = view.verticalScrollBar()
+                for position in (0, bar.maximum() // 2, bar.maximum()):
+                    bar.setValue(position)
+                    APP.processEvents()
+                    self.assert_marks_follow_text(dialog, view, gutter)
+                self.assertEqual(view.toPlainText(), raw)
+                if RENDER_DIR:
+                    bar.setValue(0)
+                    APP.processEvents()
+                    self.assertTrue(dialog.grab().save(str(RENDER_DIR / f"aligned-{mode}-{expanded}.png")))
+            dialog.hide()
+
+    def test_svg_marks_follow_wrapped_and_recolored_restored_text(self):
+        for mode in Theme.PALETTES:
+            dialog = self.dialog(mode)
+            dialog.resize(420, 440)
+            title = "Preparing board frameworks and upload tools for a long selected package name"
+            result = "The complete diagnostic must wrap onto several reading lines and keep its mark beside the first"
+            dialog._restore_summary({"presentation": {}, "auto_scroll": False, "summary": {
+                "text": title + "\n  " + result + "\n\n", "runs": [
+                    {"text": title + "\n", "tags": ["section"]},
+                    {"text": "  " + result + "\n\n", "tags": ["warn"]},
+                ]}})
+            APP.processEvents()
+            view = dialog.summary_edit
+            self.assertGreater(view.document().firstBlock().layout().lineCount(), 1)
+            self.assertEqual(dialog._log_icon(view.document().find(result).block()),
+                             ("warning", dialog._theme_pal["T_YELLOW"]))
+            self.assert_marks_follow_text(dialog, view, dialog._summary_svg_gutter)
+            cursor = QTextCursor(view.document())
+            cursor.select(QTextCursor.SelectionType.Document)
+            fmt = dialog._summary_format("fail")
+            cursor.mergeCharFormat(fmt)
+            APP.processEvents()
+            for label in (title, result):
+                self.assertEqual(dialog._log_icon(view.document().find(label).block()),
+                                 ("error", dialog._theme_pal["T_RED"]))
+            self.assert_marks_follow_text(dialog, view, dialog._summary_svg_gutter)
+            dialog.hide()
+
     def test_stage_dividers_render_in_all_themes_without_changing_copied_text(self):
         for mode in Theme.PALETTES:
             dialog = self.dialog(mode)

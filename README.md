@@ -1790,7 +1790,10 @@ checks in `direct/verify_notification_persistence.py` and
 `direct/verify_notification_writes.py` use explicit temporary databases to verify
 successful writes, denied replacements and preservation of existing history.
 `direct/verify_bootstrap_headers.py` checks journal dividers, narrow-screen header
-wrapping, failed-stage colors and restored native reading selection. Its optional
+wrapping, failed-stage colors and restored native reading selection. Setup SVGs
+use each line's visible text format and first rendered line height; headings,
+results and blank separators retain their own alignment after wrapping, scrolling
+and native-to-Qt restoration on Windows and Ubuntu. Its optional
 `--render-dir temp/audit/bootstrap-headers` produces dark/light/Solarized previews.
 The runtime preview also checks all six tool panels in a 640-pixel workspace at the half-screen minimum,
 including control visibility and the serial send bar. Its terminal layout probe

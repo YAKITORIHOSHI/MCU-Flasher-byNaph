@@ -802,8 +802,17 @@ class BootstrapDialog(QDialog):
 
     def _log_icon(self, block):
         from src.modules.svg_icons import status_name
-        color = block.charFormat().foreground().color().name()
         palette = self._theme_pal
+        # QTextBlock.charFormat() describes the paragraph separator, which
+        # inherits the preceding insertion's format. Read the visible text so
+        # stage/status marks stay beside their own line, including after restore
+        # or failed-stage recoloring. Empty separators carry no status mark.
+        if not block.text().strip():
+            return "", palette["T_TEXT_DIM"]
+        fragment = block.begin().fragment()
+        if not fragment.isValid():
+            return "", palette["T_TEXT_DIM"]
+        color = fragment.charFormat().foreground().color().name()
         for key, tag in (("T_GREEN", "ok"), ("T_RED", "fail"), ("T_YELLOW", "warn"), ("T_CYAN", "section")):
             if color == palette.get(key):
                 return status_name(tag), color
