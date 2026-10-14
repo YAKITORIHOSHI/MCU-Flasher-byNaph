@@ -44,6 +44,8 @@ def checks(group, scale, output):
             yield render(script, folder)
         yield "verify_package_coverage", []
     if group == "all" and scale == "1":
+        if sys.platform == "win32":
+            yield "verify_terminal", []
         yield "verify_theme_readability", []
         yield "verify_panel_readability", []
         yield "verify_build_console", []

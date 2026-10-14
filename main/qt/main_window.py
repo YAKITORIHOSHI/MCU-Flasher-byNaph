@@ -265,7 +265,10 @@ class MCUMainWindow(QMainWindow):
         required = self._bottom_tabs.tabBar().sizeHint().height()
         required += max(24, panel.minimumSizeHint().height() if panel else 24)
         gap = self._v_splitter.handleWidth()
-        monitor_min = min(required, max(0, available - gap - 38))
+        # Keep the active tool's fixed controls and first reading line intact
+        # on a scaled, short monitor. The editor receives the remaining height
+        # and regains its normal minimum as soon as more room is available.
+        monitor_min = min(required, max(0, available - gap))
         editor_min = min(150, max(0, available - monitor_min - gap))
         if self._editor_area.minimumHeight() != editor_min:
             self._editor_area.setMinimumHeight(editor_min)

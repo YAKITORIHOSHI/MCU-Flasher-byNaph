@@ -430,6 +430,7 @@ class EditorReviewChecks(unittest.TestCase):
             ('wide',1000,620,1), ('short',1000,300,1), ('compact',620,240,1),
             ('middle',520,240,1), ('badge-limit',480,220,1),
             ('narrow',460,180,1), ('small',360,150,1), ('minimum',280,120,1),
+            ('micro',250,150,1),
             ('scale125',800,400,1.25), ('scale150',720,330,1.5),
             ('scale175',700,300,1.75), ('scale200',640,260,2),
         )

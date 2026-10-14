@@ -134,6 +134,10 @@ class AIChangesPanel(QWidget):
         header.addWidget(self._clear)
         layout.addLayout(header)
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        # A tall, stacked history must be allowed to receive a shorter resize
+        # before its child reading minima switch back to a single row. Native
+        # Windows otherwise pins the outer window to the previous stack height.
+        splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self._splitter = splitter
         self._tree = QTreeWidget(splitter)
         self._tree.setHeaderLabels(["Prompt / file", "Decision"])

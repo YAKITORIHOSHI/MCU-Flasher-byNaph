@@ -6,6 +6,17 @@ license: Complete terms in LICENSE.txt
 
 # Frontend Design
 
+## Short native window budgets
+
+Keep active tool controls and a complete chosen-font reading line inside the
+workspace before allocating remaining height to the editor. A stacked preview
+must receive a shorter resize before computing its new reading minima; do not
+let the previous splitter minimum pin native Windows after a font change.
+For a very narrow editor review bar, optional source metadata may shrink with
+ellipsis while decision text and 28px navigation targets stay fully visible.
+Retain full metadata in tooltips and accessible descriptions. Verify actual
+native viewport dimensions, complete ancestor bounds and preserved focus/state.
+
 ## SVG action contract
 
 Use the local `src/assets/icons/actions/*.svg` family for application-owned marks.

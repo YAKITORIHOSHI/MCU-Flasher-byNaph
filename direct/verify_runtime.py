@@ -998,7 +998,10 @@ def qt_smoke(app, render_dir=None):
             serial = window._serial_panel
             assert serial._header.geometry().bottom() < serial.height(), "Serial header clipped"
             send = serial.findChild(QWidget, "serial-send-bar")
-            assert send.geometry().bottom() < serial.height(), "Serial send controls clipped"
+            assert send.geometry().bottom() < serial.height(), (
+                f"Serial send controls clipped: window={window.size()}, splitter={window._v_splitter.size()}, "
+                f"tabs={window._bottom_tabs.size()}, panel={serial.size()}, header={serial._header.geometry()}, "
+                f"send={send.geometry()}, reading={serial._output.geometry()}, minimum={serial.minimumSizeHint()}")
             if render_dir:
                 assert window.grab().save(str(render_dir / "glass-small-serial.png"))
             window._bottom_tabs.setCurrentWidget(window._console_container)

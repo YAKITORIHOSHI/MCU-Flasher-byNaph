@@ -493,6 +493,7 @@ class QtResponsiveChecks(ControlChecks):
                     for reading in readings:
                         self.assertEqual(reading.font().pointSize(), size)
                         self.assertGreaterEqual(reading.viewport().height(), reading.fontMetrics().lineSpacing())
+                    capture(host, f'tool-{cls.__name__}-font-{size}-short')
                 host.hide()
 
     def test_terminal_many_tabs_scroll_without_pushing_add_button_outside_header(self):

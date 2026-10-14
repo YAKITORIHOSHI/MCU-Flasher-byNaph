@@ -821,6 +821,7 @@ class ProjectChecks(unittest.TestCase):
         new_window = ProjectDialog(api, open_in_new_window=True)
         try:
             new_window._open_path_edit.setText(str(main_ino))
+            self.wait_for_existing_preview(new_window)
             with patch.object(new_window, "_choose_project_window", return_value=True):
                 new_window._open_existing()
             api.open_project_window.assert_called_once_with(str(main_ino))
@@ -841,6 +842,7 @@ class ProjectChecks(unittest.TestCase):
         same_project = ProjectDialog(api, parent=parent, open_in_new_window=True)
         try:
             same_project._open_path_edit.setText(str(main_ino))
+            self.wait_for_existing_preview(same_project)
             with patch.object(same_project, "_choose_project_window", return_value=False):
                 same_project._open_existing()
             api.set_active_file.assert_called_once_with(str(main_ino))

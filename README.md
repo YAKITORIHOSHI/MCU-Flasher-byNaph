@@ -131,6 +131,11 @@ short detail panes, including 200% scaling. Optional headings and padding yield
 before controls; valid list/detail sash positions and saved fonts are retained.
 Selecting installed-package metadata also refreshes the card's reading budget
 when its title changes, including native Windows font metrics.
+On short scaled desktops, the active tool's controls and first output line get
+the workspace height they require before the editor receives the remaining
+space. AI Changes can shrink after its reading font changes. At very narrow
+editor widths, source metadata yields to full review decisions and navigation;
+complete metadata remains available in tooltips and accessible descriptions.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
 Original SVG chip artwork and a compact circuit divider bring color to the
