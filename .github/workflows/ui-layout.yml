@@ -79,4 +79,6 @@ jobs:
           path: |
             temp/audit/layout-native
             temp/audit/package-coverage/*.png
+            temp/audit/terminal/*.png
+            temp/audit/terminal/protocol-report.json
           if-no-files-found: warn

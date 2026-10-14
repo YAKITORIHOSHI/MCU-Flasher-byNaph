@@ -277,6 +277,32 @@ class QtResponsiveChecks(ControlChecks):
         self.assertTrue(all(label.isVisible() for label in controls._group_labels))
         self.assertEqual(serial._output.font(), content_font)
 
+    def test_serial_options_keep_native_theme_ink_in_short_panes(self):
+        from PySide6.QtGui import QPalette
+        from main.core.log_colors import contrast_ratio
+        host = self.own(QWidget())
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(0, 0, 0, 0)
+        serial = SerialPanel(self.backend, host)
+        layout.addWidget(serial)
+        host.show()
+        for mode in ('default', 'light', 'solarized_dark'):
+            APP.setStyleSheet(build_stylesheet(mode))
+            serial.apply_theme(mode)
+            host.resize(320, 110)
+            pump()
+            button = serial._display_options
+            self.assertTrue(button.isVisible())
+            self.contained(button, serial._header)
+            palette = get_palette(mode)
+            self.assertGreaterEqual(contrast_ratio(palette['TEXT_BRIGHT'], palette['BG_DARK']), 4.5)
+            self.assertEqual(button.palette().color(QPalette.ColorRole.ButtonText), QColor(palette['TEXT_BRIGHT']))
+            painted = button.grab().toImage()
+            ink = painted.pixelColor(round(4 * painted.devicePixelRatio()),
+                                     round(button.height() / 2 * painted.devicePixelRatio()))
+            self.assertEqual(ink, QColor(palette['BG_DARK']), 'Native button must paint its themed surface')
+            capture(host, f'serial-options-{mode}-short')
+
     def test_terminal_add_button_alignment_and_shell_choices(self):
         host = self.own(QWidget())
         layout = QVBoxLayout(host)

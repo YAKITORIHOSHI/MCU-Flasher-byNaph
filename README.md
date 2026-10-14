@@ -136,6 +136,8 @@ the workspace height they require before the editor receives the remaining
 space. AI Changes can shrink after its reading font changes. At very narrow
 editor widths, source metadata yields to full review decisions and navigation;
 complete metadata remains available in tooltips and accessible descriptions.
+Serial Options uses explicit theme colors and an SVG menu indicator so its
+native button stays readable in dark, light and Solarized palettes.
 Failed Firebase settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
 Original SVG chip artwork and a compact circuit divider bring color to the

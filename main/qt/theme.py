@@ -1034,6 +1034,18 @@ QTabWidget#workspace-tabs QTabBar::tab:hover:!selected {{
 QTabWidget#workspace-tabs QTabBar QToolButton {{
     background: {bg_dark}; border: 1px solid {rim}; border-radius: 7px;
 }}
+QToolButton#serial-display-options {{
+    background: {bg_dark}; color: {text_bright};
+    border: 1px solid {border_lit}; border-radius: 5px;
+    padding: 3px 20px 3px 8px; min-height: 20px;
+}}
+QToolButton#serial-display-options:hover {{
+    background: {bg_mid}; border-color: {cyan};
+}}
+QToolButton#serial-display-options::menu-indicator {{
+    image: url("{_icon_arrow}"); width: 10px; height: 10px;
+    subcontrol-origin: padding; subcontrol-position: right center; right: 5px;
+}}
 QSplitter::handle {{ background: transparent; }}
 QSplitter::handle:hover {{ background: {selected}; }}
 QPushButton:focus, QToolButton:focus,
