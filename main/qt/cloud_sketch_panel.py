@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
-from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, read_project_link
+from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, CloudLocalConflict, read_project_link
 from main.core.credential_store import save_cloud_configuration
 
 
@@ -301,6 +301,49 @@ class _CloudSketchActionDialog(QDialog):
     def _choose(self, choice):
         self.choice = choice
         self.accept() if choice else self.reject()
+
+
+class _CloudLocalReplaceDialog(QDialog):
+    """Explain exactly which local sources an explicitly approved pull replaces."""
+
+    def __init__(self, conflict, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Local sketch project already exists")
+        card = GlassCard(self, radius=10)
+        card.set_palette(parent._palette)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.addWidget(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        self._body_scroll, body, content = _prompt_body(card, layout)
+        note = QLabel(body)
+        note.setTextFormat(Qt.TextFormat.PlainText)
+        note.setWordWrap(True)
+        note.setMinimumWidth(0)
+        note.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        note.setText(f'A local sketch project named “{conflict["name"]}” already exists:\n\n'
+                     f'{conflict["root"]}\n\n'
+                     'Replace its root sketch sources and text notes with this cloud version? '
+                     'Local source files absent from the cloud version will be removed. '
+                     'A recovery copy of saved sources is kept. Other files, build caches and AI history are kept.')
+        content.addWidget(note)
+        content.addStretch(1)
+        actions = QHBoxLayout()
+        self.cancel_button = QPushButton("Cancel", card)
+        self.cancel_button.setDefault(True)
+        self.cancel_button.clicked.connect(self.reject)
+        self.replace_button = QPushButton("Replace", card)
+        self.replace_button.setAutoDefault(False)
+        self.replace_button.setProperty("cloudPrimary", True)
+        self.replace_button.clicked.connect(self.accept)
+        actions.addWidget(self.cancel_button)
+        actions.addWidget(self.replace_button)
+        layout.addLayout(actions)
+        self.setStyleSheet(parent.styleSheet())
+        from main.qt.responsive import fit_dialog, ScreenWatcher
+        fit_dialog(self, (480, 310), (320, 240))
+        self._screen_watcher = ScreenWatcher(self)
 
 
 class CloudSketchPanel(QWidget):
@@ -773,7 +816,10 @@ class CloudSketchPanel(QWidget):
                 result["error"] = safe_message(exc)
                 if isinstance(exc, CloudNameConflict):
                     result["upload_conflict"] = {"root": exc.root, "name": exc.name, "matches": exc.matches}
-                if getattr(exc, "local_sources_changed", False):
+                if isinstance(exc, CloudLocalConflict):
+                    result["local_conflict"] = {"root": exc.root, "name": exc.name, "sketch_id": exc.sketch_id,
+                                                "local_state": exc.local_state, "revision": exc.revision}
+                if getattr(exc, "local_sources_changed", False) and str(getattr(exc, "project_root", root)) == str(root):
                     result["sources_changed"] = True
                     result["value"] = root
             try:
@@ -812,6 +858,10 @@ class CloudSketchPanel(QWidget):
             return
         self._apply_state(result.get("state", {}))
         kind, value = result["kind"], result.get("value")
+        if result.get("local_conflict"):
+            self._complete_job()
+            self._resolve_local_conflict(result["local_conflict"])
+            return
         if result.get("upload_conflict"):
             self._complete_job()
             self._resolve_upload_conflict(result["upload_conflict"])
@@ -1356,6 +1406,30 @@ class CloudSketchPanel(QWidget):
                 return working
             return self._service.pull_project(sketch_id)
         self._request("open", "Opening cloud sketch in another workspace…", download)
+
+    def _resolve_local_conflict(self, conflict):
+        if self._closed or self._busy or not self._state.get("authenticated") or not self._can_change_project():
+            return
+        from main.core.config import find_project_window
+        if find_project_window(conflict["root"]):
+            self._status.setText("A project with this name is open. Close that workspace before replacing its saved sources.")
+            return
+        account_uid = self._state.get("account", {}).get("uid")
+        dialog = _CloudLocalReplaceDialog(conflict, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        dialog.deleteLater()
+        if not accepted:
+            self._status.setText("Download cancelled. The existing local project is kept.")
+            return
+        if account_uid != self._state.get("account", {}).get("uid") or not self._can_change_project():
+            return
+        def replace():
+            if find_project_window(conflict["root"]):
+                raise ValueError("The existing project was opened. Close its workspace before replacing it.")
+            return self._service.pull_project(conflict["sketch_id"], destination=conflict["root"],
+                replace_existing=True, expected_local_state=conflict["local_state"],
+                expected_revision=conflict["revision"])
+        self._request("open", "Replacing existing local sketch sources…", replace, project_io=True)
 
     def _current_link(self):
         root = self._active_root()

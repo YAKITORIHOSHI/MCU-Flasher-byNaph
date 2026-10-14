@@ -4267,6 +4267,13 @@ class MCUWebBackendAPI:
             launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
             launch_env["SCONSFLAGS"] = f"-j{jobs}"
 
+            compiler_cwd = cache_root
+            if sys.platform == "win32":
+                compiler_cwd = _HOST_RUNTIME.compiler_working_directory(cache_root)
+                if compiler_cwd != cache_root:
+                    self.emit("console:log", {"text": "  Using a short Windows compiler path for this board's workspace.",
+                                              "tag": "info", "newline": True})
+
             self._active_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -4275,7 +4282,7 @@ class MCUWebBackendAPI:
                 bufsize=1,
                 encoding="utf-8",
                 errors="replace",
-                cwd=str(cache_root),
+                cwd=str(compiler_cwd),
                 env=launch_env,
                 **_HOST_RUNTIME.process_options(priority=True, session=True),
             )
@@ -6743,8 +6750,11 @@ class MCUWebBackendAPI:
             )
             upload_log.start()
             upload_started = time.monotonic()
+            compiler_cwd = cache_root
+            if sys.platform == "win32":
+                compiler_cwd = _HOST_RUNTIME.compiler_working_directory(cache_root)
             self._active_process = subprocess.Popen(
-                command, cwd=str(cache_root), env=env, stdout=subprocess.PIPE,
+                command, cwd=str(compiler_cwd), env=env, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                 **_HOST_RUNTIME.process_options(priority=True, session=True),
             )
@@ -7894,6 +7904,9 @@ class MCUWebBackendAPI:
                 from src.modules.offline_runtime import bootstrap_instruction
                 raise RuntimeError(bootstrap_instruction("AVR upload tool tool-avrdude is missing"))
 
+            compiler_cwd = cache_root
+            if sys.platform == "win32":
+                compiler_cwd = _HOST_RUNTIME.compiler_working_directory(cache_root)
             self._active_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -7904,7 +7917,7 @@ class MCUWebBackendAPI:
                 errors="replace",
                 creationflags=creation_flags,
                 startupinfo=startupinfo,
-                cwd=str(cache_root),
+                cwd=str(compiler_cwd),
                 env=launch_env,
             )
             from main.core.connection_loss import SerialConnectionGuard

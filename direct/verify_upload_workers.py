@@ -81,7 +81,8 @@ class UploadWorkerChecks(unittest.TestCase):
                        find_pio_executable=lambda: ["mock-platformio"],
                        _refresh_platformio_core_environment=lambda _: (self.root / "fixture-core", {}),
                        SCRIPT_DIR=self.root, DEFAULT_UPLOAD_SPEED="460800")
-        self.ns["_HOST_RUNTIME"] = SimpleNamespace(process_options=lambda **_: {})
+        self.ns["_HOST_RUNTIME"] = SimpleNamespace(process_options=lambda **_: {},
+                                                   compiler_working_directory=lambda workspace: workspace)
         exec(compile(ast.Module(body=[iterator, upload_classifier, cls], type_ignores=[]),
                      "isolated_upload", "exec"), self.ns)
         self.api = self.ns["MCUWebBackendAPI"]()

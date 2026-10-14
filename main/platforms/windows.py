@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import os
+import hashlib
 import subprocess
 import threading
 from pathlib import Path
@@ -215,6 +216,51 @@ def _ensure_junction(link_path: Path, real_dir: Path) -> str | None:
 _MCUFLASHER_APP_DIRNAME = ".mcuflasher-app"
 _PLATFORMIO_ALIAS_NAME = ".platformio-mcu-gui"
 _MODULES_ALIAS_NAME = ".mcuflasher-libs"
+
+
+def _create_compiler_junction(alias: Path, canonical: Path) -> bool:
+    """Create only; never repair/repoint an entry that raced with this build."""
+    def literal(path):
+        return "'" + str(path).replace("'", "''") + "'"
+    command = ("New-Item -ItemType Junction -Path " + literal(alias)
+               + " -Target " + literal(canonical) + " -ErrorAction Stop | Out-Null")
+    try:
+        subprocess.run(["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+                       check=True, capture_output=True, timeout=15,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        pass  # A competing launch may have created the identical alias.
+    return bool(_is_windows_reparse_point(alias) and alias.is_dir() and alias.resolve() == canonical)
+
+
+def compiler_working_directory(workspace: Path) -> Path:
+    """Give Windows GCC a short cwd while retaining the canonical board cache.
+
+    Python can stage long paths that older GCC binaries cannot open. Only the
+    compiler launch uses this alias; receipts, Clean and source identity keep
+    using the real project workspace. Call on the operation worker only.
+    """
+    workspace = Path(workspace)
+    if sys.platform != "win32" or len(str(workspace).encode("utf-16-le")) // 2 <= 100:
+        return workspace
+    canonical = workspace.resolve(strict=True)
+    namespace = _mcuflasher_app_root(canonical)
+    aliases = _prepare_mcuflasher_app_root(namespace / "builds") if namespace else None
+    if aliases is None:
+        raise RuntimeError("Windows could not prepare a short compiler path. Choose a shorter sketch location and compile again.")
+    key = hashlib.sha256(os.path.normcase(str(canonical)).encode("utf-8")).hexdigest()[:24]
+    alias = aliases / key
+    # Do not adopt, remove or repoint an unrelated entry, including a broken
+    # link. A deterministic alias for another target is never ours to repair.
+    if os.path.lexists(alias):
+        if not _is_windows_reparse_point(alias) or not alias.is_dir() or alias.resolve() != canonical:
+            raise RuntimeError("The short compiler path is occupied by unrelated material. Choose a shorter sketch location and compile again.")
+    else:
+        if not _create_compiler_junction(alias, canonical):
+            raise RuntimeError("Windows could not create a short compiler path. Choose a shorter sketch location and compile again.")
+    if not alias.is_dir() or alias.resolve() != canonical or len(str(alias).encode("utf-16-le")) // 2 > 100:
+        raise RuntimeError("The compiler path could not be shortened safely. Choose a shorter sketch location and compile again.")
+    return alias
 
 
 def _prepare_mcuflasher_app_root(app_root: Path) -> Path | None:
@@ -828,6 +874,7 @@ __all__ = [
     "_short_platformio_core_alias",
     "_system_reserved_cpu_count",
     "board_toolchain_ready",
+    "compiler_working_directory",
     "ensure_platformio",
     "ensure_scons_ready",
     "prepare_platformio_board_toolchain",

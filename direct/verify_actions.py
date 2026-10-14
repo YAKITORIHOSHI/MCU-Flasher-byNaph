@@ -47,7 +47,8 @@ class ActionChecks(unittest.TestCase):
                        get_project_build_cache_root=lambda *a, **k: self.root / ".mcu_flasher_build_cache",
                        robust_rmtree=shutil.rmtree, _sketch_ram_cache=SimpleNamespace(invalidate=Mock()),
                        subprocess=SimpleNamespace(PIPE=-1, STDOUT=-2, CREATE_NO_WINDOW=0))
-        self.ns["_HOST_RUNTIME"] = SimpleNamespace(use_native_upload=lambda _: False, process_options=lambda **_: {})
+        self.ns["_HOST_RUNTIME"] = SimpleNamespace(use_native_upload=lambda _: False, process_options=lambda **_: {},
+                                                   compiler_working_directory=lambda workspace: workspace)
         self.ns["DEFAULT_UPLOAD_SPEED"] = 460800
         exec(compile(ast.Module(body=[cls], type_ignores=[]), "isolated_backend", "exec"), self.ns)
         self.api = self.ns["MCUWebBackendAPI"]()

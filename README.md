@@ -1128,6 +1128,22 @@ to obtain newer remote files. Cloud working sketches live under the generated
 source folder: `_MCUFlasherByNaph_src/Cloud/<sketch name>/`, alongside `Boards`
 and `Libs`. Pull recovery copies and account state stay in your OS user's private
 data directory. Existing working copies retain their saved edits when opened.
+Opening the same cloud sketch reuses its linked folder. If a different local
+project already has that folder name, MCU Flasher asks **Replace** or **Cancel**
+instead of silently creating a numbered folder. Replace restores the cloud's
+root sources and text notes, removes obsolete root sources, and keeps a recovery
+copy; other assets, build caches and AI history are preserved. Close an open
+target workspace before replacing it. Files or cloud revisions changed after
+the prompt require a fresh decision. A folder owned by another account cannot
+be replaced; rename the cloud sketch first. **Pull latest** updates an existing
+linked project with its existing confirmation and recovery behavior.
+
+On Windows, Compile and PlatformIO upload use a short, verified compiler path
+when the board workspace path is long. This avoids older ESP32 GCC failures
+such as `opening dependency file ... .c.d: No such file or directory` after a
+sketch is downloaded into the deeper Cloud folder. The actual board workspace,
+incremental objects and successful build receipts stay in the project cache.
+Native Ubuntu compiler path handling is unchanged.
 
 **Push** saves acknowledged editor changes and creates a new cloud revision.
 If another window/device already pushed, it reports a conflict instead of

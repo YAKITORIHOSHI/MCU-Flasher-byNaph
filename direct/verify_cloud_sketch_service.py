@@ -415,7 +415,10 @@ class CloudChecks(unittest.TestCase):
         self.http.uid = "other-account"
         self.login()
         third = self.service.upload_project(self.local, first["name"])
-        three = self.service.pull_project(third["id"])
+        with self.assertRaisesRegex(cloud.CloudError, "another cloud account"):
+            self.service.pull_project(third["id"])
+        renamed = self.service.rename_sketch(third["id"], "Other account sketch", third["revision"])
+        three = self.service.pull_project(renamed["id"])
         self.assertNotEqual(one, three)
         self.assertNotEqual(two, three)
         self.assertEqual(cloud.read_project_link(one)["uid"], "fixture-user")
@@ -505,8 +508,8 @@ class CloudChecks(unittest.TestCase):
         self.assertEqual((destination / "Sketch.ino").read_bytes(), b"// external destination edit\n")
         self.assertEqual((legacy / "Sketch.ino").read_bytes(), b"void setup() {}\nvoid loop() {}\n")
         self.assertFalse((destination / cloud.LINK_NAME).exists())
-        retry = self.service.working_directory(meta["id"], meta["name"])
-        self.assertEqual(retry.name, "Copy race (2)")
+        with self.assertRaises(cloud.CloudLocalConflict):
+            self.service.working_directory(meta["id"], meta["name"])
         self.assertEqual((destination / "Sketch.ino").read_bytes(), b"// external destination edit\n")
 
     def test_unknown_folder_and_empty_reservation_never_overwrite_user_material(self):
@@ -515,11 +518,123 @@ class CloudChecks(unittest.TestCase):
         occupied = self.folder / "_MCUFlasherByNaph_src" / "Cloud" / meta["name"]
         occupied.mkdir(parents=True)
         (occupied / "Sketch.ino").write_bytes(b"unrelated user project")
-        working = self.service.working_directory(meta["id"], meta["name"])
-        self.assertEqual(working.name, "Occupied sketch (2)")
+        with self.assertRaises(cloud.CloudLocalConflict) as caught:
+            self.service.working_directory(meta["id"], meta["name"])
+        conflict = caught.exception
+        self.assertEqual(Path(conflict.root), occupied)
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"unrelated user project")
+        working = self.service.pull_project(meta["id"], occupied, replace_existing=True,
+            expected_local_state=conflict.local_state, expected_revision=conflict.revision)
+        self.assertEqual(working, occupied)
         self.assertEqual(self.service.working_directory(meta["id"], meta["name"]), working)
         self.service.pull_project(meta["id"])
-        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"unrelated user project")
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"void setup() {}\nvoid loop() {}\n")
+        backups = list((self.folder / "user-cloud" / "recovery").rglob("Sketch.ino"))
+        self.assertTrue(any(path.read_bytes() == b"unrelated user project" for path in backups))
+        self.assertEqual([path.name for path in occupied.parent.iterdir()], [occupied.name])
+
+    def local_conflict(self, name="Collision"):
+        self.login()
+        meta = self.service.upload_project(self.local, name)
+        occupied = self.folder / "_MCUFlasherByNaph_src" / "Cloud" / name
+        occupied.mkdir(parents=True)
+        (occupied / "Sketch.ino").write_bytes(b"// saved local source\n")
+        with self.assertRaises(cloud.CloudLocalConflict) as caught:
+            self.service.working_directory(meta["id"], name)
+        return meta, occupied, caught.exception
+
+    def replace_conflict(self, meta, occupied, conflict):
+        return self.service.pull_project(meta["id"], occupied, replace_existing=True,
+            expected_local_state=conflict.local_state, expected_revision=conflict.revision)
+
+    def test_replacement_rejects_changed_local_bytes_and_new_sources(self):
+        meta, occupied, conflict = self.local_conflict()
+        (occupied / "Sketch.ino").write_bytes(b"// externally changed\n")
+        with self.assertRaisesRegex(cloud.CloudConflict, "after the replacement prompt"):
+            self.replace_conflict(meta, occupied, conflict)
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"// externally changed\n")
+        with self.assertRaises(cloud.CloudLocalConflict) as caught:
+            self.service.working_directory(meta["id"], meta["name"])
+        (occupied / "Added.cpp").write_bytes(b"// newly saved\n")
+        with self.assertRaises(cloud.CloudConflict):
+            self.replace_conflict(meta, occupied, caught.exception)
+        self.assertFalse((occupied / cloud.LINK_NAME).exists())
+
+    def test_replacement_rejects_changed_remote_revision(self):
+        meta, occupied, conflict = self.local_conflict()
+        record = self.http.data["users"][self.http.uid]["cloud_sketches"][meta["id"]]
+        self.service._append_revision(record, record["versions"]["r1"]["files"])
+        with self.assertRaisesRegex(cloud.CloudConflict, "cloud sketch changed"):
+            self.replace_conflict(meta, occupied, conflict)
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"// saved local source\n")
+
+    def test_replacement_rejects_deleted_destination_without_recreating_it(self):
+        meta, occupied, conflict = self.local_conflict()
+        shutil.rmtree(occupied)
+        with self.assertRaises(cloud.CloudConflict):
+            self.replace_conflict(meta, occupied, conflict)
+        self.assertFalse(occupied.exists())
+
+    @unittest.skipUnless(sys.platform == "win32", "Native Windows junction check")
+    def test_replacement_refuses_a_redirected_project_folder(self):
+        from main.platforms import windows
+        meta, occupied, conflict = self.local_conflict()
+        original = occupied.with_name("preserved-original")
+        occupied.rename(original)
+        self.assertTrue(windows._create_compiler_junction(occupied, original.resolve()))
+        self.addCleanup(os.rmdir, occupied)
+        with self.assertRaisesRegex(cloud.CloudError, "symbolic links"):
+            self.replace_conflict(meta, occupied, conflict)
+        self.assertEqual((original / "Sketch.ino").read_bytes(), b"// saved local source\n")
+
+    def test_replacement_removes_old_root_sources_and_preserves_assets_and_journals(self):
+        meta, occupied, conflict = self.local_conflict()
+        (occupied / "Old.cpp").write_bytes(b"// obsolete source\n")
+        (occupied / "asset.dat").write_bytes(b"keep asset")
+        journal = occupied / ".mcu_flasher_build_cache" / ".mcu_ai_edits" / "edit1.txt"
+        journal.parent.mkdir(parents=True)
+        journal.write_bytes(b"keep journal")
+        with self.assertRaises(cloud.CloudLocalConflict) as caught:
+            self.service.working_directory(meta["id"], meta["name"])
+        self.replace_conflict(meta, occupied, caught.exception)
+        self.assertFalse((occupied / "Old.cpp").exists())
+        self.assertEqual((occupied / "asset.dat").read_bytes(), b"keep asset")
+        self.assertEqual(journal.read_bytes(), b"keep journal")
+        backups = list((self.folder / "user-cloud" / "recovery").rglob("Old.cpp"))
+        self.assertEqual(backups[0].read_bytes(), b"// obsolete source\n")
+
+    def test_replacement_refuses_a_different_account_even_with_confirmation(self):
+        meta = self.upload()
+        state, _ = cloud._local_pull_state(self.local)
+        self.http.uid = "other-account"
+        self.login()
+        other = self.service.upload_project(self.local, "Other sketch")
+        with self.assertRaisesRegex(cloud.CloudError, "another cloud sketch or account"):
+            self.service.pull_project(other["id"], self.local, replace_existing=True,
+                expected_local_state=state, expected_revision=other["revision"])
+        self.assertEqual(cloud.read_project_link(self.local)["sketch_id"], meta["id"])
+
+    def test_case_only_source_rename_keeps_cloud_source(self):
+        meta, occupied, conflict = self.local_conflict()
+        (occupied / "Sketch.ino").rename(occupied / "sketch.ino")
+        with self.assertRaises(cloud.CloudLocalConflict) as caught:
+            self.service.working_directory(meta["id"], meta["name"])
+        self.replace_conflict(meta, occupied, caught.exception)
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"void setup() {}\nvoid loop() {}\n")
+        self.assertEqual(len(list(occupied.glob("*.ino"))), 1)
+
+    def test_failed_replacement_restores_unlinked_sources(self):
+        meta, occupied, conflict = self.local_conflict()
+        real_replace = cloud.os.replace
+        def fail_header(src, dst):
+            if Path(dst) == cloud._io_path(occupied / "Header.h"):
+                raise OSError("fixture storage failure")
+            return real_replace(src, dst)
+        with patch.object(cloud.os, "replace", side_effect=fail_header):
+            with self.assertRaisesRegex(cloud.CloudError, "Previous linked files were restored"):
+                self.replace_conflict(meta, occupied, conflict)
+        self.assertEqual((occupied / "Sketch.ino").read_bytes(), b"// saved local source\n")
+        self.assertFalse((occupied / cloud.LINK_NAME).exists())
 
     def test_stale_base_or_racing_etag_never_overwrites(self):
         meta = self.upload()

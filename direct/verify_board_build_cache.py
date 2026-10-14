@@ -89,7 +89,10 @@ class BoardBuildCacheChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(web_bridge, "classify_platformio_failure", return_value="code"))
         self.stack.enter_context(patch.object(web_bridge, "_iter_process_output",
                                              side_effect=lambda process, *_args, **_options: iter(process.stdout)))
+        self.original_popen = web_bridge.subprocess.Popen
         self.stack.enter_context(patch.object(web_bridge.subprocess, "Popen", side_effect=self.compile_fixture))
+        self.stack.enter_context(patch.object(web_bridge._HOST_RUNTIME, "compiler_working_directory",
+                                             side_effect=lambda workspace: workspace, create=True))
         # An accidental hardware call should fail the verifier immediately.
         self.stack.enter_context(patch.object(web_bridge.serial, "Serial",
                                              side_effect=AssertionError("Fixture opened a serial port")))
@@ -139,7 +142,7 @@ class BoardBuildCacheChecks(unittest.TestCase):
 
     def compile_fixture(self, command, **options):
         workspace = Path(options["cwd"])
-        self.assertTrue(workspace.is_relative_to(self.sandbox), "Compiler escaped its fixture")
+        self.assertTrue(workspace.resolve().is_relative_to(self.sandbox.resolve()), "Compiler escaped its fixture")
         info = self.api._resolve_board_info()
         build = workspace / ".pio" / "build" / "mcu_env"
         build.mkdir(parents=True, exist_ok=True)
@@ -162,6 +165,25 @@ class BoardBuildCacheChecks(unittest.TestCase):
     def logs(self):
         return "\n".join(str(call.args[1].get("text", "")) for call in self.api.emit.call_args_list
                          if call.args[0] == "console:log")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows launch path")
+    def test_short_compiler_cwd_keeps_receipts_and_firmware_in_canonical_board_workspace(self):
+        from main.platforms import windows
+        self.api.current_board = ESP
+        workspace = self.api._board_workspace_dir(ESP)
+        workspace.mkdir(parents=True, exist_ok=True)
+        alias = self.sandbox / "compiler-alias"
+        # Build a real fixture junction before installing the mocked compiler.
+        with patch.object(windows.subprocess, "Popen", self.original_popen):
+            self.assertTrue(windows._ensure_junction(alias, workspace))
+        self.addCleanup(os.rmdir, alias)
+        with patch.object(web_bridge._HOST_RUNTIME, "compiler_working_directory", return_value=alias):
+            self.compile_board(ESP)
+        self.assertEqual(self.calls[-1][0], alias)
+        self.assertTrue((workspace / "build-receipt.json").is_file())
+        self.assertTrue((workspace / ".pio/build/mcu_env/firmware.bin").is_file())
+        self.assertTrue(self.api.check_can_skip_compile())
+        self.assertEqual(self.api._find_cached_firmware_binary(), workspace / ".pio/build/mcu_env/firmware.bin")
 
     def test_switching_a_to_b_and_back_retains_both_real_worker_outputs(self):
         a = self.compile_board(AVR)

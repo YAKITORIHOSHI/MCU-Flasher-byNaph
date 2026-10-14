@@ -31,6 +31,10 @@ account/recovery records outside this shared source folder. When adopting an
 older cloud location, copy only validated root sources and the nonsecret cloud
 link; preserve original assets, protected build caches and AI journals. Reject
 concurrent source changes and never replace a different account's working copy.
+Local name collisions require Replace/Cancel, never an automatic numbered
+download. Replacement requires the reviewed source/link/folder state and cloud
+revision; recovery retains all affected root sources. Do not overwrite an open
+target workspace. Preserve unknown assets and protected cache/journal trees.
 
 Classify paths before changing attributes or deleting anything:
 
@@ -90,6 +94,10 @@ Classify paths before changing attributes or deleting anything:
   the successful build receipt together. Arduino CLI uses a certified CLI
   subfolder in that same native board workspace. Do not restore shared or
   family-bucketed binaries into an exact-board build; legacy caches stay untouched.
+  Windows compiler launches may use a create-only, verified short junction to
+  this canonical workspace. Keep receipt validation and Clean on canonical
+  paths; never traverse the compiler alias as a new cache owner. Verify with
+  `direct/verify_windows_build_paths.py` using only disposable `temp/` aliases.
 - Board switching and framework changes never delete another target's build.
   Check root source bytes and the selected receipt before enabling Skip Compile;
   bind receipts to host, exact identity, build configuration, configured library

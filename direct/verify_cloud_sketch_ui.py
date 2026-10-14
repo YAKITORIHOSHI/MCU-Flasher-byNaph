@@ -22,8 +22,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit, QStyle, QStyleOptionFrame, QScrollArea
 from main.qt.cloud_sketch_panel import (
     CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog, _CloudUploadDialog,
-    _CloudSketchActionDialog,
+    _CloudSketchActionDialog, _CloudLocalReplaceDialog,
 )
+from main.core.cloud_sketch_service import CloudLocalConflict
 from main.qt.project_dialog import ProjectDialog
 from main.qt.theme import build_stylesheet, register_fonts
 from main.qt.garbage_collection import install_gui_garbage_collector
@@ -542,6 +543,66 @@ class CloudUIChecks(unittest.TestCase):
         self.wait(lambda: not panel._busy)
         self.assertEqual(sum(row[0] == "pull" for row in self.service.calls), 1)
         self.assertEqual(path.read_text(), "// unsaved closed local changes\n")
+
+    def test_local_name_collision_cancel_never_downloads_or_opens(self):
+        panel = self.panel()
+        collision = CloudLocalConflict(self.root / "existing", "fixture", "Sensor sketch", "fixture-state", 3)
+        self.service.working_directory = Mock(side_effect=collision)
+        with patch("main.qt.cloud_sketch_panel._CloudLocalReplaceDialog") as dialog:
+            dialog.return_value.exec.return_value = QDialog.DialogCode.Rejected
+            panel._open_cloud()
+            self.wait(lambda: not panel._busy)
+        self.assertFalse(any(row[0] == "pull" for row in self.service.calls))
+        self.backend.open_project_window.assert_not_called()
+        self.assertIn("cancelled", panel._status.text())
+        self.assertFalse(self.backend._cloud_project_operation)
+
+    def test_local_name_collision_replace_passes_both_guards_and_opens_existing_path(self):
+        panel = self.panel()
+        existing = self.root / "existing"
+        collision = CloudLocalConflict(existing, "fixture", "Sensor sketch", "fixture-state", 3)
+        self.service.working_directory = Mock(side_effect=collision)
+        original_pull = self.service.pull_project
+        self.service.pull_project = Mock(side_effect=original_pull)
+        with patch("main.qt.cloud_sketch_panel._CloudLocalReplaceDialog") as dialog:
+            dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            panel._open_cloud()
+            self.wait(lambda: not panel._busy)
+        self.service.pull_project.assert_called_once_with("fixture", destination=str(existing),
+            replace_existing=True, expected_local_state="fixture-state", expected_revision=3)
+        self.backend.open_project_window.assert_called_once_with(str(existing))
+        self.assertFalse(self.backend._cloud_project_operation)
+
+    def test_local_name_collision_refuses_an_open_target(self):
+        panel = self.panel()
+        existing = self.root / "existing"
+        conflict = {"root": str(existing), "name": "Sensor sketch", "sketch_id": "fixture",
+                    "local_state": "fixture-state", "revision": 3}
+        with patch("main.core.config.find_project_window", return_value=object()), \
+             patch("main.qt.cloud_sketch_panel._CloudLocalReplaceDialog") as dialog:
+            panel._resolve_local_conflict(conflict)
+            dialog.assert_not_called()
+        self.assertIn("Close that workspace", panel._status.text())
+        self.assertFalse(any(row[0] == "pull" for row in self.service.calls))
+
+    def test_local_replacement_prompt_defaults_to_cancel_and_fits_compact_palettes(self):
+        panel = self.panel()
+        conflict = {"root": str(self.root / ("long name Ω " * 15)), "name": "Long sketch Ω " * 6}
+        for mode in ("default", "light", "solarized_dark"):
+            APP.setStyleSheet(build_stylesheet(mode))
+            panel.apply_theme(mode)
+            dialog = _CloudLocalReplaceDialog(conflict, panel)
+            self.widgets.append(dialog)
+            dialog.show()
+            self.settle_layout()
+            self.assertTrue(dialog.cancel_button.isDefault())
+            self.assertFalse(dialog.replace_button.isDefault())
+            self.assert_visible_in_ancestors(dialog.cancel_button)
+            self.assert_visible_in_ancestors(dialog.replace_button)
+            self.assertEqual(dialog._body_scroll.horizontalScrollBar().maximum(), 0)
+            scale = os.environ.get("QT_SCALE_FACTOR", "1")
+            self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-local-replace-scale-{scale}.png")))
+            dialog.close()
 
     def test_signed_in_cloud_dialog_is_simple_and_names_current_sketch(self):
         APP.setStyleSheet(build_stylesheet("default"))

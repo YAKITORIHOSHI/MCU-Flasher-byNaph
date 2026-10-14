@@ -59,6 +59,15 @@ class CloudNameConflict(CloudError):
         self.matches = [dict(row) for row in matches]
 
 
+class CloudLocalConflict(CloudError):
+    """A local name collision needs a reviewed replacement, never a numbered copy."""
+
+    def __init__(self, root, sketch_id, name, local_state, revision):
+        super().__init__("A local sketch project with this name already exists. Choose Replace or Cancel.")
+        self.root, self.sketch_id, self.name = str(root), sketch_id, name
+        self.local_state, self.revision = local_state, revision
+
+
 def _sketch_name(value: str) -> str:
     if not isinstance(value, str):
         raise CloudError("Enter a valid sketch name of at most 100 characters.")
@@ -122,6 +131,10 @@ def _io_path(value: Path | str) -> Path:
     if native.startswith("\\\\?\\"):
         return Path(native)
     return Path("\\\\?\\UNC\\" + native[2:] if native.startswith("\\\\") else "\\\\?\\" + native)
+
+
+def _redirected_directory(path: Path) -> bool:
+    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
 
 
 def read_project_link(root: Path | str) -> dict[str, Any] | None:
@@ -236,6 +249,55 @@ def _validate_snapshot(value: Any) -> dict[str, bytes]:
                for name, raw in result.items()):
         raise CloudError("The cloud snapshot has no primary sketch source. No local files were changed.")
     return result
+
+
+def _local_pull_state(root: Path) -> tuple[str, dict[str, bytes]]:
+    """Capture bounded saved sources and folder/link identity for a pull prompt."""
+    folder = _io_path(root)
+    if _redirected_directory(folder) or not folder.is_dir() or any(_redirected_directory(_io_path(p)) for p in root.parents):
+        raise CloudError("The existing local project is not a safe sketch folder.")
+    identity = folder.stat()
+    files: dict[str, bytes] = {}
+    seen, total = set(), 0
+    try:
+        for count, path in enumerate(folder.iterdir()):
+            if count >= 4096:
+                raise CloudError("The existing project contains too many root entries to inspect safely.")
+            if path.name.startswith(".") or path.suffix.lower() not in SOURCE_SUFFIXES:
+                continue
+            name = _source_name(path.name)
+            if path.is_symlink() or not path.is_file() or name.casefold() in seen:
+                raise CloudError("The existing project contains unsafe or conflicting source filenames.")
+            seen.add(name.casefold())
+            if len(files) >= MAX_FILES or path.stat().st_size > MAX_FILE_BYTES:
+                raise CloudError("The existing project exceeds the cloud source size limit.")
+            with path.open("rb") as stream:
+                before = os.fstat(stream.fileno())
+                raw = stream.read(MAX_FILE_BYTES + 1)
+                after = os.fstat(stream.fileno())
+            total += len(raw)
+            if len(raw) > MAX_FILE_BYTES or total > MAX_SOURCE_BYTES:
+                raise CloudError("The existing project exceeds the cloud source size limit.")
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                    after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                raise CloudError("The local project changed while checking it. Try opening it again.")
+            files[name] = raw
+        link_path = folder / LINK_NAME
+        link_bytes = b""
+        if link_path.exists() or link_path.is_symlink():
+            if not read_project_link(root):
+                raise CloudError("The existing local cloud link is damaged. Check the project before replacing it.")
+            with link_path.open("rb") as stream:
+                link_bytes = stream.read(64 * 1024 + 1)
+            if len(link_bytes) > 64 * 1024:
+                raise CloudError("The existing local cloud link changed while checking it. Try again.")
+        state = {"identity": [identity.st_dev, identity.st_ino],
+                 "files": {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()},
+                 "link": hashlib.sha256(link_bytes).hexdigest()}
+        digest = hashlib.sha256(json.dumps(state, sort_keys=True).encode("utf-8")).hexdigest()
+        return digest, files
+    except OSError:
+        raise CloudError("The existing local sources could not be read safely. Check folder access and try again.") from None
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -876,14 +938,21 @@ class CloudSketchService:
                 old = read_project_link(previous) if previous is not None else None
                 sketch_name = old.get("name") if old else self._meta(sketch_id).get("name")
             name = preferred_name or _working_folder_name(sketch_name)
-            for number in range(1, MAX_WORKING_FOLDERS + 2):
-                folder = name if number == 1 else f"{name} ({number})"
+            for _attempt in range(2):
+                folder = name
                 if folder.casefold() in folders:
-                    continue
+                    occupied = folders[folder.casefold()]
+                    link = read_project_link(occupied)
+                    if link and (link["uid"] != self._uid or link.get("provider") != scope):
+                        raise CloudError("A local project with this name belongs to another cloud account. Rename the cloud sketch before opening it.")
+                    state, _ = _local_pull_state(occupied)
+                    meta = self._meta(sketch_id)
+                    raise CloudLocalConflict(occupied, sketch_id, meta["name"], state, meta["revision"])
                 destination = root / folder
                 try:
                     _io_path(destination).mkdir(exist_ok=False)
                 except FileExistsError:
+                    folders[folder.casefold()] = destination
                     continue
                 if previous is not None:
                     try:
@@ -1035,30 +1104,49 @@ class CloudSketchService:
             return sorted(rows, key=lambda row: row["revision"], reverse=True)
 
     def pull_project(self, sketch_id: str, destination: Path | str | None = None,
-                     revision: int | None = None, *, source_guard=None) -> Path:
+                     revision: int | None = None, *, source_guard=None,
+                     replace_existing=False, expected_local_state=None, expected_revision=None) -> Path:
         with self._lock:
+            if replace_existing and (destination is None or type(expected_revision) is not int):
+                raise CloudError("Replacement requires the reviewed local folder and cloud revision.")
             record, _ = self._record(_safe_id(sketch_id))
+            if expected_revision is not None and (type(expected_revision) is not int
+                    or record["meta"]["revision"] != expected_revision):
+                raise CloudConflict("The cloud sketch changed after the replacement prompt. Refresh and try again.")
             wanted = revision if revision is not None else record["meta"]["revision"]
             if type(wanted) is not int or "r" + str(wanted) not in record["versions"]:
                 raise CloudError("The requested cloud revision is no longer available.")
             sources = _validate_snapshot(record["versions"]["r" + str(wanted)].get("files"))
             root = Path(destination) if destination is not None else self.working_directory(sketch_id, record["meta"]["name"])
             io_root = _io_path(root)
-            if io_root.is_symlink() or any(_io_path(parent).is_symlink() for parent in root.parents):
+            if _redirected_directory(io_root) or any(_redirected_directory(_io_path(parent)) for parent in root.parents):
                 raise CloudError("A cloud working folder cannot use symbolic links.")
+            if replace_existing and not io_root.is_dir():
+                raise CloudConflict("The local project changed after the replacement prompt. Open it again to review the new files.")
             io_root.mkdir(parents=True, exist_ok=True)
             root_identity = io_root.stat()
             old_link = read_project_link(root)
-            if (old_link and (old_link["uid"] != self._uid or old_link["sketch_id"] != sketch_id
+            if (old_link and (old_link["uid"] != self._uid or (old_link["sketch_id"] != sketch_id and not replace_existing)
                               or old_link.get("provider") != self._scope())):
                 raise CloudError("This folder belongs to another cloud sketch or account.")
             tracked = set(old_link["files"] if old_link else [])
+            if replace_existing:
+                local_state, local_sources = _local_pull_state(root)
+                if not expected_local_state or local_state != expected_local_state:
+                    raise CloudConflict("The local project changed after the replacement prompt. Open it again to review the new files.")
+                tracked.update(local_sources)
+            tracked_names = {name.casefold() for name in tracked}
             for filename in sources:
                 path = io_root / filename
-                if path.exists() and filename not in tracked:
+                known = filename in tracked or (sys.platform == "win32" and filename.casefold() in tracked_names)
+                if path.exists() and not known:
                     raise CloudError("Pull would overwrite an unlinked local file. Choose an empty cloud folder.")
             # Never follow links, overwrite directories, or delete an unknown file.
             touched = tracked | set(sources)
+            if sys.platform == "win32":
+                native_names = {name.casefold(): name for name in tracked}
+                native_names.update({name.casefold(): name for name in sources})
+                touched = set(native_names.values())
             old_files: dict[str, bytes] = {}
             for filename in touched:
                 path = io_root / _source_name(filename)
@@ -1100,9 +1188,11 @@ class CloudSketchService:
                         os.fsync(stream.fileno())
                     staged[filename] = temporary
                 current_identity = io_root.stat()
-                if (io_root.is_symlink() or any(_io_path(parent).is_symlink() for parent in root.parents)
+                if (_redirected_directory(io_root) or any(_redirected_directory(_io_path(parent)) for parent in root.parents)
                         or (current_identity.st_dev, current_identity.st_ino) != (root_identity.st_dev, root_identity.st_ino)):
                     raise CloudError("The working folder changed during pull. No source files were replaced.")
+                if replace_existing and _local_pull_state(root)[0] != expected_local_state:
+                    raise CloudConflict("The local project changed during replacement. No source files were replaced.")
                 for filename in touched:
                     path = io_root / filename
                     if (path.is_symlink() or (path.exists() and not path.is_file())
@@ -1118,7 +1208,10 @@ class CloudSketchService:
                 for filename, temporary in staged.items():
                     os.replace(temporary, io_root / filename)
                     changed.append(filename)
+                cloud_names = {name.casefold() for name in sources}
                 for filename in tracked - set(sources):
+                    if sys.platform == "win32" and filename.casefold() in cloud_names:
+                        continue  # A case-only rename still denotes the newly installed file.
                     (io_root / filename).unlink(missing_ok=True)
                     changed.append(filename)
                 link_change_attempted = True
