@@ -982,8 +982,9 @@ class ProjectChecks(unittest.TestCase):
                         for page, buttons in enumerate(actions):
                             dialog._tabs.setCurrentIndex(page)
                             APP.processEvents()
-                            self.assertEqual(dialog.width(), width)
-                            self.assertEqual(dialog.height(), height)
+                            rounding = 1 if sys.platform.startswith("linux") and scale % 1 else 0
+                            self.assertLessEqual(abs(dialog.width() - width), rounding)
+                            self.assertLessEqual(abs(dialog.height() - height), rounding)
                             for button in buttons:
                                 self.assertTrue(button.isVisible())
                                 rect = QRect(button.mapTo(dialog, QPoint()), button.size())

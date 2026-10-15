@@ -69,6 +69,10 @@ class BoardBuildCacheChecks(unittest.TestCase):
         self.cache.mkdir()
         self.core = self.sandbox / "core"
         self.core.mkdir()
+        boot_app0 = self.core / "packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+        boot_app0.parent.mkdir(parents=True)
+        boot_app0.write_bytes(b"fixture boot_app0" * 128)
+        self.stack.enter_context(patch.object(API, "_locate_esp32_boot_app0", return_value=boot_app0))
         self.library = self.sandbox / "libraries"
         self.calls = []
         self.returncode = 0

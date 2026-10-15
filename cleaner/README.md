@@ -18,6 +18,8 @@ Aliases are unlinked only when they point into this checkout's Windows store
 or modules; another checkout's aliases and their targets remain intact.
 
 Ubuntu fresh cleanup removes the validated `.venv-linux` and source bytecode.
+The environment's standard Python-generated `.gitignore` is recognized by its
+exact content; custom or linked ignore rules still block cleanup.
 Ubuntu runtime reset also removes receipt-authenticated native tools and Linux
 offline extras. Its XDG PlatformIO store is shared by this account's checkouts
 for the current architecture. It stays intact unless runtime reset explicitly

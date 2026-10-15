@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
-from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, CloudLocalConflict, read_project_link
+from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, CloudLocalConflict, CloudError, read_project_link
 from main.core.credential_store import save_cloud_configuration
 
 
@@ -1401,7 +1401,8 @@ class CloudSketchPanel(QWidget):
         sketch_id = row["id"]
         def download():
             from main.core.config import find_project_window
-            working = self._service.working_directory(sketch_id, sketch_name=row.get("name"))
+            working = self._service.working_directory(sketch_id, sketch_name=row.get("name"),
+                is_project_open=lambda path: bool(find_project_window(str(path))))
             if find_project_window(str(working)) or read_project_link(working):
                 return working
             return self._service.pull_project(sketch_id)
@@ -1423,12 +1424,14 @@ class CloudSketchPanel(QWidget):
             return
         if account_uid != self._state.get("account", {}).get("uid") or not self._can_change_project():
             return
-        def replace():
+        def check_target():
             if find_project_window(conflict["root"]):
-                raise ValueError("The existing project was opened. Close its workspace before replacing it.")
+                raise CloudError("The existing project was opened. Close its workspace before replacing it.")
+        def replace():
+            check_target()
             return self._service.pull_project(conflict["sketch_id"], destination=conflict["root"],
                 replace_existing=True, expected_local_state=conflict["local_state"],
-                expected_revision=conflict["revision"])
+                expected_revision=conflict["revision"], publication_guard=check_target)
         self._request("open", "Replacing existing local sketch sources…", replace, project_io=True)
 
     def _current_link(self):

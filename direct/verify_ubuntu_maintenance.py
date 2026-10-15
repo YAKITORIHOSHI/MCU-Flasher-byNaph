@@ -116,6 +116,44 @@ class UbuntuMaintenanceTests(unittest.TestCase):
         self.assertFalse(venv.exists())
         self.assertTrue(all(path.exists() for path in windows))
 
+    def test_generated_venv_gitignore_is_removed_with_validated_environment(self):
+        venv = self.venv()
+        (venv / ".gitignore").write_bytes(maintenance.VENV_GITIGNORE)
+        self.apply(self.plan("fresh"))
+        self.assertFalse(venv.exists())
+
+    def test_custom_or_linked_venv_gitignore_refuses_all_cleanup(self):
+        venv = self.venv()
+        ignore = venv / ".gitignore"
+        retained = self.write("main/__pycache__/fixture.pyc")
+        for content in (b"# user rules\n*\n", maintenance.VENV_GITIGNORE + b"# user edit\n"):
+            ignore.write_bytes(content)
+            with self.assertRaisesRegex(maintenance.MaintenanceError, "ignore rules were retained"):
+                self.plan("fresh")
+            self.assertTrue(retained.exists())
+            self.assertEqual(ignore.read_bytes(), content)
+        ignore.unlink()
+        external = self.base / "user-ignore"
+        external.write_bytes(maintenance.VENV_GITIGNORE)
+        ignore.symlink_to(external)
+        with self.assertRaises(maintenance.MaintenanceError):
+            self.plan("fresh")
+        self.assertTrue(ignore.is_symlink())
+        self.assertEqual(external.read_bytes(), maintenance.VENV_GITIGNORE)
+
+    def test_changed_venv_gitignore_after_preview_preserves_every_target(self):
+        venv = self.venv()
+        ignore = venv / ".gitignore"
+        ignore.write_bytes(maintenance.VENV_GITIGNORE)
+        retained = self.write("main/__pycache__/fixture.pyc")
+        plan = self.plan("fresh")
+        ignore.write_bytes(b"# concurrent user rules\n")
+        with self.assertRaises(maintenance.MaintenanceError):
+            self.apply(plan)
+        self.assertTrue(retained.exists())
+        self.assertTrue(venv.exists())
+        self.assertEqual(ignore.read_bytes(), b"# concurrent user rules\n")
+
     def test_runtime_receipts_and_linux_extras_are_removed(self):
         arduino, opencode, extras = self.tool("arduino-cli"), self.tool("opencode"), self.extras()
         windows = [self.write("src/_python/python.exe"), self.write("src/_python/Lib/encodings/__init__.py"),

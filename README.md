@@ -1128,13 +1128,20 @@ to obtain newer remote files. Cloud working sketches live under the generated
 source folder: `_MCUFlasherByNaph_src/Cloud/<sketch name>/`, alongside `Boards`
 and `Libs`. Pull recovery copies and account state stay in your OS user's private
 data directory. Existing working copies retain their saved edits when opened.
+If a verified working copy is still open at an earlier Cloud location, Open
+focuses that workspace; adopting the new location waits until it is closed.
 Opening the same cloud sketch reuses its linked folder. If a different local
 project already has that folder name, MCU Flasher asks **Replace** or **Cancel**
 instead of silently creating a numbered folder. Replace restores the cloud's
 root sources and text notes, removes obsolete root sources, and keeps a recovery
 copy; other assets, build caches and AI history are preserved. Close an open
 target workspace before replacing it. Files or cloud revisions changed after
-the prompt require a fresh decision. A folder owned by another account cannot
+the prompt require a fresh decision. The worker rechecks the cloud revision,
+open-window ownership, folder/link identity and saved bytes after staging,
+immediately before replacement. If an external editor changes a file during a
+failed replacement, rollback retains that edit and reports the recovery folder
+instead of overwriting it. Failed staging writes are cleaned up for a safe retry.
+A folder owned by another account cannot
 be replaced; rename the cloud sketch first. **Pull latest** updates an existing
 linked project with its existing confirmation and recovery behavior.
 
@@ -1144,6 +1151,18 @@ such as `opening dependency file ... .c.d: No such file or directory` after a
 sketch is downloaded into the deeper Cloud folder. The actual board workspace,
 incremental objects and successful build receipts stay in the project cache.
 Native Ubuntu compiler path handling is unchanged.
+
+Cloud snapshots preserve UTF-8 source bytes and exact filenames, including line
+endings. They contain no libraries, toolchains or build caches. On Ubuntu, select
+the same exact board/framework and prepare the same library versions separately;
+the native board workspace and package store remain independent of Windows.
+Case-only source renames remove obsolete spellings on Ubuntu's case-sensitive
+filesystem, including generated source staging. The isolated native check is
+`.venv-linux/bin/python -B direct/verify_ubuntu_cloud_workflow.py`: it compares
+original/restored bytes and generated ESP32 Arduino/NimBLE 2.5.1 fixture inputs,
+checks permissions and native environment isolation, and exercises a deep
+dependency path with host GCC. Its ESP32 compiler is mocked; it does not certify
+an ESP32 firmware build or install packages.
 
 **Push** saves acknowledged editor changes and creates a new cloud revision.
 If another window/device already pushed, it reports a conflict instead of

@@ -111,7 +111,7 @@ class FakeService:
         self.authenticated = False
         self.rows = []
 
-    def working_directory(self, sketch_id, sketch_name=None):
+    def working_directory(self, sketch_id, sketch_name=None, *, is_project_open=None):
         return self.root / "cloud-copy"
 
     def pull_project(self, sketch_id, destination=None, revision=None, **kwargs):
@@ -120,6 +120,8 @@ class FakeService:
         folder.mkdir(exist_ok=True)
         guard = kwargs.get("source_guard")
         with guard([folder / "Sensor.ino"]) if guard else nullcontext():
+            if kwargs.get("publication_guard"):
+                kwargs["publication_guard"]()
             (folder / "Sensor.ino").write_text("// cloud snapshot\n", encoding="utf-8")
             link = {"schema": 1, "uid": "fixture-user", "sketch_id": "fixture", "revision": 3,
                     "files": ["Sensor.ino"], "provider": "fixture"}
@@ -208,6 +210,16 @@ class CloudUIChecks(unittest.TestCase):
         while time.monotonic() < deadline:
             APP.processEvents()
             time.sleep(.003)
+
+    def assert_native_coordinate(self, actual, expected):
+        # Native fractional Linux scaling can round decorated client bounds by
+        # one logical pixel. Keep frame fit, reading and visibility checks exact.
+        rounding = 1 if sys.platform.startswith("linux") and APP.devicePixelRatio() % 1 else 0
+        self.assertLessEqual(abs(actual - expected), rounding, (actual, expected))
+
+    def assert_native_size(self, widget, expected):
+        for actual, wanted in zip((widget.width(), widget.height()), expected):
+            self.assert_native_coordinate(actual, wanted)
 
     def assert_visible_in_ancestors(self, widget):
         self.assertTrue(widget.isVisible(), widget.objectName())
@@ -544,6 +556,25 @@ class CloudUIChecks(unittest.TestCase):
         self.assertEqual(sum(row[0] == "pull" for row in self.service.calls), 1)
         self.assertEqual(path.read_text(), "// unsaved closed local changes\n")
 
+    def test_open_passes_worker_window_lookup_and_focuses_legacy_copy(self):
+        panel = self.panel()
+        original = self.root / "legacy-copy"
+        original.mkdir()
+        source = original / "Sensor.ino"
+        source.write_bytes(b"// saved legacy edit\n")
+        owner_thread = threading.get_ident()
+        def resolve(sketch_id, sketch_name=None, *, is_project_open=None):
+            self.assertNotEqual(threading.get_ident(), owner_thread)
+            self.assertTrue(is_project_open(original))
+            return original
+        with patch.object(self.service, "working_directory", side_effect=resolve), \
+             patch("main.core.config.find_project_window", return_value=object()):
+            panel._open_cloud()
+            self.wait(lambda: not panel._busy)
+        self.backend.open_project_window.assert_called_once_with(str(original))
+        self.assertFalse(any(row[0] == "pull" for row in self.service.calls))
+        self.assertEqual(source.read_bytes(), b"// saved legacy edit\n")
+
     def test_local_name_collision_cancel_never_downloads_or_opens(self):
         panel = self.panel()
         collision = CloudLocalConflict(self.root / "existing", "fixture", "Sensor sketch", "fixture-state", 3)
@@ -568,9 +599,30 @@ class CloudUIChecks(unittest.TestCase):
             dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
             panel._open_cloud()
             self.wait(lambda: not panel._busy)
-        self.service.pull_project.assert_called_once_with("fixture", destination=str(existing),
-            replace_existing=True, expected_local_state="fixture-state", expected_revision=3)
+        self.service.pull_project.assert_called_once()
+        args, kwargs = self.service.pull_project.call_args
+        kwargs = dict(kwargs)
+        self.assertEqual(args, ("fixture",))
+        guard = kwargs.pop("publication_guard")
+        self.assertTrue(callable(guard))
+        self.assertEqual(kwargs, dict(destination=str(existing), replace_existing=True,
+                                     expected_local_state="fixture-state", expected_revision=3))
         self.backend.open_project_window.assert_called_once_with(str(existing))
+        self.assertFalse(self.backend._cloud_project_operation)
+
+    def test_local_replacement_rechecks_open_window_at_publication(self):
+        panel = self.panel()
+        existing = self.root / "existing"
+        conflict = {"root": str(existing), "name": "Sensor sketch", "sketch_id": "fixture",
+                    "local_state": "fixture-state", "revision": 3}
+        with patch("main.core.config.find_project_window", side_effect=[None, None, object()]), \
+             patch("main.qt.cloud_sketch_panel._CloudLocalReplaceDialog") as dialog:
+            dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            panel._resolve_local_conflict(conflict)
+            self.wait(lambda: not panel._busy)
+        self.assertIn("Close its workspace", panel._status.text())
+        self.backend.open_project_window.assert_not_called()
+        self.assertFalse((existing / "Sensor.ino").exists())
         self.assertFalse(self.backend._cloud_project_operation)
 
     def test_local_name_collision_refuses_an_open_target(self):
@@ -634,7 +686,7 @@ class CloudUIChecks(unittest.TestCase):
         from main.qt.responsive import work_area
         from src.modules.ui_metrics import preferred_size
         fitted_size = preferred_size(work_area(dialog), 590, 580)
-        self.assertEqual((dialog.width(), dialog.height()), fitted_size)
+        self.assert_native_size(dialog, fitted_size)
         self.assertTrue(dialog.screen().availableGeometry().contains(dialog.frameGeometry()))
         if fitted_size == (590, 580):
             self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
@@ -867,14 +919,14 @@ class CloudUIChecks(unittest.TestCase):
                 dialog._apply_dialog_theme(mode)
                 panel.apply_theme(mode)
                 for width, height in ((720, 560), (900, 650), (400, 360)):
-                    if APP.platformName() == "windows":
+                    if APP.platformName() == "windows" or (sys.platform.startswith("linux") and APP.platformName() == "xcb"):
                         # Couple native DPI with this monitor's real work area;
                         # offscreen fixtures retain the exact 720x560 selector.
                         area = dialog.screen().availableGeometry()
                         width, height = min(width, area.width() - 24), min(height, area.height() - 48)
                     dialog.resize(width, height)
                     self.settle_layout()
-                    self.assertEqual((dialog.width(), dialog.height()), (width, height))
+                    self.assert_native_size(dialog, (width, height))
                     self.assert_compact_sketch_header(panel)
                     self.reveal_in_scroll_ancestors(panel._refresh_btn)
                     self.assert_visible_in_ancestors(panel._refresh_btn)
@@ -887,8 +939,8 @@ class CloudUIChecks(unittest.TestCase):
                         account_bounds = QRect(panel._account_card.mapTo(panel, QPoint()), panel._account_card.size())
                         for widget in (panel._sync_actions, panel._status):
                             bounds = QRect(widget.mapTo(panel, QPoint()), widget.size())
-                            self.assertEqual(bounds.left(), account_bounds.left())
-                            self.assertEqual(bounds.right(), account_bounds.right())
+                            self.assert_native_coordinate(bounds.left(), account_bounds.left())
+                            self.assert_native_coordinate(bounds.right(), account_bounds.right())
                     self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-selector-cloud-{width}-{height}.png")))
                 dialog.resize(720, 560)
                 dialog._tabs.setCurrentIndex(0)
@@ -1046,6 +1098,13 @@ class CloudUIChecks(unittest.TestCase):
     def test_palettes_compact_actions_and_sensitive_field_capture_masking(self):
         self.service.pull_project("fixture", destination=self.local)
         panel = self.panel()
+        if sys.platform.startswith("linux"):
+            # This bare-panel fixture measures synthetic widths. Decorated
+            # cloud dialogs/monitor fitting have their own native checks.
+            panel.hide()
+            panel.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+                                 | Qt.WindowType.X11BypassWindowManagerHint)
+            panel.show()
         for mode in ("default", "light", "solarized_dark"):
             APP.setStyleSheet(build_stylesheet(mode))
             panel.apply_theme(mode)
@@ -1056,14 +1115,20 @@ class CloudUIChecks(unittest.TestCase):
                 self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
             for width, height in ((720, 650), (400, 360), (330, 270)):
                 panel.resize(width, height)
-                APP.processEvents()
+                self.settle_layout()
+                # Native resizing can apply the previous layout minimum before
+                # delivering compact reflow. Retry once after that dispatch.
+                panel.resize(width, height)
+                self.settle_layout()
+                self.assert_native_size(panel, (width, height))
                 if (width, height) == (400, 360):
                     self.wait(lambda: panel._scroll.verticalScrollBar().maximum() == 0)
                 for button in (panel._upload_btn, panel._open_btn,
                                panel._push_btn, panel._pull_btn, panel._history_btn):
                     geometry = QRect(button.mapTo(panel, QPoint()), button.size())
                     self.assertTrue(panel.rect().contains(geometry), (mode, width, height, button.text(), geometry))
-                    self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16)
+                    self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16,
+                                            (mode, width, height, panel.size(), button.text(), button.size()))
                 for button in (panel._refresh_btn,):
                     self.assertGreaterEqual(button.width(), button.fontMetrics().horizontalAdvance(button.text()) + 16)
                 if (width, height) == (400, 360):

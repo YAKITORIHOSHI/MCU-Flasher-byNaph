@@ -884,7 +884,7 @@ class CloudSketchService:
                     pass
             raise
 
-    def working_directory(self, sketch_id: str, sketch_name: str | None = None) -> Path:
+    def working_directory(self, sketch_id: str, sketch_name: str | None = None, *, is_project_open=None) -> Path:
         """Resolve an account-owned, readable Cloud folder without pulling edits."""
         with self._lock:
             if not self._uid:
@@ -920,6 +920,14 @@ class CloudSketchService:
                                 return mapped
             except (OSError, ValueError, TypeError):
                 pass
+            if previous is None:
+                legacy = self._data_dir / "projects" / scope[:16] / self._account_folder() / sketch_id
+                if self._owns_working_link(read_project_link(legacy), sketch_id, scope=scope):
+                    previous = legacy
+            if previous is not None and is_project_open is not None and is_project_open(previous):
+                # A location change must not create a second workspace beside
+                # an open legacy copy whose dirty buffers still own that folder.
+                return previous
             folders: dict[str, Path] = {}
             for count, item in enumerate(io_root.iterdir()):
                 if count >= MAX_WORKING_FOLDERS:
@@ -930,10 +938,6 @@ class CloudSketchService:
                     _io_path(location_file.parent).mkdir(parents=True, exist_ok=True)
                     _atomic_json(location_file, {"schema": 1, "folder": candidate.name, "path": str(candidate)})
                     return candidate
-            if previous is None:
-                legacy = self._data_dir / "projects" / scope[:16] / self._account_folder() / sketch_id
-                if self._owns_working_link(read_project_link(legacy), sketch_id, scope=scope):
-                    previous = legacy
             if sketch_name is None:
                 old = read_project_link(previous) if previous is not None else None
                 sketch_name = old.get("name") if old else self._meta(sketch_id).get("name")
@@ -974,11 +978,13 @@ class CloudSketchService:
         # limits even under a long user profile; full identities stay in the link.
         return hashlib.sha256(_safe_id(self._uid).encode("utf-8")).hexdigest()[:16]
 
+    def _link_value(self, meta: dict, files: list[str], *, source_revision=None) -> dict:
+        return {"schema": 1, "uid": self._uid, "provider": self._scope(),
+                "sketch_id": meta["id"], "revision": meta["revision"],
+                "source_revision": source_revision or meta["revision"], "files": files, "name": meta["name"]}
+
     def _link(self, root: Path, meta: dict, files: list[str], *, source_revision=None) -> None:
-        _atomic_json(root / LINK_NAME, {"schema": 1, "uid": self._uid, "provider": self._scope(),
-                                     "sketch_id": meta["id"], "revision": meta["revision"],
-                                     "source_revision": source_revision or meta["revision"], "files": files,
-                                     "name": meta["name"]})
+        _atomic_json(root / LINK_NAME, self._link_value(meta, files, source_revision=source_revision))
 
     def _append_revision(self, record: dict, files: dict) -> None:
         revision = record["meta"]["revision"] + 1
@@ -1105,7 +1111,8 @@ class CloudSketchService:
 
     def pull_project(self, sketch_id: str, destination: Path | str | None = None,
                      revision: int | None = None, *, source_guard=None,
-                     replace_existing=False, expected_local_state=None, expected_revision=None) -> Path:
+                     replace_existing=False, expected_local_state=None, expected_revision=None,
+                     publication_guard=None) -> Path:
         with self._lock:
             if replace_existing and (destination is None or type(expected_revision) is not int):
                 raise CloudError("Replacement requires the reviewed local folder and cloud revision.")
@@ -1170,8 +1177,34 @@ class CloudSketchService:
             _atomic_json(backup / "recovery.json", {"schema": 1, "source_revision": wanted,
                                                     "files": list(old_files), "created_at": int(time.time() * 1000)})
             staged: dict[str, Path] = {}
+            published: dict[str, tuple[int, int]] = {}
             changed: list[str] = []
             link_change_attempted = False
+            new_link_bytes = json.dumps(self._link_value(record["meta"], list(sources), source_revision=wanted),
+                                        ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+            def check_root():
+                current = io_root.stat()
+                if (_redirected_directory(io_root) or any(_redirected_directory(_io_path(parent)) for parent in root.parents)
+                        or (current.st_dev, current.st_ino) != (root_identity.st_dev, root_identity.st_ino)):
+                    raise CloudError("The working folder changed during pull. No further source files were replaced.")
+
+            def matches_file(path, content, identity=None):
+                if path.is_symlink():
+                    return False
+                if content is None:
+                    return not path.exists()
+                if not path.is_file():
+                    return False
+                info = path.stat()
+                return (info.st_size == len(content)
+                        and (identity is None or (info.st_dev, info.st_ino) == identity)
+                        and path.read_bytes() == content)
+
+            def check_source(filename):
+                if not matches_file(io_root / filename, old_files.get(filename)):
+                    raise CloudError("A local source changed during pull. Save your changes and try again.")
+
             guard = contextlib.ExitStack()
             if source_guard is not None:
                 try:
@@ -1182,55 +1215,80 @@ class CloudSketchService:
             try:
                 for filename, content in sources.items():
                     temporary = io_root / (".mcu-cloud-" + uuid.uuid4().hex + ".tmp")
+                    staged[filename] = temporary  # Also clean partial writes/failed fsync.
                     with temporary.open("xb") as stream:
                         stream.write(content)
                         stream.flush()
                         os.fsync(stream.fileno())
-                    staged[filename] = temporary
-                current_identity = io_root.stat()
-                if (_redirected_directory(io_root) or any(_redirected_directory(_io_path(parent)) for parent in root.parents)
-                        or (current_identity.st_dev, current_identity.st_ino) != (root_identity.st_dev, root_identity.st_ino)):
-                    raise CloudError("The working folder changed during pull. No source files were replaced.")
+                # Network/vault and window registry work remain on this worker.
+                # Recheck remote state before the final local byte/identity pass.
+                if self._meta(sketch_id)["revision"] != record["meta"]["revision"]:
+                    raise CloudConflict("The cloud sketch changed during pull. Refresh and try again.")
+                if publication_guard is not None:
+                    publication_guard()
+                check_root()
                 if replace_existing and _local_pull_state(root)[0] != expected_local_state:
                     raise CloudConflict("The local project changed during replacement. No source files were replaced.")
                 for filename in touched:
-                    path = io_root / filename
-                    if (path.is_symlink() or (path.exists() and not path.is_file())
-                            or (filename in old_files and (not path.exists() or path.stat().st_size > MAX_FILE_BYTES
-                                                         or path.read_bytes() != old_files[filename]))
-                            or (filename not in old_files and path.exists())):
-                        raise CloudError("A local source changed during pull. Save your changes and try again.")
+                    check_source(filename)
                 if ((old_link_bytes is not None and (not link_path.exists() or link_path.is_symlink()
                                                     or link_path.stat().st_size > 64 * 1024
                                                     or link_path.read_bytes() != old_link_bytes))
                         or (old_link_bytes is None and link_path.exists())):
                     raise CloudError("The local cloud link changed during pull. Try again after checking the project.")
                 for filename, temporary in staged.items():
+                    check_root()
+                    check_source(filename)
+                    identity = temporary.stat()
                     os.replace(temporary, io_root / filename)
+                    published[filename] = identity.st_dev, identity.st_ino
                     changed.append(filename)
                 cloud_names = {name.casefold() for name in sources}
                 for filename in tracked - set(sources):
                     if sys.platform == "win32" and filename.casefold() in cloud_names:
                         continue  # A case-only rename still denotes the newly installed file.
+                    check_root()
+                    check_source(filename)
                     (io_root / filename).unlink(missing_ok=True)
                     changed.append(filename)
+                check_root()
+                for filename in changed:
+                    if not matches_file(io_root / filename, sources.get(filename), published.get(filename)):
+                        raise CloudError("A local source changed during pull. Save your changes and try again.")
+                if not matches_file(link_path, old_link_bytes):
+                    raise CloudError("The local cloud link changed during pull. Try again after checking the project.")
                 link_change_attempted = True
                 self._link(root, record["meta"], list(sources), source_revision=wanted)
             except (OSError, CloudError) as failure:
                 rollback_failed = False
-                for filename in changed:
+                external_changes = False
+                for filename in reversed(changed):
                     try:
+                        check_root()
                         target = io_root / filename
+                        if not matches_file(target, sources.get(filename), published.get(filename)):
+                            # A concurrent writer owns these bytes. Preserve them
+                            # and require reload/manual recovery instead of undoing them.
+                            rollback_failed = True
+                            external_changes = True
+                            continue
                         if filename in old_files:
                             recovery_temp = io_root / (".mcu-cloud-" + uuid.uuid4().hex + ".tmp")
-                            recovery_temp.write_bytes(old_files[filename])
-                            os.replace(recovery_temp, target)
+                            try:
+                                recovery_temp.write_bytes(old_files[filename])
+                                os.replace(recovery_temp, target)
+                            finally:
+                                recovery_temp.unlink(missing_ok=True)
                         else:
                             target.unlink(missing_ok=True)
-                    except OSError:
+                    except (OSError, CloudError):
                         rollback_failed = True
                 if link_change_attempted:
                     try:
+                        check_root()
+                        if not (matches_file(link_path, new_link_bytes) or matches_file(link_path, old_link_bytes)):
+                            external_changes = True
+                            raise CloudError("The cloud link was changed by another writer.")
                         if old_link_bytes is not None:
                             _atomic_json(link_path, json.loads(old_link_bytes.decode("utf-8")))
                         else:
@@ -1239,7 +1297,9 @@ class CloudSketchService:
                         rollback_failed = True
                 if rollback_failed:
                     raise CloudRecoveryError(
-                        f"Pull could not finish or fully restore files. Recovery copies are in {backup}.",
+                        "Pull could not finish or fully restore files. "
+                        + ("Concurrent external changes were retained. " if external_changes else "")
+                        + f"Recovery copies are in {backup}.",
                         project_root=root, recovery_dir=backup,
                     ) from None
                 if not changed and isinstance(failure, CloudError):
@@ -1247,8 +1307,11 @@ class CloudSketchService:
                 raise CloudError("Pull could not finish. Previous linked files were restored and a recovery copy was kept.") from None
             finally:
                 try:
+                    check_root()
                     for temporary in staged.values():
                         temporary.unlink(missing_ok=True)
+                except (OSError, CloudError):
+                    pass  # Never clean a replaced/redirected project root.
                 finally:
                     guard.close()
             return root

@@ -185,6 +185,11 @@ class QtResponsiveChecks(ControlChecks):
 
     def test_control_rows_and_serial_reflow(self):
         host = self.own(QWidget())
+        if sys.platform.startswith('linux'):
+            # Exercise explicit synthetic client widths without GNOME's
+            # automatic maximization of windows near the real monitor size.
+            host.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+                                | Qt.WindowType.X11BypassWindowManagerHint)
         layout = QVBoxLayout(host)
         toolbar = PrimaryToolbar(self.backend, host)
         controls = ControlsBar(self.backend, host)
@@ -1008,6 +1013,12 @@ class QtResponsiveChecks(ControlChecks):
         second = Screen(QRect(-900, 40, 900, 600))
         current = [first]
         widget = self.own(QWidget())
+        if sys.platform.startswith('linux'):
+            # These synthetic monitors need not exist on the real desktop.
+            # Keep the native WM from moving this arithmetic fixture back to
+            # a physical screen; decorated dialog fitting is checked separately.
+            widget.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+                                  | Qt.WindowType.X11BypassWindowManagerHint)
         refreshed = []
         watcher = ScreenWatcher(widget, refreshed.append)
         with patch('main.qt.responsive.active_screen', side_effect=lambda _widget=None: current[0]):
@@ -1026,7 +1037,7 @@ class QtResponsiveChecks(ControlChecks):
             watcher._schedule()
             pump()
             self.assertIs(watcher._screen, second)
-            self.assertTrue(second.rect.contains(widget.frameGeometry()))
+            self.assertTrue(second.rect.contains(widget.frameGeometry()), (second.rect, widget.frameGeometry()))
             self.assertFalse(watcher._timer.isActive())
             refreshed.clear()
             first.availableGeometryChanged.emit(first.rect)

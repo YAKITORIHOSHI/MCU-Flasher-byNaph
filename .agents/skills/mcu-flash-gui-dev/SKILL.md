@@ -299,6 +299,9 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   saved sources. Use readable sketch folders under the configured generated source
   root's `Cloud/`, beside `Boards/` and `Libs/`; credentials and account state stay
   outside that folder. Preserve legacy working edits when adopting this location.
+  Resolve open linked copies in earlier locations through a worker-owned window
+  lookup before adoption; focus the existing workspace and defer copying until
+  it is closed, preserving its dirty models and pending AI edits.
   Never silently number local folder collisions: ask Replace/Cancel for an
   unlinked project or a different sketch from the same account. Replace uses
   the reviewed folder/source/link digest and remote revision, rechecks them
@@ -306,8 +309,21 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   only. Refuse foreign account/provider copies and open target workspaces.
   Same-sketch links reuse the existing folder and saved edits; Pull latest
   remains an explicit confirmed update. Handle Windows case-only source renames
-  without deleting the newly restored file. Verify cancellation, collision
+  without deleting the newly restored file; native Ubuntu must remove the obsolete
+  case spelling in root sources and generated staging. Recheck the cloud revision
+  and open target after staging, then folder/link identity and actual saved bytes
+  immediately before publication. Revalidate each affected source before replacing
+  or removing it. Rollback may restore only the attempt's unchanged published files
+  or still-absent deleted paths; retain concurrent external source/link edits and
+  report recovery/reload requirements. Clean partial staging writes on failure,
+  and refuse rollback/cleanup through a replaced or redirected root.
+  Verify cancellation, collision
   replacement, races, rollback, account isolation and compact prompt actions.
+  Run native Cloud UI scales serially when testing window-level mouse focus.
+  Synthetic bare-panel/client-width and fake-monitor fixtures must avoid native
+  window-manager automatic maximization/relocation; keep decorated dialog/frame
+  checks separate. At fractional Linux scales allow only one logical pixel of
+  geometry rounding, retaining full reading, control visibility and frame bounds.
   Keep the signed-in screen compact: account menu, sketch list, and relevant
   actions; open upload entry explicitly rather than showing raw paths by default.
   Pin the sketch heading and Refresh action above the list; assign spare height
@@ -325,6 +341,15 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   and hardware operations; refresh every Monaco model only after confirmed Pull.
   Verify `direct/verify_cloud_sketch_service.py`, `verify_cloud_configuration.py`,
   `verify_cloud_sketch_ui.py` and the real Monaco cloud-pull runtime fixture.
+  On native Ubuntu also run `direct/verify_ubuntu_cloud_workflow.py` with
+  `.venv-linux/bin/python`. Compare exact root bytes/names, real source staging,
+  generated INI, exact board/framework and configured library version before/after
+  a mocked cloud round trip. Its host GCC dependency probe is native filesystem
+  coverage, not ESP32 compilation; do not claim native ESP32 coverage without a
+  separately provisioned native fixture. Never port Windows junctions/MAX_PATH
+  handling to Linux based on a Windows log. Cloud snapshots exclude packages,
+  libraries and caches; preserve firmware and native host build handling unless
+  a native defect is reproduced.
   Cloud reload success requires a successful strict source scan off the GUI
   thread, complete expected-file/model coverage and the
   renderer that received the request; failed loads or stale-page replies retain

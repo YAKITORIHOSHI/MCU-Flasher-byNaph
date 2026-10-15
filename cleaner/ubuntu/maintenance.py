@@ -31,6 +31,7 @@ MAX_DEPTH = 64
 SCAN_SECONDS = 30
 DELETE_SECONDS = 120
 PROC_LIMIT = 16384
+VENV_GITIGNORE = b"# Created by venv; see https://docs.python.org/3/library/venv.html\n*\n"
 
 
 class MaintenanceError(RuntimeError):
@@ -129,7 +130,12 @@ def _validate_venv(path):
     if (not fields.get("home") or not re.fullmatch(r"3\.\d+(?:\.\d+)?", fields.get("version", ""))
             or fields.get("include-system-site-packages", "").lower() != "false"):
         raise MaintenanceError(f"The native environment does not match an isolated Python 3 venv: {path}")
-    _known_children(path, {"bin", "lib", "lib64", "include", "share", "etc", "pyvenv.cfg"})
+    _known_children(path, {"bin", "lib", "lib64", "include", "share", "etc", "pyvenv.cfg", ".gitignore"})
+    ignore = path / ".gitignore"
+    if _exists(ignore) and (not ignore.is_file() or _linked(ignore)
+                           or ignore.stat().st_size != len(VENV_GITIGNORE)
+                           or ignore.read_bytes() != VENV_GITIGNORE):
+        raise MaintenanceError(f"Unrecognized native environment ignore rules were retained: {ignore}")
     for name in ("bin", "lib", "include", "share", "etc"):
         child = path / name
         if _exists(child) and (not child.is_dir() or _linked(child)):
