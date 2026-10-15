@@ -79,7 +79,9 @@ class ColdWindowChecks(unittest.TestCase):
             self.assertIsNone(gui._app)
             self.assertTrue(window.root.winfo_viewable())
             self.assertEqual(window.root.cget("bg"), Theme.PALETTES[mode]["BG_DARKEST"])
-            self.assertEqual(window.log_edit.cget("bg"), Theme.PALETTES[mode]["BG_DARKEST"])
+            self.assertEqual(window.log_edit.cget("bg"), window.palette["T_BG_DARKEST"])
+            self.assertNotEqual(window.log_edit.cget("bg"), window.root.cget("bg"),
+                                "The reading pane must use the frosted layer, not the scene's dark fill")
             self.assertEqual(window.root.resizable(), (1, 1))
             self.assertLessEqual(window.root.winfo_width(), window.root.winfo_screenwidth())
             self.assertLessEqual(window.root.winfo_height(), window.root.winfo_screenheight())

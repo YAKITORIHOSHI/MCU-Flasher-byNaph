@@ -15,6 +15,26 @@ def readable_foreground(background: str) -> str:
     return "#ffffff" if luminance < .179 else "#000000"
 
 
+def frosted_palette(palette: dict[str, str], *, prefix="") -> dict[str, str]:
+    """Composite utility reading surfaces from the theme's own glass colors.
+
+    Tk's native text controls need solid fills. Use the frosted material's tint
+    there, retaining the darker scene separately; never turn the whole window
+    translucent or dim its text along with its surface.
+    """
+    result = dict(palette)
+    key = lambda name: prefix + name
+    scene = palette[key("BG_DARKEST")]
+    light = readable_foreground(scene) == "#000000"
+    reading = mix(palette[key("BG_MID")], palette[key("CYAN")], .075 if light else .12)
+    result.update({key("WINDOW_BG"): scene,
+                   key("BG_DARKEST"): reading,
+                   key("BG_DARK"): mix(reading, scene, .08),
+                   key("BG_MID"): mix(reading, palette[key("BG_LIGHT")], .18),
+                   key("BG_LIGHT"): mix(reading, "#ffffff", .32 if light else .055)})
+    return result
+
+
 def contrast_ratio(foreground: str, background: str) -> float:
     """Relative-luminance contrast without loading either GUI toolkit."""
     def luminance(color):

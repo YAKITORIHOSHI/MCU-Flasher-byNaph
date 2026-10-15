@@ -50,8 +50,15 @@ bevels, hard diagonal cuts and opaque title labels covering the surface.
 Keep native rounded SVG buttons and notebook keyboard navigation. The shared
 standard-library renderer serves Ubuntu and Windows; do not add blur, animation
 or image-package requirements. Retain one large material cache per surface.
-Reading panes stay opaque, and selection ink follows its actual highlight after
-palette changes. At narrow widths the header subtitle yields before saved
+Composite reading controls in the frosted surface's color rather than using
+black container fills. Carry soft theme-colored reflected light through empty
+and selected states, with one smooth rim instead of stacked metallic bevels.
+Native Tk text controls retain readable solid composite fills; do not fake
+glass by reducing the entire window's opacity. On Ubuntu load bundled Montserrat
+through process-local Fontconfig application fonts, without installing fonts or
+rewriting user configuration. Keep rounded native fields, keyboard focus and
+selection ink tied to the actual highlight after palette changes.
+At narrow widths the header subtitle yields before saved
 package fonts or the last complete detail line. Check all three palettes at
 100–200% with `direct/verify_downloader_appearance.py`; optional `--render-dir`
 captures both selected and empty states, without live catalogs or hardware.

@@ -862,6 +862,14 @@ line visible; longer details remain reachable by scrolling.
 Static shaded glass rims, reflections and panel headings now match the workspace
 in Glass, Frosted Light and Solarized. Headings yield to reading space on short
 panes; folder, vendor URL and version rows reflow using native Tk font widths.
+Utility reading panes use a composited frosted tint instead of black fills, with
+soft cyan/blue reflected light and a single smooth rim. Resources, cold setup,
+Qt setup and the direct-link downloader share this treatment. On Ubuntu, the
+bundled Montserrat faces are registered only inside the Tk process; no system
+font installation or user Fontconfig rewrite is needed. Package names use the
+UI typeface, while paths and technical logs retain their appropriate fixed fonts.
+Download forms resize and scroll, keeping the focused action reachable; rounded
+fields retain native editing and buttons keep a visible keyboard focus ring.
 The full native frame is fitted after window moves. Windows uses the current
 monitor work area; Ubuntu uses desktop work-area hints with a Tk fallback.
 

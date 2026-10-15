@@ -36,6 +36,7 @@ Source, network and credential work stays off the Qt thread. Existing save/busy 
 
 ## Original SVG Icons and Theme Improvements
 
+- **Utility glass refinement:** Resources, setup and the direct-link downloader use colored frosted reading surfaces with soft reflected light in place of black container fills. Native Ubuntu Tk uses the bundled Montserrat fonts without installing them system-wide. Rounded fields preserve native editing, and compact download forms keep their focused actions reachable by scrolling. This is a later source update; the published Cloud CI baseline below does not certify these visual changes.
 - App interface emoji have been replaced with original SVG icons across the workspace, setup, Resources browser, Developer Access, and supporting controls.
 - Icons use colors suited to **Glass Smoked Dark**, **Glass Frosted Light**, and **Solarized Dark**, including selected, disabled, and hover states.
 - The early setup interface and Qt workspace share the same local SVG designs. Icons do not depend on an internet connection or the operating system's emoji font.

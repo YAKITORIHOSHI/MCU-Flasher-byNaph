@@ -372,8 +372,10 @@ class FieldRow:
 class ScrollBody(tk.Frame):
     """Keep installed-item metadata reachable when the detail pane is short."""
 
-    def __init__(self, parent, background):
+    def __init__(self, parent, background, *, fill_viewport=False):
         super().__init__(parent, bg=background)
+        self._fill_viewport = fill_viewport
+        self._fit_after = None
         self.canvas = tk.Canvas(self, bg=background, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         scrollbar.pack(side="right", fill="y")
@@ -381,12 +383,34 @@ class ScrollBody(tk.Frame):
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.body = tk.Frame(self.canvas, bg=background)
         self._window = self.canvas.create_window(0, 0, window=self.body, anchor="nw")
-        self.canvas.bind("<Configure>", lambda event: self.canvas.itemconfigure(self._window, width=event.width))
-        self.body.bind("<Configure>", lambda _event: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.bind("<Configure>", self._fit_body)
+        self.body.bind("<Configure>", self._content_changed)
         self._toplevel = self.winfo_toplevel()
         self._bindings = [(sequence, self._toplevel.bind(sequence, self._wheel, add="+"))
                           for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>")]
         self.bind("<Destroy>", self._detach, add="+")
+
+    def _fit_body(self, _event=None):
+        options = {"width": max(1, self.canvas.winfo_width())}
+        if self._fill_viewport:
+            options["height"] = max(self.body.winfo_reqheight(), self.canvas.winfo_height())
+        for key, value in options.items():
+            if float(self.canvas.itemcget(self._window, key)) != value:
+                self.canvas.itemconfigure(self._window, **{key: value})
+
+    def request_fit(self):
+        """Recheck a stretched form after a child's natural height changes."""
+        if self._fit_after is None:
+            self._fit_after = self.after_idle(self._finish_fit)
+
+    def _finish_fit(self):
+        self._fit_after = None
+        self._fit_body()
+
+    def _content_changed(self, _event=None):
+        if self._fill_viewport:
+            self._fit_body()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def _wheel(self, event):
         widget = event.widget
@@ -402,6 +426,9 @@ class ScrollBody(tk.Frame):
 
     def _detach(self, event):
         if event.widget is self:
+            if self._fit_after is not None:
+                self.after_cancel(self._fit_after)
+                self._fit_after = None
             for sequence, callback in self._bindings:
                 self._toplevel.unbind(sequence, callback)
             self._bindings.clear()
@@ -410,13 +437,27 @@ class ScrollBody(tk.Frame):
 class ScrollForm(ScrollBody):
     """Scrollable utility form which reveals fields reached with Tab."""
 
-    def __init__(self, parent, background):
-        super().__init__(parent, background)
+    def __init__(self, parent, background, *, fill_viewport=False):
+        super().__init__(parent, background, fill_viewport=fill_viewport)
+        self._reveal_after = None
         self._focus_binding = self._toplevel.bind("<FocusIn>", self._focus_in, add="+")
+        self.canvas.bind("<Configure>", self._queue_reveal, add="+")
+        self.body.bind("<Configure>", self._queue_reveal, add="+")
         self.bind("<Destroy>", self._detach_focus, add="+")
 
-    def _focus_in(self, event):
-        widget = event.widget
+    def _queue_reveal(self, _event=None):
+        if self._reveal_after is None:
+            self._reveal_after = self.after_idle(self._reveal_current)
+
+    def _reveal_current(self):
+        self._reveal_after = None
+        self._focus_in()
+
+    def _focus_in(self, event=None):
+        try:
+            widget = event.widget if event is not None else self.focus_get()
+        except (KeyError, tk.TclError):
+            return  # A native popup can own focus without a Python wrapper.
         owner = widget
         while owner is not None and owner is not self.body:
             owner = getattr(owner, "master", None)
@@ -442,6 +483,9 @@ class ScrollForm(ScrollBody):
         if event.widget is self and self._focus_binding:
             self._toplevel.unbind("<FocusIn>", self._focus_binding)
             self._focus_binding = None
+            if self._reveal_after is not None:
+                self.after_cancel(self._reveal_after)
+                self._reveal_after = None
 
 
 
@@ -487,8 +531,15 @@ def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=T
             x0, x1 = round(width * step / samples), round(width * (step + 1) / samples)
             x = (x0 + x1) / 2
             glow = max(0., 1 - abs(x / width + vertical * .32 - .18) / .65)
-            sheen = (.065 if sum(top) < 500 else .045) * glow * max(0., 1 - vertical * 1.2) if reflection else 0.
+            sheen = (.06 if sum(top) < 500 else .035) * glow * max(0., 1 - vertical * 1.2) if reflection else 0.
             fill = _blend(color, (255, 255, 255), sheen)
+            if reflection and width * height > 65536:
+                # Broad defocused light through the material, rather than
+                # black slabs or bands painted around an opaque center.
+                left = max(0., 1 - ((x / width - .12) ** 2 / .45 + (vertical - .18) ** 2 / .65)) ** 2
+                right = max(0., 1 - ((x / width - .92) ** 2 / .42 + (vertical - .7) ** 2 / .7)) ** 2
+                fill = _blend(fill, (142, 219, 219), .18 * left)
+                fill = _blend(fill, (145, 160, 224), .14 * right)
             if not rounded or (x0 >= inner_inset + 1 and x1 <= width - inner_inset - 1 and 1 <= y < height - 1):
                 rows.extend(bytes(fill) * (x1 - x0))
                 continue
@@ -517,6 +568,40 @@ from src.modules.tk_svg import SvgButton, photo as svg_photo
 class GlassButton(SvgButton):
     """Native button semantics and SVGs over a rounded, static glass skin."""
 
+    def __init__(self, *args, **kwargs):
+        self._glass_colors = {}
+        for key in ("background", "bg", "activebackground"):
+            if key in kwargs:
+                self._glass_colors["background" if key == "bg" else key] = kwargs[key]
+        super().__init__(*args, **kwargs)
+        tk.Button.configure(self, highlightthickness=0, bd=0, relief="flat")
+        self.bind("<FocusIn>", lambda _event: self._refresh_svg(), add="+")
+        self.bind("<FocusOut>", lambda _event: self._refresh_svg(), add="+")
+
+    def cget(self, key):
+        canonical = "background" if key == "bg" else key
+        if canonical in ("background", "activebackground"):
+            if canonical not in self._glass_colors:
+                self._glass_colors[canonical] = tk.Button.cget(self, canonical)
+            return self._glass_colors[canonical]
+        return tk.Button.cget(self, key)
+
+    def configure(self, cnf=None, **kwargs):
+        if isinstance(cnf, dict):
+            kwargs = {**cnf, **kwargs}
+            cnf = None
+        previous = dict(self._glass_colors)
+        for key in ("background", "bg", "activebackground"):
+            if key in kwargs:
+                self._glass_colors["background" if key == "bg" else key] = kwargs[key]
+        try:
+            return super().configure(cnf, **kwargs)
+        except tk.TclError:
+            self._glass_colors = previous
+            raise
+
+    config = configure
+
     def _refresh_svg(self):
         font = tkfont.Font(root=self, font=self.cget("font"))
         text = self.cget("text")
@@ -534,8 +619,8 @@ class GlassButton(SvgButton):
         if disabled:
             base = mix(base, outside, .55)
         # Preserve text contrast against the *brightest* material sample.
-        upper = mix(base, "#ffffff", .06 if readable_foreground(base) == "#ffffff" else .22)
-        lower = mix(base, "#000000", .09)
+        upper = mix(base, "#ffffff", .018 if readable_foreground(base) == "#ffffff" else .10)
+        lower = mix(base, "#000000", .035)
         from src.modules.ui_palette import contrast_ratio
         def contrast(value, first, last):
             return min(contrast_ratio(value, mix(first, "#ffffff", .065)), contrast_ratio(value, last))
@@ -553,7 +638,9 @@ class GlassButton(SvgButton):
             tk.Button.configure(self, **{"disabledforeground" if disabled else "activeforeground" if active else "foreground": ink})
         width = font.measure(text) + round(24 * scale) + (2 * (size + round(5 * scale)) if name else 0)
         height = max(size, font.metrics("linespace")) + round(14 * scale)
-        rim = mix(base, "#ffffff", .23 if readable_foreground(base) == "#ffffff" else .40)
+        rim = mix(base, "#ffffff", .12 if readable_foreground(base) == "#ffffff" else .24)
+        if self.focus_get() is self:
+            rim = hex_color(self.cget("highlightcolor"))
         key = (width, height, upper, lower, rim, outside, ink, name)
         if key != getattr(self, "_glass_key", None):
             self._glass_key = key
@@ -565,12 +652,16 @@ class GlassButton(SvgButton):
                              "-compositingrule", "overlay")
             tk.Button.configure(self, image=self._svg_image, compound="center", padx=0, pady=0,
                                 highlightbackground=outside)
+        # Classic Tk reserves another pixel around an image even with bd=0.
+        # Paint it in the surrounding surface, preserving the action colors
+        # separately so a square native frame cannot outline the rounded skin.
+        tk.Button.configure(self, background=outside, activebackground=outside)
 
 
 def material_ink(color, upper, lower, minimum=4.5):
     """Retain a semantic ink, adjusting it only for the reflective bounds."""
     from src.modules.ui_palette import contrast_ratio
-    surfaces = (mix(upper, "#ffffff", .065), lower)
+    surfaces = (mix(upper, "#ffffff", .18), lower)
     def readable(value):
         return all(contrast_ratio(value, surface) >= minimum for surface in surfaces)
     if readable(color):
@@ -590,12 +681,52 @@ def material_ink(color, upper, lower, minimum=4.5):
     return min(choices)[1] if choices else readable_foreground(upper)
 
 
+class EntryWell(tk.Canvas):
+    """Rounded field surround; editing, selection and focus remain native Tk."""
+
+    def __init__(self, parent, palette, **options):
+        super().__init__(parent, bg=parent.cget("background"), bd=0, highlightthickness=0, width=1, height=1)
+        self.palette = palette
+        options.update(bg=palette.BG_DARK, fg=palette.TEXT_BRIGHT, insertbackground=palette.CYAN,
+                       selectbackground=palette.CYAN_DIM, selectforeground=readable_foreground(palette.CYAN_DIM),
+                       bd=0, relief="flat", highlightthickness=0)
+        self.entry = tk.Entry(self, **options)
+        self._field = self.create_window(0, 0, window=self.entry, anchor="w")
+        self._surface_key = None
+        self.bind("<Configure>", self._draw, add="+")
+        self.entry.bind("<FocusIn>", self._draw, add="+")
+        self.entry.bind("<FocusOut>", self._draw, add="+")
+        self._draw()
+
+    def _draw(self, _event=None):
+        p, scale = self.palette, ui_scale(self)
+        height = self.entry.winfo_reqheight() + round(12 * scale)
+        if self.winfo_pixels(self.cget("height")) != height:
+            self.configure(height=height)
+        width, pad = max(1, self.winfo_width()), round(10 * scale)
+        self.coords(self._field, pad, height / 2)
+        self.itemconfigure(self._field, width=max(1, width - 2 * pad))
+        key = (width, height, p.BG_DARK, p.BG_DARK,
+               p.CYAN if self.entry.focus_get() is self.entry else mix(p.BORDER, p.BG_DARK, .55),
+               self.cget("background"), round(7 * scale), False)
+        if key != self._surface_key:
+            self._surface_key = key
+            self._surface = glass_photo(self, *key)
+            self.delete("surface")
+            self.create_image(0, 0, image=self._surface, anchor="nw", tags="surface")
+            self.tag_lower("surface", self._field)
+
+    def _schedule(self):
+        self._draw()
+
+
 class BrowserHeader(tk.Canvas):
     """Paint the title directly on glass so opaque labels cannot hide it."""
 
-    def __init__(self, parent, palette):
-        super().__init__(parent, bg=palette.BG_DARKEST, height=1, bd=0, highlightthickness=0)
+    def __init__(self, parent, palette, *, title="Libraries & boards", subtitle="MCU Flasher by Naph · Arduino packages"):
+        super().__init__(parent, bg=getattr(palette, "WINDOW_BG", palette.BG_DARKEST), height=1, bd=0, highlightthickness=0)
         self.palette = palette
+        self.title, self.subtitle = title, subtitle
         self._redraw_id = None
         self._title_font = tkfont.Font(root=self, family="Montserrat", size=14, weight="bold")
         self._subtitle_font = tkfont.Font(root=self, family="Montserrat", size=8)
@@ -620,8 +751,8 @@ class BrowserHeader(tk.Canvas):
         width, pad = self.winfo_width(), round(10 * scale)
         mark_size, gap = round(32 * scale), round(10 * scale)
         title_height = self._title_font.metrics("linespace") + self._subtitle_font.metrics("linespace") + round(4 * scale)
-        title_width = mark_size + gap + max(self._title_font.measure("Libraries & boards"),
-                                           self._subtitle_font.measure("MCU Flasher by Naph · Arduino packages"))
+        title_width = mark_size + gap + max(self._title_font.measure(self.title),
+                                           self._subtitle_font.measure(self.subtitle))
         action_width, action_height = self.actions.winfo_reqwidth(), self.actions.winfo_reqheight()
         stacked = width < title_width + action_width + 3 * pad
         if stacked:
@@ -635,8 +766,8 @@ class BrowserHeader(tk.Canvas):
         if width < 2:
             return
         self.delete("material")
-        top = mix(p.BG_LIGHT, "#ffffff", .13 if readable_foreground(p.BG_DARKEST) == "#ffffff" else .30)
-        key = (width, height, top, p.BG_DARK, mix(p.BORDER, p.BG_MID, .55), p.BG_DARKEST, round(14 * scale))
+        top = mix(p.BG_MID, "#ffffff", .045)
+        key = (width, height, top, p.BG_DARK, mix(p.BORDER, p.CYAN, .22), self.cget("background"), round(14 * scale))
         if key != getattr(self, "_surface_key", None):
             self._surface_key = key
             self._surface = glass_photo(self, *key)
@@ -645,11 +776,11 @@ class BrowserHeader(tk.Canvas):
         self.create_image(pad, pad + max(mark_size, title_height) / 2, image=self._brand,
                           anchor="w", tags="material")
         title_x = pad + mark_size + gap
-        self.create_text(title_x, pad, text="Libraries & boards", anchor="nw",
+        self.create_text(title_x, pad, text=self.title, anchor="nw",
                          font=self._title_font, fill=p.TEXT_BRIGHT, tags="material")
         if not stacked:
             self.create_text(title_x, pad + self._title_font.metrics("linespace") + round(4 * scale),
-                             text="MCU Flasher by Naph · Arduino packages", anchor="nw",
+                             text=self.subtitle, anchor="nw",
                              font=self._subtitle_font, fill=material_ink(p.TEXT_DIM, top, p.BG_DARK), tags=("material", "subtitle"))
         action_y = height - pad - action_height if stacked else (height - action_height) / 2
         self.coords(self._actions_window, width - pad, action_y)
@@ -679,10 +810,11 @@ def configure_glass_tabs(style, root, palette):
         photos = root._glass_tab_photos = {}
     name = "BrowserGlass." + p.active_theme + str(size) + ".tab"
     if key not in photos:
-        photos[key] = tuple(glass_photo(root, size, size, upper, lower, rim, p.BG_DARKEST, corner, False)
+        photos[key] = tuple(glass_photo(root, size, size, upper, lower, rim, getattr(p, "WINDOW_BG", p.BG_DARKEST), corner, False)
                             for upper, lower, rim in (
-                                (p.BG_MID, p.BG_DARK, mix(p.BORDER, p.BG_MID, .6)),
-                                (p.BG_LIGHT, p.BG_MID, mix(p.CYAN, p.BG_MID, .55)),
+                                (getattr(p, "WINDOW_BG", p.BG_DARKEST), getattr(p, "WINDOW_BG", p.BG_DARKEST),
+                                 getattr(p, "WINDOW_BG", p.BG_DARKEST)),
+                                (mix(p.BG_MID, p.CYAN, .06), p.BG_MID, mix(p.CYAN, p.BG_MID, .70)),
                                 (p.BG_HOVER, p.BG_MID, mix(p.BORDER_LIT, p.BG_MID, .6))))
         normal, selected, active = photos[key]
         style.element_create(name, "image", normal, ("selected", selected), ("active", active),
@@ -718,8 +850,8 @@ class GlassEmptyState(tk.Canvas):
         if min(width, height) < 2:
             return
         p, scale = self.palette, ui_scale(self)
-        top = mix(p.BG_MID, p.BG_LIGHT, .35)
-        key = (width, height, top, p.BG_DARKEST, top, p.BG_DARKEST, 0)
+        top = mix(p.BG_MID, "#ffffff", .045)
+        key = (width, height, top, p.BG_DARK, top, p.BG_DARKEST, 0)
         if key != getattr(self, "_surface_key", None):
             self._surface_key = key
             self._surface = glass_photo(self, *key)
@@ -743,7 +875,11 @@ class GlassCard(tk.Canvas):
     """Static shaded glass chrome around an opaque native reading surface."""
 
     def __init__(self, parent, palette, padding: int = 10, *, expand=False, heading=""):
-        super().__init__(parent, bg=palette.BG_DARKEST, height=1, bd=0, highlightthickness=0)
+        try:
+            surround = parent.cget("background")
+        except tk.TclError:
+            surround = getattr(palette, "WINDOW_BG", palette.BG_DARKEST)
+        super().__init__(parent, bg=surround, height=1, bd=0, highlightthickness=0)
         self.palette = palette
         self.expand = expand
         self.padding = round(padding * ui_scale(self))
@@ -805,10 +941,12 @@ class GlassCard(tk.Canvas):
     def _draw(self):
         self._redraw_id = None
         p = self.palette
-        height = self.winfo_height() if self.expand else self.body.winfo_reqheight() + 2 * self.padding
+        requested = self.body.winfo_reqheight() + 2 * self.padding
+        height = self.winfo_height() if self.expand else max(requested, self.winfo_height())
         width = self.winfo_width()
-        if not self.expand and self.winfo_pixels(self.cget("height")) != height:
-            self.configure(height=height)
+        if not self.expand and self.winfo_pixels(self.cget("height")) != requested:
+            self.configure(height=requested)
+            self.event_generate("<<GlassRequestChanged>>", when="tail")
         heading_height = self._heading_font.metrics("linespace") + round(10 * ui_scale(self)) if self.heading else 0
         reading_height = self._reading_height() if self.expand else self.body.winfo_reqheight()
         # A short pane spends its pixels on reading before panel headings.
@@ -822,13 +960,12 @@ class GlassCard(tk.Canvas):
         self.delete("glass")
         if width < 4 or height < 4:
             return
-        light = readable_foreground(p.BG_DARKEST) == "#000000"
         # The reading body stays opaque; the enclosing material uses a soft,
         # continuous reflection and a single smooth rim, without stacked bevels.
-        top = mix(p.BG_LIGHT, "#ffffff", .24 if light else .09)
-        bottom = mix(p.BG_MID, p.BG_DARKEST, .22)
-        rim = mix(p.BORDER, p.BG_MID, .55)
-        key = (width, height, top, bottom, rim, p.BG_DARKEST, round(14 * ui_scale(self)))
+        top = mix(p.BG_MID, p.BG_LIGHT, .18)
+        bottom = mix(p.BG_MID, p.BG_DARKEST, .12)
+        rim = mix(p.BORDER, p.BG_MID, .70)
+        key = (width, height, top, bottom, rim, self.cget("background"), round(14 * ui_scale(self)))
         if key != getattr(self, "_surface_key", None):
             self._surface_key = key
             self._surface = glass_photo(self, *key)

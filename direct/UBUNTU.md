@@ -96,6 +96,14 @@ verification requirements; this run used X11/Xvfb rather than a new Wayland audi
 
 ## Install on Ubuntu
 
+The native Resources browser, setup views and direct-link download form now use
+colored frosted reading layers rather than black container fills, with soft
+static reflections and rounded fields. Linux Tk loads bundled Montserrat only
+inside its process through Fontconfig application fonts; system/user font files
+are not changed. The file downloader supports resizing and keyboard-driven
+scrolling. Appearance checks use isolated catalogs/forms at five scales; they
+never install packages or start real downloads.
+
 Use a normal desktop account and a writable checkout on 64-bit Intel/AMD Ubuntu 24.04 or newer.
 All Ubuntu launch, setup, repair, downloader and direct Python entry points validate
 the installed OS release before runtime preparation, installation or services.

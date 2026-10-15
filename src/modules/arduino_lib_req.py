@@ -459,9 +459,12 @@ class Theme:
 try:
     from main.core.theme import Theme as _SharedTheme
     Theme.PALETTES = _SharedTheme.PALETTES
-    Theme.apply_theme("default")
 except ImportError:
     pass
+
+from src.modules.ui_palette import frosted_palette
+Theme.PALETTES = {name: frosted_palette(values) for name, values in Theme.PALETTES.items()}
+Theme.apply_theme("default")
 
 
 def _detect_system_theme() -> str:
@@ -1618,43 +1621,38 @@ class BrowseTab:
 
     def _build(self, parent: ttk.Frame):
         # Search bar
-        top = tk.Frame(parent, bg=Theme.BG_DARKEST, pady=4)
+        top = tk.Frame(parent, bg=Theme.WINDOW_BG, pady=4)
         top.pack(fill="x")
 
-        SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
+        SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG).pack(side="left")
         self.search_var = tk.StringVar()
-        self.search_entry = tk.Entry(
-            top, textvariable=self.search_var,
-            width=40, font=("Montserrat", 10),
-            bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
-            insertbackground=Theme.CYAN, borderwidth=0,
-            highlightthickness=1, highlightcolor=Theme.CYAN,
-            highlightbackground=Theme.BORDER
-        )
-        self.lbl_search_status = SvgLabel(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
+        from src.modules.tk_glass import EntryWell
+        self._search_well = EntryWell(top, Theme, textvariable=self.search_var, font=("Montserrat", 10))
+        self.search_entry = self._search_well.entry
+        self.lbl_search_status = SvgLabel(top, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG)
         self.lbl_search_status.pack(side="right", padx=(10, 0))
-        self.search_entry.pack(side="left", padx=(8, 10), fill="x", expand=True)
+        self._search_well.pack(side="left", padx=(8, 10), fill="x", expand=True)
         self.search_entry.bind("<KeyRelease>", self._on_search)
         self.search_entry.bind("<Return>", lambda _event: self._execute_search())
 
         # Paned window: list | detail
-        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BG_DARKEST, sashwidth=5, sashrelief=tk.FLAT, bd=0)
+        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.WINDOW_BG, sashwidth=5, sashrelief=tk.FLAT, bd=0)
         pane.pack(fill="both", expand=True, pady=(4, 4))
 
         # --- Left: item list ---
         from src.modules.tk_glass import GlassCard
-        left_card = GlassCard(pane, Theme, padding=7, expand=True,
+        left_card = GlassCard(pane, Theme, padding=3, expand=True,
                               heading="Available libraries" if self._detail_builder == self.app._build_library_detail else "Available boards")
         pane.add(left_card, minsize=200)
         left = left_card.body
 
         self.listbox = SvgListbox(
-            left, icon_for=self._row_icon, font=("Consolas", 10),
-            bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
+            left, icon_for=self._row_icon, font=("Montserrat", 11),
+            bg=Theme.BG_DARK, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
-            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
+            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_DARK,
             highlightthickness=1, borderwidth=0, relief=tk.FLAT,
-            activestyle="none",
+            activestyle="none", selectborderwidth=0,
             exportselection=False
         )
         self.list_scroll = ttk.Scrollbar(left, orient="vertical", style="Vertical.TScrollbar",
@@ -1665,7 +1663,7 @@ class BrowseTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        detail_card = GlassCard(pane, Theme, padding=9, expand=True, heading="Package details")
+        detail_card = GlassCard(pane, Theme, padding=4, expand=True, heading="Package details")
         pane.add(detail_card, minsize=350)
         self.detail_frame = detail_card.body
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
@@ -1947,42 +1945,37 @@ class InstalledTab:
 
     def _build(self, parent: ttk.Frame):
         # Search bar
-        top = tk.Frame(parent, bg=Theme.BG_DARKEST, pady=4)
+        top = tk.Frame(parent, bg=Theme.WINDOW_BG, pady=4)
         top.pack(fill="x")
 
-        SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST).pack(side="left")
+        SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG).pack(side="left")
         # Reserve the count before the expanding entry so it stays readable.
-        self.lbl_search_status = SvgLabel(top, text="0 installed", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST)
+        self.lbl_search_status = SvgLabel(top, text="0 installed", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG)
         self.lbl_search_status.pack(side="right", padx=(8, 0))
         self.search_var = tk.StringVar()
-        self.search_entry = tk.Entry(
-            top, textvariable=self.search_var,
-            width=40, font=("Montserrat", 10),
-            bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
-            insertbackground=Theme.CYAN, borderwidth=0,
-            highlightthickness=1, highlightcolor=Theme.CYAN,
-            highlightbackground=Theme.BORDER
-        )
-        self.search_entry.pack(side="left", padx=(8, 10), fill="x", expand=True)
+        from src.modules.tk_glass import EntryWell
+        self._search_well = EntryWell(top, Theme, textvariable=self.search_var, font=("Montserrat", 10))
+        self.search_entry = self._search_well.entry
+        self._search_well.pack(side="left", padx=(8, 10), fill="x", expand=True)
         self.search_entry.bind("<KeyRelease>", self._on_search)
 
         # Paned window: list | detail
-        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.BG_DARKEST, sashwidth=5, sashrelief=tk.FLAT, bd=0)
+        pane = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=Theme.WINDOW_BG, sashwidth=5, sashrelief=tk.FLAT, bd=0)
         pane.pack(fill="both", expand=True, pady=(4, 4))
 
         # --- Left: item list ---
         from src.modules.tk_glass import GlassCard
-        left_card = GlassCard(pane, Theme, padding=7, expand=True, heading="Installed packages")
+        left_card = GlassCard(pane, Theme, padding=3, expand=True, heading="Installed packages")
         pane.add(left_card, minsize=200)
         left = left_card.body
 
         self.listbox = SvgListbox(
-            left, icon_for=self._row_icon, font=("Consolas", 10),
-            bg=Theme.BG_MID, fg=Theme.TEXT_BRIGHT,
+            left, icon_for=self._row_icon, font=("Montserrat", 11),
+            bg=Theme.BG_DARK, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
-            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
+            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_DARK,
             highlightthickness=1, borderwidth=0, relief=tk.FLAT,
-            activestyle="none",
+            activestyle="none", selectborderwidth=0,
             exportselection=False
         )
         self.list_scroll = ttk.Scrollbar(left, orient="vertical", style="Vertical.TScrollbar",
@@ -1993,7 +1986,7 @@ class InstalledTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        detail_card = GlassCard(pane, Theme, padding=9, expand=True, heading="Installed details")
+        detail_card = GlassCard(pane, Theme, padding=4, expand=True, heading="Installed details")
         pane.add(detail_card, minsize=350)
         self.detail_frame = detail_card.body
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
@@ -2797,10 +2790,10 @@ class ArduinoBrowser:
         style.theme_use("clam")
 
         # Configure frames and general layouts
-        style.configure("TFrame", background=Theme.BG_DARKEST)
+        style.configure("TFrame", background=Theme.WINDOW_BG)
         style.configure("TLabel", background=Theme.BG_DARKEST, foreground=Theme.TEXT)
-        style.configure("TNotebook", background=Theme.BG_DARKEST, borderwidth=0, tabmargins=(0, 0, 0, 8),
-                        lightcolor=Theme.BG_DARKEST, darkcolor=Theme.BG_DARKEST, bordercolor=Theme.BG_DARKEST)
+        style.configure("TNotebook", background=Theme.WINDOW_BG, borderwidth=0, tabmargins=(0, 0, 0, 8),
+                        lightcolor=Theme.WINDOW_BG, darkcolor=Theme.WINDOW_BG, bordercolor=Theme.WINDOW_BG)
         style.configure("TNotebook.Tab", font=("Montserrat", 10, "bold"), background=Theme.BG_MID,
                         foreground=Theme.TEXT_DIM, borderwidth=1, bordercolor=Theme.BORDER,
                         lightcolor=Theme.BORDER, darkcolor=Theme.BORDER, padding=(14, 2))
@@ -2856,6 +2849,8 @@ class ArduinoBrowser:
 
 
     def _build_ui(self):
+        from src.modules.tk_font_runtime import register_tk_fonts
+        register_tk_fonts()
         from src.modules.browser_loading import TkTasks, LatestScan
         if not hasattr(self, '_tasks'):
             self._tasks = TkTasks(self.root)
@@ -2863,12 +2858,12 @@ class ArduinoBrowser:
             self._inventory_request_id = 0
             self._catalog_revision = 0
         self._rendered_theme = Theme.active_theme
-        from src.modules.tk_glass import GlassCard, NativeResizeFocus
+        from src.modules.tk_glass import GlassCard, NativeResizeFocus, EntryWell
         if sys.platform.startswith("linux"):
             self._native_resize_focus = NativeResizeFocus(self.root)
         from src.modules.runtime_resources import performance_profile
         self._progress_interval = 120 if performance_profile().constrained else 80
-        self.root.configure(bg=Theme.BG_DARKEST)
+        self.root.configure(bg=Theme.WINDOW_BG)
 
         self._configure_styles()
 
@@ -2893,7 +2888,7 @@ class ArduinoBrowser:
                                             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         self.sources_btn.pack(side="right", padx=(6, 6))
         # Download folder bar
-        folder_card = GlassCard(self.root, Theme, padding=10)
+        folder_card = GlassCard(self.root, Theme, padding=8)
         folder_card.pack(fill="x", padx=12, pady=(0, 8))
         folder_bar = folder_card.body
 
@@ -2901,13 +2896,8 @@ class ArduinoBrowser:
                                 font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
 
         self.folder_var = tk.StringVar(value=self._download_dir)
-        self.folder_entry = tk.Entry(
-            folder_bar, textvariable=self.folder_var,
-            font=("Consolas", 10), bg=Theme.BG_LIGHT, fg=Theme.TEXT_BRIGHT,
-            insertbackground=Theme.CYAN, borderwidth=0,
-            highlightthickness=1, highlightcolor=Theme.CYAN,
-            highlightbackground=Theme.BORDER
-        )
+        self._folder_well = EntryWell(folder_bar, Theme, textvariable=self.folder_var, font=("Consolas", 10))
+        self.folder_entry = self._folder_well.entry
         self.folder_entry.bind("<Return>", lambda e: self._apply_folder_entry())
         self.folder_entry.bind("<FocusOut>", lambda e: self._apply_folder_entry())
 
@@ -2916,7 +2906,7 @@ class ArduinoBrowser:
             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
         )
         from src.modules.tk_glass import FieldRow
-        self._folder_row = FieldRow(folder_bar, folder_label, self.folder_entry, self.browse_btn)
+        self._folder_row = FieldRow(folder_bar, folder_label, self._folder_well, self.browse_btn)
 
         # Additional board manager indexes. The default Arduino index is
         # always loaded; this field lets users add vendor indexes such as the
@@ -3019,7 +3009,7 @@ class ArduinoBrowser:
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # Bottom bar: progress + status
-        bottom_card = GlassCard(self.root, Theme, padding=10)
+        bottom_card = GlassCard(self.root, Theme, padding=8)
         bottom_card.pack(side="bottom", fill="x", padx=12, pady=(0, 12), before=self.notebook)
         bottom = bottom_card.body
 

@@ -993,7 +993,7 @@ class DownloaderChecks(unittest.TestCase):
         for mode in ("light", "solarized_dark", "default"):
             with patch.object(module, "_resolve_lib_req_theme", return_value=mode):
                 app._apply_current_theme()
-            self.assertEqual(app.root.cget("bg"), module.Theme.BG_DARKEST)
+                self.assertEqual(app.root.cget("bg"), module.Theme.WINDOW_BG)
             app.refresh_btn.event_generate("<Enter>")
             self.assertEqual(app.refresh_btn.cget("bg"), app.refresh_btn._hover_bg)
             if RENDER_DIR:

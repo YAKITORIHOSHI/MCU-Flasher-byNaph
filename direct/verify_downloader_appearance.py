@@ -20,6 +20,7 @@ from src.modules.ui_palette import contrast_ratio
 
 SCALE = 1.0
 RENDER_DIR = None
+CAPTURE_APP = None
 
 
 class NativeWorkAreaChecks(unittest.TestCase):
@@ -140,6 +141,21 @@ class AppearanceChecks(TkDownloaderFixture):
         if self.root.state() == "withdrawn":
             self.root.deiconify()
         self.pump()
+
+    def test_native_reading_font_and_keyboard_focus_ring(self):
+        self.show()
+        if sys.platform.startswith("linux"):
+            self.assertEqual(font.Font(root=self.root, font=self.app.lib_tab.listbox.cget("font")).actual("family"),
+                             "Montserrat", "Bundled UI fonts must reach Tk, not only Qt")
+        button = self.app.refresh_btn
+        button.focus_force()
+        self.pump()
+        self.assertEqual(button.winfo_pixels(button.cget("highlightthickness")), 0)
+        self.assertEqual(button._glass_key[4], button.cget("highlightcolor"))
+        self.app.lib_tab.search_entry.focus_force()
+        self.pump()
+        well = self.app.lib_tab._search_well
+        self.assertEqual(well._surface_key[4], self.module.Theme.CYAN)
 
     def test_themes_and_reflow_preserve_search_selection_version_and_focus(self):
         app = self.app
@@ -288,6 +304,60 @@ class AppearanceChecks(TkDownloaderFixture):
                                  card.body.winfo_rooty() + card.body.winfo_height())
 
 
+class FileDownloaderChecks(unittest.TestCase):
+    def test_themes_compact_scrolling_and_literal_fields_without_network(self):
+        from src.modules import downloader
+        from src.modules.tk_glass import ui_scale
+        global CAPTURE_APP
+        if RENDER_DIR:
+            from PySide6.QtWidgets import QApplication
+            CAPTURE_APP = QApplication.instance() or QApplication([])
+        initialize = tk.Tk.__init__
+        def scaled_initialize(window, *args, **kwargs):
+            initialize(window, *args, **kwargs)
+            window.withdraw()
+            window.tk.call("tk", "scaling", SCALE * 96 / 72)
+        for mode in ("default", "light", "solarized_dark"):
+            with self.subTest(theme=mode), patch.object(tk.Tk, "__init__", scaled_initialize), \
+                    patch.object(downloader, "check_internet_connection", side_effect=AssertionError("Network probe")), \
+                    patch.object(downloader.DownloaderApp, "_run_download", side_effect=AssertionError("Download started")):
+                window = downloader.DownloaderApp(theme_mode=mode)
+                errors = []
+                window.report_callback_exception = lambda *args: errors.append(args)
+                try:
+                    value = "https://fixture.invalid/Sketch%20Ω?literal=$value"
+                    window.url_entry.insert(0, value)
+                    window.download_dir.set(str(ROOT / "temp/audit/download-design/Save Ω $literal"))
+                    folder = window.download_dir.get()
+                    for width, height in ((720, 460), (420, 320), (720, 460)):
+                        scale = ui_scale(window)
+                        window.geometry(f"{min(round(width * scale), window.winfo_screenwidth() - 40)}x"
+                                        f"{min(round(height * scale), window.winfo_screenheight() - 40)}+10+10")
+                        window.deiconify()
+                        deadline = time.monotonic() + .5
+                        while time.monotonic() < deadline:
+                            window.update()
+                            time.sleep(.02)
+                        window.download_btn.focus_force()
+                        window.update()
+                        self.assertEqual(window.url_entry.get(), value)
+                        self.assertEqual(window.download_dir.get(), folder)
+                        self.assertTrue(window.download_btn.winfo_ismapped())
+                        canvas = window._form.canvas
+                        self.assertGreaterEqual(window.download_btn.winfo_rooty(), canvas.winfo_rooty())
+                        self.assertLessEqual(window.download_btn.winfo_rooty() + window.download_btn.winfo_height(),
+                                             canvas.winfo_rooty() + canvas.winfo_height() + 1)
+                        for control in (window.url_entry, window.folder_entry, window.browse_btn, window.download_btn):
+                            self.assertLessEqual(control.winfo_x() + control.winfo_width(), control.master.winfo_width() + 1)
+                        if RENDER_DIR:
+                            CAPTURE_APP.processEvents()
+                            image = CAPTURE_APP.primaryScreen().grabWindow(int(window.winfo_id()))
+                            self.assertTrue(image.save(str(RENDER_DIR / f"file-downloader-{mode}-{width}.png")))
+                    self.assertEqual(errors, [])
+                finally:
+                    window.destroy()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--scale", type=float, choices=(1.0, 1.25, 1.5, 1.75, 2.0), default=1.0)
@@ -298,6 +368,6 @@ if __name__ == "__main__":
     if RENDER_DIR:
         RENDER_DIR.mkdir(parents=True, exist_ok=True)
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
-                               for cls in (NativeWorkAreaChecks, AppearanceChecks))
+                               for cls in (NativeWorkAreaChecks, AppearanceChecks, FileDownloaderChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

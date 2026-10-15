@@ -27,7 +27,7 @@ class _GlassCard(tk.Canvas):
     """Rounded static glass rim around an opaque, readable content surface."""
 
     def __init__(self, parent, palette, *, stretch=False, padding=14):
-        super().__init__(parent, bg=palette["T_BG_DARKEST"], bd=0,
+        super().__init__(parent, bg=palette.get("T_WINDOW_BG", palette["T_BG_DARKEST"]), bd=0,
                          highlightthickness=0, height=1)
         self.palette = palette
         self.padding = round(padding * ui_scale(self))
@@ -65,47 +65,16 @@ class _GlassCard(tk.Canvas):
         self.itemconfigure(self._body_item, width=max(1, width - inset * 2),
                            height=max(1, height - inset * 2) if self.stretch else 0)
         self.delete("glass")
-        scale = ui_scale(self)
-        radius = min(round(16 * scale), max(1, height // 2))
-
-        def rounded(left, top, right, bottom, **options):
-            self.create_polygon(left + radius, top, right - radius, top, right, top,
-                                right, top + radius, right, bottom - radius, right, bottom,
-                                right - radius, bottom, left + radius, bottom, left, bottom,
-                                left, bottom - radius, left, top + radius, left, top,
-                                smooth=True, splinesteps=24, tags="glass", **options)
-
-        depth = max(2, round(3 * scale))
-        rounded(depth, depth + 1, width - 1, height - 1,
-                fill=mix(p["T_BG_DARKEST"], "#000000", .20), outline="")
-        rounded(1, 1, width - depth, height - depth,
-                fill=p["T_BG_MID"], outline=mix(p["T_BORDER"], p["T_CYAN"], .15))
-        rim = mix(p["T_BORDER"], "#ffffff", .55)
-        self.create_line(radius, 2, width - radius - depth, 2,
-                         fill=rim, width=max(1, scale), tags="glass")
-        # Reflections live in the clear perimeter; the journal and controls
-        # retain their opaque reading surfaces. Nothing samples the desktop.
-        band = max(3, inset - round(3 * scale))
-        for step in range(band):
-            strength = .28 * (1 - step / band)
-            y = 3 + step
-            self.create_line(radius + 2, y, width - radius - depth, y,
-                             fill=mix(p["T_BG_MID"], "#ffffff", strength), tags="glass")
-        for step in range(max(2, round(4 * scale))):
-            self.create_line(radius + round(8 * scale), 4 + step,
-                             max(radius + 1, width * .56), band + 1 - step,
-                             fill=mix(p["T_BG_MID"], "#ffffff", .15 - step * .018),
-                             width=max(1, scale), tags="glass")
-        self.create_line(3, radius, 3, height - radius - depth,
-                         fill=mix(p["T_BORDER"], "#ffffff", .32), tags="glass")
-        self.create_line(4, radius + round(6 * scale), 4, max(radius + 1, height * .64),
-                         fill=mix(p["T_BG_MID"], "#ffffff", .16), tags="glass")
-        self.create_line(width - depth - 1, radius, width - depth - 1, height - radius - depth,
-                         fill=mix(p["T_BG_MID"], p["T_BG_DARKEST"], .65),
-                         width=max(1, scale), tags="glass")
-        self.create_line(radius, height - depth - 1, width - radius - depth, height - depth - 1,
-                         fill=mix(p["T_BG_MID"], p["T_BG_DARKEST"], .72),
-                         width=max(1, 2 * scale), tags="glass")
+        if width < 4 or height < 4:
+            return
+        from src.modules.tk_glass import glass_photo
+        key = (width, height, mix(p["T_BG_MID"], p["T_BG_LIGHT"], .18),
+               mix(p["T_BG_MID"], p["T_BG_DARKEST"], .12),
+               mix(p["T_BORDER"], p["T_BG_MID"], .70), self.cget("background"), round(14 * ui_scale(self)))
+        if key != getattr(self, "_surface_key", None):
+            self._surface_key = key
+            self._surface = glass_photo(self, *key)
+        self.create_image(0, 0, image=self._surface, anchor="nw", tags="glass")
         self.tag_lower("glass", self._body_item)
 
 
@@ -313,6 +282,8 @@ class NativeBootstrapWindow:
     SPINNER = ("", "", "", "", "", "", "", "", "", "")
 
     def __init__(self, gui, palette, load_config, save_config, record_exception, *, dispatcher=None):
+        from src.modules.ui_palette import frosted_palette, setup_text_palette
+        palette = setup_text_palette(frosted_palette(palette, prefix="T_"))
         self.gui, self.palette = gui, palette
         self.load_config, self.save_config = load_config, save_config
         self.record_exception = record_exception
@@ -330,10 +301,12 @@ class NativeBootstrapWindow:
         self._spin_index = 0
         self._density = None
         self._layout_pending = False
+        from src.modules.tk_font_runtime import register_tk_fonts
+        register_tk_fonts()
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("MCU Flasher by Naph — Setup")
-        self.root.configure(bg=palette["T_BG_DARKEST"])
+        self.root.configure(bg=palette["T_WINDOW_BG"])
         self._window_icon = None
         try:
             icon_path = Path(__file__).resolve().parents[1] / "assets" / "icons" / "app_chip.png"

@@ -29,6 +29,20 @@ fonts or the last complete detail line. Verify the browser at five native scales
 on Ubuntu and Windows via `direct/verify_downloader_appearance.py`; captures use
 isolated selected/empty catalogs and belong under `temp/audit/`.
 
+Resources, setup and direct-link forms derive their reading fills with
+`frosted_palette`; keep the darker scene separate from the colored frosted
+containers. Preserve soft reflected light across large materials and readable
+semantic inks. Do not revert their reading areas to black slabs or use whole-window
+opacity. Cold setup uses the same bounded PNG material as Tk Resources;
+Qt setup derives the same surface colors. Register the bundled Regular/Bold
+Montserrat faces through process-local Fontconfig for native Linux Tk, with no
+font installation or user-config write. Rounded field surrounds retain actual
+Entry widgets. ScrollForm must reveal the focused control after viewport/content
+resizes and cancel queued callbacks on close. Verify native fonts, field bytes,
+focus rings, all themes, compact scrolling and the standalone file downloader in
+the appearance verifier, plus cold/Qt setup and responsive fixtures. No fixture
+may start downloads, Bootstrap installers, accounts or live metadata workers.
+
 ## SVG action contract
 
 Developer Access field captions/controls are top-aligned inside grid cells.

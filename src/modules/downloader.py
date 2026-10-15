@@ -258,52 +258,88 @@ def download_direct_link(url: str, destination_dir: Path, progress_callback, can
 # ---------- GUI ----------
 
 class DownloaderApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, *, theme_mode=None):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from src.modules.tk_font_runtime import register_tk_fonts
+        from main.core.theme import Theme
+        from types import SimpleNamespace
+        from src.modules.ui_palette import frosted_palette
+        register_tk_fonts()
+        if theme_mode is None:
+            from main.core.config import get_theme_mode
+            theme_mode = get_theme_mode()
+        mode = theme_mode if theme_mode in Theme.PALETTES else "default"
+        self.palette = SimpleNamespace(**frosted_palette(Theme.PALETTES[mode]), active_theme=mode)
         super().__init__()
-        self.title("Drive Link Downloader")
-        self.geometry("520x260")
-        self.resizable(False, False)
-
+        self.title("MCU Flasher — Download files")
+        from src.modules.tk_glass import DialogFit
+        self._window_fit = DialogFit(self, preferred=(660, 420), minimum=(420, 320))
+        self.configure(bg=self.palette.WINDOW_BG)
         self.download_dir = tk.StringVar(value=str(Path.home() / "Downloads"))
-        self.status_text = tk.StringVar(value="Paste a download link (direct or Google Drive) and click Download.")
+        self.status_text = tk.StringVar(value="Paste a direct link or Google Drive share link to download a file.")
         self.cancel_event = threading.Event()
         self.worker_thread = None
-
         self._build_widgets()
 
     def _build_widgets(self):
-        # URL entry
-        tk.Label(self, text="Download link (direct or Google Drive):").pack(anchor="w", padx=12, pady=6)
-        self.url_entry = tk.Entry(self, width=70)
-        self.url_entry.pack(fill="x", padx=12)
+        from src.modules.tk_glass import BrowserHeader, GlassButton, GlassCard, FieldRow, ScrollForm, EntryWell
+        from src.modules.ui_palette import readable_foreground
+        p = self.palette
+        self._header = BrowserHeader(self, p, title="Download files", subtitle="Direct links and Google Drive")
+        self._header.pack(fill="x", padx=12, pady=(12, 10))
+        self._form = ScrollForm(self, p.WINDOW_BG, fill_viewport=True)
+        self._form.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self._card = GlassCard(self._form.body, p, padding=14)
+        self._card.pack(fill="both", expand=True)
+        self._card.bind("<<GlassRequestChanged>>", lambda _event: self._form.request_fit(), add="+")
+        body = self._card.body
 
-        # Destination folder
-        dest_frame = tk.Frame(self)
-        dest_frame.pack(fill="x", padx=12, pady=6)
-        tk.Label(dest_frame, text="Save to:").pack(side="left")
-        tk.Entry(dest_frame, textvariable=self.download_dir, width=45).pack(
-            side="left", padx=6, fill="x", expand=True
-        )
-        tk.Button(dest_frame, text="Browse...", command=self._choose_dir).pack(side="left")
+        def label(parent, text):
+            return tk.Label(parent, text=text, font=("Montserrat", 10), bg=p.BG_MID, fg=p.TEXT,
+                            anchor="w", bd=0)
 
-        # Progress bar
-        self.progress = ttk.Progressbar(self, orient="horizontal", mode="determinate", length=480)
-        self.progress.pack(padx=12, pady=(16, 4))
+        def entry(parent, **options):
+            return EntryWell(parent, p, font=("Montserrat", 10), **options)
 
-        # Status label
-        tk.Label(self, textvariable=self.status_text, anchor="w", wraplength=480, justify="left").pack(
-            fill="x", padx=12
-        )
+        def button(parent, text, callback, *, primary=False, state="normal"):
+            base, hover = (p.BTN_MONITOR, p.BTN_MONITOR_H) if primary else (p.BTN_CLEAR, p.BTN_CLEAR_H)
+            return GlassButton(parent, text=text, command=callback, state=state,
+                               font=("Montserrat", 9, "bold"), bg=base, activebackground=hover,
+                               fg=readable_foreground(base), activeforeground=readable_foreground(hover),
+                               disabledforeground=p.TEXT_DIM, relief="flat", bd=0,
+                               highlightthickness=1, highlightbackground=p.BG_MID, highlightcolor=p.CYAN)
 
-        # Buttons
-        btn_frame = tk.Frame(self)
-        btn_frame.pack(pady=14)
-        self.download_btn = tk.Button(btn_frame, text="Download", width=14, command=self._start_download)
-        self.download_btn.pack(side="left", padx=6)
-        self.cancel_btn = tk.Button(
-            btn_frame, text="Cancel", width=14, command=self._cancel_download, state="disabled"
-        )
-        self.cancel_btn.pack(side="left", padx=6)
+        label(body, "Download link").pack(fill="x", pady=(0, 7))
+        self._url_well = entry(body, width=1)
+        self.url_entry = self._url_well.entry
+        self._url_well.pack(fill="x", ipady=5, pady=(0, 14))
+        folder = tk.Frame(body, bg=p.BG_MID)
+        folder.pack(fill="x", pady=(0, 16))
+        self._folder_well = entry(folder, textvariable=self.download_dir, width=1)
+        self.folder_entry = self._folder_well.entry
+        self.browse_btn = button(folder, "Browse…", self._choose_dir)
+        self._folder_row = FieldRow(folder, label(folder, "Save to"), self._folder_well, self.browse_btn)
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("Vertical.TScrollbar", background=p.BG_MID, troughcolor=p.WINDOW_BG,
+                        bordercolor=p.WINDOW_BG, arrowcolor=p.TEXT_DIM,
+                        lightcolor=p.BG_MID, darkcolor=p.BG_MID)
+        style.map("Vertical.TScrollbar", background=[("active", p.BG_HOVER)])
+        style.configure("FileDownload.Horizontal.TProgressbar", background=p.CYAN,
+                        troughcolor=p.BG_DARK, borderwidth=0, lightcolor=p.CYAN, darkcolor=p.CYAN)
+        self.progress = ttk.Progressbar(body, orient="horizontal", mode="determinate",
+                                       style="FileDownload.Horizontal.TProgressbar")
+        self.progress.pack(fill="x", pady=(0, 10))
+        self.status_label = label(body, "")
+        self.status_label.configure(textvariable=self.status_text, justify="left", fg=p.TEXT_DIM)
+        self.status_label.pack(fill="x", pady=(0, 16))
+        body.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(80, event.width - 4)), add="+")
+        actions = tk.Frame(body, bg=p.BG_MID)
+        actions.pack(fill="x")
+        self.download_btn = button(actions, "Download", self._start_download, primary=True)
+        self.download_btn.pack(side="right")
+        self.cancel_btn = button(actions, "Cancel", self._cancel_download, state="disabled")
+        self.cancel_btn.pack(side="right", padx=(0, 8))
 
     def _choose_dir(self):
         chosen = filedialog.askdirectory(initialdir=self.download_dir.get())

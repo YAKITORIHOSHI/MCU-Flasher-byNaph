@@ -14,7 +14,7 @@ from main.qt.log_follow import LogFollow, preserve_log_view
 from main.qt.icons import icon
 from main.qt.setup_components import GlassCard, VectorGlyph, StatusChip, SetupProgressRow
 from src.modules.bootstrap_presentation import BootstrapPresentation, concise_status
-from src.modules.ui_palette import setup_text_palette
+from src.modules.ui_palette import setup_text_palette, frosted_palette
 
 
 class _SetupHeading(QTextBlockUserData):
@@ -140,7 +140,7 @@ class BootstrapDialog(QDialog):
         controls = control_assets(mode)
         icon_checked, icon_checked_hover = controls["hover"], controls["setup-hover"]
         icon_checked_dim = controls["disabled"]
-        pal = setup_text_palette(pal, glass=True)
+        pal = setup_text_palette(frosted_palette(pal, prefix="T_"), glass=True)
         self._theme_pal = pal
         self._theme_mode = mode
 
