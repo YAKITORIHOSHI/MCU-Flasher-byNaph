@@ -290,8 +290,11 @@ responsive layout checks pass; one native setup-frame fixture still fails in
 six short-work-area cases with the original verifier and unchanged UI source.
 The first native ARM64 CI run stopped on missing WebEngine system libraries.
 Bootstrap now checks the ARM wheel's linked dependencies, including Opus,
-Minizip, Snappy and WebP, before opening Qt; the corrected native run still
-needs completed results. See the
+Minizip, Snappy and WebP, before opening Qt. Corrected source `03c6703` passed
+[native Ubuntu 24.04 and 26.04 ARM64 CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38750157321):
+actual workspace, sample viewer, PTY, performance and responsive checks, fresh
+Bootstrap and a real ESP32 Compile-button build. Physical Raspberry Pi USB,
+graphics and native Wayland still require on-device checks. See the
 [ARM64 setup and verification limits](direct/UBUNTU.md#raspberry-pi-and-arm64)
 and [source release notes](RELEASE_NOTES.md#october-15-source-update-ubuntu-arm64-and-raspberry-pi).
 

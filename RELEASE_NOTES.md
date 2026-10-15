@@ -39,11 +39,13 @@ remain outside the supported setup. See the [Ubuntu setup guide](direct/UBUNTU.m
   using a local fake CLI. All 18 offscreen responsive layout checks pass.
   One native setup-frame fixture has six failing short-work-area cases that
   also reproduce with the original verifier and unchanged UI source.
-- **Native ARM64 CI added:** Ubuntu 24.04/26.04 ARM64 jobs cover runtime,
-  sample viewer, PTY, responsive checks, empty-store Bootstrap and a real ESP32
-  Compile-button fixture. These new jobs have not yet been verified for this
-  source update. Local CPU simulations do not certify execution on a physical
-  Pi, USB upload/reset, native Windows or every vendor's ARM64 board packages.
+- **Native ARM64 CI passed:** Corrected source `03c6703` passed both Ubuntu
+  24.04 and 26.04 ARM64 jobs, including runtime validation, the actual Qt/Monaco
+  workspace, sample viewer, PTY, performance, responsive checks, empty-store
+  Bootstrap and a real ESP32 Compile-button build. See the
+  [completed ARM64 run](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38750157321).
+  This does not certify a physical Pi's USB/graphics, native Wayland, native
+  Windows or every vendor's ARM64 board packages.
 
 The first [native ARM64 CI run](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38746323679)
 on source `90a45ed` stopped during WebEngine import on both LTS releases because
@@ -51,8 +53,10 @@ on source `90a45ed` stopped during WebEngine import on both LTS releases because
 dependency closure and adds its Ubuntu media, compression and window-system
 prerequisites to Bootstrap. CPU and linker validation now run before native Qt
 imports and report all missing libraries together. Intel/AMD prerequisites and
-Windows production files remain unchanged. Native ARM64 execution still needs
-completed results for the corrected revision.
+Windows production files remain unchanged. The corrected native ARM64 run
+completed successfully on both LTS releases and produced 267,888-byte ESP32
+firmware through the app's actual Compile button on each host. No physical USB
+upload or live provider account was used.
 
 This source update does not rebuild or replace the published release ZIP.
 Earlier CI results below remain scoped to their recorded source revisions.

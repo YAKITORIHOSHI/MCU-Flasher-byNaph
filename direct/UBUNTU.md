@@ -577,9 +577,13 @@ maintenance and Windows setup/runtime boundaries. ARM64 fixtures simulate host
 identities and providers; native ARM64 and native Windows execution were not
 performed in those local fixtures. The first native ARM64 CI run on `90a45ed`
 failed before workspace startup on both LTS releases because `libopus.so.0` was
-missing. The follow-up adds the complete reviewed ARM Qt dependency mappings;
-native ARM64 CI must finish on the corrected revision before its startup,
-workspace and firmware-build results can be reported.
+missing. The follow-up adds the complete reviewed ARM Qt dependency mappings.
+Corrected source `03c6703` then passed the entire
+[native ARM64 run](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38750157321)
+on Ubuntu 24.04 and 26.04: private runtime and host contracts, actual Qt/Monaco
+workspace, Qt5 sample viewer, native PTY, performance and responsive checks,
+empty-runtime/store Bootstrap, prepared relaunch and a real ESP32 Compile-button
+build. Both hosts produced 267,888-byte firmware; neither performed a USB upload.
 
 Offscreen responsive layout checks passed. The native xcb responsive run
 still reports a setup-dialog frame-clamping failure that also reproduces on the
