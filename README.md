@@ -288,7 +288,10 @@ unchanged. Local amd64 verification passed **400 checks**, with **3 native Windo
 checks skipped**, plus the real WebEngine/PTY fake-CLI probe. All 18 offscreen
 responsive layout checks pass; one native setup-frame fixture still fails in
 six short-work-area cases with the original verifier and unchanged UI source.
-Native ARM64 CI has been added but has not yet verified this update. See the
+The first native ARM64 CI run stopped on missing WebEngine system libraries.
+Bootstrap now checks the ARM wheel's linked dependencies, including Opus,
+Minizip, Snappy and WebP, before opening Qt; the corrected native run still
+needs completed results. See the
 [ARM64 setup and verification limits](direct/UBUNTU.md#raspberry-pi-and-arm64)
 and [source release notes](RELEASE_NOTES.md#october-15-source-update-ubuntu-arm64-and-raspberry-pi).
 

@@ -31,10 +31,10 @@ jobs:
         run: |
           # Use the release's own Python for Ubuntu's ABI-matched Qt5 packages.
           prerequisites="$(/usr/bin/python3 - <<'PY'
-          from direct.ubuntu.preflight import SYSTEM_LIBRARIES, SYSTEM_TOOLS, CLIPBOARD_PACKAGES, normalize_packages
+          from direct.ubuntu.preflight import system_libraries, SYSTEM_TOOLS, CLIPBOARD_PACKAGES, normalize_packages
           from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES
           packages = ['python3-venv', 'python3-tk', 'xvfb', *SYSTEM_PACKAGES, *CLIPBOARD_PACKAGES]
-          packages += [package for _, package in (*SYSTEM_LIBRARIES, *SYSTEM_TOOLS)]
+          packages += [package for _, package in (*system_libraries(), *SYSTEM_TOOLS)]
           print(' '.join(normalize_packages(packages)))
           PY
           )"
@@ -69,6 +69,9 @@ jobs:
           xvfb-run -a .venv-linux/bin/python -B direct/verify_performance.py --no-finalize
           xvfb-run -a .venv-linux/bin/python -B direct/verify_responsive.py --render-dir temp/audit/arm64/responsive
       - name: Empty ARM64 runtime, full board preparation and real ESP32 compile
+        # Collect real Bootstrap/compile evidence even if a UI fixture failed;
+        # the earlier failure still makes the job fail.
+        if: ${{ !cancelled() }}
         timeout-minutes: 42
         run: |
           # Real setup/downloads run only inside the disposable temp/ app/store.

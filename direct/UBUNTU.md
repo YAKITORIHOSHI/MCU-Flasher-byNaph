@@ -247,6 +247,17 @@ a private-environment import hook; it keeps system site packages disabled and
 runs both viewers from `.venv-linux`. Qt5 and Qt6 remain in separate processes.
 The amd64 wheel requirements and Windows dependencies retain their existing paths.
 
+ARM64's Qt WebEngine wheels also use Ubuntu's media/compression libraries,
+including Opus, LittleCMS, Minizip, Snappy and WebP. Bootstrap detects these before
+private setup; its ARM-only prerequisite list follows the reviewed Qt wheel ELF
+dependency closure. Runtime checks validate CPU identity and all linked
+libraries before importing Qt, so diagnostics list missing SONAMEs together.
+To print the complete manual apt command for the current host without installing:
+
+```bash
+/usr/bin/python3 -B -c 'from direct.ubuntu.preflight import system_install_command; print(system_install_command())'
+```
+
 Arduino CLI and OpenCode downloads select pinned, checksum-verified native
 ARM64 assets. Receipt and ELF checks reject tools copied from the other CPU.
 Native PlatformIO stores and firmware receipts already separate the host
@@ -564,8 +575,11 @@ Windows checks skipped. The isolated checks cover CPU selection, wrong-CPU
 runtime/tool rejection, ARM64 dependency routing, portable launchers, Bootstrap,
 maintenance and Windows setup/runtime boundaries. ARM64 fixtures simulate host
 identities and providers; native ARM64 and native Windows execution were not
-performed for this addition. The new ARM64 CI jobs must complete before their
-native results can be reported.
+performed in those local fixtures. The first native ARM64 CI run on `90a45ed`
+failed before workspace startup on both LTS releases because `libopus.so.0` was
+missing. The follow-up adds the complete reviewed ARM Qt dependency mappings;
+native ARM64 CI must finish on the corrected revision before its startup,
+workspace and firmware-build results can be reported.
 
 Offscreen responsive layout checks passed. The native xcb responsive run
 still reports a setup-dialog frame-clamping failure that also reproduces on the

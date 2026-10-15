@@ -45,6 +45,15 @@ remain outside the supported setup. See the [Ubuntu setup guide](direct/UBUNTU.m
   source update. Local CPU simulations do not certify execution on a physical
   Pi, USB upload/reset, native Windows or every vendor's ARM64 board packages.
 
+The first [native ARM64 CI run](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38746323679)
+on source `90a45ed` stopped during WebEngine import on both LTS releases because
+`libopus.so.0` was missing. The follow-up checks the official ARM64 wheel's ELF
+dependency closure and adds its Ubuntu media, compression and window-system
+prerequisites to Bootstrap. CPU and linker validation now run before native Qt
+imports and report all missing libraries together. Intel/AMD prerequisites and
+Windows production files remain unchanged. Native ARM64 execution still needs
+completed results for the corrected revision.
+
 This source update does not rebuild or replace the published release ZIP.
 Earlier CI results below remain scoped to their recorded source revisions.
 

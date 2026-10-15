@@ -462,7 +462,10 @@ class PlatformChecks(unittest.TestCase):
         process.poll = lambda: process.returncode
         process.wait = lambda: process.returncode or 0
         api._kill_active_process_tree = Mock(side_effect=lambda: setattr(process, "returncode", -15))
-        with patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+        # Keep this Ubuntu cancellation path independent of the verifier's
+        # native Windows host; the worker consults both its backend and sys.
+        with patch.object(web_bridge, "sys", SimpleNamespace(platform="linux")), \
+                patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
                 patch.object(platform, "_uname_cache", None), \
                 patch.object(platform, "machine", return_value="x86_64"), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \

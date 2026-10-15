@@ -42,11 +42,28 @@ SYSTEM_LIBRARIES = (
     ("xcb-render", "libxcb-render0"), ("xcb-util", "libxcb-util1"),
     ("usb-1.0", "libusb-1.0-0"), ("udev", "libudev1"),
 )
+# Qt's ARM64 wheels link these against Ubuntu instead of bundling them. This
+# list comes from the PySide6 6.12.0 / WebEngine 6.12.0.140 ELF dependency closure
+# (workspace, xcb and Wayland client); keep amd64's existing prerequisites intact.
+ARM_SYSTEM_LIBRARIES = (
+    ("opus", "libopus0"), ("lcms2", "liblcms2-2"),
+    ("minizip", "libminizip1t64"), ("snappy", "libsnappy1v5"),
+    ("webp", "libwebp7"), ("webpdemux", "libwebpdemux2"), ("webpmux", "libwebpmux3"),
+    ("brotlidec", "libbrotli1"), ("zstd", "libzstd1"), ("z", "zlib1g"),
+    ("expat", "libexpat1"), ("ICE", "libice6"), ("SM", "libsm6"),
+    ("wayland-client", "libwayland-client0"), ("wayland-cursor", "libwayland-cursor0"),
+    ("wayland-egl", "libwayland-egl1"),
+)
 SYSTEM_TOOLS = (("bash", "bash"), ("git", "git"), ("make", "build-essential"),
                 ("gcc", "build-essential"), ("g++", "build-essential"),
                 ("xdg-open", "xdg-utils"), ("ldd", "libc-bin"), ("rg", "ripgrep"),
                 ("secret-tool", "libsecret-tools"))
 CLIPBOARD_PACKAGES = ("xclip", "wl-clipboard")
+
+
+def system_libraries(architecture: str | None = None) -> tuple[tuple[str, str], ...]:
+    """Return only this CPU's Ubuntu library prerequisites, without loading Qt."""
+    return SYSTEM_LIBRARIES + (ARM_SYSTEM_LIBRARIES if (architecture or host_architecture()) == "arm64" else ())
 
 
 def normalize_packages(packages) -> tuple[str, ...]:
@@ -69,7 +86,7 @@ def system_install_command(packages=None) -> str:
     """Return a manual recovery command; checks never execute it."""
     if not packages:
         packages = ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", *CLIPBOARD_PACKAGES,
-                    *(package for _, package in SYSTEM_LIBRARIES)]
+                    *(package for _, package in system_libraries())]
         if host_architecture() == "arm64":
             from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES
             packages.extend(SYSTEM_PACKAGES)
@@ -118,7 +135,7 @@ def host_preflight(*, require_display=False) -> None:
         missing.append("xclip")
     if not (shutil.which("wl-copy") and shutil.which("wl-paste")):
         missing.append("wl-clipboard")
-    for name, package in SYSTEM_LIBRARIES:
+    for name, package in system_libraries(architecture):
         try:
             library = ctypes.util.find_library(name)
             if not library:
@@ -131,6 +148,7 @@ def host_preflight(*, require_display=False) -> None:
 
 
 def _check_linked_libraries(paths) -> None:
+    failures = []
     for path in paths:
         if not path.is_file():
             raise RuntimeError(f"A Qt runtime file is missing: {path}. Rerun Ubuntu Bootstrap.")
@@ -138,8 +156,25 @@ def _check_linked_libraries(paths) -> None:
         missing = [line.strip() for line in result.stdout.splitlines() if "not found" in line]
         if result.returncode or missing:
             detail = "; ".join(missing) or result.stderr.strip() or f"ldd returned {result.returncode}"
-            raise RuntimeError(f"Qt native dependencies are unavailable for {path.name}: {detail}\n"
-                               "Install the Ubuntu desktop prerequisites:\n" + system_install_command())
+            failures.append(f"{path.name}: {detail}")
+    if failures:
+        raise RuntimeError("Qt native dependencies are unavailable:\n" + "\n".join(failures) + "\n"
+                           "Install the Ubuntu desktop prerequisites:\n" + system_install_command())
+
+
+def _check_qt_runtime_files(qt_root: Path, architecture: str) -> None:
+    """Validate native CPU and all linked dependencies before importing Qt."""
+    paths = (qt_root / "lib/libQt6Core.so.6", qt_root / "plugins/platforms/libqxcb.so",
+             qt_root / "lib/libQt6WebEngineCore.so.6", qt_root / "libexec/QtWebEngineProcess")
+    # Verify every target before letting ldd inspect any one of them. A copied
+    # runtime must never reach native loading or a host loader for a foreign CPU.
+    for native in paths:
+        if not native.is_file():
+            raise RuntimeError(f"A Qt runtime file is missing: {native}. Rerun Ubuntu Bootstrap.")
+        if not elf_matches_host(native, architecture):
+            raise RuntimeError("Ubuntu's Qt runtime was copied from another CPU architecture. "
+                               "Run bash direct/ubuntu/run.sh --repair on this computer.")
+    _check_linked_libraries(paths)
 
 
 def bootstrap_ready(core) -> bool:
@@ -186,10 +221,7 @@ def runtime_preflight(root=ROOT) -> None:
     qt_spec = importlib.util.find_spec("PySide6")
     if qt_spec is not None and qt_spec.origin:
         qt_root = Path(qt_spec.origin).parent / "Qt"
-        for native in (qt_root / "lib/libQt6Core.so.6", qt_root / "libexec/QtWebEngineProcess"):
-            if native.is_file() and not elf_matches_host(native, architecture):
-                raise RuntimeError("Ubuntu's Qt runtime was copied from another CPU architecture. "
-                                   "Run bash direct/ubuntu/run.sh --repair on this computer.")
+        _check_qt_runtime_files(qt_root, architecture)
     sys.path.insert(0, str(root))
     try:
         _check_tk()
@@ -205,10 +237,6 @@ def runtime_preflight(root=ROOT) -> None:
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
         raise RuntimeError(f"Ubuntu runtime dependency validation failed: {exc}\n"
                            "Rerun Ubuntu Bootstrap; python3-tk must be supplied by Ubuntu.") from exc
-    qt_root = Path(PySide6.__file__).parent / "Qt"
-    _check_linked_libraries((qt_root / "plugins/platforms/libqxcb.so",
-                            qt_root / "lib/libQt6WebEngineCore.so.6",
-                            qt_root / "libexec/QtWebEngineProcess"))
     # Keep Qt5 and Qt6 native graphs in separate processes, as in production.
     result = subprocess.run([sys.executable, "-B", "-c",
                              "import PyQt5.QtWidgets, PyQt5.Qsci; "

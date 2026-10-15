@@ -36,6 +36,48 @@ class IsolatedChecks(unittest.TestCase):
 
 
 class HostChecks(IsolatedChecks):
+    def test_arm_wheel_media_dependencies_are_reported_before_private_setup(self):
+        # These SONAMEs are DT_NEEDED entries in Qt 6.12.0.140's native ARM64
+        # WebEngine. A minimal Ubuntu host must prepare them before importing Qt.
+        absent = {"opus", "lcms2", "minizip", "snappy", "webp", "webpdemux", "webpmux"}
+        expected = {"libopus0", "liblcms2-2", "libminizip1t64", "libsnappy1v5",
+                    "libwebp7", "libwebpdemux2", "libwebpmux3"}
+        for release in ("24.04", "26.04"):
+            for machine in ("aarch64", "x86_64"):
+                with self.subTest(release=release, machine=machine), ExitStack() as stack:
+                    stack.enter_context(patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 14))))
+                    stack.enter_context(patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": release}))
+                    stack.enter_context(patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine=machine), create=True))
+                    stack.enter_context(patch.object(preflight.importlib.util, "find_spec", return_value=object()))
+                    stack.enter_context(patch.object(preflight, "_check_tk"))
+                    stack.enter_context(patch.object(preflight.shutil, "which", return_value="/fixture/tool"))
+                    stack.enter_context(patch.object(preflight.ctypes.util, "find_library", side_effect=lambda name: None if name in absent else name))
+                    stack.enter_context(patch.object(preflight.ctypes, "CDLL", return_value=object()))
+                    stack.enter_context(patch.object(arm_qt5, "missing_system_packages", return_value=()))
+                    stack.enter_context(patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")))
+                    if machine == "aarch64":
+                        with self.assertRaises(preflight.MissingSystemDependencies) as missing:
+                            preflight.host_preflight()
+                        self.assertEqual(set(missing.exception.packages), expected)
+                        self.assertTrue(expected <= system_setup.ALLOWED_PACKAGES)
+                    else:
+                        preflight.host_preflight()
+
+    def test_arm_extra_dependencies_are_allowlisted_for_visible_os_setup(self):
+        missing = preflight.MissingSystemDependencies(["libopus0", "libminizip1t64", "libsnappy1v5"])
+        with patch.object(preflight, "host_preflight", side_effect=[missing, None]) as host, \
+                patch.object(system_setup, "sys", SimpleNamespace(platform="linux", stdin=SimpleNamespace(isatty=lambda: True))), \
+                patch.object(system_setup.os, "geteuid", return_value=1000, create=True), \
+                patch.object(system_setup.os, "access", return_value=True), \
+                patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run, \
+                redirect_stdout(io.StringIO()):
+            system_setup.ensure_system_dependencies()
+        self.assertEqual(host.call_count, 2)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.args[0][-3:], list(missing.packages))
+        self.assertEqual(run.call_args.args[0][:2], ["/usr/bin/sudo", "/usr/bin/apt-get"])
+        self.assertEqual(run.call_args.kwargs["cwd"], "/")
+
     def test_both_lts_hosts_admit_arm64_and_keep_amd64_dependencies(self):
         for release in ("24.04", "26.04"):
             for machine in ("x86_64", "aarch64"):
@@ -95,6 +137,46 @@ class HostChecks(IsolatedChecks):
             self.assertIn("PySide6", selected)
             self.assertEqual("PyQt5" in selected, machine == "x86_64")
             self.assertEqual("QScintilla" in selected, machine == "x86_64")
+
+
+class QtNativePreflightChecks(IsolatedChecks):
+    def qt_files(self, machine=183):
+        root = self.root / "PySide6/Qt"
+        paths = (root / "lib/libQt6Core.so.6", root / "plugins/platforms/libqxcb.so",
+                 root / "lib/libQt6WebEngineCore.so.6", root / "libexec/QtWebEngineProcess")
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(elf(machine))
+        return root, paths
+
+    def test_foreign_cpu_in_any_required_file_stops_before_linker_or_native_import(self):
+        root, paths = self.qt_files()
+        for path in paths:
+            with self.subTest(path=path.name), \
+                    patch.object(subprocess, "run", side_effect=AssertionError("Foreign ELF reached ldd")):
+                path.write_bytes(elf(62))
+                with self.assertRaisesRegex(RuntimeError, "another CPU architecture"):
+                    preflight._check_qt_runtime_files(root, "arm64")
+                path.write_bytes(elf(183))
+
+    def test_preimport_linker_reports_all_missing_sonames(self):
+        root, paths = self.qt_files()
+        replies = [SimpleNamespace(returncode=0, stdout="", stderr=""),
+                   SimpleNamespace(returncode=0, stdout="libSM.so.6 => not found\n", stderr=""),
+                   SimpleNamespace(returncode=0, stdout="libopus.so.0 => not found\nlibsnappy.so.1 => not found\n", stderr=""),
+                   SimpleNamespace(returncode=0, stdout="libwebpdemux.so.2 => not found\n", stderr="")]
+        private = str(self.root / ".venv-linux")
+        with patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 14), prefix=private, base_prefix="system")), \
+                patch.object(preflight, "host_architecture", return_value="arm64"), \
+                patch.object(preflight.importlib.util, "find_spec", return_value=SimpleNamespace(origin=str(root.parent / "__init__.py"))), \
+                patch.object(preflight, "_check_tk", side_effect=AssertionError("Native imports ran before linker validation")), \
+                patch.object(subprocess, "run", side_effect=replies) as run:
+            with self.assertRaises(RuntimeError) as error:
+                preflight.runtime_preflight(self.root)
+        for name in ("libSM.so.6", "libopus.so.0", "libsnappy.so.1", "libwebpdemux.so.2"):
+            self.assertIn(name + " => not found", str(error.exception))
+        self.assertIn("libopus0", str(error.exception))
+        self.assertEqual([call.args[0] for call in run.call_args_list], [["ldd", str(path)] for path in paths])
 
 
 class Qt5BridgeChecks(IsolatedChecks):
