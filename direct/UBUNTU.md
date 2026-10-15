@@ -25,6 +25,41 @@ host implementation through `main/core/toolchain.py`:
 | `direct/ubuntu/launch.py` / `preflight.py` | First-run Bootstrap handoff, desktop launch and dependency diagnostics |
 | `direct/ubuntu/install_desktop.py` | Local desktop shortcut and optional per-user Applications entry |
 
+## Cloud and Fresh cleanup source update — 2026-10-15
+
+Revision `7a58479` reuses the verified linked Cloud working folder, focuses an
+already open copy without replacing buffers, and requires Replace/Cancel for
+local name collisions. Confirmed replacement backs up affected root sources and
+notes outside the project, preserves assets/settings/caches/AI journals, and
+rechecks cloud revision, folder/link identity and source bytes before publication.
+Rollback retains concurrent external edits and reports incomplete recovery.
+Saved edits at legacy locations are preserved; existing duplicate folders are
+not removed automatically. See the [Cloud guide](cloud/README.md).
+
+The native Ubuntu fixture confirmed identical original/restored source bytes,
+filenames, exact ESP32/Arduino settings, NimBLE-Arduino 2.5.1 configuration and
+generated build inputs. Case-only renames, writable/read-only roots and failure
+recovery were exercised. Host GCC wrote a dependency file through a 420-character
+path. No Ubuntu cause matching the supplied Windows long-path compiler failure
+was established, so native Ubuntu build-path handling remains unchanged.
+The fixture's ESP32 compiler was mocked; this was not a full native NimBLE build.
+
+Cloud service/configuration/UI, editor manifest, exact-board cache, runtime/Monaco
+Pull and native PTY checks passed with mocked accounts, persistence and hardware.
+Cloud layouts and the relevant responsive cases passed at 100/125/150/175/200%.
+The 48-check native maintenance verifier passed before the requested Fresh clean;
+cleanup then removed the generated environment and bytecode. The next launch
+needs Bootstrap again. Logs and captures are under `temp/audit/ubuntu-cloud/`
+and are excluded from source releases.
+
+For this revision, CI's isolated native first-run jobs passed on Ubuntu 24.04
+and 26.04, including full default preparation, actual workspace launch and a real
+baseline ESP32 Compile-button build. The broader runtime jobs failed and their
+downstream integration steps were skipped. These results do not certify the
+Cloud NimBLE sketch, physical USB uploads, real Firebase/keyring integration or
+native Wayland. See the [compatibility run](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38670491891)
+and [release notes](../RELEASE_NOTES.md) for packaging and verification limits.
+
 ## Native parity audit — 2026-10-13
 
 The current audit used Ubuntu 26.04.1 LTS (amd64), private Python 3.14.4,
@@ -73,7 +108,10 @@ os-release as shell code. Python admission reads native freedesktop release data
 and malformed releases; older fixtures verify rejection only.
 Python 3.10 or newer,
 four CPU cores, and enough space for native board toolchains are
-required. Ubuntu 24.04 and 26.04 are the compatibility workflow targets.
+required. Plan at least 10 GB free for the default AVR/ESP32/ESP8266 Arduino
+plan, with 20 GB recommended; these are estimates, not measured peak usage or
+enforced thresholds. See [system requirements](../README.md#system-requirements).
+Ubuntu 24.04 and 26.04 are the compatibility workflow targets.
 The first-launch job uses each release's system Python, including Python 3.14
 on 26.04. Check the completed compatibility run for the revision being used;
 first-launch, runtime and compile results are separate jobs. CI uses X11/Xvfb
@@ -96,6 +134,14 @@ architecture tree and are unlinked without following them. External, broken or
 cyclic links still refuse cleanup. Next launch uses Bootstrap to download or
 restore missing dependencies;
 do not include generated environments or audit fixtures in source releases.
+
+For **Fresh** dependency cleanup (the environment and source bytecode), preview
+`bash cleaner/clean_fresh.sh`; apply the reviewed plan with
+`bash cleaner/clean_fresh.sh --apply` and its confirmation prompt. This preserves
+user settings, credentials, sketches and protected recovery/build caches; it
+does not reset the desktop user's account. Python's exact generated root
+`.gitignore` is accepted inside `.venv-linux`; custom files and unexpected links
+still refuse cleanup. See the [maintenance guide](../cleaner/README.md).
 
 For manual provisioning, the equivalent desktop dependencies are:
 
@@ -223,8 +269,14 @@ If system Python itself is missing, the shell launcher installs `python3` and
 readiness without authentication or installation.
 
 When system packages, Python dependencies or readiness need repair, a desktop
-launch opens the available Ubuntu terminal with live Bootstrap output. Failed
-setup stays visible; success opens the workspace and closes that setup terminal.
+launch opens the available Ubuntu terminal with live Bootstrap output.
+Ubuntu 26.04 and newer prefer installed **Ptyxis**, the new Ubuntu terminal,
+using `--standalone --` with literal command arguments. If it is unavailable,
+the existing terminal alternatives remain available. Ubuntu 24.04 keeps the
+existing selection order. This also covers missing-system-Python recovery;
+setup invoked inside an existing terminal continues in that terminal. See the
+[Ubuntu 26.04 desktop changes](https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/).
+Failed setup stays visible; success opens the workspace and closes that setup terminal.
 Healthy launches need no terminal or administrator prompt.
 Immediate desktop launch failures include a log under `logs/ubuntu-launch-*.log`.
 

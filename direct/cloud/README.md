@@ -70,9 +70,17 @@ authentication secrets.
 Cloud working sketches are stored with the generated board/library sources,
 under `_MCUFlasherByNaph_src/Cloud/<sketch name>/`. The configured source folder
 is shared with `Boards` and `Libs`; its default location is the current user's
-Documents folder. Names are readable, safe on Windows and Ubuntu, and separate
-working copies cannot overwrite a different account's or sketch's folder.
-Existing working-copy edits are preserved when adopting the new location.
+Documents folder. Names are readable and safe on Windows and Ubuntu. Opening the
+same verified provider/account/sketch reuses its linked saved working copy. If
+that project is already open, its window is focused without pulling sources or
+replacing editor buffers. This also applies to a verified open copy at an older
+location: adoption waits until it closes and preserves its saved edits.
+Existing duplicate folders are not cleaned automatically.
+
+A same-name unlinked folder or another sketch's folder under the same account
+requires **Replace** or **Cancel**. The prompt names the exact destination;
+downloads never silently create numbered folders. A different account/provider's
+linked folder is refused. Open target workspaces remain protected.
 
 Private account state and pull recovery copies remain outside the installation:
 
@@ -104,7 +112,7 @@ folder in a separate workspace.
 
 The selected sketch's Actions menu offers Rename and Delete. Names are compared
 without case or surrounding whitespace. Uploading an existing name requires an
-explicit Replace or Save a copy choice; numbered copies use the first available
+explicit Replace or Save a copy choice; numbered **remote** copies use the first available
 ` (1)`, ` (2)`, etc. Replace preserves the sketch ID and appends a guarded source
 revision. Rename rejects other sketches' names and appends a source-identical
 revision to satisfy the existing published rules. Delete uses the sketch ETag
@@ -114,6 +122,8 @@ they do not retry a conflicting write automatically. Existing working copies
 keep their local revision after Rename/Replace, so explicitly Pull latest before
 their next Push. These are bounded client name checks; independent simultaneous
 clients do not provide a server-wide unique-name transaction.
+These remote naming choices are separate from local working-folder collision
+handling; opening/downloading does not create a numbered local copy.
 
 Push reads source bytes and conditionally replaces the sketch record using the
 Firebase ETag. A stale base revision or ETag fails with a conflict: explicitly
@@ -126,12 +136,20 @@ instead of automatically converting dense numeric keys into a JSON array.
 Pull validates the complete snapshot and SHA-256 digests before replacing
 anything. It preserves a local recovery copy outside the checkout, replaces
 root source files through same-folder atomic replacements, and removes only
-filenames already tracked by that sketch's valid link. An unknown local file,
-directory or symbolic link prevents the pull. Protected build caches and AI
-recovery journals are never touched. On a storage failure, the previous linked
-files are restored when possible and the recovery folder is retained.
-The folder identity, cloud link and touched source bytes are checked again after
-staging; an external edit during preparation rejects the pull before replacement.
+filenames already tracked by that sketch's valid link during an ordinary Pull.
+An unknown conflicting local file, directory or symbolic link prevents that Pull.
+An explicitly confirmed **Replace** of a local name collision additionally backs
+up the reviewed root sources/notes and removes obsolete root source/note files.
+Assets, settings, build caches and AI recovery journals remain intact.
+
+The cloud revision, folder/link identity and affected source bytes are rechecked
+after the prompt and staging, immediately before publication. Each file is
+checked again before mutation; a newly open target also rejects replacement.
+On failure, rollback restores only unchanged files owned by that attempt or
+still-absent deleted paths. Concurrent external edits and links are retained,
+and incomplete recovery reports the retained backup location. A redirected
+project root is never followed for rollback or cleanup. Ubuntu fixtures cover
+case-only filename changes and rollback spellings on its case-sensitive filesystem.
 Cloud filesystem operations support extended Windows paths for deep project and
 recovery folders. The extension is restricted to Windows I/O; visible project
 paths, AI watcher paths and native Ubuntu paths retain their normal spelling.
@@ -158,6 +176,19 @@ isolated `temp/` projects; it does not read a live vault, contact Firebase, depl
 rules, create/delete real accounts, modify a user sketch or access hardware.
 Native Ubuntu Secret Service behavior must also be checked on an Ubuntu desktop
 with an unlocked keyring. Mocked host checks do not prove native keyring access.
+
+Also run `direct/verify_cloud_configuration.py`, `direct/verify_cloud_sketch_ui.py`
+and `direct/verify_cloud_editor_manifest.py` with the private runtime. The Ubuntu
+`direct/verify_ubuntu_cloud_workflow.py` fixture compares original/restored source
+bytes, filenames, exact board/framework, configured library version, generated
+INI and staged build inputs. It checks permissions and a long dependency path
+with native host GCC; its ESP32 compiler is mocked. It neither installs a
+toolchain nor certifies a full NimBLE firmware compilation. Use
+`direct/verify_board_build_cache.py`, native runtime/Monaco Pull checks and compact
+responsive fixtures for cache receipts, all editor models, pending AI edits,
+independent windows and prompt layouts. All source/network/vault/hardware fixtures
+remain isolated under `temp/`.
+
 `direct/verify_cloud_rules.js` compiles and checks the rules against loopback Auth
 and RTDB emulators, including REST history readback and twenty-revision retention.
 Run it through Firebase `emulators:exec --only database,auth` using a synthetic

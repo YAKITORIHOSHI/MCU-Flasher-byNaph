@@ -556,6 +556,13 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   roots; copied Windows and relative values fall back to the account defaults.
   Missing-system-Python recovery uses the documented terminal argument
   separators, including Alacritty `-e` and kitty/gnome-terminal `--`.
+  On validated Ubuntu 26.04+, prefer installed Ptyxis with `--standalone --`
+  for desktop Bootstrap/repair in both `launch.py` and missing-Python `run.sh`
+  recovery. Keep the existing fallback order and Ubuntu 24.04 preference,
+  preserve literal project/repair arguments, and never install a terminal as
+  part of selection. Shell selection uses parsed release values published by
+  admission, overriding inherited values. Verify with isolated launcher/system
+  setup fixtures; use only a harmless recorder for an installed-terminal probe.
 - Install the workspace's GUI garbage collector in Qt verification fixtures
   before creating widgets or workers, including project, cloud, developer and
   performance checks. Keep automatic cyclic collection out of Qt callbacks and

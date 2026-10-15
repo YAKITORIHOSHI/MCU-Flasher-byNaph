@@ -322,6 +322,43 @@ class MissingPythonChecks(unittest.TestCase):
                                             "--bootstrap-window", *arguments])
                 self.assertFalse((self.root / "NEVER").exists())
 
+    def test_missing_python_ptyxis_preference_uses_validated_release_and_literal_arguments(self):
+        tools = self.root / "ptyxis-terminals"
+        tools.mkdir()
+        env = dict(self.env, PATH=self.shell_path(tools) + ":/usr/bin:/bin",
+                   mcu_ubuntu_release_major="99", mcu_ubuntu_release_minor="99")
+        for name in ("ptyxis", "x-terminal-emulator"):
+            terminal = tools / name
+            terminal.write_text('#!/bin/bash\nprintf \'%s\\0\' "${0##*/}" "$@" > "$MCU_PYTHON_FIXTURE_RECEIPT"\n',
+                                encoding="utf-8", newline="\n")
+            terminal.chmod(0o755)
+        # Lookup is confined to the two disposable recorders, never a desktop app.
+        lookup = ('command() {\n'
+                  '  [[ "$1" == -v ]] || return 1\n'
+                  '  [[ "$2" == x-terminal-emulator || '
+                  '( "$2" == ptyxis && "$MCU_PYTHON_FIXTURE_PTYXIS" == yes ) ]]\n'
+                  '}\n')
+        coordinator = self.script.parent / "terminal-preference.sh"
+        coordinator.write_text(self.script.read_text(encoding="utf-8").replace(
+            "set -euo pipefail\n", "set -euo pipefail\n" + lookup, 1), encoding="utf-8", newline="\n")
+        arguments = ["--desktop", "--repair", "--project", 'Sketch Ω $(touch NEVER) "quoted"', "--new-window"]
+        for version, installed, expected in (("24.04", "yes", ["x-terminal-emulator", "-e"]),
+                                             ("26.03", "yes", ["x-terminal-emulator", "-e"]),
+                                             ("26.04", "yes", ["ptyxis", "--standalone", "--"]),
+                                             ("26.4", "yes", ["ptyxis", "--standalone", "--"]),
+                                             ("26.04.1", "yes", ["ptyxis", "--standalone", "--"]),
+                                             ("28.04", "yes", ["ptyxis", "--standalone", "--"]),
+                                             ("26.04", "no", ["x-terminal-emulator", "-e"])):
+            with self.subTest(version=version, installed=installed):
+                (self.root / "os-release").write_text(f'ID=ubuntu\nVERSION_ID="{version}"\n', encoding="utf-8")
+                env["MCU_PYTHON_FIXTURE_PTYXIS"] = installed
+                result = subprocess.run([self.bash, self.shell_path(coordinator), *arguments], env=env,
+                                        cwd=self.root, capture_output=True, text=True, encoding="utf-8", timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.receipt.read_text(encoding="utf-8").split("\0")[:-1],
+                                 [*expected, "/bin/bash", self.shell_path(self.script), "--bootstrap-window", *arguments])
+                self.assertFalse((self.root / "NEVER").exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

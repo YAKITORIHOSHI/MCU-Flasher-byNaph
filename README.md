@@ -8,6 +8,8 @@
 ![Toolchain](https://img.shields.io/badge/toolchain-PlatformIO%20%2B%20Arduino%20CLI-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
+[v10 release notes and verification limits](RELEASE_NOTES.md)
+
 ---
 
 ## 📖 Table of Contents
@@ -261,6 +263,23 @@ The full launcher still reports that native tool/board preparation is needed;
 this audit did not install or launch against the live store. Updated CI targets
 24.04/26.04; its current run and Windows native verification remain separate.
 
+The 2026-10-15 source update at `7a58479` adds guarded Cloud replacement and
+recovery, reuses an already open linked project, and verifies case-sensitive
+source names and native Ubuntu permissions with isolated fixtures. Original and
+restored sources, generated build inputs and exact target settings matched.
+The native host-GCC long dependency-path probe passed; the Cloud ESP32 compiler
+was mocked, so this does not certify a real NimBLE firmware build. CI's native
+first-run jobs passed on Ubuntu 24.04 and 26.04, including a baseline ESP32
+Compile-button build. The broader runtime jobs failed and their downstream
+integration steps were skipped. See the [compatibility run for this revision](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38670491891)
+and [release notes](RELEASE_NOTES.md) for the scope and packaged-release limits.
+
+Desktop Bootstrap and repair now prefer the installed **Ptyxis** terminal on
+Ubuntu 26.04 or newer, with the existing terminal alternatives as fallbacks.
+Ubuntu 24.04 keeps its existing terminal preference. This applies both to normal
+first-run setup and missing-system-Python recovery; launching from an existing
+terminal continues there.
+
 The project terminal passes xterm capability replies and bracketed paste to
 interactive coding CLIs. Installed Codex, Claude Code and OpenCode version
 commands have been verified through its Windows PTY; a local interactive probe
@@ -379,7 +398,11 @@ and system repair remain explicit actions. See the maintenance guide for the
 native commands and confirmation phrases.
 Removing generated Python environments also removes their PlatformIO Python
 packages; the native launcher restores dependencies through Bootstrap on the
-next launch. Ubuntu cleanup must retain Windows `src/_python`, `env` and the
+next launch. **Fresh** resets owned dependencies; it preserves saved settings,
+accounts and credentials rather than resetting the desktop user's identity.
+Ubuntu recognizes Python's exact generated root `.gitignore` in a virtual
+environment, while custom files or unexpected links still refuse cleanup.
+Ubuntu cleanup must retain Windows `src/_python`, `env` and the
 Python installer under `installers/.handsoff/`. Keep the working Windows runtime
 when preparing a folder for both operating systems. Its launcher can restore a
 missing runtime from that installer and repair moved Windows `env` paths. Source releases
@@ -885,18 +908,19 @@ Setup starts at 70% of the active monitor's width and height. Qt logical sizing,
 1. **Drive Storage Verification**: Inspects installation drive for storage speed and integrity.
 2. **Private Python Auto-Healing**: Verifies and heals the isolated portable Python 3 runtime at `src/_python/` using bundled offline installers in `installers/.handsoff/`.
 3. **Virtual Environment Isolation**: Configures and validates required dependencies (`PySide6`, `pyserial`, `pywebview`, `pywinpty`).
-4. **Pre-Built Toolchain Seeding**: Seeds the pre-built PlatformIO core (~1.7GB fast download with resume & SHA-256 verification) and Arduino CLI binaries.
+4. **Pre-Built Toolchain Seeding**: Seeds compatible pre-built PlatformIO packages with resume and SHA-256 verification, and prepares Arduino CLI binaries for the host.
 5. **Driver Verification**: Detects Silicon Labs CP210x and CH34x USB UART drivers; Windows displays a UAC prompt only if a missing machine-level driver installation is strictly required.
 6. **Package Preparation**: Both modes verify the runtime and local editor/terminal assets and prepare the configured framework, uploader/debugger and library plan. Readiness is recorded only after every required check succeeds. Offline Mode applies to board/library preparation; Cloud and Developer Access check their own connections.
 7. **GUI Launch**: Boots the native PySide6 desktop interface with smooth layout transition. Direct GUI entry points require bootstrap readiness and never run installers.
 
 > [!IMPORTANT]
 > **Python Requirement (Git Source vs. Release Package)**:
-> - **Pulling from Git (Source)**: Pulling and running directly from this repository requires **Python (3.10+) installed on your machine** so the initial launch scripts (`launcher.py`, `runThisOnWindows.vbs`) can run and auto-bootstrap the private runtime.
-> - **Release Package (`MCU_Flasher.exe`)**: Pre-built standalone release packages are completely self-contained — **no Python installation is required** on the machine.
+> - **Windows**: The launcher prepares the private runtime from the bundled Python installer; an existing system Python installation is not required. A source checkout needs its Git LFS installer assets.
+> - **Ubuntu source setup**: Use the supported Ubuntu release's native Python (3.10 or newer) to prepare `.venv-linux`.
+> - **Initial preparation**: Internet access may still be required for runtime dependencies, system prerequisites and the configured board/library plan.
 
 > [!NOTE]
-> **Storage Requirement**: The configured offline plan can require substantial space and download time, especially with more platforms or native frameworks. Its size depends on the current packages; the older 6 GB baseline covers only a limited toolchain set. Add custom platforms, frameworks and libraries to `direct/offline-packages.json` before running bootstrap while online.
+> **Storage Requirement**: For the default AVR / ESP32 / ESP8266 Arduino plan, budget at least **10 GB on Ubuntu** or **15 GB on Windows**, with **20 GB recommended**. These are planning estimates, not measured peak usage or enforced thresholds. See [System Requirements](#system-requirements). Additional platforms, frameworks, libraries and retained build caches require more space.
 
 > [!IMPORTANT]
 > **Hardware Requirement**: At least **4 CPU cores** are required. Startup checks physical cores when available and uses logical threads as a fallback when the OS cannot report physical topology. Unsupported systems receive an incompatibility notice before the application starts.
@@ -1099,7 +1123,8 @@ the login form. The list heading and Refresh action stay together at the top,
 and the sketch list uses the available space below them. The Cloud tab shares
 the selector's glass background, retaining opaque fields and reading surfaces.
 **Upload local** opens
-a folder/name dialog; select a sketch and choose **Open sketch**. The
+a folder/name dialog; select a sketch and choose **Upload**. Then select the
+uploaded sketch in the Cloud list and choose **Open sketch**. The
 selected sketch's **Actions** menu offers **Rename sketch** and **Delete sketch**.
 Deletion confirms removal of the cloud sketch and its version history, retaining
 local working files. Names are checked without case or surrounding whitespace;
@@ -1639,11 +1664,24 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 and amd64 Ubuntu; Ubuntu 24.04 and 26.04 have local native hardware-free verification, including GNOME Wayland on 26.04, with Ubuntu 24.04/26.04 CI targets. Check the compatibility results for the revision being used.
+- **Operating System**: Windows 10/11 (64-bit) or native Ubuntu 24.04 or newer (64-bit Intel/AMD). Ubuntu 24.04/26.04 are CI targets; check the scoped results for the revision being used. X11/Xvfb checks do not certify native Wayland, keyring or USB behavior.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
-- **Storage**: **6GB+** free disk space for toolchains, platforms, and compilers
-- **Python**: Python 3.10+ required on machine when pulling/developing from source (pre-built release packages do **not** require Python on the machine)
+- **Python**: Ubuntu source setup uses native Python 3.10+ and creates `.venv-linux`. Windows uses its private runtime and bundled installer; no system Python is required.
 - **Version Control**: Git with Git LFS (`git lfs install`)
+
+Free-space planning for the default AVR / ESP32 / ESP8266 Arduino plan:
+
+| Platform | Estimated minimum free space | Recommended free space |
+| --- | ---: | ---: |
+| Ubuntu | **10 GB** | **20 GB** |
+| Windows | **15 GB** | **20 GB** |
+
+These decimal-GB estimates replace the older 6 GB baseline. They are not measured
+peak installer usage or enforced thresholds. Allow room for the private runtime,
+downloads retained during extraction, native packages, repairs and build caches.
+Custom platforms, extra Arduino CLI cores, libraries and retained versions need
+more space. Check every destination volume if the app, temporary files and
+package store are on separate drives. See [release notes](RELEASE_NOTES.md).
 
 ### Verification & Syntax Checking
 

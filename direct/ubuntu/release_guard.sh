@@ -37,4 +37,8 @@ require_supported_ubuntu() {
         printf '%s\n' "$requirement" >&2
         return 1
     fi
+    # Only publish parsed values after admission; inherited environment values
+    # must never select a different release's terminal or recovery behavior.
+    mcu_ubuntu_release_major=$major
+    mcu_ubuntu_release_minor=$minor
 }

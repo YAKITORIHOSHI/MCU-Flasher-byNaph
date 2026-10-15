@@ -28,12 +28,19 @@ if [[ ! -x /usr/bin/python3 ]]; then
         exit 1
     fi
     if [[ ! -t 0 && "$bootstrap_window" == false ]]; then
-        for terminal in x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm kitty alacritty; do
+        terminals=(x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm kitty alacritty)
+        if (( mcu_ubuntu_release_major > 26 || (mcu_ubuntu_release_major == 26 && mcu_ubuntu_release_minor >= 4) )); then
+            terminals=(ptyxis "${terminals[@]}")
+        fi
+        for terminal in "${terminals[@]}"; do
             if command -v "$terminal" >/dev/null; then
-                separator=-e
-                [[ "$terminal" != gnome-terminal && "$terminal" != kitty ]] || separator=--
-                [[ "$terminal" != xfce4-terminal ]] || separator=--execute
-                exec "$terminal" "$separator" /bin/bash "$app_root/direct/ubuntu/run.sh" --bootstrap-window "$@"
+                case "$terminal" in
+                    ptyxis) terminal_options=(--standalone --) ;;
+                    gnome-terminal|kitty) terminal_options=(--) ;;
+                    xfce4-terminal) terminal_options=(--execute) ;;
+                    *) terminal_options=(-e) ;;
+                esac
+                exec "$terminal" "${terminal_options[@]}" /bin/bash "$app_root/direct/ubuntu/run.sh" --bootstrap-window "$@"
             fi
         done
         printf '%s\n' 'Bootstrap needs a desktop terminal to install Ubuntu Python. Install python3 and python3-venv, then launch again.' >&2

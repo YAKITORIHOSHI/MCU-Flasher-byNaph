@@ -365,6 +365,46 @@ class LauncherChecks(unittest.TestCase):
                          str(self.root / "direct/ubuntu/run.sh"), "--bootstrap-window", *arguments])
         self.assertNotIn("shell", child.call_args.kwargs)
 
+    def test_ubuntu_26_prefers_standalone_ptyxis_and_preserves_literal_arguments(self):
+        arguments = ["--repair", "--project", 'Sketch Ω $(touch NEVER) "quoted"', "--new-window"]
+        env = {"PATH": "/fixture/bin"}
+        with patch("src.modules.ubuntu_release.require_supported_ubuntu", return_value=(26, 4)), \
+                patch.object(launch.shutil, "which", side_effect=lambda name: "/fixture/bin/" + name) as lookup, \
+                patch.object(launch.subprocess, "Popen") as child:
+            self.assertTrue(launch.bootstrap_terminal(arguments, env))
+        lookup.assert_called_once_with("ptyxis")
+        child.assert_called_once_with(["/fixture/bin/ptyxis", "--standalone", "--", "/bin/bash",
+                                      str(self.root / "direct/ubuntu/run.sh"), "--bootstrap-window", *arguments],
+                                     cwd=self.root, env=env, start_new_session=True)
+        self.assertFalse((self.root / "NEVER").exists())
+
+    def test_ubuntu_24_retains_existing_terminal_preference(self):
+        with patch("src.modules.ubuntu_release.require_supported_ubuntu", return_value=(24, 4)), \
+                patch.object(launch.shutil, "which", side_effect=lambda name: "/fixture/bin/" + name) as lookup, \
+                patch.object(launch.subprocess, "Popen") as child:
+            self.assertTrue(launch.bootstrap_terminal([], {}))
+        lookup.assert_called_once_with("x-terminal-emulator")
+        self.assertEqual(child.call_args.args[0][:2], ["/fixture/bin/x-terminal-emulator", "-e"])
+
+    def test_ubuntu_26_missing_or_unlaunchable_ptyxis_falls_back(self):
+        for installed in (False, True):
+            with self.subTest(installed=installed), \
+                    patch("src.modules.ubuntu_release.require_supported_ubuntu", return_value=(26, 4)), \
+                    patch.object(launch.shutil, "which", side_effect=lambda name: "/fixture/bin/" + name
+                                 if name == "x-terminal-emulator" or (installed and name == "ptyxis") else None), \
+                    patch.object(launch.subprocess, "Popen", side_effect=[OSError("Cannot start Ptyxis"), object()]
+                                 if installed else [object()]) as child:
+                self.assertTrue(launch.bootstrap_terminal(["--repair"], {}))
+            self.assertEqual(child.call_args.args[0][:2], ["/fixture/bin/x-terminal-emulator", "-e"])
+            self.assertEqual(child.call_count, 2 if installed else 1)
+
+    def test_no_terminal_available_reports_failure_without_spawning(self):
+        with patch("src.modules.ubuntu_release.require_supported_ubuntu", return_value=(26, 4)), \
+                patch.object(launch.shutil, "which", return_value=None), \
+                patch.object(launch.subprocess, "Popen") as child:
+            self.assertFalse(launch.bootstrap_terminal([], {}))
+        child.assert_not_called()
+
     def test_native_shortcut_and_registration_use_fixture_locations(self):
         (self.root / "direct/ubuntu").mkdir(parents=True)
         (self.root / "direct/ubuntu/run.sh").write_text("fixture", encoding="utf-8")

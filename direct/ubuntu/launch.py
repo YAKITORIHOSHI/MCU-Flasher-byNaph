@@ -76,14 +76,22 @@ def runtime_problem(env: dict[str, str]) -> str | None:
 
 
 def bootstrap_terminal(arguments: list[str], env: dict[str, str]) -> bool:
+    from src.modules.ubuntu_release import require_supported_ubuntu
+
+    version = require_supported_ubuntu()
     child = ["/bin/bash", str(ROOT / "direct/ubuntu/run.sh"), "--bootstrap-window", *arguments]
-    for name, separator in (("x-terminal-emulator", "-e"), ("gnome-terminal", "--"),
-                            ("konsole", "-e"), ("xfce4-terminal", "--execute"),
-                            ("xterm", "-e"), ("kitty", "--"), ("alacritty", "-e")):
+    terminals = (("x-terminal-emulator", ("-e",)), ("gnome-terminal", ("--",)),
+                 ("konsole", ("-e",)), ("xfce4-terminal", ("--execute",)),
+                 ("xterm", ("-e",)), ("kitty", ("--",)), ("alacritty", ("-e",)))
+    if version is not None and version[:2] >= (26, 4):
+        # Ubuntu 26.04 ships Ptyxis. Use a separate instance and literal argv,
+        # rather than forwarding setup to an existing terminal window.
+        terminals = (("ptyxis", ("--standalone", "--")), *terminals)
+    for name, options in terminals:
         terminal = shutil.which(name)
         if terminal:
             try:
-                subprocess.Popen([terminal, separator, *child], cwd=ROOT, env=env,
+                subprocess.Popen([terminal, *options, *child], cwd=ROOT, env=env,
                                  start_new_session=True)
                 return True
             except OSError:
