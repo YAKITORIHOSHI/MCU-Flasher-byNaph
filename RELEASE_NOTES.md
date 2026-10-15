@@ -2,7 +2,7 @@
 
 > **Version:** v10 — Stable Release<br>
 > **Release Codename:** *Quantum Bridge & Core Shield*<br>
-> **Target Platforms:** Windows 10/11 (64-bit) · Native Ubuntu 24.04 or newer (64-bit Intel/AMD)<br>
+> **Target Platforms:** Windows 10/11 (64-bit) · Native Ubuntu 24.04 or newer (amd64 / ARM64)<br>
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 6, 2026<br>
@@ -12,6 +12,41 @@
 ---
 
 > **Source update and download status:** These notes include the October 15 source fixes. As checked on October 15, the [published Windows ZIP](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/tag/latest) was last updated on October 14, and the `latest` tag points to `e68e813`, an earlier revision. Rebuild and verify the release assets before describing these new fixes as included in that download. The verification limits below still apply.
+
+## October 15 Source Update: Ubuntu ARM64 and Raspberry Pi
+
+Ubuntu's existing launch and Bootstrap path now selects **amd64/x86_64** or
+**ARM64/aarch64**. Raspberry Pi 5 and other supported Pis can use the same
+application folder with **64-bit Ubuntu Desktop 24.04 LTS or 26.04 LTS**, a desktop
+session and at least four CPU cores. Older 32-bit Pi models and Raspberry Pi OS
+remain outside the supported setup. See the [Ubuntu setup guide](direct/UBUNTU.md#raspberry-pi-and-arm64).
+
+- **One Ubuntu entry:** `MCU_Flasher` is a portable Bash launcher for both CPUs.
+  Optional native C builds use separate `MCU_Flasher-amd64` / `MCU_Flasher-arm64`
+  filenames and preserve the portable entry and Windows executables.
+- **Native dependencies:** ARM64 uses PySide6/WebEngine wheels and Ubuntu's
+  release-matched Qt5/QScintilla/SIP packages for the separate sample viewer.
+  Only the PyQt5 namespace is exposed to the private runtime; broad system site
+  packages stay disabled. The amd64 Qt5 wheel path stays available.
+- **Correct tools after a move:** Arduino CLI and OpenCode select pinned,
+  checksum-verified native archives. ELF CPU checks and architecture receipts
+  reject foreign tools and detect private runtimes copied between amd64 and
+  ARM64. Run Ubuntu `--repair` on the destination computer.
+- **Windows preserved:** This ARM64 change leaves Windows production code,
+  launchers, dependency setup and executable unchanged.
+- **Verification:** Local amd64 verification passed **400 checks**, with
+  **3 native-Windows-only checks skipped**, plus a real Qt WebEngine/PTY probe
+  using a local fake CLI. All 18 offscreen responsive layout checks pass.
+  One native setup-frame fixture has six failing short-work-area cases that
+  also reproduce with the original verifier and unchanged UI source.
+- **Native ARM64 CI added:** Ubuntu 24.04/26.04 ARM64 jobs cover runtime,
+  sample viewer, PTY, responsive checks, empty-store Bootstrap and a real ESP32
+  Compile-button fixture. These new jobs have not yet been verified for this
+  source update. Local CPU simulations do not certify execution on a physical
+  Pi, USB upload/reset, native Windows or every vendor's ARM64 board packages.
+
+This source update does not rebuild or replace the published release ZIP.
+Earlier CI results below remain scoped to their recorded source revisions.
 
 ## A More Expressive Workspace, With More Reliable Board Preparation
 
@@ -115,9 +150,9 @@ Coverage reporting does not guarantee compatibility with every board. Declared b
 ## System and Storage Requirements
 
 - **Windows:** Windows 10/11, 64-bit. The supplied launcher uses the application's private Python runtime.
-- **Ubuntu:** Native Ubuntu 24.04 or newer on 64-bit Intel/AMD. Ubuntu 22.04 is no longer supported. Launch and setup validate the OS release before preparing the runtime.
+- **Ubuntu:** Native Ubuntu 24.04 or newer on amd64 or ARM64. Raspberry Pi requires a supported 64-bit Ubuntu Desktop image. Ubuntu 22.04 is no longer supported. Launch and setup validate the OS release and CPU architecture before preparing the runtime.
 - **CPU:** At least four cores, using physical-core information when available and logical-core fallback otherwise.
-- **Ubuntu source setup:** Python 3.10 or newer; use the supported Ubuntu release's native Python. Setup creates a private `.venv-linux` environment.
+- **Ubuntu source setup:** Python 3.10 or newer; use the supported Ubuntu release's native Python. ARM64 uses `/usr/bin/python3` to match Ubuntu's sample-viewer packages. Setup creates a private `.venv-linux` environment.
 - **Storage location:** Use a writable SSD or HDD with executable storage for the runtime and native tools. An SSD is recommended for setup and compilation.
 - **Connectivity:** Internet access is needed for initial preparation, updates, and additional package installation. Prepared builds use local packages.
 - **Serial permissions:** Ubuntu may require `dialout` membership and applicable udev rules.
@@ -160,7 +195,7 @@ bash direct/ubuntu/run.sh
 bash direct/ubuntu/run.sh --repair
 ```
 
-The native `MCU_Flasher` launcher is also available. Ubuntu setup may request administrator authentication for missing system prerequisites; the application runtime stays in its private environment.
+The portable `MCU_Flasher` launcher works on amd64 and ARM64. Ubuntu setup may request administrator authentication for missing system prerequisites; the application runtime stays in its private environment.
 
 ### Ubuntu 26.04 Terminal Preference — October 15 Update
 

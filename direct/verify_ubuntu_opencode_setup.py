@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tarfile
@@ -24,10 +25,10 @@ from direct.ubuntu import opencode_setup as setup
 from main.platforms import ubuntu_opencode as discovery
 
 
-def elf_binary():
+def elf_binary(machine="amd64"):
     header = bytearray(64)
     header[:6] = b"\x7fELF\x02\x01"
-    header[18:20] = b"\x3e\x00"
+    header[18:20] = {"amd64": 62, "arm64": 183}[machine].to_bytes(2, "little")
     return bytes(header) + b"Native OpenCode fixture; never executed."
 
 
@@ -64,7 +65,7 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(discovery, "ROOT", self.app))
         self.stack.enter_context(patch.object(discovery.Path, "home", return_value=self.home))
         self.which = self.stack.enter_context(patch.object(discovery.shutil, "which", return_value=None))
-        self.stack.enter_context(patch.object(setup.platform, "machine", return_value="x86_64"))
+        self.machine = self.stack.enter_context(patch.object(platform, "machine", return_value="x86_64"))
         self.stack.enter_context(patch.object(setup.os, "geteuid", return_value=1000))
         self.stack.enter_context(patch.dict(os.environ, {"MCU_FLASHER_WORKSPACE_RUNTIME": "", "MCU_FLASHER_OFFLINE_RUNTIME": ""}))
         self.run = self.stack.enter_context(patch.object(setup.subprocess, "run", return_value=
@@ -92,6 +93,38 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
         self.assertEqual(self.run.call_args.args[0][1:], ["--version"])
         self.assertEqual(self.run.call_args.kwargs["stdin"], subprocess.DEVNULL)
         self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_arm64_archive_is_selected_verified_and_reused(self):
+        self.machine.return_value = "aarch64"
+        self.archive = archive_bytes([("opencode", elf_binary("arm64"), tarfile.REGTYPE)])
+        with patch.object(setup, "ARM64_ARCHIVE_SIZE", len(self.archive)), \
+                patch.object(setup, "ARM64_ARCHIVE_SHA256", hashlib.sha256(self.archive).hexdigest()):
+            installed = self.ensure()
+            self.assertTrue(self.open.call_args.args[0].full_url.endswith("/opencode-linux-arm64.tar.gz"))
+            state = json.loads((self.directory / "installation.json").read_text())
+            self.assertEqual(state["architecture"], "linux-arm64")
+            self.assertEqual(state["archive"], "opencode-linux-arm64.tar.gz")
+            self.assertEqual((self.directory / "opencode").read_bytes(), elf_binary("arm64"))
+            self.open.reset_mock()
+            self.machine.return_value = "arm64"
+            self.assertEqual(self.ensure(), installed)
+            self.assertEqual(discovery.find_opencode_cli(), installed)
+            self.open.assert_not_called()
+
+    def test_moved_amd64_install_is_preserved_when_arm64_download_fails(self):
+        self.ensure()
+        before = {path.name: path.read_bytes() for path in self.directory.iterdir()}
+        self.machine.return_value = "aarch64"
+        with patch.object(setup, "ARM64_ARCHIVE_SIZE", len(self.archive)), \
+                patch.object(setup, "ARM64_ARCHIVE_SHA256", hashlib.sha256(self.archive).hexdigest()), \
+                self.assertRaisesRegex(RuntimeError, "native Linux arm64"):
+            self.ensure()
+        self.assertEqual({path.name: path.read_bytes() for path in self.directory.iterdir()}, before)
+        self.archive = archive_bytes([("opencode", elf_binary("arm64"), tarfile.REGTYPE)])
+        with patch.object(setup, "ARM64_ARCHIVE_SIZE", len(self.archive)), \
+                patch.object(setup, "ARM64_ARCHIVE_SHA256", hashlib.sha256(self.archive).hexdigest()):
+            self.ensure()
+        self.assertEqual((self.directory / "opencode").read_bytes(), elf_binary("arm64"))
 
     def test_working_user_installation_is_reused_without_download_or_profile_changes(self):
         binary = self.home / ".local/bin/opencode"
@@ -205,7 +238,7 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
     def test_bootstrap_guard_and_unsupported_architecture_stop_before_installation(self):
         with patch.dict(os.environ, {"MCU_FLASHER_WORKSPACE_RUNTIME": "1"}), self.assertRaisesRegex(RuntimeError, "Bootstrap-only"):
             self.ensure()
-        with patch.object(setup.platform, "machine", return_value="aarch64"), self.assertRaisesRegex(RuntimeError, "amd64"):
+        with patch.object(platform, "machine", return_value="armv7l"), self.assertRaisesRegex(RuntimeError, "64-bit"):
             self.ensure()
         with patch.object(setup.os, "geteuid", return_value=0), self.assertRaisesRegex(RuntimeError, "without sudo"):
             self.ensure()

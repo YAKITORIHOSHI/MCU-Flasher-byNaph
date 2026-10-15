@@ -1,4 +1,4 @@
-# Native amd64 Ubuntu runtime; excludes Windows DLLs, pywin32, pywinpty and WebView2.
+# Native amd64/ARM64 Ubuntu runtime; excludes Windows-only dependencies.
 # Linux 6.12 wheels lose None references on the mutable-None Python ABI.
 PySide6>=6.7,<6.12; python_version < "3.12"
 PySide6>=6.7,<7; python_version >= "3.12"
@@ -12,6 +12,7 @@ setuptools==80.9.0
 future==1.0.0
 ptyprocess>=0.7,<1
 requests>=2.31,<3
-# The Library Downloader opens read-only samples in its separate Qt5 process.
-PyQt5>=5.15,<6
-QScintilla>=2.14,<3
+# The sample viewer uses pip Qt5 wheels on amd64. ARM64 uses Ubuntu's native
+# python3-pyqt5/python3-pyqt5.qsci through a narrow private-venv package bridge.
+PyQt5>=5.15,<6; platform_machine != "aarch64" and platform_machine != "arm64"
+QScintilla>=2.14,<3; platform_machine != "aarch64" and platform_machine != "arm64"

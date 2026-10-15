@@ -1,0 +1,90 @@
+name: Native Ubuntu ARM64
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-26.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+      QT_QPA_PLATFORM: xcb
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Native Ubuntu prerequisites
+        run: |
+          # Use the release's own Python for Ubuntu's ABI-matched Qt5 packages.
+          prerequisites="$(/usr/bin/python3 - <<'PY'
+          from direct.ubuntu.preflight import SYSTEM_LIBRARIES, SYSTEM_TOOLS, CLIPBOARD_PACKAGES, normalize_packages
+          from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES
+          packages = ['python3-venv', 'python3-tk', 'xvfb', *SYSTEM_PACKAGES, *CLIPBOARD_PACKAGES]
+          packages += [package for _, package in (*SYSTEM_LIBRARIES, *SYSTEM_TOOLS)]
+          print(' '.join(normalize_packages(packages)))
+          PY
+          )"
+          read -r -a packages <<< "$prerequisites"
+          sudo apt-get update
+          sudo apt-get install -y "${packages[@]}"
+      - name: Private ARM64 runtime and isolated host contracts
+        run: |
+          test "$(uname -m)" = aarch64
+          /usr/bin/python3 -m venv .venv-linux
+          .venv-linux/bin/python -m pip install --prefer-binary --only-binary=PySide6,PySide6-Essentials,PySide6-Addons,shiboken6 -r direct/ubuntu/requirements.txt
+          .venv-linux/bin/python -B - <<'PY'
+          from pathlib import Path
+          from direct.ubuntu.arm_qt5 import install_bridge
+          from direct.ubuntu.runtime_architecture import private_site_packages, record_runtime_architecture
+          environment = Path('.venv-linux')
+          install_bridge(private_site_packages(environment))
+          record_runtime_architecture(environment)
+          PY
+          .venv-linux/bin/python -B -c 'from direct.ubuntu.preflight import runtime_preflight; runtime_preflight()'
+          bash direct/ubuntu/build_launcher.sh
+          ./MCU_Flasher --help
+          for check in ubuntu_architecture ubuntu_arm_bootstrap platforms private_runtimes ubuntu_release ubuntu_launcher ubuntu_bootstrap ubuntu_system_setup ubuntu_arduino_cli ubuntu_opencode_setup ubuntu_opencode ubuntu_maintenance; do
+            .venv-linux/bin/python -B "direct/verify_${check}.py"
+          done
+      - name: Native workspace, sample viewer, terminal and resource policy
+        timeout-minutes: 12
+        run: |
+          xvfb-run -a .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/arm64/workspace --no-finalize
+          xvfb-run -a .venv-linux/bin/python -B direct/verify_library_samples.py
+          xvfb-run -a .venv-linux/bin/python -B direct/verify_ubuntu_ai_panel.py --native-renderer
+          xvfb-run -a .venv-linux/bin/python -B direct/verify_performance.py --no-finalize
+          xvfb-run -a .venv-linux/bin/python -B direct/verify_responsive.py --render-dir temp/audit/arm64/responsive
+      - name: Empty ARM64 runtime, full board preparation and real ESP32 compile
+        timeout-minutes: 42
+        run: |
+          # Real setup/downloads run only inside the disposable temp/ app/store.
+          # The override is confined to that copy for small hosted runners.
+          xvfb-run -a /usr/bin/python3 -B direct/verify_ubuntu_first_run.py --execute --allow-small-runner --timeout 2400
+      - name: ARM64 evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-${{ matrix.os }}
+          path: |
+            temp/audit/arm64
+            temp/audit/ubuntu-first-run/*/*.json
+            temp/audit/ubuntu-first-run/*/*.log
+            temp/audit/ubuntu-first-run/*/*.png
+            temp/audit/ubuntu-first-run/*/runtime-captures/*.png
+            temp/audit/ubuntu-first-run/*/app/logs/offline-builders-*/*.log
+            temp/audit/ubuntu-first-run/*/app/temp/audit/first-compile/application-compile.log
+          if-no-files-found: ignore

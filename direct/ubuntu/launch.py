@@ -54,9 +54,14 @@ def report_error(message: str, *, desktop: bool) -> None:
 
 
 def runtime_problem(env: dict[str, str]) -> str | None:
+    from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
+
     python = ROOT / ".venv-linux/bin/python"
     if not python.is_file() or not os.access(python, os.X_OK):
         return "The Ubuntu private runtime is missing or has a broken interpreter link."
+    if not elf_matches_host(python):
+        return ("The Ubuntu private runtime interpreter does not match this host's "
+                f"{host_architecture()} architecture. Run Bootstrap repair on this computer.")
     commands = (
         [str(python), "-B", str(ROOT / "direct/ubuntu/preflight.py"), "--runtime"],
         [str(python), "-B", "-c",

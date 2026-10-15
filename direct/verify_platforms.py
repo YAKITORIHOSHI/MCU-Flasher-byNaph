@@ -249,7 +249,7 @@ class PlatformChecks(unittest.TestCase):
         builder.return_value.create.assert_called_once_with(setup.ENV_DIR)
         self.assertEqual(run.call_count, 3)
         self.assertTrue(run.call_args_list[-1].args[0][2].endswith("offline_bootstrap.py"))
-        architecture.assert_called_once_with()
+        architecture.assert_called_with()
         final_command = run.call_args_list[-1].args[0]
         self.assertEqual(Path(final_command[final_command.index("--core") + 1]).name, "x86_64")
         self.assertNotIn("--runtime-only", final_command)
@@ -373,6 +373,7 @@ class PlatformChecks(unittest.TestCase):
         process = SimpleNamespace(stdout=io.StringIO("\n".join(lines) + "\n"), wait=lambda: code, poll=lambda: code)
         with patch.object(web_bridge, "sys", SimpleNamespace(platform=host)), \
                 patch.object(web_bridge, "_HOST_RUNTIME", ubuntu), \
+                patch.object(ubuntu, "compiler_working_directory", return_value=self.root, create=True), \
                 patch.object(platform, "_uname_cache", None), \
                 patch.object(platform, "machine", return_value="x86_64"), \
                 patch.object(web_bridge, "port_occupied_owner", return_value=None), \
@@ -493,7 +494,9 @@ class PlatformChecks(unittest.TestCase):
             bash = str(candidate) if candidate.is_file() else None
         if not bash:
             self.skipTest("Bash unavailable; Ubuntu CI verifies syntax natively")
-        for entry in ("direct/ubuntu/run.sh", "direct/runThisOnUbuntu.sh"):
+        for entry in ("MCU_Flasher", "direct/ubuntu/run.sh", "direct/ubuntu/build_launcher.sh",
+                      "direct/ubuntu/architecture_guard.sh", "direct/ubuntu/release_guard.sh",
+                      "direct/runThisOnUbuntu.sh"):
             result = subprocess.run([bash, "-n", str(ROOT / entry)], capture_output=True, timeout=10,
                                     **get_platform_backend().process_options())
             self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+from src.modules.ubuntu_architecture import elf_matches_host, linux_tool_architecture
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,7 +23,8 @@ def _native_executable(candidate) -> str | None:
         if not target.is_file() or not os.access(path, os.X_OK):
             return None
         with path.open("rb") as stream:
-            if stream.read(2) == b"MZ":
+            header = stream.read(4)
+            if header[:2] == b"MZ" or (header == b"\x7fELF" and not elf_matches_host(path)):
                 return None
         return str(path)
     except (OSError, RuntimeError, TypeError, ValueError):
@@ -40,14 +42,14 @@ def managed_arduino_cli(root=None) -> str | None:
             return None
         data = json.loads(receipt.read_text(encoding="utf-8"))
         if (not isinstance(data, dict) or data.get("owner") != "mcu-flasher-ubuntu-arduino-cli"
-                or data.get("architecture") != "linux-amd64"
+                or data.get("architecture") != linux_tool_architecture()
                 or data.get("executable") != "arduino-cli"):
             return None
         executable = folder / "arduino-cli"
-        if executable.is_symlink():
+        if executable.is_symlink() or not elf_matches_host(executable):
             return None
         return _native_executable(executable)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RuntimeError):
         return None
 
 

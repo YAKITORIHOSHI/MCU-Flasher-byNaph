@@ -154,6 +154,11 @@ Classify paths before changing attributes or deleting anything:
   store needs `--include-native-store` and a current Linux/architecture receipt.
   Retain other architectures, all Windows resources and system packages.
   Native descriptor-relative deletion must not follow venv interpreter links.
+  Native Arduino CLI/OpenCode receipts may identify linux-amd64 or linux-arm64;
+  validate ELF64 CPU bytes against the recorded architecture before recognizing
+  an owned tool for cleanup. Legacy OpenCode receipts without architecture are
+  amd64-only. Runtime discovery separately requires the current host CPU, so a
+  copied owned tool can be reset safely without ever executing it on the wrong CPU.
   Python 3.14's `bin/𝜋thon` link is recognized only when it resolves to that
   environment's own `bin/python`; a different destination remains a refusal.
   In a receipt-authenticated native store, admit packaged file/directory aliases

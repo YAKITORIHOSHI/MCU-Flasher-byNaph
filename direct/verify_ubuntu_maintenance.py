@@ -48,13 +48,14 @@ class UbuntuMaintenanceTests(unittest.TestCase):
         self.write(".venv-linux/lib/python3.12/site-packages/fixture.py")
         return self.root / ".venv-linux"
 
-    def tool(self, name):
+    def tool(self, name, architecture="linux-amd64"):
         directory = self.root / ".ubuntu-tools" / name
         directory.mkdir(parents=True)
         executable = directory / name
-        executable.write_bytes(b"\x7fELFfixture")
+        code = {"linux-amd64": 62, "linux-arm64": 183}[architecture]
+        executable.write_bytes(b"\x7fELF\x02\x01" + b"\0" * 12 + code.to_bytes(2, "little") + b"fixture")
         info = executable.stat()
-        receipt = {"owner": "mcu-flasher-ubuntu-" + name, "architecture": "linux-amd64",
+        receipt = {"owner": "mcu-flasher-ubuntu-" + name, "architecture": architecture,
                    "executable": name, "executable_sha256": "a" * 64, "schema": 1,
                    "size": info.st_size, "mtime_ns": info.st_mtime_ns, "binary_sha256": "b" * 64}
         (directory / "installation.json").write_text(json.dumps(receipt), encoding="utf-8")
@@ -163,6 +164,37 @@ class UbuntuMaintenanceTests(unittest.TestCase):
         self.assertFalse(opencode.exists())
         self.assertFalse(extras.exists())
         self.assertTrue(all(path.exists() for path in windows))
+
+    def test_arm64_receipts_are_safe_to_clean_after_moving_the_checkout(self):
+        arduino = self.tool("arduino-cli", "linux-arm64")
+        opencode = self.tool("opencode", "linux-arm64")
+        self.apply(self.plan("runtime"))
+        self.assertFalse(arduino.exists())
+        self.assertFalse(opencode.exists())
+
+    def test_tool_elf_must_match_its_recorded_architecture(self):
+        for name in ("arduino-cli", "opencode"):
+            with self.subTest(name=name):
+                directory = self.tool(name, "linux-arm64")
+                certificate = directory / "installation.json"
+                receipt = json.loads(certificate.read_text())
+                for architecture in ("linux-amd64", "linux-armhf", None, ["linux-arm64"]):
+                    receipt["architecture"] = architecture
+                    certificate.write_text(json.dumps(receipt))
+                    with self.assertRaisesRegex(maintenance.MaintenanceError, "receipt is invalid"):
+                        self.plan("runtime")
+                    self.assertTrue((directory / name).exists())
+                receipt["architecture"] = "linux-arm64"
+                certificate.write_text(json.dumps(receipt))
+
+    def test_legacy_opencode_receipt_remains_cleanable_on_amd64(self):
+        directory = self.tool("opencode")
+        certificate = directory / "installation.json"
+        receipt = json.loads(certificate.read_text())
+        receipt.pop("architecture")
+        certificate.write_text(json.dumps(receipt))
+        self.apply(self.plan("runtime"))
+        self.assertFalse(directory.exists())
 
     def test_python314_alias_is_unlinked_without_touching_system_interpreter(self):
         venv = self.venv()

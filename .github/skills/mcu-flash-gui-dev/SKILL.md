@@ -13,6 +13,12 @@ Native Ubuntu requires 24.04 or newer, validated from installed OS-release
 information before runtime preparation, installation, repair or services. Missing
 or malformed data fails explicitly; rejection preserves all user resources.
 Verify older-release rejection using isolated fixtures only.
+Ubuntu admits 64-bit amd64/x86_64 and ARM64/aarch64, including capable Raspberry
+Pis running Ubuntu Desktop 24.04/26.04. The root MCU_Flasher is portable Bash;
+optional native C builds use architecture-specific names. Keep Windows paths
+and dependency ranges unchanged. See canonical guidance for the narrow ARM Qt5
+bridge, copied-runtime repair, ELF checks and native ARM64 CI.
+
 
 ## Platform Scope
 

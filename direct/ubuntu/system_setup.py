@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 from direct.ubuntu import preflight
+from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES as ARM_QT5_PACKAGES
 from direct.ubuntu.preflight import (MissingSystemDependencies, CLIPBOARD_PACKAGES, SYSTEM_LIBRARIES,
                                     SYSTEM_TOOLS, normalize_packages,
                                     system_install_command)
@@ -16,6 +17,7 @@ APT_GET = Path("/usr/bin/apt-get")
 SUDO = Path("/usr/bin/sudo")
 PKEXEC = Path("/usr/bin/pkexec")
 ALLOWED_PACKAGES = frozenset(("python3", "python3-venv", "python3-tk", "libasound2t64", "libglib2.0-0t64",
+                              *ARM_QT5_PACKAGES,
                               *CLIPBOARD_PACKAGES,
                               *(package for _, package in SYSTEM_LIBRARIES),
                               *(package for _, package in SYSTEM_TOOLS)))

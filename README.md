@@ -1,6 +1,6 @@
 # 🛠️ MCU Flasher by Naph
 
-> **A glass desktop workspace for compiling, flashing, monitoring, and coding microcontrollers on Windows and Ubuntu.**
+> **A glass desktop workspace for compiling, flashing, monitoring, and coding microcontrollers on Windows and Ubuntu, including Ubuntu ARM64 on Raspberry Pi.**
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Ubuntu-blue)
 ![Architecture](https://img.shields.io/badge/architecture-PySide6%20%7C%20Qt%20for%20Python-41CD52)
@@ -279,6 +279,18 @@ Ubuntu 26.04 or newer, with the existing terminal alternatives as fallbacks.
 Ubuntu 24.04 keeps its existing terminal preference. This applies both to normal
 first-run setup and missing-system-Python recovery; launching from an existing
 terminal continues there.
+
+The October 15 ARM64 source update adds CPU selection inside the same Ubuntu
+launcher and Bootstrap path for **Ubuntu Desktop 24.04/26.04 LTS**. It selects
+native dependencies and tool downloads for amd64 or ARM64, including Raspberry
+Pi 5, and repairs runtimes copied between CPUs. Windows production paths remain
+unchanged. Local amd64 verification passed **400 checks**, with **3 native Windows
+checks skipped**, plus the real WebEngine/PTY fake-CLI probe. All 18 offscreen
+responsive layout checks pass; one native setup-frame fixture still fails in
+six short-work-area cases with the original verifier and unchanged UI source.
+Native ARM64 CI has been added but has not yet verified this update. See the
+[ARM64 setup and verification limits](direct/UBUNTU.md#raspberry-pi-and-arm64)
+and [source release notes](RELEASE_NOTES.md#october-15-source-update-ubuntu-arm64-and-raspberry-pi).
 
 The project terminal passes xterm capability replies and bracketed paste to
 interactive coding CLIs. Installed Codex, Claude Code and OpenCode version
@@ -807,7 +819,16 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ## 🚀 Quick Start
 
-**Ubuntu 24.04 or newer (64-bit Intel/AMD):** open **`MCU_Flasher`**, the native Linux executable beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
+**Ubuntu 24.04 or newer (64-bit Intel/AMD or ARM64):** open **`MCU_Flasher`**, the portable Ubuntu launcher beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
+
+Ubuntu detects `amd64`/`x86_64` or `arm64`/`aarch64` within the same launch/setup
+path. Raspberry Pi 5 and other capable Pis need **64-bit Ubuntu Desktop 24.04 LTS
+or 26.04 LTS**, four CPU cores and a desktop session. Pi 4/5 models with at least
+4 GB RAM meet Ubuntu's published Pi desktop memory requirement; 8 GB leaves more
+room for the editor and compilers. Older 32-bit Pis, Raspberry Pi OS and bare
+Ubuntu Server without a desktop are outside this application's supported setup.
+See [Ubuntu's model matrix](https://ubuntu.com/hardware/docs/boards/how-to/ubuntu_supported/raspberry-pi/)
+and the [ARM64 setup details](direct/UBUNTU.md#raspberry-pi-and-arm64).
 
 Ubuntu launch, setup, repair, downloader and direct Python entries read the installed
 OS release before preparing a runtime or starting services. Releases below 24.04
@@ -945,7 +966,7 @@ Below is the complete architectural layout of the MCU Flasher ecosystem:
 ```
 MCU Flasher by Naph/
 ├── MCU_Flasher.exe                   # Native Windows launcher (compiled from src/launcher.cs)
-├── MCU_Flasher                       # Native Ubuntu amd64 launcher (src/launcher_ubuntu.c)
+├── MCU_Flasher                       # Portable Ubuntu amd64/ARM64 Bash launcher
 ├── MCU Flasher.desktop               # Movable local Ubuntu shortcut (keep beside the app)
 ├── mcu_flash_gui.py                 # Root application entry point forwarder
 ├── README.md                         # Comprehensive documentation, user guide & architecture
@@ -1527,7 +1548,7 @@ verification; board compilation/upload still requires separate target checks.
 - **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Starts `direct\runThisOnWindows.vbs` silently without prompting for unnecessary Administrator elevation.
 - **`direct/windows/run.vbs`**: Windows VBScript bootstrapper that checks drive storage type and launches `src/modules/launcher.py`. Requests targeted UAC elevation only for machine-level driver installations. `direct/runThisOnWindows.vbs` forwards here for existing executable launchers.
 - **`direct/ubuntu/setup.py` / `run.sh`**: Native Ubuntu setup and launch. Create/repair `.venv-linux`, preserve project arguments and keep system Python unchanged; `run.sh --repair` explicitly repairs the runtime.
-- **`MCU_Flasher` / `src/launcher_ubuntu.c`**: Native Ubuntu executable. Resolves its application folder independently of the working directory and forwards arguments to the separate Linux launcher. Rebuild with `direct/ubuntu/build_launcher.sh`.
+- **`MCU_Flasher`**: Portable Ubuntu Bash entry for amd64 and ARM64. Resolves its application folder independently of the working directory and forwards literal arguments to the Ubuntu launcher. `src/launcher_ubuntu.c` remains available for optional native wrappers; `direct/ubuntu/build_launcher.sh` creates `MCU_Flasher-amd64` or `MCU_Flasher-arm64` beside the portable entry.
 - **`direct/ubuntu/launch.py` / `preflight.py` / `system_setup.py` / `install_desktop.py`**: Read-only diagnostics, automatic first-run Bootstrap, desktop launch logging and checkout-specific desktop shortcuts. Missing system prerequisites install through Ubuntu's visible sudo/pkexec authentication; only apt-get receives administrator rights. Python dependencies install into `.venv-linux`, and the GUI stays under the desktop user. Cancelled or failed system setup stops before launch. Qt5 sample-viewer validation runs in a separate process from Qt6.
 - **`mcu_flash_gui.py`**: Root entry point forwarder. Enforces private Python execution via `private_python_guard.py`, installs console-hiding hooks, and delegates directly to `main.mcu_flash_gui.main()`.
 
@@ -1672,9 +1693,9 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 (64-bit) or native Ubuntu 24.04 or newer (64-bit Intel/AMD). Ubuntu 24.04/26.04 are CI targets; check the scoped results for the revision being used. X11/Xvfb checks do not certify native Wayland, keyring or USB behavior.
+- **Operating System**: Windows 10/11 (64-bit) or native Ubuntu 24.04 or newer (amd64 or ARM64). Ubuntu 24.04/26.04 have x86-64 and ARM64 CI targets; check the completed results for the revision being used. X11/Xvfb checks do not certify native Wayland, keyring or USB behavior.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
-- **Python**: Ubuntu source setup uses native Python 3.10+ and creates `.venv-linux`. Windows uses its private runtime and bundled installer; no system Python is required.
+- **Python**: Ubuntu source setup uses native Python 3.10+ and creates `.venv-linux`. ARM64 uses Ubuntu's release-matched `/usr/bin/python3` for the native sample-viewer packages. Windows uses its private runtime and bundled installer; no system Python is required.
 - **Version Control**: Git with Git LFS (`git lfs install`)
 
 Free-space planning for the default AVR / ESP32 / ESP8266 Arduino plan:
@@ -1835,6 +1856,12 @@ The workflow also runs the recent cursor, preference, catalog, storage and
 worker regressions on all three Ubuntu targets, with explicit Node-based editor
 checks and native Qt xcb rendering under Xvfb. Local Windows simulations do
 not substitute for those native results.
+The separate [native ARM64 workflow](.github/workflows/ubuntu-arm64.yml) targets
+Ubuntu 24.04/26.04 ARM runners using their release-matched system Python. It
+checks the private Qt6 workspace and native Qt5 sample viewer, hardware-free
+contracts, PTY and responsive behavior, then runs Bootstrap and an ESP32 compile
+inside a disposable fixture. These ARM64 jobs need completed results for the
+revision being used; adding the workflow alone is not execution evidence.
 Ubuntu assistant discovery and lifecycle checks use `direct/verify_ubuntu_opencode.py`
 and `direct/verify_ubuntu_ai_panel.py`. The latter's `--native-renderer` probe uses
 real Qt WebEngine/xterm.js and a local fake CLI over a real PTY, with isolated

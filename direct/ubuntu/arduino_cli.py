@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
-import platform
 import re
 import shutil
 import subprocess
@@ -18,6 +17,7 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from main.platforms import ubuntu_arduino
+from src.modules.ubuntu_architecture import elf_matches_host, host_architecture, linux_tool_architecture
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "1.5.1"
@@ -26,6 +26,9 @@ VERSION = "1.5.1"
 ARCHIVE_NAME = f"arduino-cli_{VERSION}_Linux_64bit.tar.gz"
 ARCHIVE_URL = f"https://github.com/arduino/arduino-cli/releases/download/v{VERSION}/{ARCHIVE_NAME}"
 ARCHIVE_SHA256 = "28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd2b"
+ARM64_ARCHIVE_NAME = f"arduino-cli_{VERSION}_Linux_ARM64.tar.gz"
+ARM64_ARCHIVE_URL = f"https://github.com/arduino/arduino-cli/releases/download/v{VERSION}/{ARM64_ARCHIVE_NAME}"
+ARM64_ARCHIVE_SHA256 = "1e69e077479f300614d4551334e0a33f08ee40b04315d83b8e7e0e94f0d0ee62"
 OWNER = "mcu-flasher-ubuntu-arduino-cli"
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_EXECUTABLE_BYTES = 128 * 1024 * 1024
@@ -39,11 +42,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _native_amd64(path: Path) -> bool:
-    with path.open("rb") as stream:
-        header = stream.read(20)
-    return (len(header) == 20 and header[:6] == b"\x7fELF\x02\x01"
-            and int.from_bytes(header[18:20], "little") == 62)
+def _archive_spec() -> tuple[str, str]:
+    if host_architecture() == "arm64":
+        return ARM64_ARCHIVE_URL, ARM64_ARCHIVE_SHA256
+    return ARCHIVE_URL, ARCHIVE_SHA256
 
 
 def _version(executable: str | Path, env) -> str | None:
@@ -66,8 +68,9 @@ def _version(executable: str | Path, env) -> str | None:
 
 
 def _download_archive(path: Path) -> None:
+    archive_url, archive_sha256 = _archive_spec()
     digest = hashlib.sha256()
-    request = Request(ARCHIVE_URL, headers={"User-Agent": "MCU-Flasher-Ubuntu-Bootstrap"})
+    request = Request(archive_url, headers={"User-Agent": "MCU-Flasher-Ubuntu-Bootstrap"})
     deadline = time.monotonic() + 180
     with urlopen(request, timeout=30) as response, path.open("xb") as stream:
         size = 0
@@ -80,7 +83,7 @@ def _download_archive(path: Path) -> None:
                 raise RuntimeError("Arduino CLI download exceeded its size/time limit.")
             stream.write(block)
             digest.update(block)
-    if digest.hexdigest() != ARCHIVE_SHA256:
+    if digest.hexdigest() != archive_sha256:
         raise RuntimeError("Arduino CLI archive SHA-256 verification failed; the previous installation is preserved.")
 
 
@@ -105,8 +108,8 @@ def _extract_executable(archive: Path, destination: Path) -> None:
             raise RuntimeError("Arduino CLI executable could not be read.")
         with source, destination.open("xb") as output:
             shutil.copyfileobj(source, output, length=1024 * 1024)
-    if not _native_amd64(destination):
-        raise RuntimeError("Arduino CLI archive executable is not native Linux amd64.")
+    if not elf_matches_host(destination):
+        raise RuntimeError(f"Arduino CLI archive executable is not native Linux {host_architecture()}.")
     destination.chmod(0o755)
 
 
@@ -152,9 +155,10 @@ def ensure_arduino_cli(*, env=None, log=print) -> str:
     """Reuse a healthy install or atomically prepare the pinned CLI in app-owned files."""
     from src.modules.ubuntu_release import require_supported_ubuntu
     require_supported_ubuntu()
-    if (not sys.platform.startswith("linux") or platform.machine().lower() not in {"x86_64", "amd64"}
-            or os.geteuid() == 0):
-        raise RuntimeError("Prepare Arduino CLI as the normal Ubuntu amd64 desktop account.")
+    if not sys.platform.startswith("linux") or os.geteuid() == 0:
+        raise RuntimeError("Prepare Arduino CLI as the normal Ubuntu desktop account.")
+    architecture = linux_tool_architecture()
+    archive_url, archive_sha256 = _archive_spec()
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
         raise RuntimeError("Arduino CLI downloads belong to Ubuntu Bootstrap; restart with --repair.")
     found = ubuntu_arduino.find_arduino_cli()
@@ -173,8 +177,8 @@ def ensure_arduino_cli(*, env=None, log=print) -> str:
         if managed:
             receipt = json.loads((folder / "installation.json").read_text())
             if (_sha256(Path(managed)) == receipt.get("executable_sha256")
-                    and receipt.get("archive_sha256") == ARCHIVE_SHA256
-                    and _native_amd64(Path(managed)) and _version(managed, env) == VERSION):
+                    and receipt.get("archive_sha256") == archive_sha256
+                    and elf_matches_host(Path(managed)) and _version(managed, env) == VERSION):
                 log(f"Native Arduino CLI {VERSION} is ready.")
                 return managed
         log(f"Preparing native Arduino CLI {VERSION}…")
@@ -188,9 +192,9 @@ def ensure_arduino_cli(*, env=None, log=print) -> str:
             _extract_executable(archive, executable)
             if _version(executable, env) != VERSION:
                 raise RuntimeError("Downloaded Arduino CLI failed native version validation; previous files are preserved.")
-            receipt = {"owner": OWNER, "architecture": "linux-amd64", "version": VERSION,
+            receipt = {"owner": OWNER, "architecture": architecture, "version": VERSION,
                        "executable": "arduino-cli", "executable_sha256": _sha256(executable),
-                       "archive_url": ARCHIVE_URL, "archive_sha256": ARCHIVE_SHA256}
+                       "archive_url": archive_url, "archive_sha256": archive_sha256}
             (prepared / "installation.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
             # Keep the last installation outside TemporaryDirectory so a failed
             # promotion followed by a failed rollback cannot erase its only copy.

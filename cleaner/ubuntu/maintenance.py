@@ -16,6 +16,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from src.modules.ubuntu_release import enforce_supported_ubuntu
+from src.modules.ubuntu_architecture import elf_matches_host
 SOURCE_TREES = ("main", "src/modules", "src/dbs", "direct", "cleaner", "DANGER-ZONE")
 PROTECTED = frozenset((".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode",
                        ".clangd", ".opencode", ".git", "node_modules", "env", "_python",
@@ -152,7 +153,7 @@ def _validate_tool(path):
     if not executable.is_file() or _linked(executable):
         raise MaintenanceError(f"Native tool executable is unavailable: {path}")
     if name == "arduino-cli":
-        valid = (receipt.get("architecture") == "linux-amd64"
+        valid = (receipt.get("architecture") in ("linux-amd64", "linux-arm64")
                  and receipt.get("executable") == name
                  and re.fullmatch(r"[a-fA-F0-9]{64}", str(receipt.get("executable_sha256", ""))))
     else:
@@ -160,8 +161,9 @@ def _validate_tool(path):
         valid = (receipt.get("schema") == 1 and receipt.get("size") == info.st_size
                  and receipt.get("mtime_ns") == info.st_mtime_ns
                  and re.fullmatch(r"[a-fA-F0-9]{64}", str(receipt.get("binary_sha256", ""))))
-    with executable.open("rb") as stream:
-        valid = valid and stream.read(4) == b"\x7fELF"
+    architecture = receipt.get("architecture", "linux-amd64")
+    valid = (valid and architecture in ("linux-amd64", "linux-arm64")
+             and elf_matches_host(executable, machine=architecture.removeprefix("linux-")))
     if not valid:
         raise MaintenanceError(f"Native tool receipt is invalid: {path}")
     _known_children(path, {name, "installation.json"})

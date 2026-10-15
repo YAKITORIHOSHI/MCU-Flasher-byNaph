@@ -231,6 +231,12 @@ class MissingPythonChecks(unittest.TestCase):
         guard = (ROOT / "direct/ubuntu/release_guard.sh").read_text()
         guard = guard.replace("/etc/os-release", shlex.quote(self.shell_path(release)))
         (folder / "release_guard.sh").write_text(guard, encoding="utf-8", newline="\n")
+        architecture = (ROOT / "direct/ubuntu/architecture_guard.sh").read_text()
+        if os.name == "nt":
+            # Git Bash exercises missing-Python orchestration only. Architecture
+            # admission has separate native Bash/ARM fixtures in the launcher verifier.
+            architecture = architecture.replace("uname -m", "printf x86_64").replace("getconf LONG_BIT", "printf 64")
+        (folder / "architecture_guard.sh").write_text(architecture, encoding="utf-8", newline="\n")
         self.script.write_text(source, encoding="utf-8", newline="\n")
         self.env = os.environ.copy()
         self.env.pop("BASH_ENV", None)

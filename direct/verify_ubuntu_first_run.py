@@ -258,6 +258,8 @@ def _gui_result(fixture: Path, sketch: Path, runtime: Path) -> dict:
 
 
 def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
+    from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
+
     fixture.mkdir(parents=True, exist_ok=False)
     app = fixture / "app"
     app.mkdir()
@@ -272,7 +274,8 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     runtime = app / ".venv-linux"
     if core.exists() or runtime.exists():
         raise RuntimeError("First run must start without native packages or a private runtime")
-    report = {"success": False, "fixture": str(fixture), "initial_private_runtime_present": False,
+    report = {"success": False, "fixture": str(fixture), "host_machine": platform.machine(),
+              "architecture": host_architecture(), "initial_private_runtime_present": False,
               "initial_native_store_present": False, "default_plan": json.loads((app / "direct/offline-packages.json").read_text()),
               "upload": False, "live_settings_modified": False, "system_packages_installed": False,
               "fixture_instrumentation": {
@@ -322,9 +325,8 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     compile_fixture.mkdir(parents=True)
     (compile_fixture / "core").symlink_to(core, target_is_directory=True)
     compiler = core / "packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++"
-    with compiler.open("rb") as source:
-        if source.read(4) != b"\x7fELF":
-            raise RuntimeError("Bootstrap prepared a non-native ESP32 compiler")
+    if not elf_matches_host(compiler):
+        raise RuntimeError("Bootstrap prepared an ESP32 compiler for a different host CPU architecture")
     compile_log = fixture / "compile-verifier.log"
     compiled = _run([str(python), "-B", str(app / "direct/verify_target_resolution.py"),
                      "--compile-button-only", str(compile_fixture)],

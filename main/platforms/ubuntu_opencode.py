@@ -8,6 +8,8 @@ import time
 from collections import deque
 from pathlib import Path
 
+from src.modules.ubuntu_architecture import elf_matches_host, linux_tool_architecture
+
 
 _WINDOWS_SUFFIXES = frozenset({".exe", ".cmd", ".bat", ".ps1"})
 _USER_BIN_DIRS = (".opencode/bin", ".local/bin", ".npm-global/bin", ".bun/bin")
@@ -27,6 +29,9 @@ def managed_opencode_cli() -> str | None:
         state = json.loads(certificate.read_text(encoding="utf-8"))
         if state.get("owner") != MANAGED_OWNER or state.get("schema") != 1:
             return None
+        # Legacy receipts were produced by the amd64-only installer.
+        if state.get("architecture", "linux-amd64") != linux_tool_architecture():
+            return None
         executable = directory / "opencode"
         if executable.is_symlink():
             return None
@@ -34,7 +39,7 @@ def managed_opencode_cli() -> str | None:
         if stat.st_size != state.get("size") or stat.st_mtime_ns != state.get("mtime_ns"):
             return None
         return _native_executable(executable)
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
         return None
 
 
@@ -53,8 +58,12 @@ def _native_executable(candidate) -> str | None:
             return None
         # A copied Windows binary may have been renamed to "opencode".
         with path.open("rb") as stream:
-            if stream.read(2) == b"MZ":
+            header = stream.read(4)
+            if header[:2] == b"MZ":
                 return None
+        # PATH/npm wrappers remain valid; native ELF executables must match CPU.
+        if header == b"\x7fELF" and not elf_matches_host(path):
+            return None
         return str(path)
     except (OSError, RuntimeError, TypeError, ValueError):
         return None

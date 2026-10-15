@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tarfile
@@ -19,10 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from direct.ubuntu import arduino_cli
 from main.platforms import ubuntu_arduino
+from src.modules.ubuntu_architecture import host_architecture
+
+
+def elf_binary(machine="amd64"):
+    code = {"amd64": 62, "arm64": 183}[machine]
+    return b"\x7fELF\x02\x01" + b"\0" * 12 + code.to_bytes(2, "little") + b"fixture native payload"
 
 
 def archive_bytes(*, executable=None, entries=()):
-    executable = executable or b"\x7fELF\x02\x01" + b"\0" * 12 + b"\x3e\0" + b"fixture native payload"
+    executable = executable or elf_binary()
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz") as bundle:
         member = tarfile.TarInfo("arduino-cli")
@@ -54,7 +61,7 @@ class ArduinoCliChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(ubuntu_arduino, "ROOT", self.root))
         self.stack.enter_context(patch.object(Path, "home", return_value=self.home))
         self.stack.enter_context(patch.object(arduino_cli.os, "geteuid", return_value=1000))
-        self.stack.enter_context(patch.object(arduino_cli.platform, "machine", return_value="x86_64"))
+        self.machine = self.stack.enter_context(patch.object(platform, "machine", return_value="x86_64"))
         self.stack.enter_context(patch.object(ubuntu_arduino.shutil, "which", return_value=None))
         self.stack.enter_context(patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "", "MCU_FLASHER_WORKSPACE_RUNTIME": ""}))
         self.network = self.stack.enter_context(patch.object(arduino_cli, "urlopen", side_effect=AssertionError("Live network attempted")))
@@ -63,7 +70,8 @@ class ArduinoCliChecks(unittest.TestCase):
 
     def install(self, payload=None):
         payload = archive_bytes() if payload is None else payload
-        with patch.object(arduino_cli, "ARCHIVE_SHA256", hashlib.sha256(payload).hexdigest()), \
+        digest_name = "ARM64_ARCHIVE_SHA256" if host_architecture() == "arm64" else "ARCHIVE_SHA256"
+        with patch.object(arduino_cli, digest_name, hashlib.sha256(payload).hexdigest()), \
                 patch.object(arduino_cli, "urlopen", return_value=io.BytesIO(payload)):
             return arduino_cli.ensure_arduino_cli(env={"PATH": "/fixture"}, log=self.messages.append)
 
@@ -76,13 +84,38 @@ class ArduinoCliChecks(unittest.TestCase):
     def test_empty_store_prepares_verified_native_cli_and_receipt(self):
         executable = self.install()
         path = Path(executable)
-        self.assertTrue(arduino_cli._native_amd64(path))
+        self.assertTrue(arduino_cli.elf_matches_host(path))
         self.assertTrue(os.access(path, os.X_OK))
         receipt = json.loads((path.parent / "installation.json").read_text())
         self.assertEqual(receipt["owner"], arduino_cli.OWNER)
         self.assertEqual(receipt["executable_sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
         self.assertEqual(ubuntu_arduino.find_arduino_cli(), executable)
         self.assertFalse(any(path.parent.parent.glob(".arduino-cli-stage-*")))
+
+    def test_arm64_asset_is_verified_certified_and_reused_for_both_linux_aliases(self):
+        self.machine.return_value = "aarch64"
+        payload = archive_bytes(executable=elf_binary("arm64"))
+        executable = self.install(payload)
+        receipt = json.loads((Path(executable).parent / "installation.json").read_text())
+        self.assertEqual(receipt["architecture"], "linux-arm64")
+        self.assertTrue(receipt["archive_url"].endswith("_Linux_ARM64.tar.gz"))
+        self.assertEqual(receipt["executable_sha256"], hashlib.sha256(elf_binary("arm64")).hexdigest())
+        self.machine.return_value = "arm64"
+        with patch.object(arduino_cli, "ARM64_ARCHIVE_SHA256", receipt["archive_sha256"]):
+            self.assertEqual(arduino_cli.ensure_arduino_cli(log=self.messages.append), executable)
+        self.assertEqual(ubuntu_arduino.find_arduino_cli(), executable)
+        self.network.assert_not_called()
+
+    def test_moved_amd64_install_is_hidden_on_arm64_and_replaced_only_after_validation(self):
+        executable = self.install()
+        before = {path.name: path.read_bytes() for path in Path(executable).parent.iterdir()}
+        self.machine.return_value = "aarch64"
+        self.assertIsNone(ubuntu_arduino.find_arduino_cli())
+        with self.assertRaisesRegex(RuntimeError, "not native Linux arm64"):
+            self.install()
+        self.assertEqual({path.name: path.read_bytes() for path in Path(executable).parent.iterdir()}, before)
+        self.assertEqual(self.install(archive_bytes(executable=elf_binary("arm64"))), executable)
+        self.assertTrue(arduino_cli.elf_matches_host(Path(executable)))
 
     def test_warm_store_checks_binary_hash_and_version_without_download(self):
         executable = self.install()
@@ -96,7 +129,7 @@ class ArduinoCliChecks(unittest.TestCase):
         executable = self.install()
         Path(executable).write_bytes(b"MZ corrupt Windows replacement")
         self.assertEqual(self.install(), executable)
-        self.assertTrue(arduino_cli._native_amd64(Path(executable)))
+        self.assertTrue(arduino_cli.elf_matches_host(Path(executable)))
 
     def test_failed_checksum_preserves_previous_owned_installation(self):
         executable = self.install()
@@ -186,6 +219,23 @@ class ArduinoCliChecks(unittest.TestCase):
         with patch.object(ubuntu_arduino.shutil, "which", return_value=executable):
             self.assertEqual(ubuntu_arduino.find_arduino_cli(), executable)
 
+    def test_discovery_rejects_external_elf_for_the_other_cpu(self):
+        path = self.home / "bin/arduino-cli"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(elf_binary("arm64"))
+        path.chmod(0o755)
+        self.assertIsNone(ubuntu_arduino.find_arduino_cli())
+        self.machine.return_value = "aarch64"
+        self.assertEqual(ubuntu_arduino.find_arduino_cli(), str(path))
+
+    def test_managed_receipt_for_a_different_cpu_is_not_accepted(self):
+        executable = self.install()
+        receipt_path = Path(executable).parent / "installation.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["architecture"] = "linux-arm64"
+        receipt_path.write_text(json.dumps(receipt))
+        self.assertIsNone(ubuntu_arduino.find_arduino_cli())
+
     def test_unsafe_or_wrong_architecture_archives_are_rejected(self):
         for payload in (archive_bytes(entries=(("../escape", "file"),)),
                         archive_bytes(entries=(("/absolute", "file"),)),
@@ -239,7 +289,7 @@ class ArduinoCliChecks(unittest.TestCase):
         with patch.object(arduino_cli.os, "geteuid", return_value=0):
             with self.assertRaisesRegex(RuntimeError, "desktop account"):
                 arduino_cli.ensure_arduino_cli()
-        with patch.object(arduino_cli.platform, "machine", return_value="aarch64"):
+        with patch.object(platform, "machine", return_value="armv7l"):
             with self.assertRaisesRegex(RuntimeError, "amd64"):
                 arduino_cli.ensure_arduino_cli()
         with patch.dict(os.environ, {"MCU_FLASHER_WORKSPACE_RUNTIME": "1"}):

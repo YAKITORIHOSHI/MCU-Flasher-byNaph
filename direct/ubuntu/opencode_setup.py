@@ -5,7 +5,6 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import stat
@@ -22,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from main.platforms.ubuntu_opencode import MANAGED_OWNER, _native_executable, find_opencode_cli
+from src.modules.ubuntu_architecture import elf_matches_host, host_architecture, linux_tool_architecture
 
 # Official immutable release and GitHub asset SHA-256, reviewed 2026-10-09:
 # https://github.com/anomalyco/opencode/releases/tag/v1.18.35
@@ -32,9 +32,19 @@ ARCHIVE_NAME = "opencode-linux-x64-baseline.tar.gz"
 ARCHIVE_URL = f"https://github.com/anomalyco/opencode/releases/download/v{VERSION}/{ARCHIVE_NAME}"
 ARCHIVE_SHA256 = "90c97d4a24d36437bce36f27195c9cd2e0b70ed037a04d1c6a6740eb246c2a73"
 ARCHIVE_SIZE = 60_669_350
+ARM64_ARCHIVE_NAME = "opencode-linux-arm64.tar.gz"
+ARM64_ARCHIVE_URL = f"https://github.com/anomalyco/opencode/releases/download/v{VERSION}/{ARM64_ARCHIVE_NAME}"
+ARM64_ARCHIVE_SHA256 = "f7f2ba59ee8aa94d388f9696575a32d20e71c2ee48def9f80fc693a60fec6c72"
+ARM64_ARCHIVE_SIZE = 60_487_957
 MAX_DOWNLOAD_BYTES = 96 * 1024 * 1024
 MAX_BINARY_BYTES = 384 * 1024 * 1024
 INSTALL_LOCK_TIMEOUT = 60.0
+
+
+def _archive_spec() -> tuple[str, str, str, int]:
+    if host_architecture() == "arm64":
+        return ARM64_ARCHIVE_NAME, ARM64_ARCHIVE_URL, ARM64_ARCHIVE_SHA256, ARM64_ARCHIVE_SIZE
+    return ARCHIVE_NAME, ARCHIVE_URL, ARCHIVE_SHA256, ARCHIVE_SIZE
 
 
 def _sha256(path: Path) -> str:
@@ -89,7 +99,8 @@ def _installation_state(directory: Path) -> dict | None:
 
 
 def _download(destination: Path, log) -> None:
-    request = urllib.request.Request(ARCHIVE_URL, headers={"User-Agent": "MCU-Flasher-Ubuntu-Bootstrap"})
+    _, archive_url, archive_sha256, archive_size = _archive_spec()
+    request = urllib.request.Request(archive_url, headers={"User-Agent": "MCU-Flasher-Ubuntu-Bootstrap"})
     digest, count = hashlib.sha256(), 0
     deadline, last_log = time.monotonic() + 300.0, 0.0
     with urllib.request.urlopen(request, timeout=30) as response, destination.open("wb") as stream:
@@ -102,15 +113,15 @@ def _download(destination: Path, log) -> None:
             if not chunk:
                 break
             count += len(chunk)
-            if count > MAX_DOWNLOAD_BYTES or count > ARCHIVE_SIZE:
+            if count > MAX_DOWNLOAD_BYTES or count > archive_size:
                 raise RuntimeError("OpenCode archive exceeded its reviewed size.")
             stream.write(chunk)
             digest.update(chunk)
             now = time.monotonic()
             if now - last_log >= 5:
-                log(f"Downloading OpenCode {VERSION}: {count * 100 // ARCHIVE_SIZE}%")
+                log(f"Downloading OpenCode {VERSION}: {count * 100 // archive_size}%")
                 last_log = now
-    if count != ARCHIVE_SIZE or digest.hexdigest() != ARCHIVE_SHA256:
+    if count != archive_size or digest.hexdigest() != archive_sha256:
         raise RuntimeError("OpenCode archive failed its pinned size/SHA-256 verification.")
 
 
@@ -140,10 +151,8 @@ def _extract(archive: Path, destination: Path) -> None:
     if not found:
         raise RuntimeError("OpenCode archive does not contain its native executable.")
     destination.chmod(0o755)
-    with destination.open("rb") as stream:
-        header = stream.read(20)
-    if len(header) < 20 or header[:4] != b"\x7fELF" or header[4:6] != b"\x02\x01" or header[18:20] != b"\x3e\x00":
-        raise RuntimeError("OpenCode archive does not contain a native Linux amd64 executable.")
+    if not elf_matches_host(destination):
+        raise RuntimeError(f"OpenCode archive does not contain a native Linux {host_architecture()} executable.")
 
 
 @contextmanager
@@ -172,8 +181,10 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
     """Reuse a working native CLI or atomically prepare the pinned owned binary."""
     from src.modules.ubuntu_release import require_supported_ubuntu
     require_supported_ubuntu()
-    if not sys.platform.startswith("linux") or platform.machine().casefold() not in {"x86_64", "amd64"}:
-        raise RuntimeError("Native OpenCode Bootstrap supports Ubuntu amd64.")
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("Native OpenCode Bootstrap requires Ubuntu.")
+    architecture = linux_tool_architecture()
+    archive_name, _, archive_sha256, _ = _archive_spec()
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         raise RuntimeError("Prepare OpenCode as the desktop account, without sudo.")
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
@@ -190,7 +201,8 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
         state = _installation_state(directory)
         # Check owned state only after acquiring the lock. Another Bootstrap may
         # have completed while this one waited, and discovery must see that state.
-        candidate = _native_executable(directory / "opencode") if state else None
+        candidate = (_native_executable(directory / "opencode")
+                     if state and state.get("architecture", "linux-amd64") == architecture else None)
         if candidate and _sha256(Path(candidate)) == state.get("binary_sha256"):
             version = _version(candidate, environment)
             if version:
@@ -205,7 +217,7 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
             log("The current OpenCode command could not be verified; preparing the app-owned native binary.")
         with tempfile.TemporaryDirectory(prefix=".opencode-prepare-", dir=tools) as temporary:
             staging = Path(temporary)
-            archive = staging / ARCHIVE_NAME
+            archive = staging / archive_name
             log(f"Preparing OpenCode {VERSION} for native Ubuntu…")
             _download(archive, log)
             prepared = staging / "installation"
@@ -217,7 +229,8 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
                 raise RuntimeError("The prepared OpenCode binary failed its pinned --version check.")
             stat = binary.stat()
             certificate = {"schema": 1, "owner": MANAGED_OWNER, "version": VERSION,
-                           "archive": ARCHIVE_NAME, "archive_sha256": ARCHIVE_SHA256,
+                           "architecture": architecture,
+                           "archive": archive_name, "archive_sha256": archive_sha256,
                            "binary_sha256": _sha256(binary), "size": stat.st_size,
                            "mtime_ns": stat.st_mtime_ns}
             (prepared / "installation.json").write_text(json.dumps(certificate, indent=2) + "\n", encoding="utf-8")

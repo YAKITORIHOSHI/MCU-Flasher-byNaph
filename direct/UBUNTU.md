@@ -21,7 +21,9 @@ host implementation through `main/core/toolchain.py`:
 | `main/platforms/windows.py` | Windows executable discovery, guarded package commands and short-path aliases |
 | `main/core/build_resources.py` | Shared CPU, RAM and storage budgets |
 | `direct/ubuntu/requirements.txt` | Native Linux dependencies, without Windows terminal/WebView packages |
-| `MCU_Flasher` / `src/launcher_ubuntu.c` | Native amd64 executable and its rebuildable Linux-only source |
+| `MCU_Flasher` / `src/launcher_ubuntu.c` | Portable amd64/ARM64 Bash entry and optional native C wrapper |
+| `direct/ubuntu/architecture_guard.sh` / `src/modules/ubuntu_architecture.py` | Early 64-bit CPU admission and native ELF identity checks |
+| `direct/ubuntu/arm_qt5.py` | ARM64-only access to Ubuntu's ABI-matched Qt5 sample-viewer package |
 | `direct/ubuntu/launch.py` / `preflight.py` | First-run Bootstrap handoff, desktop launch and dependency diagnostics |
 | `direct/ubuntu/install_desktop.py` | Local desktop shortcut and optional per-user Applications entry |
 
@@ -62,7 +64,7 @@ and [release notes](../RELEASE_NOTES.md) for packaging and verification limits.
 
 ## Native parity audit — 2026-10-13
 
-The current audit used Ubuntu 26.04.1 LTS (amd64), private Python 3.14.4,
+The 2026-10-13 audit used Ubuntu 26.04.1 LTS (amd64), private Python 3.14.4,
 PySide6 6.12.0 and native Tcl/Tk 8.6. Qt, WebEngine, Tk and PTY probes ran
 under isolated Xvfb displays; the fake OpenCode CLI exercised actual capability
 replies, Unicode, bracketed paste, hide/reveal, restart and process shutdown.
@@ -104,7 +106,7 @@ are not changed. The file downloader supports resizing and keyboard-driven
 scrolling. Appearance checks use isolated catalogs/forms at five scales; they
 never install packages or start real downloads.
 
-Use a normal desktop account and a writable checkout on 64-bit Intel/AMD Ubuntu 24.04 or newer.
+Use a normal desktop account and a writable checkout on 64-bit Intel/AMD or ARM64 Ubuntu 24.04 or newer.
 All Ubuntu launch, setup, repair, downloader and direct Python entry points validate
 the installed OS release before runtime preparation, installation or services.
 Older releases stop with “MCU Flasher requires Ubuntu 24.04 or newer.” Missing,
@@ -179,13 +181,13 @@ Wayland behavior. See the [Ubuntu 26.04 release notes](https://documentation.ubu
 From the project directory:
 
 ```bash
-# Launch the supplied native executable, or double-click it in Files:
+# Launch the supplied portable Ubuntu entry, or open its desktop shortcut:
 ./MCU_Flasher
 # Check prerequisites/readiness without setup or GUI:
 ./MCU_Flasher --check
 # Register an Applications menu entry and generate the local desktop shortcut:
 ./MCU_Flasher --install-shortcut
-# Rebuild the executable/shortcut from source when needed:
+# Optionally build a native wrapper for this CPU beside the portable entry:
 bash direct/ubuntu/build_launcher.sh
 # The original explicit setup and terminal launch still work:
 python3 direct/ubuntu/setup.py
@@ -198,18 +200,71 @@ bash direct/ubuntu/run.sh --project "/home/you/Arduino/AnotherSketch" --new-wind
 bash direct/ubuntu/run.sh --repair
 ```
 
-`MCU_Flasher` is a native ELF launcher for this application folder, like the
-existing Windows launcher. Keep it beside `direct/`, `main/` and `src/`; it is
+`MCU_Flasher` is a portable Bash launcher for this application folder on both
+amd64 and ARM64. Keep it beside `direct/`, `main/` and `src/`; it is
 not a single-file bundle of Python and board toolchains. Executable permissions
 are supplied; if a copy loses them, use `chmod +x MCU_Flasher`. A filesystem
 mounted with `noexec` can use `bash direct/ubuntu/run.sh` to enter setup, but the
 private runtime and native tools still need executable storage. The generated
 folder shortcut resolves the application beside the shortcut at click time and
-invokes Bash, so its launch path survives a folder move and a lost ELF executable
-bit. Keep that shortcut beside `direct/`, `main/` and `src/`. Ubuntu may require
-right-clicking it and choosing **Allow Launching**. The optional Applications menu
+invokes Bash, so its launch path survives a folder move and lost execute
+permissions on launcher scripts. Keep that shortcut beside `direct/`, `main/`
+and `src/`. Ubuntu may require right-clicking it and choosing **Allow Launching**.
+The optional Applications menu
 entry uses absolute paths; after moving the folder, run
 `bash direct/ubuntu/run.sh --install-shortcut` to regenerate that menu entry.
+
+The optional C build produces `MCU_Flasher-amd64` or `MCU_Flasher-arm64` beside
+the portable entry. It never replaces `MCU_Flasher` or Windows `.exe` files.
+Keep a native wrapper beside the application folders and use it only on its
+matching CPU. The portable entry and desktop shortcut require no compilation.
+
+## Raspberry Pi and ARM64
+
+The Ubuntu branch selects `amd64` for `x86_64`/`amd64` and `arm64` for
+`aarch64`/`arm64`. Raspberry Pi 5 uses ARM64. Install the **64-bit Ubuntu Desktop
+24.04 LTS or 26.04 LTS image** for your model; a desktop session and four CPU
+cores remain required. Ubuntu lists desktop support for Pi 4/5 and related
+models with at least 4 GB RAM. 8 GB gives the editor and compiler more headroom.
+Check [Ubuntu's support and EEPROM requirements](https://ubuntu.com/hardware/docs/boards/how-to/ubuntu_supported/raspberry-pi/)
+before installing the OS. A 32-bit userspace, older 32-bit Pi, Raspberry Pi OS,
+or a server installation without a desktop does not meet this setup's contract.
+
+Launch exactly as on an Intel/AMD Ubuntu machine:
+
+```bash
+bash direct/ubuntu/run.sh
+# Diagnose only, without installing anything:
+bash direct/ubuntu/run.sh --check
+```
+
+Bootstrap uses ARM64 PySide6/WebEngine wheels for the workspace. The separate
+read-only sample viewer uses Ubuntu's `python3-pyqt5`, `python3-pyqt5.qsci` and
+`python3-pyqt5.sip` packages because upstream PyQt5 has no Linux ARM64 wheels.
+Use Ubuntu's `/usr/bin/python3` when provisioning manually so its Python ABI
+matches these packages. Bootstrap exposes only their `PyQt5` namespace through
+a private-environment import hook; it keeps system site packages disabled and
+runs both viewers from `.venv-linux`. Qt5 and Qt6 remain in separate processes.
+The amd64 wheel requirements and Windows dependencies retain their existing paths.
+
+Arduino CLI and OpenCode downloads select pinned, checksum-verified native
+ARM64 assets. Receipt and ELF checks reject tools copied from the other CPU.
+Native PlatformIO stores and firmware receipts already separate the host
+architecture; upstream packages must also provide tools for that host. A board
+package without Linux ARM64 binaries cannot be made ready by using an amd64 tool.
+
+When moving an application folder between Intel/AMD and ARM64 Ubuntu, run
+`bash direct/ubuntu/run.sh --repair` on the destination. Bootstrap detects a
+foreign private-runtime receipt or native extensions and reinstalls the Ubuntu
+requirements for the current CPU, then prepares that CPU's board store. Preserve
+the Windows runtime, settings, sketches and protected caches when moving it.
+
+`.github/workflows/ubuntu-arm64.yml` adds native Ubuntu 24.04/26.04 ARM64 jobs
+for bootstrap contracts, the real Qt/Monaco and sample viewers, PTY, resource and
+responsive checks, plus empty-store preparation and an ESP32 compile fixture.
+Adding these jobs is not evidence that they have passed. Local amd64 architecture
+fixtures simulate CPU selection and wrong-CPU rejection; they do not certify
+execution on a physical Pi, Wayland, keyring or USB upload/reset behavior.
 
 ## Copied folders and launch problems
 
@@ -309,10 +364,11 @@ preparation. Required tools, custom package sources and Windows plans remain
 unchanged; Bootstrap still stops on genuine package preparation failures.
 It preserves installed packages, repairs stale copied interpreter links, refuses
 external environment symlinks and never installs pip packages into system Python.
-GUI bindings use binary wheels to avoid an unattended Qt source build. Their
-joint PySide6/PyQt5/QScintilla wheel availability currently limits this release
-to amd64; ARM is rejected with an explanation. Run the GUI as
-your desktop account; do not disable Chromium's sandbox or run it through sudo.
+The workspace uses PySide6/WebEngine binary wheels on amd64 and ARM64 to avoid
+an unattended Qt source build. The separate sample viewer uses PyQt5/QScintilla
+wheels on amd64 and Ubuntu's ABI-matched Qt5 packages on ARM64 through the narrow
+private-environment import hook described above. Run the GUI as your desktop
+account; do not disable Chromium's sandbox or run it through sudo.
 Keep the local offline `src/editor` assets when copying the application. The old
 `direct/setup_ubuntu.py`, `runThisOnUbuntu.sh` and `requirements-ubuntu.txt`
 paths forward to the Ubuntu files for compatibility.
@@ -501,6 +557,23 @@ paths. Errors remain visible; broad try/catch blocks do not prove recovery.
 
 ## Verification and current limits
 
+### ARM64 addition — 2026-10-15
+
+Local amd64 verification completed with 400 checks passed and three native
+Windows checks skipped. The isolated checks cover CPU selection, wrong-CPU
+runtime/tool rejection, ARM64 dependency routing, portable launchers, Bootstrap,
+maintenance and Windows setup/runtime boundaries. ARM64 fixtures simulate host
+identities and providers; native ARM64 and native Windows execution were not
+performed for this addition. The new ARM64 CI jobs must complete before their
+native results can be reported.
+
+Offscreen responsive layout checks passed. The native xcb responsive run
+still reports a setup-dialog frame-clamping failure that also reproduces on the
+unmodified baseline, so this addition does not claim a full native responsive
+suite pass. Physical Raspberry Pi USB upload/reset, native Wayland and real
+provider/keyring integration remain separate checks. The dated audit results
+below describe their recorded revisions and environments.
+
 The Ubuntu parity audit additionally covers Bootstrap's native Arduino CLI and
 OpenCode preparation, clipboard/search tools, private esptool reset commands,
 Download Manager reuse and shutdown, assistant keyboard ownership, current
@@ -522,6 +595,8 @@ Windows reset command paths are preserved.
 Hardware-free regressions, using the application's private Python:
 
 ```bash
+.venv-linux/bin/python -B direct/verify_ubuntu_architecture.py
+.venv-linux/bin/python -B direct/verify_ubuntu_arm_bootstrap.py
 .venv-linux/bin/python -B direct/verify_ubuntu_arduino_cli.py
 .venv-linux/bin/python -B direct/verify_ubuntu_opencode_setup.py
 .venv-linux/bin/python -B direct/verify_ubuntu_download_manager.py
@@ -548,8 +623,8 @@ xvfb-run -a /usr/bin/python3 -B direct/verify_ubuntu_first_run.py --execute
 ```
 
 It copies application sources/assets into a new `temp/audit/ubuntu-first-run/`
-fixture with an empty runtime and native store, runs the native launcher and the
-full default Bootstrap, opens the actual Monaco workspace, verifies a prepared
+fixture with an empty runtime and native store, runs the portable Ubuntu launcher
+and the full default Bootstrap, opens the actual Monaco workspace, verifies a prepared
 launch, clicks Compile for ESP32 and runs the runtime checks. It redirects home
 paths in the fixture and prohibits serial opens; installers run normally only
 inside the fixture. It leaves logs and firmware there and never installs system
@@ -617,8 +692,8 @@ package paths, setup/launch arguments and build/upload process options. It
 parses Bash scripts without launching; the native Windows Script Host check
 skips on Ubuntu. Setup and hardware calls are mocked.
 
-The Ubuntu CI job additionally provisions native AVR packages under `temp/`,
-then uses copied packages to compile Uno, Nano and Mega through the application's
+The existing Ubuntu compatibility CI job additionally provisions native AVR
+packages under `temp/`, then uses copied packages to compile Uno, Nano and Mega through the application's
 Compile button. To run that optional integration locally with already installed
 native packages, use `.venv-linux/bin/python -B direct/verify_target_resolution.py
 --compile-installed-avr`. An explicit `--avr-core /path/to/native/store` is also
@@ -668,9 +743,9 @@ PTY cleanup fixtures passed 107 checks, with two Windows-only cases skipped.
 The GNOME Secret Service passed an isolated store/read/remove round trip using
 the production vault adapter and a unique test-only service namespace.
 No existing account record or real sketch was accessed by those fixtures.
-This host still needs normal Bootstrap preparation: `.venv-linux` is absent and
-the read-only launcher check reports missing `libsecret-tools`. Verification
-used a disposable runtime and checksum-verified temporary Ubuntu vault tools;
+At that audit, the host still needed normal Bootstrap preparation: `.venv-linux`
+was absent and the read-only launcher check reported missing `libsecret-tools`.
+Verification used a disposable runtime and checksum-verified temporary Ubuntu vault tools;
 it did not install system packages or provision live board stores. At the
 user's request, generated Linux/Windows Python runtimes and bulky isolated
 audit dependencies were subsequently removed. Compact validation evidence and
@@ -681,7 +756,7 @@ freeing approximately 5.1 GB outside the checkout. All 45 isolated Ubuntu
 maintenance checks passed, including external-link and other-architecture
 preservation; CI runs this verifier on each Ubuntu runtime combination.
 
-Local Ubuntu 24.04 amd64 verification passes with the native xcb backend on an
+Earlier Ubuntu 24.04 amd64 verification passed with the native xcb backend on an
 isolated Xvfb display: 35 runtime checks plus the real Monaco workspace, seven
 event-filter/heap-crash checks, 25 native serial-view checks, 24 build-console
 checks, and 26 performance checks. The responsive suite passed 14 Qt/Tk checks
@@ -706,7 +781,8 @@ run installers or firmware operations; separate isolated native first-run and
 ESP32 Compile probes are described below. Other Wayland desktop environments
 and actual hardware remain separate checks.
 Windows driver installers and UNC mappings remain Windows-specific; the new
-`MCU_Flasher` supplies Ubuntu's native executable launcher.
+`MCU_Flasher` now supplies Ubuntu's portable amd64/ARM64 Bash launcher; optional
+native C wrappers use separate CPU-specific filenames.
 
 The missing **ESP32 Dev Module** definition was traced to Ubuntu's earlier
 SCons-only online setup. First-run/repair now prepares the configured native

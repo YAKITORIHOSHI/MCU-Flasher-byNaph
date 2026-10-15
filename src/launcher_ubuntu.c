@@ -1,4 +1,5 @@
-/* Native Linux counterpart of MCU_Flasher.exe. Keep the application folder together. */
+/* Optional native amd64/arm64 Ubuntu wrapper; MCU_Flasher is the portable entry.
+ * Compile on the target host and keep this binary beside direct/, main/, src/. */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <stdio.h>

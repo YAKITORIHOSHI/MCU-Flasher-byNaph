@@ -19,6 +19,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from src.modules.ubuntu_release import require_supported_ubuntu
+from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
 
 # Ubuntu package names are kept beside their SONAMEs so a first-run failure
 # explains the actual missing dependency instead of Qt's generic xcb warning.
@@ -66,8 +67,12 @@ class MissingSystemDependencies(RuntimeError):
 
 def system_install_command(packages=None) -> str:
     """Return a manual recovery command; checks never execute it."""
-    packages = packages or ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", *CLIPBOARD_PACKAGES,
-                            *(package for _, package in SYSTEM_LIBRARIES)]
+    if not packages:
+        packages = ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", *CLIPBOARD_PACKAGES,
+                    *(package for _, package in SYSTEM_LIBRARIES)]
+        if host_architecture() == "arm64":
+            from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES
+            packages.extend(SYSTEM_PACKAGES)
     return "sudo apt install " + " ".join(normalize_packages(packages))
 
 
@@ -89,15 +94,15 @@ def host_preflight(*, require_display=False) -> None:
         raise RuntimeError("This launcher requires native Ubuntu/Linux. Use MCU_Flasher.exe on Windows.")
     if sys.version_info < (3, 10):
         raise RuntimeError("Python 3.10 or newer is required. Install Ubuntu's python3 and python3-venv.")
-    # Both Qt bindings are needed: PySide6 owns the workspace, while the library
-    # sample viewer uses a separate PyQt5/QScintilla process. Their released Linux
-    # wheels are jointly available on amd64; do not start an unattended Qt build.
-    if struct.calcsize("P") != 8 or os.uname().machine.lower() not in ("x86_64", "amd64"):
-        raise RuntimeError("The Ubuntu desktop release currently requires 64-bit Intel/AMD (amd64). "
-                           "PyQt5/QScintilla sample-viewer wheels are unavailable for this architecture.")
+    architecture = host_architecture(os.uname().machine)
+    if struct.calcsize("P") != 8:
+        raise RuntimeError("MCU Flasher requires a 64-bit Ubuntu Python interpreter (amd64 or ARM64).")
     if require_display and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         raise RuntimeError("Open MCU Flasher from your Ubuntu desktop session. No DISPLAY or WAYLAND_DISPLAY is available.")
     missing = []
+    if architecture == "arm64":
+        from direct.ubuntu.arm_qt5 import missing_system_packages
+        missing.extend(missing_system_packages())
     if importlib.util.find_spec("ensurepip") is None:
         missing.append("python3-venv")
     try:
@@ -173,7 +178,18 @@ def runtime_preflight(root=ROOT) -> None:
     expected = root / ".venv-linux"
     if sys.prefix == sys.base_prefix or Path(sys.prefix).resolve() != expected:
         raise RuntimeError("MCU Flasher must use its own .venv-linux environment. Rerun Ubuntu Bootstrap.")
+    architecture = host_architecture()
+    from direct.ubuntu.runtime_architecture import check_runtime_architecture
+    check_runtime_architecture(expected, architecture)
     check_qt_python_compatibility()
+    # Do not import a copied amd64 Qt extension on ARM64 (or vice versa).
+    qt_spec = importlib.util.find_spec("PySide6")
+    if qt_spec is not None and qt_spec.origin:
+        qt_root = Path(qt_spec.origin).parent / "Qt"
+        for native in (qt_root / "lib/libQt6Core.so.6", qt_root / "libexec/QtWebEngineProcess"):
+            if native.is_file() and not elf_matches_host(native, architecture):
+                raise RuntimeError("Ubuntu's Qt runtime was copied from another CPU architecture. "
+                                   "Run bash direct/ubuntu/run.sh --repair on this computer.")
     sys.path.insert(0, str(root))
     try:
         _check_tk()
@@ -196,8 +212,8 @@ def runtime_preflight(root=ROOT) -> None:
     # Keep Qt5 and Qt6 native graphs in separate processes, as in production.
     result = subprocess.run([sys.executable, "-B", "-c",
                              "import PyQt5.QtWidgets, PyQt5.Qsci; "
-                             "from pathlib import Path; import PyQt5; "
-                             "print(Path(PyQt5.__file__).parent / 'Qt5/plugins/platforms/libqxcb.so')"],
+                             "from pathlib import Path; from PyQt5.QtCore import QLibraryInfo; "
+                             "print(Path(QLibraryInfo.location(QLibraryInfo.PluginsPath)) / 'platforms/libqxcb.so')"],
                             capture_output=True, text=True, timeout=30, check=False)
     if result.returncode:
         raise RuntimeError("The library sample viewer's PyQt5/QScintilla runtime is unavailable:\n" +

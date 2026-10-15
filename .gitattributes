@@ -23,7 +23,8 @@
 *.sys binary
 *.cat binary
 *.ttf binary
-MCU_Flasher binary
+# The Ubuntu entry is portable Bash; preserve LF even in Windows checkouts.
+MCU_Flasher text eol=lf
 
 # Git LFS binary installers
 installers/*.exe filter=lfs diff=lfs merge=lfs -text

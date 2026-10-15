@@ -200,7 +200,7 @@ class UbuntuBootstrapChecks(unittest.TestCase):
                 preflight.normalize_packages(["libasound2", "libglib2.0-0"])
 
     def test_unsupported_architecture_stops_before_dependency_work(self):
-        with patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="aarch64")), \
+        with patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="armv7l")), \
                 patch.object(preflight, "_check_tk", side_effect=AssertionError("Dependency work ran")), \
                 patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")):
             with self.assertRaisesRegex(RuntimeError, "64-bit Intel/AMD"):

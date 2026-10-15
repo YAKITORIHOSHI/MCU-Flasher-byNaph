@@ -96,15 +96,29 @@ def main(argv=None) -> int:
     try:
         from direct.ubuntu.system_setup import ensure_system_dependencies
         ensure_system_dependencies(require_display=args.launch, env=env)
+        from src.modules.ubuntu_architecture import host_architecture
+        from direct.ubuntu.runtime_architecture import (needs_architecture_repair,
+                                                       private_site_packages,
+                                                       record_runtime_architecture)
+        architecture = host_architecture()
         stage = "private Python environment"
         # Never clear a repaired environment or install into system Python.
         prepare_environment_directory(ENV_DIR)
         venv.EnvBuilder(with_pip=True, symlinks=True).create(ENV_DIR)
         python = ENV_DIR / "bin/python"
+        force_reinstall = needs_architecture_repair(ENV_DIR, architecture)
+        if architecture == "arm64":
+            from direct.ubuntu.arm_qt5 import install_bridge
+            install_bridge(private_site_packages(ENV_DIR))
         stage = "Python dependencies"
+        reinstall = ["--force-reinstall"] if force_reinstall else []
+        if force_reinstall:
+            print("This private runtime contains packages for another CPU architecture; replacing native wheels.", flush=True)
         subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check",
                         "--no-user", "--prefer-binary", "--only-binary=PySide6,PySide6-Essentials,PySide6-Addons,shiboken6,PyQt5,PyQt5-Qt5,QScintilla",
+                        *reinstall,
                         "-r", str(ROOT / "direct/ubuntu/requirements.txt")], check=True, env=env, cwd=ROOT)
+        record_runtime_architecture(ENV_DIR, architecture)
         stage = "native runtime validation"
         subprocess.run([str(python), "-c",
                         "from direct.ubuntu.preflight import runtime_preflight; runtime_preflight()"],
@@ -149,7 +163,7 @@ def main(argv=None) -> int:
         recovery = {
             "Ubuntu prerequisites": "",
             "private Python environment": "Install python3-venv (or the matching python3.X-venv for a custom interpreter), then rerun Bootstrap.",
-            "Python dependencies": "Check network access and available disk space, then rerun Bootstrap. Native GUI wheels require amd64 Python 3.10 or newer.",
+            "Python dependencies": "Check network access and available disk space, then rerun Bootstrap. Use 64-bit Ubuntu Python 3.10 or newer on amd64/ARM64; ARM64's Qt5 viewer uses Ubuntu's python3-pyqt5 and python3-pyqt5.qsci packages.",
             "native runtime validation": "Read the dependency error above, install its Ubuntu prerequisites, then rerun Bootstrap.",
             "native Arduino CLI": "Check network access and the native CLI error above, then rerun Bootstrap; existing files are preserved.",
             "OpenCode AI Assistant": "Check network access and the native CLI error above, then rerun Bootstrap; existing files are preserved.",

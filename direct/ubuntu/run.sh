@@ -7,6 +7,8 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 source "$app_root/direct/ubuntu/release_guard.sh"
 require_supported_ubuntu || exit 1
+source "$app_root/direct/ubuntu/architecture_guard.sh"
+require_supported_ubuntu_architecture || exit 1
 # Bootstrap's coordinator uses Ubuntu Python; the workspace always uses its venv.
 unset PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONUSERBASE
 unset PYTHONEXEPATH PIO_PYTHON_EXE PLATFORMIO_PYTHON_EXE PLATFORMIO_PENV_DIR

@@ -267,6 +267,8 @@ jobs:
           PY
           .venv-linux/bin/python -B direct/verify_platforms.py
           .venv-linux/bin/python -B direct/verify_private_runtimes.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_architecture.py
+          .venv-linux/bin/python -B direct/verify_ubuntu_arm_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_release.py
           .venv-linux/bin/python -B direct/verify_ubuntu_launcher.py
           .venv-linux/bin/python -B direct/verify_ubuntu_bootstrap.py

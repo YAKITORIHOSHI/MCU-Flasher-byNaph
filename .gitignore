@@ -148,6 +148,9 @@ ___*.py
 node_modules/
 .venv-linux/
 .ubuntu-tools/
+# Optional per-host Ubuntu C wrappers; MCU_Flasher itself is universal Bash.
+/MCU_Flasher-amd64
+/MCU_Flasher-arm64
 # Folder shortcuts are generated locally; only Applications entries need new paths after moves.
 /MCU Flasher.desktop
 

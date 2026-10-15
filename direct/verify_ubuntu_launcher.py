@@ -9,6 +9,7 @@ import ctypes.util
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from direct.ubuntu import launch, install_desktop, preflight
+from src.modules import ubuntu_architecture
 
 
 class FirstLaunchPackagingChecks(unittest.TestCase):
@@ -39,6 +41,13 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
                 (source / name).write_text("fixture", encoding="utf-8")
             for name in ("verify_runtime.py", "verify_target_resolution.py"):
                 (source / "direct" / name).write_text('sys.path.insert(0, str(ROOT))\n', encoding="utf-8")
+            native_sources = ("direct/ubuntu/architecture_guard.sh", "direct/ubuntu/arm_qt5.py",
+                              "direct/ubuntu/runtime_architecture.py", "src/modules/ubuntu_architecture.py")
+            for relative in native_sources:
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("native ARM64 support fixture\n", encoding="utf-8")
+            (source / "src/dbs/bootstrap_config.json").write_text('{"live settings":true}\n', encoding="utf-8")
             (source / "main/mcu_flash_gui.py").write_text(
                 'from main.web_bridge import MCUWebBackendAPI\n'
                 'def launch():\n        window.show()\n', encoding="utf-8")
@@ -54,6 +63,9 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
                     scope["_copy_source"](destination)
                     self.assertTrue((destination / "MCU_Flasher").is_file())
                     self.assertFalse((destination / "AGENTS.md").exists())
+                    self.assertFalse((destination / "src/dbs/bootstrap_config.json").exists())
+                    for relative in native_sources:
+                        self.assertEqual((destination / relative).read_bytes(), (source / relative).read_bytes())
                     self.assertIn("isolated home", (destination / "src/__init__.py").read_text())
 
 
@@ -76,6 +88,89 @@ class LaunchEnvironmentChecks(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(get_pythonexe_path(), os.path.normpath(sys.executable))
         self.assertEqual(env["PYTHONNOUSERSITE"], "1")
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Native Bash architecture fixtures")
+class ArchitectureEntryChecks(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        audit = ROOT / "temp/audit/ubuntu-launcher"
+        audit.mkdir(parents=True, exist_ok=True)
+        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit)))
+        self.folder = self.root / "direct/ubuntu"
+        self.folder.mkdir(parents=True)
+        for name in ("run.sh", "build_launcher.sh", "architecture_guard.sh"):
+            shutil.copy2(ROOT / "direct/ubuntu" / name, self.folder / name)
+        (self.folder / "release_guard.sh").write_text(
+            "require_supported_ubuntu() { return 0; }\n", encoding="utf-8")
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", "")}
+
+    def architecture(self, machine: str, bits: str = "64"):
+        (self.bin / "uname").write_text(
+            '#!/bin/bash\nif [[ "$1" == -s ]]; then printf Linux; else printf "%s" '
+            + machine + '; fi\n', encoding="utf-8")
+        (self.bin / "getconf").write_text('#!/bin/bash\nprintf "%s" ' + bits + '\n', encoding="utf-8")
+        for name in ("uname", "getconf"):
+            (self.bin / name).chmod(0o755)
+
+    def run_script(self, name: str, *arguments: str):
+        return subprocess.run(["/bin/bash", str(self.folder / name), *arguments],
+                              env=self.env, capture_output=True, text=True, timeout=10)
+
+    def test_amd64_arm64_and_aliases_reach_same_python_dispatch_with_literal_arguments(self):
+        recorder = self.root / "python"
+        recorder.write_text('#!/bin/bash\nexec /usr/bin/python3 -c '
+                            "'import json,sys; print(json.dumps(sys.argv[1:]))' \"$@\"\n", encoding="utf-8")
+        recorder.chmod(0o755)
+        runner = self.folder / "run.sh"
+        runner.write_text(runner.read_text().replace("/usr/bin/python3", shlex.quote(str(recorder))), encoding="utf-8")
+        arguments = ["--project", 'Sketch Ω $(touch NEVER) "quoted"', "--check"]
+        for machine in ("x86_64", "amd64", "aarch64", "arm64"):
+            with self.subTest(machine=machine):
+                self.architecture(machine)
+                result = self.run_script("run.sh", *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), ["-B", str(self.folder / "launch.py"), *arguments])
+        self.assertFalse((self.root / "NEVER").exists())
+
+    def test_unsupported_or_32_bit_userspace_never_reaches_python_or_compiler(self):
+        for machine, bits in (("armv7l", "32"), ("aarch64", "32"), ("riscv64", "64"), ("x86_64", "unknown")):
+            with self.subTest(machine=machine, bits=bits):
+                self.architecture(machine, bits)
+                for name in ("run.sh", "build_launcher.sh"):
+                    result = self.run_script(name, "--check")
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("64-bit Ubuntu", result.stderr)
+                self.assertFalse((self.root / "--check").exists())
+
+    def test_native_build_selects_host_filename_and_preserves_portable_and_windows_entries(self):
+        protected = {"MCU_Flasher": b"portable Ubuntu entry\n", "MCU_Flasher.exe": b"MZ Windows launcher\n",
+                     "direct/windows/run.vbs": b"Windows launcher fixture\r\n"}
+        for name, contents in protected.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(contents)
+        compiler = self.bin / "cc"
+        compiler.write_text('#!/bin/bash\nwhile (( $# > 0 )); do\n'
+                            '  if [[ "$1" == -o ]]; then shift; printf native-fixture > "$1"; exit 0; fi\n'
+                            '  shift\ndone\nexit 9\n', encoding="utf-8")
+        compiler.chmod(0o755)
+        self.env["CC"] = str(compiler)
+        for machine, architecture in (("x86_64", "amd64"), ("aarch64", "arm64")):
+            with self.subTest(machine=machine):
+                self.architecture(machine)
+                result = self.run_script("build_launcher.sh")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.root / f"MCU_Flasher-{architecture}").read_bytes(), b"native-fixture")
+                for name, contents in protected.items():
+                    self.assertEqual((self.root / name).read_bytes(), contents)
+                for name in ("MCU_Flasher", "MCU_Flasher.exe"):
+                    result = self.run_script("build_launcher.sh", str(self.root / name))
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual((self.root / name).read_bytes(), protected[name])
 
 
 def desktop_command(text: str, *, action: bool = False) -> list[str]:
@@ -246,14 +341,9 @@ class LauncherChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(launch.os, "geteuid", return_value=1000))
         self.stack.enter_context(patch.object(launch.sys, "stdin", SimpleNamespace(isatty=lambda: True)))
 
-    def test_native_executable_preserves_location_and_literal_arguments(self):
-        folder = self.root / 'Moved Ubuntu Ω folder $cash `literal`'
-        (folder / "direct/ubuntu").mkdir(parents=True)
-        target = folder / "MCU_Flasher"
-        if not (ROOT / "MCU_Flasher").is_file():
-            self.skipTest("Build native MCU_Flasher before this check")
-        shutil.copy2(ROOT / "MCU_Flasher", target)
-        recorder = folder / "direct/ubuntu/run.sh"
+    def launcher_arguments(self, target: Path):
+        recorder = target.parent / "direct/ubuntu/run.sh"
+        recorder.parent.mkdir(parents=True, exist_ok=True)
         recorder.write_text('#!/bin/bash\nexec /usr/bin/python3 -c '
                             "'import json,sys; print(json.dumps(sys.argv[1:]))' \"$@\"\n", encoding="utf-8")
         arguments = ["--project", 'Sketch Ω with spaces $(touch NEVER) "quotes"', "--new-window"]
@@ -261,6 +351,29 @@ class LauncherChecks(unittest.TestCase):
                                 capture_output=True, text=True, timeout=10, check=True)
         self.assertEqual(json.loads(result.stdout), ["--desktop", *arguments])
         self.assertFalse((self.root / "NEVER").exists())
+
+    def test_portable_root_launcher_preserves_location_and_literal_arguments(self):
+        folder = self.root / 'Moved Ubuntu Ω folder $cash `literal`'
+        (folder / "direct/ubuntu").mkdir(parents=True)
+        target = folder / "MCU_Flasher"
+        shutil.copy2(ROOT / "MCU_Flasher", target)
+        self.assertTrue(target.read_bytes().startswith(b"#!/usr/bin/env bash\n"))
+        self.launcher_arguments(target)
+        link = self.root / "linked-launcher"
+        link.symlink_to(target)
+        self.launcher_arguments(link)
+
+    def test_optional_native_wrapper_preserves_location_and_literal_arguments(self):
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("Native C compiler unavailable")
+        folder = self.root / 'Native Ubuntu Ω folder $cash `literal`'
+        folder.mkdir()
+        target = folder / "MCU_Flasher-native"
+        subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        str(ROOT / "src/launcher_ubuntu.c"), "-o", str(target)],
+                       capture_output=True, text=True, timeout=30, check=True)
+        self.launcher_arguments(target)
 
     def test_missing_runtime_repairs_once_then_launches_with_same_arguments(self):
         with patch.object(launch, "runtime_problem", side_effect=["Missing runtime", None]), \
@@ -284,9 +397,24 @@ class LauncherChecks(unittest.TestCase):
         python.write_text("fixture")
         python.chmod(0o755)
         with patch.object(launch.subprocess, "run", side_effect=[
-                SimpleNamespace(returncode=0, stderr=""), SimpleNamespace(returncode=1, stderr="")]) as run:
+                SimpleNamespace(returncode=0, stderr=""), SimpleNamespace(returncode=1, stderr="")]) as run, \
+                patch.object(ubuntu_architecture, "elf_matches_host", return_value=True):
             self.assertIn("native board packages", launch.runtime_problem({}))
         self.assertIn("bootstrap_ready", run.call_args.args[0][-1])
+
+    def test_foreign_architecture_runtime_is_rejected_before_executing_it(self):
+        python = self.root / ".venv-linux/bin/python"
+        python.parent.mkdir(parents=True)
+        for machine, foreign in (("x86_64", 183), ("aarch64", 62)):
+            with self.subTest(machine=machine):
+                header = bytearray(20)
+                header[:6] = b"\x7fELF\x02\x01"
+                header[18:20] = foreign.to_bytes(2, "little")
+                python.write_bytes(header)
+                python.chmod(0o755)
+                with patch.object(ubuntu_architecture.platform, "machine", return_value=machine), \
+                        patch.object(launch.subprocess, "run", side_effect=AssertionError("Foreign Python executed")):
+                    self.assertIn("does not match this host", launch.runtime_problem({}))
 
     def test_failed_setup_never_starts_workspace(self):
         with patch.object(launch, "runtime_problem", return_value="Broken runtime"), \
