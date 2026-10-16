@@ -188,6 +188,17 @@ Classify paths before changing attributes or deleting anything:
 
 ## File distribution conventions
 
+Packaged Windows releases require the complete `src/_python/` private Python
+distribution and its installed packages. Preserve it during fresh release
+preparation; do not classify it with disposable `env` / `.venv-linux` or omit it
+just because Git ignores it. Windows must not depend on system/PATH Python.
+Use `direct/build_release.py` after committing release sources. It combines
+committed defaults, verified materialized LFS installers and the local private
+Windows runtime, then verifies every archived file. Missing runtime files must
+stop packaging. GitHub source archives alone are not a packaged Windows release.
+Keep user state, package stores, protected caches and audit fixtures out of
+release ZIPs without deleting them from the working checkout.
+
 Files generated at runtime or holding user-specific state belong in dedicated
 subdirectories, not the project root:
 

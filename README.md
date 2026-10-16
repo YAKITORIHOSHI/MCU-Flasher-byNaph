@@ -437,8 +437,24 @@ environment, while custom files or unexpected links still refuse cleanup.
 Ubuntu cleanup must retain Windows `src/_python`, `env` and the
 Python installer under `installers/.handsoff/`. Keep the working Windows runtime
 when preparing a folder for both operating systems. Its launcher can restore a
-missing runtime from that installer and repair moved Windows `env` paths. Source releases
-should exclude generated environments, package stores and audit fixtures.
+missing runtime from that installer and repair moved Windows `env` paths.
+**Packaged Windows releases must include the complete `src/_python/` folder.**
+Windows starts through its bundled `python.exe` / `pythonw.exe`, without relying
+on Python installed on the user's computer. Fresh release preparation preserves
+this runtime, including its installed packages; exclude generated `env`,
+`.venv-linux`, package stores, personal settings and audit fixtures instead.
+GitHub source downloads omit the ignored private runtime and are not the full
+packaged Windows release.
+
+After committing the release sources, build the distribution with
+`python3 -B direct/build_release.py` on Ubuntu, or
+`src\_python\python.exe -B direct\build_release.py` in Windows Command Prompt.
+The builder includes the complete local private Windows runtime, checks required
+Python files, verifies the bundled installers against their committed LFS
+receipts, and preserves both native Ubuntu executables. It packages committed
+defaults rather than local settings, checks every archived file's SHA256, and
+refuses a missing runtime or an existing output ZIP. Its manifest stays under
+`temp/audit/release/`; distribute the resulting root `MCU-Flasher-*-fresh.zip`.
 
 Enabling offline mode saves the sketch and restarts into Bootstrap. Preparation
 can consume many gigabytes and substantial time. Close other project windows

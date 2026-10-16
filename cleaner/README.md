@@ -46,9 +46,14 @@ a failing exit status. Interior runtime links are never followed into targets.
 After dependency removal, relaunch the matching native launcher while online.
 Keep `installers/.handsoff/` when removing Windows's private Python: its launcher
 can restore `src/_python` from that installer before Bootstrap rebuilds `env`.
-Generated runtimes, downloaded package stores and audit fixtures can occupy
-several gigabytes; exclude them from source distributions. Keep user settings,
-sketches, recovery journals and unknown material out of any cleanup allowlist.
+Packaged Windows releases must retain the complete `src/_python/` distribution,
+including its installed packages. Windows uses this private Python rather than
+Python installed on the user's computer. Exclude generated `env`, `.venv-linux`,
+downloaded package stores, personal settings and audit fixtures from release
+ZIPs. Use `direct/build_release.py` after committing the release sources; it
+requires the private runtime and verifies the packaged files. GitHub source
+downloads do not include the ignored runtime. Keep user settings, sketches,
+recovery journals and unknown material out of any cleanup allowlist.
 
 From the project root, review a Windows plan with:
 
