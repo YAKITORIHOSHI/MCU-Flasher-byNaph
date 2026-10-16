@@ -253,6 +253,9 @@ class AppearanceChecks(TkDownloaderFixture):
     def test_short_glass_panel_retains_a_complete_native_text_line(self):
         panel = tk.Toplevel(self.root)
         self.addCleanup(panel.destroy)
+        # Production card parents use the theme's hex surface, rather than
+        # the Windows Toplevel default's symbolic SystemButtonFace color.
+        panel.configure(bg=self.module.Theme.WINDOW_BG)
         card = GlassCard(panel, self.module.Theme, padding=9, expand=True, heading="Package details")
         card.pack(fill="both", expand=True)
         entry = tk.Entry(card.body, font=("Consolas", 10))
@@ -287,6 +290,8 @@ class AppearanceChecks(TkDownloaderFixture):
     def test_short_glass_panel_retains_complete_svg_button_height(self):
         panel = tk.Toplevel(self.root)
         self.addCleanup(panel.destroy)
+        # Match the themed parent used by the actual downloader cards.
+        panel.configure(bg=self.module.Theme.WINDOW_BG)
         card = GlassCard(panel, self.module.Theme, padding=9, expand=True, heading="Package details")
         card.pack(fill="both", expand=True)
         action = self.module.make_flat_button(card.body, "Prepare board support", lambda: None,

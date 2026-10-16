@@ -34,9 +34,19 @@ The project root now contains actual compiled Linux executables: double-click
 The earlier root Bash script did not provide the requested native executable.
 Both binaries enter the existing Ubuntu Bootstrap path; the local desktop
 shortcut is optional. The amd64 file is recognized locally as
-`application/x-executable`. Earlier passing ARM64 runtime CI used source
-`03c6703` before this binary replacement and does not establish native execution
-of the new ARM64 launcher. Windows executables and setup remain unchanged.
+`application/x-executable`. Source `5a68fdc` passed
+[native ARM64 executable verification on both LTS releases](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38835072880),
+including fresh Bootstrap, warm GUI launch and ESP32 compilation; amd64 first-run
+jobs passed too. These hosted checks do not replace physical Pi USB/graphics
+verification. Windows executables and setup remain unchanged.
+
+Ubuntu's private requirements constrain Click to `>=8.1.8,<8.2` while PlatformIO
+uses a [parsing API deprecated in Click 8.2](https://click.palletsprojects.com/en/stable/changes/#version-8-2-0).
+Runtime preflight rejects missing, malformed or incompatible Click metadata
+before importing native GUI modules and sends existing installations through
+Bootstrap repair. The actual missing-platform CLI check treats deprecations as
+errors; warnings are not suppressed by this compatibility fix. Windows dependency
+ranges are unchanged.
 
 ## Cloud and Fresh cleanup source update — 2026-10-15
 

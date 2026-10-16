@@ -56,15 +56,18 @@ int main(int argc, char **argv) {
         free(script);
         return 1;
     }
-    command[0] = "/bin/bash";
+    char shell[] = "/bin/bash";
+    char desktop_option[] = "--desktop";
+    command[0] = shell;
     command[1] = script;
-    command[2] = "--desktop";
+    command[2] = desktop_option;
     for (int index = 1; index < argc; ++index)
         command[index + 2] = argv[index];
     /* exec forwards every argument verbatim; no shell command interpolation. */
     execv(command[0], command);
+    const int error = errno;
     perror("Cannot start the Ubuntu launcher");
     free(command);
     free(script);
-    return errno == ENOENT ? 127 : 1;
+    return error == ENOENT ? 127 : 1;
 }

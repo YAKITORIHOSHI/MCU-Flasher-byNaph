@@ -194,6 +194,31 @@ class ArchitectureEntryChecks(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual((self.root / "MCU_Flasher.exe").read_bytes(), protected["MCU_Flasher.exe"])
 
+    def test_native_build_rejects_windows_output_aliases_and_preserves_previous_binary_on_failure(self):
+        self.architecture("x86_64")
+        windows = self.root / "MCU_Flasher.exe"
+        windows.write_bytes(b"MZ Windows fixture")
+        alias = self.root / "windows-alias"
+        alias.symlink_to(windows)
+        hard_link = self.root / "windows-hard-link"
+        hard_link.hardlink_to(windows)
+        for output in (self.root / "other.EXE", alias, hard_link):
+            with self.subTest(output=output.name):
+                result = self.run_script("build_launcher.sh", str(output))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("Windows executables must remain unchanged", result.stderr)
+                self.assertEqual(windows.read_bytes(), b"MZ Windows fixture")
+        compiler = self.bin / "failing-cc"
+        compiler.write_text("#!/bin/bash\nexit 19\n", encoding="utf-8")
+        compiler.chmod(0o755)
+        self.env["CC"] = str(compiler)
+        previous = self.root / "MCU_Flasher"
+        previous.write_bytes(b"previous native binary")
+        result = self.run_script("build_launcher.sh")
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual(previous.read_bytes(), b"previous native binary")
+        self.assertEqual(list(self.root.glob(".mcu-launcher-build.*")), [])
+
 
 def desktop_command(text: str, *, action: bool = False) -> list[str]:
     """Decode string/Exec quoting and literal percent escapes, leaving %k alone."""
@@ -368,7 +393,7 @@ class LauncherChecks(unittest.TestCase):
         recorder.parent.mkdir(parents=True, exist_ok=True)
         recorder.write_text('#!/bin/bash\nexec /usr/bin/python3 -c '
                             "'import json,sys; print(json.dumps(sys.argv[1:]))' \"$@\"\n", encoding="utf-8")
-        arguments = ["--project", 'Sketch Ω with spaces $(touch NEVER) "quotes"', "--new-window"]
+        arguments = ["--project", 'Sketch Ω with spaces $(touch NEVER) "quotes"', "--new-window", "", "line\nbreak"]
         result = subprocess.run([str(target), *arguments], cwd=self.root,
                                 capture_output=True, text=True, timeout=10, check=True)
         self.assertEqual(json.loads(result.stdout), ["--desktop", *arguments])
@@ -410,10 +435,53 @@ class LauncherChecks(unittest.TestCase):
         folder = self.root / 'Native Ubuntu Ω folder $cash `literal`'
         folder.mkdir()
         target = folder / "MCU_Flasher-native"
-        subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+        subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Wformat=2",
+                        "-Wwrite-strings", "-Werror",
                         str(ROOT / "src/launcher_ubuntu.c"), "-o", str(target)],
                        capture_output=True, text=True, timeout=30, check=True)
         self.launcher_arguments(target)
+
+    def test_shipped_native_wrapper_reports_missing_resources_and_preserves_runner_failure(self):
+        name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
+        target = self.root / name
+        shutil.copy2(ROOT / name, target)
+        result = subprocess.run([str(target)], cwd=self.root, capture_output=True,
+                                text=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Keep MCU_Flasher beside", result.stderr)
+        recorder = self.root / "direct/ubuntu/run.sh"
+        recorder.parent.mkdir(parents=True)
+        recorder.write_text("printf 'runner failure\\n' >&2\nexit 17\n", encoding="utf-8")
+        recorder.chmod(0o644)
+        result = subprocess.run([str(target)], cwd=self.root, capture_output=True,
+                                text=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 17)
+        self.assertIn("runner failure", result.stderr)
+
+    def test_native_exec_failure_preserves_errno_across_diagnostic_output(self):
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("Native C compiler unavailable")
+        recorder = self.root / "direct/ubuntu/run.sh"
+        recorder.parent.mkdir(parents=True)
+        recorder.write_text("exit 0\n", encoding="utf-8")
+        shim = self.root / "exec_failure.c"
+        shim.write_text(
+            '#include <errno.h>\n#include <stdio.h>\n'
+            'int __wrap_execv(const char *path, char *const argv[]) {\n'
+            '    (void)path; (void)argv; errno = ENOENT; return -1;\n}\n'
+            'void __wrap_perror(const char *message) {\n'
+            '    fprintf(stderr, "%s: controlled missing shell\\n", message); errno = EIO;\n}\n',
+            encoding="utf-8")
+        target = self.root / "MCU_Flasher-exec-failure"
+        subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        str(ROOT / "src/launcher_ubuntu.c"), str(shim),
+                        "-Wl,--wrap=execv,--wrap=perror", "-o", str(target)],
+                       capture_output=True, text=True, timeout=30, check=True)
+        result = subprocess.run([str(target)], cwd=self.root, capture_output=True,
+                                text=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 127, result.stderr)
+        self.assertIn("Cannot start the Ubuntu launcher: controlled missing shell", result.stderr)
 
     def test_missing_runtime_repairs_once_then_launches_with_same_arguments(self):
         with patch.object(launch, "runtime_problem", side_effect=["Missing runtime", None]), \

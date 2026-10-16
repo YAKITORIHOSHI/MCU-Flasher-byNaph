@@ -51,6 +51,46 @@ class UbuntuReleasePackageChecks(unittest.TestCase):
 
 
 class BootstrapEnvironmentChecks(unittest.TestCase):
+    def test_click_compatibility_rejects_deprecated_or_outdated_platformio_dependencies(self):
+        for version in ("8.0.4", "8.1.7", "8.2.0", "8.5.0", "9.0.0"):
+            with self.subTest(version=version), \
+                    patch.object(preflight, "sys", SimpleNamespace(platform="linux")), \
+                    patch.object(preflight.metadata, "version", return_value=version), \
+                    patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")):
+                with self.assertRaisesRegex(RuntimeError, "--repair.*>=8.1.8,<8.2"):
+                    preflight.check_platformio_click_compatibility()
+
+    def test_click_compatibility_accepts_stable_81_and_preserves_windows_boundary(self):
+        for version in ("8.1.8", "8.1.9", "8.1.8.post1", "8.1.8+ubuntu.1"):
+            with self.subTest(version=version), \
+                    patch.object(preflight, "sys", SimpleNamespace(platform="linux")), \
+                    patch.object(preflight.metadata, "version", return_value=version):
+                preflight.check_platformio_click_compatibility()
+        with patch.object(preflight, "sys", SimpleNamespace(platform="win32")), \
+                patch.object(preflight.metadata, "version", side_effect=AssertionError("Windows dependency checked")):
+            preflight.check_platformio_click_compatibility()
+
+    def test_unknown_click_dependency_has_actionable_repair(self):
+        for result in (None, "unrecognized", "8.1.9rc1", "8.1.8.postbroken", preflight.metadata.PackageNotFoundError("click")):
+            kwargs = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
+            with self.subTest(result=str(result)), \
+                    patch.object(preflight, "sys", SimpleNamespace(platform="linux")), \
+                    patch.object(preflight.metadata, "version", **kwargs):
+                with self.assertRaisesRegex(RuntimeError, "--repair"):
+                    preflight.check_platformio_click_compatibility()
+
+    def test_runtime_rejects_deprecated_click_before_native_imports(self):
+        owning_root = ROOT / "temp/audit/click-compatibility-owner"
+        private = str(owning_root / ".venv-linux")
+        with patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 14),
+                                                            prefix=private, base_prefix="system")), \
+                patch("direct.ubuntu.runtime_architecture.check_runtime_architecture"), \
+                patch.object(preflight.importlib.util, "find_spec", return_value=None), \
+                patch.object(preflight.metadata, "version", return_value="8.5.0"), \
+                patch.object(preflight, "_check_tk", side_effect=AssertionError("Native imports ran")):
+            with self.assertRaisesRegex(RuntimeError, "Click 8.5.0.*--repair"):
+                preflight.runtime_preflight(owning_root)
+
     def test_qt_compatibility_rejects_old_python_before_native_imports(self):
         for python in ((3, 10), (3, 11)):
             with self.subTest(python=python), \
@@ -91,6 +131,10 @@ class BootstrapEnvironmentChecks(unittest.TestCase):
         requirements = [Requirement(line) for line in (ROOT / "direct/ubuntu/requirements.txt").read_text().splitlines()
                         if line.strip() and not line.startswith("#")]
         qt = [item for item in requirements if item.name == "PySide6"]
+        click = next(item for item in requirements if item.name.lower() == "click")
+        for version, accepted in (("8.0.4", False), ("8.1.7", False), ("8.1.8", True),
+                                  ("8.2.0", False), ("8.5.0", False)):
+            self.assertEqual(version in click.specifier, accepted)
         for python in ("3.10", "3.11", "3.12", "3.14"):
             matching = [item for item in qt if item.marker.evaluate({"python_version": python})]
             self.assertEqual(len(matching), 1)
@@ -135,6 +179,33 @@ class UbuntuBootstrapChecks(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+
+    def test_native_platformio_missing_platform_guard_survives_deprecations_as_errors(self):
+        from src.modules.offline_bootstrap import clean_bootstrap_environment
+        from src.modules.offline_runtime import offline_pio_command
+        core = self.root / "core"
+        core.mkdir()
+        source = self.root / "src"
+        source.mkdir()
+        (source / "main.cpp").write_text("int main() { return 0; }\n", encoding="utf-8")
+        (self.root / "platformio.ini").write_text(
+            "[env:offline]\nplatform = atmelavr\nboard = uno\nframework = arduino\n", encoding="utf-8")
+        env = clean_bootstrap_environment()
+        for name in tuple(env):
+            if name.startswith("PLATFORMIO_") and name.endswith("_DIR"):
+                env.pop(name)
+        env.update(PLATFORMIO_CORE_DIR=str(core),
+                   XDG_CONFIG_HOME=str(self.root / "config"), XDG_DATA_HOME=str(self.root / "data"),
+                   XDG_CACHE_HOME=str(self.root / "cache"), PYTHONDONTWRITEBYTECODE="1",
+                   PYTHONWARNINGS="error::DeprecationWarning,error::ResourceWarning")
+        result = subprocess.run(offline_pio_command() + ["run", "-d", str(self.root)],
+                                cwd=self.root, env=env, capture_output=True, text=True, timeout=30, check=False)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bootstrap", output)
+        self.assertNotIn("DeprecationWarning", output)
+        self.assertNotIn("Traceback", output)
+        self.assertFalse(any(core.rglob("package.json")))
 
     def host_mocks(self):
         patches = (

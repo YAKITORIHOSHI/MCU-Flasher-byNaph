@@ -21,9 +21,13 @@ the existing Bash Bootstrap path. `build_launcher.sh` rebuilds those filenames
 by default, accepts an explicit output path and rejects Windows `.exe` outputs.
 The Bash fallback and desktop shortcut remain available. Keep Windows paths
 and dependency ranges unchanged. See canonical guidance for the narrow ARM Qt5
-bridge, copied-runtime repair, ELF checks and native ARM64 CI. The successful
-ARM64 runtime CI at `03c6703` predates these binaries; do not present it as native
-execution of the new ARM64 executable.
+bridge, copied-runtime repair, ELF checks and native ARM64 CI. Source `5a68fdc`
+verified the shipped native executables through fresh Bootstrap, warm GUI launch
+and ESP32 compilation on both Ubuntu LTS ARM64 runners. This is hosted CPU
+evidence, not physical Pi USB/graphics verification. Keep Ubuntu's Click
+`>=8.1.8,<8.2` constraint and metadata preflight aligned while PlatformIO uses the
+deprecated parsing API. Existing incompatible versions must enter Bootstrap
+repair; do not suppress deprecations or change Windows dependency ranges.
 
 
 ## Platform Scope

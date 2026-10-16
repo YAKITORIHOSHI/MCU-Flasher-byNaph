@@ -11,6 +11,7 @@ import importlib.util
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import struct
 import subprocess
@@ -206,6 +207,26 @@ def check_qt_python_compatibility() -> None:
                            "Run bash direct/ubuntu/run.sh --repair to install PySide6 below 6.12.")
 
 
+def check_platformio_click_compatibility() -> None:
+    """Keep Ubuntu's PlatformIO CLI off Click's deprecated parsing APIs."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        version = metadata.version("click")
+        match = re.fullmatch(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:\.post[0-9]+)?"
+                             r"(?:\+[a-zA-Z0-9]+(?:[._-][a-zA-Z0-9]+)*)?", version)
+        if match is None:
+            raise ValueError("Unrecognized Click version")
+        release = tuple(int(part) for part in match.groups())
+    except (metadata.PackageNotFoundError, ValueError, TypeError) as exc:
+        raise RuntimeError("The Ubuntu PlatformIO Click dependency cannot be validated. "
+                           "Run bash direct/ubuntu/run.sh --repair.") from exc
+    if not (8, 1, 8) <= release < (8, 2, 0):
+        raise RuntimeError(f"Click {version} is incompatible with Ubuntu's PlatformIO runtime. "
+                           "PlatformIO still uses parsing APIs deprecated in Click 8.2. "
+                           "Run bash direct/ubuntu/run.sh --repair to install Click >=8.1.8,<8.2.")
+
+
 def runtime_preflight(root=ROOT) -> None:
     """Validate private imports and native Qt plugins without creating windows."""
     require_supported_ubuntu()
@@ -222,6 +243,7 @@ def runtime_preflight(root=ROOT) -> None:
     if qt_spec is not None and qt_spec.origin:
         qt_root = Path(qt_spec.origin).parent / "Qt"
         _check_qt_runtime_files(qt_root, architecture)
+    check_platformio_click_compatibility()
     sys.path.insert(0, str(root))
     try:
         _check_tk()

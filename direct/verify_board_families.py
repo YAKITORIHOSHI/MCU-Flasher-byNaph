@@ -60,6 +60,15 @@ class BoardFamilyChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(platform, "machine", return_value="x86_64"))
         self.stack.enter_context(patch.object(web_bridge, "_get_safe_platformio_core_dir",
                                             return_value=str(self.root / "native-core")))
+        if sys.platform == "win32":
+            # These long disposable paths can trigger Windows' compiler
+            # junction helper. Its subprocess.run shares the Popen mock below
+            # and would consume the simulated programmer before upload. The
+            # dedicated Windows platform verifier exercises real path aliases;
+            # keep this fixture focused on exact target/protocol dispatch.
+            self.stack.enter_context(patch.object(web_bridge._HOST_RUNTIME,
+                                                "compiler_working_directory",
+                                                side_effect=lambda workspace: workspace))
         self.api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         self.api.current_board, self.api.current_port = "Fixture", "COM99"
         self.api.current_baud, self.api.upload_speed = 115200, "460800"

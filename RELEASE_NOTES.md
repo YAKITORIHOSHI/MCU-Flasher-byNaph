@@ -21,9 +21,23 @@ Pi/ARM64**. The previous root Bash script did not provide the requested native
 executable. Both binaries use the existing Ubuntu Bootstrap path; the Bash
 fallback and optional desktop shortcut remain available. Windows files are unchanged.
 
-The amd64 binary is recognized locally as `application/x-executable`. The
-earlier ARM64 runtime CI below tested source `03c6703` before this correction;
-it does not establish native execution of the new ARM64 binary.
+The amd64 binary is recognized locally as `application/x-executable`. Source
+`5a68fdc` passed [native ARM64 verification on Ubuntu 24.04 and 26.04](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38835072880),
+including the shipped executable, fresh Bootstrap, warm GUI launch and a real
+ESP32 build. Both amd64 first-run jobs passed too. This is hosted native CPU
+evidence; physical Pi USB, graphics and Wayland still require device checks.
+
+The follow-up audit preserves `execv` failure status across diagnostic output,
+enables stricter C warnings, and covers missing resources, unusual arguments,
+failed builds and Windows output aliases. All 277 tracked Python files compile
+without syntax warnings; the native responsive matrix passes 90/90 cases.
+Ubuntu constrains Click to `>=8.1.8,<8.2` because PlatformIO still accesses a
+[parsing API deprecated in Click 8.2](https://click.palletsprojects.com/en/stable/changes/#version-8-2-0).
+Preflight detects incompatible existing versions and requests Bootstrap repair.
+The actual missing-platform CLI guard passes with deprecations treated as errors.
+Two Windows verification fixtures now isolate compiler path setup and use the
+production themed card background. Windows application code, executable and
+dependency ranges are unchanged.
 
 ## October 15 Source Update: Ubuntu ARM64 and Raspberry Pi
 

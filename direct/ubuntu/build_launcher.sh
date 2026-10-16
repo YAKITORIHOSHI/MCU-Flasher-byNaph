@@ -30,7 +30,7 @@ if ! command -v "$compiler" >/dev/null; then
 fi
 temporary="$(mktemp "$output_directory/.mcu-launcher-build.XXXXXX")"
 trap 'rm -f -- "$temporary"' EXIT
-"$compiler" -std=c11 -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 \
+"$compiler" -std=c11 -O2 -Wall -Wextra -Wpedantic -Wformat=2 -Wwrite-strings -Werror -D_FORTIFY_SOURCE=2 \
     -fPIE -pie -Wl,-z,relro,-z,now "$app_root/src/launcher_ubuntu.c" -o "$temporary"
 chmod 755 "$temporary"
 mv -- "$temporary" "$output"
