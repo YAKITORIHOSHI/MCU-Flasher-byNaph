@@ -28,6 +28,18 @@ from src.modules import ubuntu_architecture
 
 
 class FirstLaunchPackagingChecks(unittest.TestCase):
+    def test_shipped_launchers_are_distinct_native_64_bit_executables(self):
+        for name, machine, other_machine in (("MCU_Flasher", "x86_64", "aarch64"),
+                                             ("MCU_Flasher-arm64", "aarch64", "x86_64")):
+            with self.subTest(launcher=name):
+                launcher = ROOT / name
+                self.assertTrue(ubuntu_architecture.elf_matches_host(launcher, machine))
+                self.assertFalse(ubuntu_architecture.elf_matches_host(launcher, other_machine))
+                header = launcher.read_bytes()[:20]
+                self.assertIn(int.from_bytes(header[16:18], "little"), (2, 3))
+                if os.name != "nt":
+                    self.assertTrue(os.access(launcher, os.X_OK))
+
     def test_clean_checkout_copy_does_not_require_or_inherit_generated_guidance(self):
         tree = ast.parse((ROOT / "direct/verify_ubuntu_first_run.py").read_text(encoding="utf-8"))
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_copy_source")
@@ -55,13 +67,19 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
                      "HOME_ISOLATION": "# isolated home\n", "GUI_SERIAL_ISOLATION": "# isolated serial\n",
                      "GUI_SMOKE": "        # isolated smoke\n"}
             exec(compile(ast.Module(body=[function], type_ignores=[]), "<first-launch-copy>", "exec"), scope)
-            for has_guidance in (False, True):
-                with self.subTest(local_guidance_present=has_guidance):
+            for has_guidance, has_arm64 in ((False, False), (True, True)):
+                with self.subTest(local_guidance_present=has_guidance, arm64_present=has_arm64):
                     if has_guidance:
                         (source / "AGENTS.md").write_text("Local hardware/settings fixture", encoding="utf-8")
+                    if has_arm64:
+                        (source / "MCU_Flasher-arm64").write_bytes(b"ARM64 executable fixture")
                     destination = Path(temporary) / ("with-guidance" if has_guidance else "clean-checkout")
                     scope["_copy_source"](destination)
                     self.assertTrue((destination / "MCU_Flasher").is_file())
+                    self.assertEqual((destination / "MCU_Flasher-arm64").exists(), has_arm64)
+                    if has_arm64:
+                        self.assertEqual((destination / "MCU_Flasher-arm64").read_bytes(),
+                                         (source / "MCU_Flasher-arm64").read_bytes())
                     self.assertFalse((destination / "AGENTS.md").exists())
                     self.assertFalse((destination / "src/dbs/bootstrap_config.json").exists())
                     for relative in native_sources:
@@ -146,8 +164,8 @@ class ArchitectureEntryChecks(unittest.TestCase):
                     self.assertIn("64-bit Ubuntu", result.stderr)
                 self.assertFalse((self.root / "--check").exists())
 
-    def test_native_build_selects_host_filename_and_preserves_portable_and_windows_entries(self):
-        protected = {"MCU_Flasher": b"portable Ubuntu entry\n", "MCU_Flasher.exe": b"MZ Windows launcher\n",
+    def test_native_build_selects_host_filename_and_preserves_windows_entries(self):
+        protected = {"MCU_Flasher.exe": b"MZ Windows launcher\n",
                      "direct/windows/run.vbs": b"Windows launcher fixture\r\n"}
         for name, contents in protected.items():
             path = self.root / name
@@ -164,13 +182,17 @@ class ArchitectureEntryChecks(unittest.TestCase):
                 self.architecture(machine)
                 result = self.run_script("build_launcher.sh")
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual((self.root / f"MCU_Flasher-{architecture}").read_bytes(), b"native-fixture")
+                expected = "MCU_Flasher" if architecture == "amd64" else "MCU_Flasher-arm64"
+                self.assertEqual((self.root / expected).read_bytes(), b"native-fixture")
                 for name, contents in protected.items():
                     self.assertEqual((self.root / name).read_bytes(), contents)
-                for name in ("MCU_Flasher", "MCU_Flasher.exe"):
-                    result = self.run_script("build_launcher.sh", str(self.root / name))
-                    self.assertEqual(result.returncode, 1, result.stderr)
-                    self.assertEqual((self.root / name).read_bytes(), protected[name])
+                # An ARM user may intentionally rebuild the root name locally.
+                explicit = self.run_script("build_launcher.sh", str(self.root / "MCU_Flasher"))
+                self.assertEqual(explicit.returncode, 0, explicit.stderr)
+                self.assertEqual((self.root / "MCU_Flasher").read_bytes(), b"native-fixture")
+                result = self.run_script("build_launcher.sh", str(self.root / "MCU_Flasher.exe"))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual((self.root / "MCU_Flasher.exe").read_bytes(), protected["MCU_Flasher.exe"])
 
 
 def desktop_command(text: str, *, action: bool = False) -> list[str]:
@@ -352,18 +374,36 @@ class LauncherChecks(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), ["--desktop", *arguments])
         self.assertFalse((self.root / "NEVER").exists())
 
-    def test_portable_root_launcher_preserves_location_and_literal_arguments(self):
+    def test_shipped_host_launcher_preserves_location_and_literal_arguments_after_relocation(self):
         folder = self.root / 'Moved Ubuntu Ω folder $cash `literal`'
         (folder / "direct/ubuntu").mkdir(parents=True)
-        target = folder / "MCU_Flasher"
-        shutil.copy2(ROOT / "MCU_Flasher", target)
-        self.assertTrue(target.read_bytes().startswith(b"#!/usr/bin/env bash\n"))
+        name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
+        target = folder / name
+        shutil.copy2(ROOT / name, target)
+        self.assertTrue(ubuntu_architecture.elf_matches_host(target))
+        self.launcher_arguments(target)
+        moved = self.root / 'Relocated Ubuntu Ω folder %literal "quoted"'
+        folder.rename(moved)
+        target = moved / name
         self.launcher_arguments(target)
         link = self.root / "linked-launcher"
         link.symlink_to(target)
         self.launcher_arguments(link)
 
-    def test_optional_native_wrapper_preserves_location_and_literal_arguments(self):
+    def test_shipped_host_launcher_is_an_executable_to_ubuntu_files(self):
+        gio = shutil.which("gio")
+        if not gio:
+            self.skipTest("Ubuntu GLib file information CLI unavailable")
+        name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
+        target = self.root / name
+        shutil.copy2(ROOT / name, target)
+        result = subprocess.run([gio, "info", "-a", "standard::content-type,access::can-execute", str(target)],
+                                capture_output=True, text=True, timeout=10, check=True,
+                                env={**os.environ, "LC_ALL": "C"})
+        self.assertIn("standard::content-type: application/x-executable", result.stdout)
+        self.assertIn("access::can-execute: TRUE", result.stdout)
+
+    def test_rebuilt_native_wrapper_preserves_location_and_literal_arguments(self):
         compiler = shutil.which("cc")
         if compiler is None:
             self.skipTest("Native C compiler unavailable")

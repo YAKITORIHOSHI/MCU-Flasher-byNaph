@@ -497,7 +497,7 @@ class PlatformChecks(unittest.TestCase):
             bash = str(candidate) if candidate.is_file() else None
         if not bash:
             self.skipTest("Bash unavailable; Ubuntu CI verifies syntax natively")
-        for entry in ("MCU_Flasher", "direct/ubuntu/run.sh", "direct/ubuntu/build_launcher.sh",
+        for entry in ("direct/ubuntu/run.sh", "direct/ubuntu/build_launcher.sh",
                       "direct/ubuntu/architecture_guard.sh", "direct/ubuntu/release_guard.sh",
                       "direct/runThisOnUbuntu.sh"):
             result = subprocess.run([bash, "-n", str(ROOT / entry)], capture_output=True, timeout=10,

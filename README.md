@@ -298,6 +298,12 @@ graphics and native Wayland still require on-device checks. See the
 [ARM64 setup and verification limits](direct/UBUNTU.md#raspberry-pi-and-arm64)
 and [source release notes](RELEASE_NOTES.md#october-15-source-update-ubuntu-arm64-and-raspberry-pi).
 
+The October 16 launcher correction supplies actual native Linux executables in
+the project root: **`MCU_Flasher` for Intel/AMD** and **`MCU_Flasher-arm64` for
+Raspberry Pi/ARM64**. Double-click the file matching your CPU. The earlier root
+Bash script was not a native executable. The ARM64 CI result above predates this
+binary replacement and does not certify execution of the new ARM64 launcher.
+
 The project terminal passes xterm capability replies and bracketed paste to
 interactive coding CLIs. Installed Codex, Claude Code and OpenCode version
 commands have been verified through its Windows PTY; a local interactive probe
@@ -825,7 +831,7 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ## 🚀 Quick Start
 
-**Ubuntu 24.04 or newer (64-bit Intel/AMD or ARM64):** open **`MCU_Flasher`**, the portable Ubuntu launcher beside `MCU_Flasher.exe`, or the generated **`MCU Flasher.desktop`** shortcut. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. `./MCU_Flasher --check` diagnoses readiness without authentication, installation or opening the app; `./MCU_Flasher --repair` repairs dependencies. `bash direct/ubuntu/run.sh` remains available.
+**Ubuntu 24.04 or newer:** double-click **`MCU_Flasher` on 64-bit Intel/AMD**, or **`MCU_Flasher-arm64` on Raspberry Pi/ARM64**. These are compiled native Linux executables in the project root beside `MCU_Flasher.exe`. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. Both executables accept `--check` for read-only readiness diagnostics and `--repair` for dependency repair. `bash direct/ubuntu/run.sh` works on either CPU; the generated **`MCU Flasher.desktop`** shortcut is optional.
 
 Ubuntu detects `amd64`/`x86_64` or `arm64`/`aarch64` within the same launch/setup
 path. Raspberry Pi 5 and other capable Pis need **64-bit Ubuntu Desktop 24.04 LTS
@@ -911,7 +917,7 @@ Both host entry points apply the saved board/library preparation mode before
 installing the package guard. Cloud and Developer Access remain independent
 of that setting.
 
-Rebuild the Linux executable and local shortcut with `bash direct/ubuntu/build_launcher.sh`. The folder's `MCU Flasher.desktop` resolves the application beside itself, so it can travel with the folder. It launches the Bash entry even if a Windows copy loses the native executable's permission bit. Add an Applications menu entry with `bash direct/ubuntu/run.sh --install-shortcut`; regenerate that menu entry after moving the application folder. Replace older shortcuts that contain another computer's `/home/...` path with the same command. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. Keep `main/`, `src/` and `direct/` together.
+Rebuild the matching native Linux executable with `bash direct/ubuntu/build_launcher.sh`: it writes `MCU_Flasher` on amd64 and `MCU_Flasher-arm64` on ARM64. An explicit output path is supported; Windows `.exe` outputs are rejected. The supplied binaries need no compiler. Generate the optional local shortcut and Applications menu entry with `bash direct/ubuntu/run.sh --install-shortcut`. The local `MCU Flasher.desktop` resolves the application beside itself and invokes Bash, so it can travel with the folder. Regenerate the Applications menu entry after moving the folder. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. Keep `main/`, `src/` and `direct/` together.
 
 A folder named `_` can be residue from an older archive verification run: a Windows path prefix was incorrectly added to Linux staging paths. Archive helpers now keep Linux paths native. That fixture folder is not an application dependency; see [Ubuntu launch troubleshooting](direct/UBUNTU.md#copied-folders-and-launch-problems).
 
@@ -972,7 +978,8 @@ Below is the complete architectural layout of the MCU Flasher ecosystem:
 ```
 MCU Flasher by Naph/
 ├── MCU_Flasher.exe                   # Native Windows launcher (compiled from src/launcher.cs)
-├── MCU_Flasher                       # Portable Ubuntu amd64/ARM64 Bash launcher
+├── MCU_Flasher                       # Compiled native Ubuntu amd64 launcher
+├── MCU_Flasher-arm64                 # Compiled native Ubuntu ARM64 / Raspberry Pi launcher
 ├── MCU Flasher.desktop               # Movable local Ubuntu shortcut (keep beside the app)
 ├── mcu_flash_gui.py                 # Root application entry point forwarder
 ├── README.md                         # Comprehensive documentation, user guide & architecture
@@ -1554,7 +1561,7 @@ verification; board compilation/upload still requires separate target checks.
 - **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Starts `direct\runThisOnWindows.vbs` silently without prompting for unnecessary Administrator elevation.
 - **`direct/windows/run.vbs`**: Windows VBScript bootstrapper that checks drive storage type and launches `src/modules/launcher.py`. Requests targeted UAC elevation only for machine-level driver installations. `direct/runThisOnWindows.vbs` forwards here for existing executable launchers.
 - **`direct/ubuntu/setup.py` / `run.sh`**: Native Ubuntu setup and launch. Create/repair `.venv-linux`, preserve project arguments and keep system Python unchanged; `run.sh --repair` explicitly repairs the runtime.
-- **`MCU_Flasher`**: Portable Ubuntu Bash entry for amd64 and ARM64. Resolves its application folder independently of the working directory and forwards literal arguments to the Ubuntu launcher. `src/launcher_ubuntu.c` remains available for optional native wrappers; `direct/ubuntu/build_launcher.sh` creates `MCU_Flasher-amd64` or `MCU_Flasher-arm64` beside the portable entry.
+- **`MCU_Flasher` / `MCU_Flasher-arm64`**: Compiled native Linux executables for amd64 and ARM64 respectively, built from `src/launcher_ubuntu.c`. Double-click the matching CPU's file in the project root. Each resolves its application folder independently of the working directory and forwards literal arguments to `direct/ubuntu/run.sh` for automatic Bootstrap or prepared launch. `direct/ubuntu/build_launcher.sh` rebuilds the matching filename by default, accepts an explicit output path and rejects Windows `.exe` outputs. The Bash launch path remains available on either CPU.
 - **`direct/ubuntu/launch.py` / `preflight.py` / `system_setup.py` / `install_desktop.py`**: Read-only diagnostics, automatic first-run Bootstrap, desktop launch logging and checkout-specific desktop shortcuts. Missing system prerequisites install through Ubuntu's visible sudo/pkexec authentication; only apt-get receives administrator rights. Python dependencies install into `.venv-linux`, and the GUI stays under the desktop user. Cancelled or failed system setup stops before launch. Qt5 sample-viewer validation runs in a separate process from Qt6.
 - **`mcu_flash_gui.py`**: Root entry point forwarder. Enforces private Python execution via `private_python_guard.py`, installs console-hiding hooks, and delegates directly to `main.mcu_flash_gui.main()`.
 

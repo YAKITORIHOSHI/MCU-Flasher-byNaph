@@ -141,6 +141,11 @@ def _copy_source(destination: Path) -> None:
     # must not require it or inherit another sketch's live hardware state.
     for name in ("MCU_Flasher", "mcu_flash_gui.py", "README.md"):
         shutil.copy2(ROOT / name, destination / name)
+    # Ship/copy both CPU-specific native launchers without requiring an ARM
+    # artifact in older extracted-source fixtures. Select the host below.
+    arm64_launcher = ROOT / "MCU_Flasher-arm64"
+    if arm64_launcher.is_file():
+        shutil.copy2(arm64_launcher, destination / arm64_launcher.name)
     (destination / "src/__init__.py").write_text(HOME_ISOLATION, encoding="utf-8")
     # Direct verifiers can import main before src. Redirect home first there too.
     for name in ("verify_runtime.py", "verify_target_resolution.py"):
@@ -264,6 +269,10 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     app = fixture / "app"
     app.mkdir()
     _copy_source(app)
+    architecture = host_architecture()
+    launcher = app / ("MCU_Flasher-arm64" if architecture == "arm64" else "MCU_Flasher")
+    if not elf_matches_host(launcher) or not os.access(launcher, os.X_OK):
+        raise RuntimeError(f"The first-launch fixture needs the executable for this host CPU: {launcher}")
     env = _environment(fixture)
     if allow_small_runner:
         env["MCU_FIRST_RUN_ALLOW_SMALL_RUNNER"] = "1"
@@ -275,7 +284,7 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     if core.exists() or runtime.exists():
         raise RuntimeError("First run must start without native packages or a private runtime")
     report = {"success": False, "fixture": str(fixture), "host_machine": platform.machine(),
-              "architecture": host_architecture(), "initial_private_runtime_present": False,
+              "architecture": architecture, "launcher": str(launcher), "initial_private_runtime_present": False,
               "initial_native_store_present": False, "default_plan": json.loads((app / "direct/offline-packages.json").read_text()),
               "upload": False, "live_settings_modified": False, "system_packages_installed": False,
               "fixture_instrumentation": {
@@ -290,7 +299,7 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"First launch from empty runtime/store: {fixture}", flush=True)
     cold_log = fixture / "first-launch.log"
-    cold = _run([str(app / "MCU_Flasher"), "--project", str(sketch)],
+    cold = _run([str(launcher), "--project", str(sketch)],
                 cwd=fixture, env=env, log=cold_log, timeout=timeout, tty=True)
     report.update(first_launch_exit_code=cold, first_launch_log=str(cold_log))
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -307,14 +316,14 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
         raise RuntimeError("Bootstrap did not certify the complete default package plan")
     python = runtime / "bin/python"
     check_log = fixture / "readiness-check.log"
-    checked = _run([str(app / "MCU_Flasher"), "--check"], cwd=fixture, env=env,
+    checked = _run([str(launcher), "--check"], cwd=fixture, env=env,
                    log=check_log, timeout=180)
     if checked:
         raise RuntimeError(f"Native launcher readiness failed after Bootstrap; see {check_log}")
     print("Full Bootstrap certificate and native launcher readiness: OK", flush=True)
     warm_log = fixture / "warm-launch.log"
     (fixture / "gui-result.json").unlink()  # A clean exit alone must not reuse the cold GUI observation.
-    warm = _run([str(app / "MCU_Flasher"), "--project", str(sketch)], cwd=fixture, env=env,
+    warm = _run([str(launcher), "--project", str(sketch)], cwd=fixture, env=env,
                 log=warm_log, timeout=120, tty=True)
     warm_text = warm_log.read_text(encoding="utf-8", errors="replace")
     if warm or "Preparing Ubuntu system prerequisites" in warm_text:

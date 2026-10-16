@@ -6,12 +6,24 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 6, 2026<br>
-> **Notes Updated:** October 15, 2026<br>
+> **Notes Updated:** October 16, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
 
-> **Source update and download status:** These notes include the October 15 source fixes. As checked on October 15, the [published Windows ZIP](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/tag/latest) was last updated on October 14, and the `latest` tag points to `e68e813`, an earlier revision. Rebuild and verify the release assets before describing these new fixes as included in that download. The verification limits below still apply.
+> **Source update and download status:** These notes include the October 15 source fixes and October 16 native-launcher correction. As checked on October 15, the [published Windows ZIP](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/tag/latest) was last updated on October 14, and the `latest` tag points to `e68e813`, an earlier revision. Rebuild and verify the release assets before describing these new fixes as included in that download. The verification limits below still apply.
+
+## October 16 Correction: Native Ubuntu Executables
+
+The root Ubuntu launchers are now compiled native Linux executables:
+double-click **`MCU_Flasher` on Intel/AMD** or **`MCU_Flasher-arm64` on Raspberry
+Pi/ARM64**. The previous root Bash script did not provide the requested native
+executable. Both binaries use the existing Ubuntu Bootstrap path; the Bash
+fallback and optional desktop shortcut remain available. Windows files are unchanged.
+
+The amd64 binary is recognized locally as `application/x-executable`. The
+earlier ARM64 runtime CI below tested source `03c6703` before this correction;
+it does not establish native execution of the new ARM64 binary.
 
 ## October 15 Source Update: Ubuntu ARM64 and Raspberry Pi
 
@@ -21,9 +33,10 @@ application folder with **64-bit Ubuntu Desktop 24.04 LTS or 26.04 LTS**, a desk
 session and at least four CPU cores. Older 32-bit Pi models and Raspberry Pi OS
 remain outside the supported setup. See the [Ubuntu setup guide](direct/UBUNTU.md#raspberry-pi-and-arm64).
 
-- **One Ubuntu entry:** `MCU_Flasher` is a portable Bash launcher for both CPUs.
-  Optional native C builds use separate `MCU_Flasher-amd64` / `MCU_Flasher-arm64`
-  filenames and preserve the portable entry and Windows executables.
+- **Shared Ubuntu Bootstrap:** The amd64 `MCU_Flasher` and ARM64
+  `MCU_Flasher-arm64` native executables use the same `direct/ubuntu/run.sh`
+  setup and launch path. The October 16 correction replaces the earlier root
+  Bash script; Windows executables are preserved.
 - **Native dependencies:** ARM64 uses PySide6/WebEngine wheels and Ubuntu's
   release-matched Qt5/QScintilla/SIP packages for the separate sample viewer.
   Only the PyQt5 namespace is exposed to the private runtime; broad system site
@@ -208,7 +221,7 @@ bash direct/ubuntu/run.sh
 bash direct/ubuntu/run.sh --repair
 ```
 
-The portable `MCU_Flasher` launcher works on amd64 and ARM64. Ubuntu setup may request administrator authentication for missing system prerequisites; the application runtime stays in its private environment.
+Double-click `MCU_Flasher` on amd64 or `MCU_Flasher-arm64` on Raspberry Pi/ARM64. Both are native Linux executables; `bash direct/ubuntu/run.sh` remains a fallback for either CPU. Ubuntu setup may request administrator authentication for missing system prerequisites; the application runtime stays in its private environment.
 
 ### Ubuntu 26.04 Terminal Preference — October 15 Update
 

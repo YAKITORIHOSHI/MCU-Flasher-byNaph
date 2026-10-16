@@ -1,5 +1,5 @@
-/* Optional native amd64/arm64 Ubuntu wrapper; MCU_Flasher is the portable entry.
- * Compile on the target host and keep this binary beside direct/, main/, src/. */
+/* Native Ubuntu launcher: MCU_Flasher (amd64), MCU_Flasher-arm64 (ARM64).
+ * Keep the matching binary beside direct/, main/ and src/. */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <stdio.h>

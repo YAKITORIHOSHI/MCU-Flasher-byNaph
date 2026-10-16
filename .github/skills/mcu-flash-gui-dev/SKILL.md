@@ -14,10 +14,16 @@ information before runtime preparation, installation, repair or services. Missin
 or malformed data fails explicitly; rejection preserves all user resources.
 Verify older-release rejection using isolated fixtures only.
 Ubuntu admits 64-bit amd64/x86_64 and ARM64/aarch64, including capable Raspberry
-Pis running Ubuntu Desktop 24.04/26.04. The root MCU_Flasher is portable Bash;
-optional native C builds use architecture-specific names. Keep Windows paths
+Pis running Ubuntu Desktop 24.04/26.04. The October 16 correction supplies
+compiled native root executables: `MCU_Flasher` for amd64 and
+`MCU_Flasher-arm64` for ARM64/Pi. Double-click the matching CPU's file; both use
+the existing Bash Bootstrap path. `build_launcher.sh` rebuilds those filenames
+by default, accepts an explicit output path and rejects Windows `.exe` outputs.
+The Bash fallback and desktop shortcut remain available. Keep Windows paths
 and dependency ranges unchanged. See canonical guidance for the narrow ARM Qt5
-bridge, copied-runtime repair, ELF checks and native ARM64 CI.
+bridge, copied-runtime repair, ELF checks and native ARM64 CI. The successful
+ARM64 runtime CI at `03c6703` predates these binaries; do not present it as native
+execution of the new ARM64 executable.
 
 
 ## Platform Scope
@@ -123,6 +129,8 @@ The project provides a modern Windows desktop interface for compiling, flashing,
 MCU Flasher by Naph/
 ├── mcu_flash_gui.py                 # Root forwarder script (enforces private python & invokes main/)
 ├── MCU_Flasher.exe                   # Compiled native Windows launcher (from src/launcher.cs)
+├── MCU_Flasher                       # Compiled native Ubuntu amd64 launcher
+├── MCU_Flasher-arm64                 # Compiled native Ubuntu ARM64 / Raspberry Pi launcher
 ├── README.md                         # Comprehensive documentation, user guide & architecture
 ├── direct/
 │   └── runThisOnWindows.vbs         # Windows VBScript bootstrap launcher
