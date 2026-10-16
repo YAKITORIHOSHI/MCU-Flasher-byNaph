@@ -765,6 +765,8 @@ class CloudSketchPanel(QWidget):
         state = {"configured": service.configured, "authenticated": service.is_authenticated,
                  "account": service.account_info, "secure": service.secure_storage_status,
                  "root": root, "link": read_project_link(root) if root else None}
+        state["configuration_error"] = (getattr(service, "configuration_error", "")
+                                        if not state["configured"] else "")
         if include_connectivity:
             state["connectivity"] = bool(service.check_connection())
         if load_sketches or not state["authenticated"]:
@@ -934,7 +936,10 @@ class CloudSketchPanel(QWidget):
                                  "Sign in to open or upload cloud sketches." if self._state.get("configured") else
                                  "Set up the cloud connection, then sign in or create an account.")
         if result.get("refresh_error") and not result.get("error"):
-            self._status.setText(self._status.text() + " Cloud list refresh failed; use Refresh to reconnect.")
+            self._status.setText("Cloud list refresh failed: " + result["refresh_error"])
+        if (self._state.get("configuration_error") and not self._state.get("authenticated")
+                and not result.get("error")):
+            self._status.setText(self._state["configuration_error"])
         self._complete_job()
 
     def _complete_job(self, *, restart_autosave=True):
@@ -1051,13 +1056,15 @@ class CloudSketchPanel(QWidget):
         self._configure_toggle.setVisible(not authenticated)
         self._configuration_card.setVisible(not authenticated and self._configure_toggle.isChecked())
         connection = self._state.get("connectivity")
-        self._connection.setText("Online" if connection is True else
+        self._connection.setText("Firebase reachable" if connection is True else
                                  "Connection unavailable" if connection is False else
                                  "Checking connection…")
         if connection is not None:
             self._connectivity_status.setText(
-                "Firebase is reachable." if connection else
+                "Firebase is reachable; sign-in and sketch access are checked separately." if connection else
                 "Firebase could not be reached. Check your internet connection.")
+        if self._state.get("configuration_error"):
+            self._connectivity_status.setText(self._state["configuration_error"])
         email = self._state.get("account", {}).get("email", "")
         self._account_summary.setWordWrap(not authenticated)
         self._account_summary.setText(email if authenticated else

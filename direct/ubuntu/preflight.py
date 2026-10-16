@@ -58,7 +58,8 @@ ARM_SYSTEM_LIBRARIES = (
 SYSTEM_TOOLS = (("bash", "bash"), ("git", "git"), ("make", "build-essential"),
                 ("gcc", "build-essential"), ("g++", "build-essential"),
                 ("xdg-open", "xdg-utils"), ("ldd", "libc-bin"), ("rg", "ripgrep"),
-                ("secret-tool", "libsecret-tools"))
+                ("secret-tool", "libsecret-tools"),
+                ("gnome-keyring-daemon", "gnome-keyring"))
 CLIPBOARD_PACKAGES = ("xclip", "wl-clipboard")
 
 
@@ -86,7 +87,7 @@ class MissingSystemDependencies(RuntimeError):
 def system_install_command(packages=None) -> str:
     """Return a manual recovery command; checks never execute it."""
     if not packages:
-        packages = ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", *CLIPBOARD_PACKAGES,
+        packages = ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", "gnome-keyring", *CLIPBOARD_PACKAGES,
                     *(package for _, package in system_libraries())]
         if host_architecture() == "arm64":
             from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES

@@ -3090,7 +3090,7 @@ def ensure_pip_packages_parallel(
     importlib.invalidate_caches()
 
     # Checks are read-only, so running these concurrently is safe.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(active_specs))) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, max(1, len(active_specs)))) as executor:
         installed_flags = list(executor.map(_check, active_specs))
 
     with table_lock:
@@ -3531,6 +3531,10 @@ def ensure_pip_packages_parallel(
             )
 
         # Verify all missing packages after the single transaction.
+        # PathFinder retains negative directory results from the initial check.
+        # Coarse timestamps can otherwise hide newly installed modules until a
+        # restart, causing an unnecessary reinstall (or a false setup failure).
+        importlib.invalidate_caches()
         _ensure_pywin32_system32_dlls()
         remaining = []
         for spec in missing_specs:
@@ -3588,6 +3592,7 @@ def ensure_pip_packages_parallel(
             _update_bottom_from_rows()
 
         # Final fresh checks catch transitive changes made during a repair.
+        importlib.invalidate_caches()
         _ensure_pywin32_system32_dlls()
         final_failed = []
         for spec in active_specs:

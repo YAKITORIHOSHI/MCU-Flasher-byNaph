@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import ast
 import copy
 import hashlib
 import io
@@ -27,6 +28,42 @@ from src.modules import offline_runtime as offline
 
 CONFIG = {"firebase_api_key": "fixture-key", "firebase_database_url": "https://fixture.firebasedatabase.app",
           "firebase_project_id": "fixture-project"}
+
+
+class CloudStatusChecks(unittest.TestCase):
+    """Exercise the production completion messages without constructing Qt."""
+
+    def finish(self, state, *, refresh_error="", error=""):
+        path = ROOT / "main/qt/cloud_sketch_panel.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        panel_class = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                           and node.name == "CloudSketchPanel")
+        method = next(node for node in panel_class.body if isinstance(node, ast.FunctionDef)
+                      and node.name == "_finish_job")
+        method.decorator_list = []
+        scope = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), scope)
+        panel = SimpleNamespace(_closed=False, _generation=1, _status=Mock(), _complete_job=Mock())
+        panel._apply_state = lambda value: setattr(panel, "_state", value)
+        scope["_finish_job"](panel, 1, dict(kind="initialize", state=state,
+                                          refresh_error=refresh_error, error=error))
+        panel._complete_job.assert_called_once()
+        return panel._status.setText.call_args.args[0]
+
+    def test_locked_configuration_is_visible_in_primary_status(self):
+        message = self.finish(dict(authenticated=False, connectivity=False,
+                                   configuration_error="The desktop keyring is locked."))
+        self.assertEqual(message, "The desktop keyring is locked.")
+
+    def test_database_access_failure_retains_safe_reason_after_authentication(self):
+        message = self.finish(dict(authenticated=True, connectivity=True),
+                              refresh_error="Firebase denied access. Check database security rules.")
+        self.assertIn("denied access", message)
+        self.assertNotIn("ready", message)
+
+    def test_operation_error_takes_precedence_over_configuration_diagnostic(self):
+        self.assertEqual(self.finish(dict(authenticated=False, configuration_error="keyring locked"),
+                                     error="Sign-in failed"), "Sign-in failed")
 
 
 class RedirectedDirectoryChecks(unittest.TestCase):
@@ -326,6 +363,30 @@ class CloudChecks(unittest.TestCase):
         self.assertEqual(request.get_method(), "HEAD")
         self.assertEqual(urllib.parse.urlsplit(request.full_url).hostname, "identitytoolkit.googleapis.com")
         self.assertIsNone(request.data)
+
+    def test_locked_provider_vault_reports_error_without_claiming_connectivity(self):
+        service = cloud.CloudSketchService(credential_store=self.store,
+            transport=self.http, data_dir=self.service._data_dir)
+        with patch.object(self.store, "get", side_effect=SecureStorageError("Desktop keyring is locked")):
+            self.assertFalse(service.configured)
+            self.assertIn("keyring is locked", service.configuration_error)
+            self.assertFalse(service.check_connection())
+            with self.assertRaisesRegex(cloud.CloudError, "keyring is locked"):
+                service.sign_in("fixture@example.com", "password")
+        self.assertFalse(self.http.calls)
+        self.store.set("provider_configuration", CONFIG)
+        self.assertTrue(service.configured)
+        self.assertEqual(service.configuration_error, "")
+        self.assertTrue(service.check_connection())
+
+    def test_probe_rejects_server_errors_and_redirects_but_accepts_auth_required(self):
+        for code in (301, 302, 400, 401, 403, 404, 405, 429, 500, 503):
+            with self.subTest(status=code):
+                body = io.BytesIO(b"unread provider response")
+                error = urllib.error.HTTPError("https://fixture.firebaseio.com", code, "fixture", {}, body)
+                with patch.object(self.service, "_transport", side_effect=error):
+                    self.assertEqual(self.service.check_connection(), code in (401, 403, 405))
+                self.assertTrue(body.closed)
 
     def test_saved_credentials_fail_closed(self):
         self.store.status = False, "Fixture keyring is locked"

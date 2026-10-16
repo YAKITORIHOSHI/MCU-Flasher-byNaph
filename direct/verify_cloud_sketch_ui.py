@@ -668,7 +668,7 @@ class CloudUIChecks(unittest.TestCase):
         panel = dialog.panel
         self.assertIn("Sensor sketch", panel._linked.text())
         self.assertNotIn("local", panel._linked.text())
-        self.assertEqual(panel._connection.text(), "Online")
+        self.assertEqual(panel._connection.text(), "Firebase reachable")
         self.assertNotIn("Sign in", panel._status.text())
         self.assertTrue(panel._push_btn.isVisible())
         compact = panel.width() < 480

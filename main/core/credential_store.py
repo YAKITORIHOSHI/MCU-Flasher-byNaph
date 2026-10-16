@@ -48,7 +48,7 @@ class CredentialStore:
         if self._platform.startswith("linux") and shutil.which("secret-tool"):
             return True, "The desktop Secret Service protects saved credentials for this user."
         return False, (
-            "Secure credential saving is unavailable. On Ubuntu install libsecret-tools "
+            "Secure credential saving is unavailable. On Ubuntu install libsecret-tools and gnome-keyring "
             "and unlock a desktop keyring, or sign in without saving credentials."
         )
 
@@ -173,13 +173,14 @@ class CredentialStore:
 _CONFIG_KEYS = {"firebase_api_key", "firebase_database_url", "firebase_project_id"}
 
 
-def load_cloud_configuration(store: CredentialStore | None = None) -> dict[str, Any]:
-    """Read provider settings only from the current user's OS credential vault."""
+def load_cloud_configuration(store: CredentialStore | None = None, *, strict=False) -> dict[str, Any]:
+    """Read the user's vault; strict callers retain locked/unavailable diagnostics."""
     cfg: dict[str, Any] = {}
     try:
         cfg.update((store or CredentialStore()).get("provider_configuration") or {})
     except SecureStorageError:
-        pass
+        if strict:
+            raise
     return {key: cfg.get(key, "") for key in _CONFIG_KEYS}
 
 

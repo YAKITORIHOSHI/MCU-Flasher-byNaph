@@ -10,6 +10,26 @@
 
 [v10 release notes and verification limits](RELEASE_NOTES.md)
 
+First-run reliability: Bootstrap clears pre-install Python discovery caches before
+validating newly installed dependencies, including the Ubuntu launcher's post-setup
+check. This avoids false missing-package errors on coarse-timestamp storage while
+retaining dependency and native-architecture checks. Windows package checks use at
+most three concurrent workers to limit cold-start load.
+
+Ubuntu amd64/ARM64 setup prepares both `libsecret-tools` and `gnome-keyring`.
+Cloud credentials require an unlocked keyring in the current desktop session.
+Vault errors now remain visible instead of appearing as missing cloud configuration.
+“Firebase reachable” indicates endpoint reachability only; authentication and
+database permissions are checked separately. Redirects and failed server responses
+no longer count as a healthy endpoint. Use **Check connection** after unlocking
+the keyring to refresh configuration availability without restarting.
+
+The isolated regression `direct/verify_bootstrap_cold_cache.py` reproduces a new
+package remaining invisible when the installation directory timestamp is unchanged.
+Together with the Ubuntu launcher and cloud service verifiers, it checks the repair
+without running installers, using accounts or touching live package caches. These
+fixtures do not certify native Windows or physical Raspberry Pi first-run behavior.
+
 ---
 
 ## 📖 Table of Contents

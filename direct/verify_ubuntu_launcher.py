@@ -492,6 +492,30 @@ class LauncherChecks(unittest.TestCase):
         self.assertEqual(setup.call_args.args[0][-1], str(self.root / "direct/ubuntu/setup.py"))
         self.assertEqual(gui.call_args.args[0], ["--project", "Sketch With Spaces", "--new-window"])
 
+    def test_post_setup_check_sees_new_prerequisites_without_restart(self):
+        from importlib.machinery import PathFinder
+        site = self.root / "system-packages"
+        site.mkdir()
+
+        def host(**kwargs):
+            if PathFinder.find_spec("cold_prerequisite", [str(site)]) is None:
+                raise preflight.MissingSystemDependencies(["python3-tk"])
+
+        def install(*args, **kwargs):
+            before = site.stat()
+            (site / "cold_prerequisite.py").write_text("READY = True\n", encoding="utf-8")
+            os.utime(site, ns=(before.st_atime_ns, before.st_mtime_ns))
+            self.assertIsNone(PathFinder.find_spec("cold_prerequisite", [str(site)]))
+            return 0
+
+        with patch.object(preflight, "host_preflight", side_effect=host), \
+                patch.object(launch, "runtime_problem", return_value=None), \
+                patch.object(launch.subprocess, "call", side_effect=install) as setup, \
+                patch.object(launch, "launch_workspace", return_value=0) as gui:
+            self.assertEqual(launch.main([]), 0)
+        setup.assert_called_once()
+        gui.assert_called_once()
+
     def test_ready_runtime_does_not_run_installer(self):
         with patch.object(launch, "runtime_problem", return_value=None), \
                 patch.object(launch.subprocess, "call", side_effect=AssertionError("Installer ran")), \

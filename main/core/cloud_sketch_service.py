@@ -324,7 +324,7 @@ class CloudSketchService:
                  data_dir: Path | str | None = None,
                  source_root_provider: Callable[[], Path | str] | None = None):
         self._store = credential_store or CredentialStore()
-        self._config_provider = config_provider or (lambda: load_cloud_configuration(self._store))
+        self._config_provider = config_provider or (lambda: load_cloud_configuration(self._store, strict=True))
         self._transport = transport
         self._data_dir = Path(data_dir) if data_dir is not None else user_cloud_directory()
         self._source_root_provider = source_root_provider
@@ -377,6 +377,15 @@ class CloudSketchService:
             return False
 
     @property
+    def configuration_error(self) -> str:
+        """Keep vault failures distinct from a provider that has not been set up."""
+        try:
+            self._config()
+            return ""
+        except (CloudError, SecureStorageError, ValueError) as error:
+            return str(error)
+
+    @property
     def is_authenticated(self) -> bool:
         return bool(self._uid and self._id_token)
 
@@ -403,7 +412,9 @@ class CloudSketchService:
         try:
             endpoint = self._config()["firebase_database_url"] + "/.json?shallow=true"
             host = urllib.parse.urlsplit(endpoint).hostname
-        except Exception:
+        except SecureStorageError:
+            return False
+        except (CloudError, ValueError):
             endpoint = "https://identitytoolkit.googleapis.com/"
             host = urllib.parse.urlsplit(endpoint).hostname
         request = urllib.request.Request(endpoint, headers={"Accept": "application/json"}, method="HEAD")
@@ -417,10 +428,10 @@ class CloudSketchService:
                         pass
             return True
         except urllib.error.HTTPError as error:
-            # Auth-required, method-not-allowed and similar responses prove the
-            # Firebase endpoint is reachable; the response body is never read.
+            # Access-controlled endpoints still prove reachability. Redirects,
+            # missing databases and server failures must not appear healthy.
             error.close()
-            return True
+            return error.code in (401, 403, 405)
         except Exception:
             return False
 

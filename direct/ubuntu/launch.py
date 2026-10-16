@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 from pathlib import Path
 import shutil
@@ -196,6 +197,9 @@ def main(argv=None) -> int:
                     except EOFError:
                         pass
                 return result
+            # apt/pip ran in a child. Drop this launcher's pre-install negative
+            # import results before checking freshly installed Tk/ARM Qt5.
+            importlib.invalidate_caches()
             host_preflight(require_display=True)
             problem = runtime_problem(env)
             if problem:

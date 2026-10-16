@@ -271,6 +271,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_ubuntu_arm_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_release.py
           .venv-linux/bin/python -B direct/verify_ubuntu_launcher.py
+          .venv-linux/bin/python -B direct/verify_bootstrap_cold_cache.py
           .venv-linux/bin/python -B direct/verify_ubuntu_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_system_setup.py
           .venv-linux/bin/python -B -W error::DeprecationWarning -W error::SyntaxWarning direct/verify_ubuntu_runtime.py
@@ -412,6 +413,8 @@ jobs:
           & env/Scripts/python.exe -m pip install 'PySide6>=6.7,<7' 'pyserial>=3.5,<4' 'psutil>=5.9,<8' 'platformio>=6.1,<7' 'requests>=2.31,<3' pywinpty websockets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_platforms.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_bootstrap_cold_cache.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_offline.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

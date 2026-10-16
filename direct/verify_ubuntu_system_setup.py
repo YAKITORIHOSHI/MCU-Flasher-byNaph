@@ -72,6 +72,12 @@ class SystemSetupChecks(unittest.TestCase):
         self.assertEqual(self.run.call_args.args[0][-3:], ["xclip", "wl-clipboard", "ripgrep"])
         self.assertEqual(self.run.call_args.args[0][:2], ["/usr/bin/sudo", "/usr/bin/apt-get"])
 
+    def test_keyring_provider_is_prepared_as_well_as_the_secret_tool_client(self):
+        self.assertIn(("secret-tool", "libsecret-tools"), preflight.SYSTEM_TOOLS)
+        self.assertIn(("gnome-keyring-daemon", "gnome-keyring"), preflight.SYSTEM_TOOLS)
+        system_setup.install_system_packages(["libsecret-tools", "gnome-keyring"])
+        self.assertEqual(self.run.call_args.args[0][-2:], ["libsecret-tools", "gnome-keyring"])
+
     def test_non_tty_desktop_uses_os_authentication_agent(self):
         with patch.object(system_setup.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
                 patch.dict(os.environ, {"DISPLAY": ":fixture"}):

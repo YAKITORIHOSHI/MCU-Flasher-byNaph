@@ -1008,6 +1008,19 @@ MCU Flasher by Naph/
 - `_remote_workspace_root()` routes build workspaces to local fast storage to avoid SMB `.sconsign*.dblite` locking errors.
 
 ### 5. Bootstrap & First-Run Pipeline (`src/modules/bootstrap.py`)
+- Invalidate Python discovery caches after pip transactions and in the Ubuntu
+  launcher after child setup, before rechecking prerequisites. A negative directory
+  cache can survive installation on coarse-timestamp storage. Keep initial package
+  checks bounded to three workers; preserve real dependency/architecture failures.
+  Verify `direct/verify_bootstrap_cold_cache.py` and the Ubuntu launcher regression
+  with isolated directories and mocked installation, including unchanged mtimes.
+- Ubuntu cloud prerequisites include both the libsecret client and a Secret Service
+  provider (`gnome-keyring`). Preserve strict vault errors for Cloud configuration;
+  do not replace a locked vault with empty settings or a successful fallback probe.
+  Label endpoint reachability separately from sign-in/database access. HTTP
+  401/403/405 can establish reachability, but redirects, 404, 429 and server failures
+  cannot establish health. Keep account mutations non-replaying and credentials
+  encrypted; refresh configuration on explicit Check connection after unlock.
 - Windows release-first preparation uses the pinned archive size/SHA256 and `bootstrap_seed.py` to inspect genuine package metadata and usable manifests. Import only absent compatible package groups; preserve existing destinations, archives and failed checkpoints. Reinspect after importing platforms, then resolve missing packages normally before readiness. Do not fabricate `.piopm`, overlay installed directories, auto-prune incompatible SCons, or treat the release as a complete plan certificate. Native Ubuntu never imports the Windows seed. Verify with isolated `direct/verify_bootstrap_seed.py` fixtures.
 - Read update versions from the same explicit interpreter used by pip, with fresh distribution metadata and PEP440 ordering. Reject conflicting metadata, verify actual installed versions after upgrades and keep the base runtime separate from the application venv. Never seed or sync individual missing package/metadata trees in either direction; use target pip for missing dependencies. An incomplete check must not report all utilities current. Use `direct/verify_bootstrap_updates.py` without installing packages.
 - Serial output wraps to the viewport by default (`serial_line_wrap`), with a saved Wrap lines action in the output context menu and compact Options. Reflow changes display only; Copy retains original logical line breaks. Anchor wrapped output by UTF-16 character and visual row, retain the character across consecutive resizes, and coalesce deferred layout following with one owned timer. Cancel pending restoration on reader input, selection changes and Clear. Verify with `direct/verify_serial_wrap.py`.
