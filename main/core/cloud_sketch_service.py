@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import threading
 import time
@@ -134,7 +135,19 @@ def _io_path(value: Path | str) -> Path:
 
 
 def _redirected_directory(path: Path) -> bool:
-    return path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if is_junction is not None:
+        return is_junction()
+    if sys.platform != "win32":
+        return False
+    # Path.is_junction was added in Python 3.12. Other reparse tags, including
+    # cloud placeholders, do not redirect a directory to another local folder.
+    try:
+        return path.lstat().st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    except (OSError, ValueError):
+        return False
 
 
 def read_project_link(root: Path | str) -> dict[str, Any] | None:

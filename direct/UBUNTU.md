@@ -34,8 +34,8 @@ The project root now contains actual compiled Linux executables: double-click
 The earlier root Bash script did not provide the requested native executable.
 Both binaries enter the existing Ubuntu Bootstrap path; the local desktop
 shortcut is optional. The amd64 file is recognized locally as
-`application/x-executable`. Source `5a68fdc` passed
-[native ARM64 executable verification on both LTS releases](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38835072880),
+`application/x-executable`. Source `afe091a` passed
+[native ARM64 executable verification on both LTS releases](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38836466685),
 including fresh Bootstrap, warm GUI launch and ESP32 compilation; amd64 first-run
 jobs passed too. These hosted checks do not replace physical Pi USB/graphics
 verification. Windows executables and setup remain unchanged.

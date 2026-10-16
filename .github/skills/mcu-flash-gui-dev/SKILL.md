@@ -21,7 +21,7 @@ the existing Bash Bootstrap path. `build_launcher.sh` rebuilds those filenames
 by default, accepts an explicit output path and rejects Windows `.exe` outputs.
 The Bash fallback and desktop shortcut remain available. Keep Windows paths
 and dependency ranges unchanged. See canonical guidance for the narrow ARM Qt5
-bridge, copied-runtime repair, ELF checks and native ARM64 CI. Source `5a68fdc`
+bridge, copied-runtime repair, ELF checks and native ARM64 CI. Source `afe091a`
 verified the shipped native executables through fresh Bootstrap, warm GUI launch
 and ESP32 compilation on both Ubuntu LTS ARM64 runners. This is hosted CPU
 evidence, not physical Pi USB/graphics verification. Keep Ubuntu's Click
@@ -29,6 +29,11 @@ evidence, not physical Pi USB/graphics verification. Keep Ubuntu's Click
 deprecated parsing API. Existing incompatible versions must enter Bootstrap
 repair; do not suppress deprecations or change Windows dependency ranges.
 
+
+Cloud folder safety must reject Windows junctions on Python 3.11 too, using
+the lstat mount-point tag only when `Path.is_junction` is unavailable. Preserve
+modern Python, Ubuntu and cloud-placeholder behavior; verify native replacement
+refusal without changing Windows launchers or dependency ranges.
 
 ## Platform Scope
 

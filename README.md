@@ -300,15 +300,17 @@ and [source release notes](RELEASE_NOTES.md#october-15-source-update-ubuntu-arm6
 
 The October 16 launcher correction supplies actual native Linux executables in
 the project root: **`MCU_Flasher` for Intel/AMD** and **`MCU_Flasher-arm64` for
-Raspberry Pi/ARM64**. Double-click the file matching your CPU. Source `5a68fdc`
-passed [native ARM64 executable verification on both LTS releases](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38835072880),
+Raspberry Pi/ARM64**. Double-click the file matching your CPU. Source `afe091a`
+passed [native ARM64 executable verification on both LTS releases](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38836466685),
 including fresh Bootstrap, prepared launch and ESP32 compilation. The matching
 amd64 first-run jobs also passed. Physical Pi USB and graphics remain separate checks.
 
 The follow-up audit fixes native launcher error reporting and verifies builds
 with stricter compiler warnings. Ubuntu uses Click `>=8.1.8,<8.2` for PlatformIO's
 current parsing API; preflight sends incompatible existing installations through
-Bootstrap repair. Windows application code and dependency ranges are unchanged.
+Bootstrap repair. Windows launchers, installers and dependency ranges are unchanged.
+The audit also fixes cloud-folder junction detection on Windows Python 3.11;
+modern Python and Ubuntu retain their existing checks.
 
 The project terminal passes xterm capability replies and bracketed paste to
 interactive coding CLIs. Installed Codex, Claude Code and OpenCode version

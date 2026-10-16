@@ -16,6 +16,7 @@ import unittest
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,65 @@ from src.modules import offline_runtime as offline
 
 CONFIG = {"firebase_api_key": "fixture-key", "firebase_database_url": "https://fixture.firebasedatabase.app",
           "firebase_project_id": "fixture-project"}
+
+
+class RedirectedDirectoryChecks(unittest.TestCase):
+    MOUNT_POINT_TAG = 0xA0000003
+
+    def legacy_path(self, tag=0):
+        path = Mock(spec=["is_symlink", "lstat"])
+        path.is_symlink.return_value = False
+        path.lstat.return_value = SimpleNamespace(st_reparse_tag=tag)
+        return path
+
+    def test_legacy_windows_junction_is_redirected(self):
+        path = self.legacy_path(self.MOUNT_POINT_TAG)
+        with patch.object(cloud.sys, "platform", "win32"), patch.object(
+                cloud.stat, "IO_REPARSE_TAG_MOUNT_POINT", self.MOUNT_POINT_TAG, create=True):
+            self.assertTrue(cloud._redirected_directory(path))
+        path.lstat.assert_called_once_with()
+
+    def test_legacy_windows_regular_and_cloud_placeholder_folders_are_preserved(self):
+        for tag in (0, 0x9000001A):  # IO_REPARSE_TAG_CLOUD is not a junction.
+            with self.subTest(tag=hex(tag)):
+                path = self.legacy_path(tag)
+                with patch.object(cloud.sys, "platform", "win32"), patch.object(
+                        cloud.stat, "IO_REPARSE_TAG_MOUNT_POINT", self.MOUNT_POINT_TAG, create=True):
+                    self.assertFalse(cloud._redirected_directory(path))
+                path.lstat.assert_called_once_with()
+
+    def test_legacy_windows_missing_and_unavailable_paths_are_not_redirected(self):
+        for error in (FileNotFoundError, NotADirectoryError, PermissionError, ValueError):
+            with self.subTest(error=error.__name__):
+                path = self.legacy_path()
+                path.lstat.side_effect = error("Fixture unavailable path")
+                with patch.object(cloud.sys, "platform", "win32"):
+                    self.assertFalse(cloud._redirected_directory(path))
+
+    def test_symbolic_links_are_rejected_before_junction_inspection(self):
+        path = Mock(spec=["is_symlink", "is_junction", "lstat"])
+        path.is_symlink.return_value = True
+        self.assertTrue(cloud._redirected_directory(path))
+        path.is_junction.assert_not_called()
+        path.lstat.assert_not_called()
+
+    def test_modern_junction_method_is_preserved(self):
+        for platform in ("win32", "linux"):
+            for redirected in (False, True):
+                with self.subTest(platform=platform, redirected=redirected):
+                    path = Mock(spec=["is_symlink", "is_junction", "lstat"])
+                    path.is_symlink.return_value = False
+                    path.is_junction.return_value = redirected
+                    with patch.object(cloud.sys, "platform", platform):
+                        self.assertEqual(cloud._redirected_directory(path), redirected)
+                    path.is_junction.assert_called_once_with()
+                    path.lstat.assert_not_called()
+
+    def test_legacy_non_windows_paths_do_not_use_windows_reparse_tags(self):
+        path = self.legacy_path(self.MOUNT_POINT_TAG)
+        with patch.object(cloud.sys, "platform", "linux"):
+            self.assertFalse(cloud._redirected_directory(path))
+        path.lstat.assert_not_called()
 
 
 class MemoryStore:

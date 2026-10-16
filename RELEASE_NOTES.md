@@ -22,7 +22,7 @@ executable. Both binaries use the existing Ubuntu Bootstrap path; the Bash
 fallback and optional desktop shortcut remain available. Windows files are unchanged.
 
 The amd64 binary is recognized locally as `application/x-executable`. Source
-`5a68fdc` passed [native ARM64 verification on Ubuntu 24.04 and 26.04](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38835072880),
+`afe091a` passed [native ARM64 verification on Ubuntu 24.04 and 26.04](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/38836466685),
 including the shipped executable, fresh Bootstrap, warm GUI launch and a real
 ESP32 build. Both amd64 first-run jobs passed too. This is hosted native CPU
 evidence; physical Pi USB, graphics and Wayland still require device checks.
@@ -36,8 +36,11 @@ Ubuntu constrains Click to `>=8.1.8,<8.2` because PlatformIO still accesses a
 Preflight detects incompatible existing versions and requests Bootstrap repair.
 The actual missing-platform CLI guard passes with deprecations treated as errors.
 Windows verification fixtures now isolate compiler path setup and use the
-production themed card background. Windows application code, executable and
-dependency ranges are unchanged.
+production themed card background. A separate existing Windows Python 3.11
+cloud-folder safety defect is fixed: junctions are rejected even without
+`Path.is_junction`; ordinary and cloud-placeholder folders remain supported.
+Modern Python and Ubuntu preserve their existing checks. Windows launchers,
+installers and dependency ranges are unchanged.
 
 ## October 15 Source Update: Ubuntu ARM64 and Raspberry Pi
 
