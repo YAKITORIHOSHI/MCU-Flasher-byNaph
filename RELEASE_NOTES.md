@@ -35,7 +35,7 @@ Ubuntu constrains Click to `>=8.1.8,<8.2` because PlatformIO still accesses a
 [parsing API deprecated in Click 8.2](https://click.palletsprojects.com/en/stable/changes/#version-8-2-0).
 Preflight detects incompatible existing versions and requests Bootstrap repair.
 The actual missing-platform CLI guard passes with deprecations treated as errors.
-Two Windows verification fixtures now isolate compiler path setup and use the
+Windows verification fixtures now isolate compiler path setup and use the
 production themed card background. Windows application code, executable and
 dependency ranges are unchanged.
 

@@ -1066,7 +1066,10 @@ class TkResponsiveChecks(DownloaderChecks):
         width = min(round(480 * scale), 1024 - 48, self.root.winfo_screenwidth() - 48)
         tall = min(round(300 * scale), self.root.winfo_screenheight() - 80)
         short = min(round(120 * scale), tall - 20)
-        pane = tk.PanedWindow(dialog, orient=tk.HORIZONTAL, sashwidth=2, bd=0)
+        # Match the production downloader pane's explicit theme surface;
+        # Windows otherwise supplies the symbolic SystemButtonFace color.
+        pane = tk.PanedWindow(dialog, orient=tk.HORIZONTAL, sashwidth=2, bd=0,
+                              bg=Theme.WINDOW_BG)
         pane.pack(fill='both', expand=True)
         left = GlassCard(pane, Theme, padding=7, expand=True)
         right = GlassCard(pane, Theme, padding=9, expand=True)
