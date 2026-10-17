@@ -56,8 +56,13 @@ action. Remove empty link rows and repeated status badges.
 Keep native rounded SVG buttons and notebook keyboard navigation. The shared
 standard-library renderer serves Ubuntu and Windows; do not add blur, animation
 or image-package requirements. Retain one large material cache per surface.
-Native Tk fields and package lists retain readable solid editing/selection
-fills and their original callbacks. Do not fake glass by reducing the entire
+Continue the material through unused tab-strip space, unselected package rows
+and rounded control corners. Keep each tab's unselected rounded border,
+brighter hover rim and cyan selected rim/bottom accent consistent with the
+workspace's monitor tabs. Retain actual native Notebook/Listbox geometry,
+focus, pointer, scrolling and keyboard behavior beneath their static paint.
+Native fields and selected rows retain readable fills and original callbacks.
+Do not fake glass by reducing the entire
 window's opacity. Setup keeps its existing material. On Ubuntu load bundled Montserrat
 through process-local Fontconfig application fonts, without installing fonts or
 rewriting user configuration. Keep rounded native fields, keyboard focus and

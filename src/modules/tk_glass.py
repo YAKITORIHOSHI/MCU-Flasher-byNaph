@@ -504,7 +504,7 @@ def _blend(first, second, amount):
 
 
 @lru_cache(maxsize=64)
-def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=True):
+def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=True, transparent=False):
     """Precomposed native glass, with antialiased rims and a soft reflection.
 
     Tk has no child-widget alpha compositing. Paint the material once instead
@@ -551,7 +551,7 @@ def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=T
                 fill = _blend(fill, reflected_light, .025 * left)
                 fill = _blend(fill, reflected_shade, .03 * right)
             if not rounded or (x0 >= inner_inset + 1 and x1 <= width - inner_inset - 1 and 1 <= y < height - 1):
-                rows.extend(bytes(fill) * (x1 - x0))
+                rows.extend(bytes((*fill, 255) if transparent else fill) * (x1 - x0))
                 continue
             for pixel in range(x0, x1):
                 distance = min(pixel + .5, width - pixel - .5)
@@ -559,17 +559,17 @@ def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=T
                 interior = min(1., max(0., distance - inner_inset + .5))
                 interior *= min(1., max(0., center - 1), max(0., height - center - 1))
                 boundary = _blend(edge, fill, interior)
-                rows.extend(_blend(outside, boundary, coverage))
+                rows.extend((*boundary, round(255*coverage)) if transparent else _blend(outside, boundary, coverage))
     def chunk(kind, data):
         return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data) & 0xffffffff)
-    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', width, height, 8, 2, 0, 0, 0))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', width, height, 8, 6 if transparent else 2, 0, 0, 0))
             + chunk(b'IDAT', zlib.compress(rows, 3)) + chunk(b'IEND', b''))
 
 
-def glass_photo(master, width, height, base, lower, rim, surround, radius=12, reflection=True):
+def glass_photo(master, width, height, base, lower, rim, surround, radius=12, reflection=True, *, transparent=False):
     renderer = glass_png if width * height <= 65536 else glass_png.__wrapped__
     return tk.PhotoImage(master=master, data=base64.b64encode(
-        renderer(width, height, base, lower, rim, surround, radius, reflection)), format="png")
+        renderer(width, height, base, lower, rim, surround, radius, reflection, transparent)), format="png")
 
 
 @lru_cache(maxsize=32)
@@ -681,6 +681,7 @@ class GlassScene(tk.Canvas):
         self.body = GlassBody(self, bg=palette.WINDOW_BG)
         self._body_window = self.create_window(0, 0, window=self.body, anchor="nw")
         self.bind("<Configure>", self._schedule, add="+")
+        self.bind("<Map>", self._schedule, add="+")
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
@@ -698,6 +699,8 @@ class GlassScene(tk.Canvas):
         if width < 2 or height < 2:
             return
         self.itemconfigure(self._body_window, width=width, height=height)
+        if not self.winfo_viewable():
+            return
         p = self.palette
         key = (width, height, p.BG_LIGHT, p.BG_MID, p.BG_DARK, p.BG_DARKEST, p.BORDER, p.BORDER_LIT)
         if key != getattr(self, "_surface_key", None):
@@ -725,6 +728,11 @@ class GlassButton(SvgButton):
         tk.Button.configure(self, highlightthickness=0, bd=0, relief="flat")
         self.bind("<FocusIn>", lambda _event: self._refresh_svg(), add="+")
         self.bind("<FocusOut>", lambda _event: self._refresh_svg(), add="+")
+        self.bind("<Configure>", lambda _event: self._refresh_svg() if self.winfo_viewable() else None, add="+")
+        self.bind("<Map>", lambda _event: self._refresh_svg(), add="+")
+
+    def refresh_material(self):
+        self._refresh_svg()
 
     def cget(self, key):
         canonical = "background" if key == "bg" else key
@@ -764,6 +772,13 @@ class GlassButton(SvgButton):
         def hex_color(value):
             return '#' + ''.join(f'{part // 257:02x}' for part in self.winfo_rgb(value))
         base, ink, outside = map(hex_color, (base, ink, outside))
+        from src.modules.tk_material import material_location, material_patch
+        location = material_location(self)
+        if location:
+            source, source_x, source_y = location
+            x = max(0, min(source.width()-1, source_x))
+            y = max(0, min(source.height()-1, source_y))
+            outside = "#" + "".join(f"{part:02x}" for part in source.get(x, y))
         if disabled:
             base = mix(base, outside, .55)
         # Preserve text contrast against the *brightest* material sample.
@@ -789,10 +804,15 @@ class GlassButton(SvgButton):
         rim = mix(base, "#ffffff", .12 if readable_foreground(base) == "#ffffff" else .24)
         if self.focus_get() is self:
             rim = hex_color(self.cget("highlightcolor"))
-        key = (width, height, upper, lower, rim, outside, ink, name)
+        key = (width, height, upper, lower, rim, outside, ink, name,
+               (str(location[0]), *location[1:]) if location else None)
         if key != getattr(self, "_glass_key", None):
             self._glass_key = key
-            self._svg_image = glass_photo(self, width, height, upper, lower, rim, outside, max(4, round(8 * scale)))
+            skin = glass_photo(self, width, height, upper, lower, rim, outside, max(4, round(8 * scale)),
+                               transparent=bool(location))
+            self._svg_image = material_patch(self, width, height, location) if location else skin
+            if location:
+                self.tk.call(self._svg_image, "copy", skin, "-compositingrule", "overlay")
             if name:
                 icon = svg_photo(self, name, ink, size)
                 x = round((width - font.measure(text)) / 2 - size - 5 * scale)
@@ -803,7 +823,9 @@ class GlassButton(SvgButton):
         # Classic Tk reserves another pixel around an image even with bd=0.
         # Paint it in the surrounding surface, preserving the action colors
         # separately so a square native frame cannot outline the rounded skin.
-        tk.Button.configure(self, background=outside, activebackground=outside)
+        if (tk.Button.cget(self, "background") != outside
+                or tk.Button.cget(self, "activebackground") != outside):
+            tk.Button.configure(self, background=outside, activebackground=outside)
 
 
 def material_ink(color, upper, lower, minimum=4.5):
@@ -858,14 +880,20 @@ class EntryWell(tk.Canvas):
         key = (width, height, fill, fill,
                p.CYAN if self.entry.focus_get() is self.entry else mix(p.BORDER, fill, .55),
                self.cget("background"), round(7 * scale), False)
+        resource = getattr(p, "RESOURCE_GLASS", False)
+        if resource:
+            _material_underlay(self)
         if key != self._surface_key:
             self._surface_key = key
-            self._surface = glass_photo(self, *key)
+            self._surface = glass_photo(self, *key, transparent=resource)
             self.delete("surface")
             self.create_image(0, 0, image=self._surface, anchor="nw", tags="surface")
             self.tag_lower("surface", self._field)
 
     def _schedule(self):
+        self._draw()
+
+    def refresh_material(self):
         self._draw()
 
 
@@ -884,6 +912,7 @@ class BrowserHeader(tk.Canvas):
         self._actions_window = self.create_window(0, 0, window=self.actions, anchor="ne")
         self.bind("<Configure>", self._schedule, add="+")
         self.actions.bind("<Configure>", self._schedule, add="+")
+        self.bind("<Map>", self._schedule, add="+")
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
@@ -916,7 +945,7 @@ class BrowserHeader(tk.Canvas):
             height = 2 * pad + max(mark_size, title_height) + action_height + round(6 * scale)
         if self.winfo_pixels(self.cget("height")) != height:
             self.configure(height=height)
-        if width < 2:
+        if width < 2 or not self.winfo_viewable():
             return
         self.delete("material")
         outside = self.cget("background")
@@ -998,6 +1027,7 @@ class GlassEmptyState(tk.Canvas):
         self.palette, self.installed = palette, installed
         self._redraw_id = None
         self.bind("<Configure>", self._schedule, add="+")
+        self.bind("<Map>", self._schedule, add="+")
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
@@ -1015,7 +1045,7 @@ class GlassEmptyState(tk.Canvas):
     def _draw(self):
         self._redraw_id = None
         width, height = self.winfo_width(), self.winfo_height()
-        if min(width, height) < 2:
+        if min(width, height) < 2 or not self.winfo_viewable():
             return
         p, scale = self.palette, ui_scale(self)
         top = mix(p.BG_MID, "#ffffff", .045)
@@ -1071,6 +1101,7 @@ class GlassCard(tk.Canvas):
         self._body_window = self.create_window(self.padding, self.padding, window=self.body, anchor="nw")
         self.bind("<Configure>", self._schedule)
         self.body.bind("<Configure>", self._schedule)
+        self.bind("<Map>", self._schedule, add="+")
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
@@ -1142,7 +1173,7 @@ class GlassCard(tk.Canvas):
             self.coords(self._body_window, self.padding, vertical_padding + heading_height)
             self.itemconfigure(self._body_window, height=max(1, height - 2 * vertical_padding - heading_height))
         self.delete("glass")
-        if width < 4 or height < 4:
+        if width < 4 or height < 4 or not self.winfo_viewable():
             return
         if getattr(p, "RESOURCE_GLASS", False):
             _material_underlay(self)

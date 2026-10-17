@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 from direct.tk_downloader_fixture import TkDownloaderFixture
 from direct.tk_capture import save_tk_capture
 from src.modules.tk_glass import DialogFit, GlassCard, BrowserHeader, NativeResizeFocus, _desktop_work_area, _native_frame, _x11_work_area, ui_scale
-from src.modules.tk_material import GlassBody, GlassLabel
+from src.modules.tk_material import GlassBody, GlassLabel, _owner
 from src.modules.ui_metrics import WorkArea
 from src.modules.ui_palette import contrast_ratio
 
@@ -166,6 +166,190 @@ class AppearanceChecks(TkDownloaderFixture):
         self.pump()
         well = self.app.lib_tab._search_well
         self.assertEqual(well._surface_key[4], self.module.Theme.CYAN)
+
+    def test_clear_control_corners_follow_the_owner_through_theme_and_resize(self):
+        app = self.app
+        literal = "Sketch \u03a9 $literal"
+        app.lib_tab.search_var.set(literal)
+
+        def assert_button_corners(button):
+            owner = _owner(button)
+            self.assertIsNotNone(owner, "A glass action needs an owning material")
+            image, source = button._svg_image, owner._material_image
+            x = button.winfo_rootx() - owner.winfo_rootx()
+            y = button.winfo_rooty() - owner.winfo_rooty()
+            for px, py in ((0, 0), (image.width()-1, 0),
+                           (0, image.height()-1), (image.width()-1, image.height()-1)):
+                self.assertEqual(image.get(px, py), source.get(x+px, y+py),
+                                 "Rounded action corners must reveal the actual owner, without a flat matte")
+
+        for mode in ("default", "light", "solarized_dark"):
+            with patch.object(self.module, "_resolve_lib_req_theme", return_value=mode):
+                app._apply_current_theme()
+            for width in (1040, 480):
+                self.show(width)
+                for button in (app.sources_btn, app.refresh_btn, app.quit_btn, app.browse_btn):
+                    assert_button_corners(button)
+                for well in (app._folder_well, app.lib_tab._search_well):
+                    owner = _owner(well)
+                    self.assertIs(well._underlay_image, owner._material_image)
+                    underlay, = well.find_withtag("material-underlay")
+                    self.assertEqual(well.coords(underlay), [
+                        owner.winfo_rootx()-well.winfo_rootx(), owner.winfo_rooty()-well.winfo_rooty()])
+                    image = well._surface
+                    for x, y in ((0, 0), (image.width()-1, 0),
+                                 (0, image.height()-1), (image.width()-1, image.height()-1)):
+                        self.assertTrue(image.transparency_get(x, y),
+                                        "Native field corners must leave the shared material visible")
+                    self.assertEqual(well.entry.cget("background"), self.module.Theme.FIELD_BG,
+                                     "The native editing interior keeps its readable inset fill")
+                self.assertEqual(app.lib_tab.search_entry.get(), literal)
+
+        # State changes alter the action skin, while its outside corners still
+        # belong to the same scene. No button command is invoked by this check.
+        button = app.browse_btn
+        button.event_generate("<Enter>")
+        self.pump()
+        assert_button_corners(button)
+        button.configure(state="disabled")
+        self.pump()
+        assert_button_corners(button)
+        button.configure(state="normal")
+        button.event_generate("<Leave>")
+        self.pump()
+        assert_button_corners(button)
+
+    def test_clear_list_preserves_native_pointer_keyboard_and_scroll_callbacks(self):
+        tab = self.app.lib_tab
+        tab._on_select_handler = Mock()
+        tab.populate({f"Fixture package {index:03}": {"name": f"Fixture package {index:03}"}
+                      for index in range(200)})
+        self.show()
+        listing = tab.listbox
+        owner = _owner(listing._surface)
+        self.assertIs(listing._surface_photo, owner._material_image)
+        self.assertIs(listing._rail_photo, owner._material_image)
+        self.assertEqual((listing._surface.winfo_x(), listing._surface.winfo_y()), (0, 0),
+                         "The shared material must cover the native inactive border")
+        for canvas in (listing._surface, listing._rail):
+            material, = [item for item in canvas.find_all()
+                         if canvas.type(item) == "image" and canvas.itemcget(item, "image") == str(owner._material_image)]
+            self.assertEqual(canvas.coords(material), [
+                owner.winfo_rootx()-canvas.winfo_rootx(), owner.winfo_rooty()-canvas.winfo_rooty()])
+
+        changes, scrolls = [], []
+        listing.bind("<<ListboxSelect>>", lambda _event: changes.append(listing.curselection()), add="+")
+        def scrolled(first, last):
+            scrolls.append((float(first), float(last)))
+            tab._on_scroll(first, last)
+        listing.configure(yscrollcommand=scrolled)
+        _x, y, _width, height = listing.bbox(2)
+        y += height // 2 - listing._surface.winfo_y()
+        listing._surface.event_generate("<ButtonPress-1>", x=8, y=y, time=1000)
+        listing._surface.event_generate("<ButtonRelease-1>", x=8, y=y, time=1001)
+        self.pump()
+        self.assertEqual(listing.curselection(), (2,))
+        listing.focus_force()
+        self.root.update()
+        listing.event_generate("<KeyPress-Down>")
+        self.pump()
+        self.assertEqual(listing.curselection(), (3,))
+        self.assertIn((2,), changes)
+        self.assertIn((3,), changes)
+        self.assertGreaterEqual(tab._on_select_handler.call_count, 2)
+        rectangles = listing._surface.find_withtag("selection")
+        self.assertEqual(len(rectangles), 1, "Only the chosen row gets a solid selection surface")
+        self.assertEqual(listing._surface.itemcget(rectangles[0], "fill"), listing.cget("selectbackground"))
+        focus_ring, = listing._surface.find_withtag("focus-ring")
+        self.assertEqual(listing._surface.itemcget(focus_ring, "outline"), listing.cget("highlightcolor"))
+        double_calls = []
+        listing.bind("<Double-Button-1>", lambda _event: double_calls.append(listing.curselection()), add="+")
+        _x, double_y, _width, line = listing.bbox(3)
+        for timestamp in (3000, 3100):
+            listing._surface.event_generate("<ButtonPress-1>", x=8, y=double_y+line//2, time=timestamp)
+            listing._surface.event_generate("<ButtonRelease-1>", x=8, y=double_y+line//2, time=timestamp+1)
+        self.pump()
+        self.assertEqual(double_calls, [(3,)], "A double click invokes the native action once")
+        before = listing.yview()[0]
+        if sys.platform.startswith("linux"):
+            listing._surface.event_generate("<Button-5>", x=8, y=10, time=2000)
+        else:
+            listing._surface.event_generate("<MouseWheel>", x=8, y=10, delta=-120)
+        self.pump()
+        self.assertGreater(listing.yview()[0], before)
+        self.assertTrue(scrolls, "The native scroll callback must reach the original scrollbar")
+        self.assertEqual(tab.list_scroll.get(), listing.yview())
+        listing.yview_moveto(1)
+        self.pump()
+        self.assertGreater(listing.nearest(0), 0)
+        self.assertLessEqual(sum(listing._surface.type(item) == "text" for item in listing._surface.find_all()), 128)
+        self.assertIs(listing._surface_photo, owner._material_image)
+        if listing.bind_class("Listbox", "<Button-2>"):
+            listing.insert(tk.END, "Long package name " * 40)
+            listing.xview_moveto(0)
+            self.pump()
+            listing._surface.event_generate("<ButtonPress-2>", x=150, y=10, time=5000)
+            listing._surface.event_generate("<Motion>", x=20, y=10, state=512, time=5100)
+            listing._surface.event_generate("<ButtonRelease-2>", x=20, y=10, time=5200)
+            self.pump()
+            self.assertGreater(listing.xview()[0], 0, "Native middle-button panning remains available")
+
+    def test_clear_notebook_retains_native_selection_disabled_tabs_and_traversal(self):
+        notebook = self.app.notebook
+        self.assertFalse(notebook._style_ready,
+                         "A hidden notebook must not tile its 1px placeholder across the page")
+        self.show()
+        self.assertTrue(notebook._style_ready)
+        owner = _owner(notebook)
+        self.assertIs(notebook._material_photo, owner._material_image)
+        material = notebook._strip.find_all()[0]
+        self.assertEqual(notebook._strip.itemcget(material, "image"), str(owner._material_image))
+        x = notebook.winfo_rootx()-owner.winfo_rootx()
+        y = notebook.winfo_rooty()-owner.winfo_rooty()
+        self.assertEqual(notebook._strip.coords(material), [-x, -y])
+        self.assertEqual(notebook._client_image.get(0, 0),
+                         owner._material_image.get(x, y+notebook._strip.winfo_height()))
+        def assert_tab_rims(selected, hovered=None):
+            self.assertEqual(len(notebook._skin_photos), len(notebook._tab_boxes),
+                             "Unselected tabs need their own visible rounded border")
+            for image, (index, *_box) in zip(notebook._skin_photos, notebook._tab_boxes):
+                rim = (self.module.Theme.CYAN if index == selected else
+                       self.module.Theme.BORDER_LIT if index == hovered else self.module.Theme.BORDER)
+                expected = tuple(part//257 for part in notebook.winfo_rgb(rim))
+                self.assertEqual(image.get(image.width()//2, 0), expected)
+                self.assertTrue(image.transparency_get(0, 0), "Tab corners reveal the shared scene")
+        assert_tab_rims(0)
+        _index, left, top, right, bottom = next(box for box in notebook._tab_boxes if box[0] == 1)
+        notebook._strip.event_generate("<Motion>", x=(left+right)//2, y=(top+bottom)//2)
+        self.pump()
+        assert_tab_rims(0, 1)
+        changes = []
+        notebook.bind("<<NotebookTabChanged>>", lambda _event: changes.append(notebook.index(notebook.select())), add="+")
+
+        def click_tab(index, timestamp):
+            _index, left, top, right, bottom = next(box for box in notebook._tab_boxes if box[0] == index)
+            px, py = (left+right)//2, (top+bottom)//2
+            notebook._strip.event_generate("<ButtonPress-1>", x=px, y=py, time=timestamp)
+            notebook._strip.event_generate("<ButtonRelease-1>", x=px, y=py, time=timestamp+1)
+            self.pump()
+
+        click_tab(1, 3000)
+        self.assertEqual(notebook.index(notebook.select()), 1)
+        self.assertIn(1, changes)
+        notebook._strip.event_generate("<Leave>")
+        self.pump()
+        assert_tab_rims(1)
+        notebook.tab(2, state="disabled")
+        self.pump()
+        click_tab(2, 4000)
+        self.assertEqual(notebook.index(notebook.select()), 1, "An overlaid disabled tab must remain inactive")
+        notebook.focus_force()
+        self.root.update()
+        notebook.event_generate("<Control-Tab>")
+        self.pump()
+        self.assertEqual(notebook.index(notebook.select()), 0,
+                         "Native keyboard traversal must skip the disabled Installed tab")
+        self.assertIs(self.root.focus_get(), notebook)
 
     def test_themes_and_reflow_preserve_search_selection_version_and_focus(self):
         app = self.app

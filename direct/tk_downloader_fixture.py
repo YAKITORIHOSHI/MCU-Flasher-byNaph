@@ -43,4 +43,9 @@ class TkDownloaderFixture(unittest.TestCase):
         app._compute_installed_items = Mock()
         app._update_version_status = Mock()
         app._build_ui()
+        # Settle native geometry before individual checks launch timed workers.
+        # Otherwise the first update also pays Tcl's cold widget/layout cost,
+        # expiring the worker's cancellation gate even on the unchanged UI.
+        # Keep the window withdrawn and all persistence/network mocks in place.
+        self.root.update_idletasks()
         self.app = app

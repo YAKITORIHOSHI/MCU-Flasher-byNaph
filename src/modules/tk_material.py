@@ -1,8 +1,9 @@
 """Native Tk containers and labels composited over their owner's static glass.
 
 Owners provide a full-sized ``_material_image`` and optional
-``_material_bounds = (upper_color, lower_color)``. No crop copies or refresh
-timer are needed: a canvas clips the shared image at its screen-relative offset.
+``_material_bounds = (upper_color, lower_color)``. Containers and labels clip the
+shared image at their screen-relative offset without copies or refresh timers.
+Small rounded controls can composite a bounded crop through ``material_patch``.
 """
 from __future__ import annotations
 
@@ -20,6 +21,33 @@ def _owner(widget):
             return parent
         parent = parent.master
     return None
+
+
+def material_location(widget):
+    """Return the current material and widget offset, for small native skins."""
+    owner = _owner(widget)
+    if owner is None:
+        return None
+    return (owner._material_image, widget.winfo_rootx()-owner.winfo_rootx(),
+            widget.winfo_rooty()-owner.winfo_rooty())
+
+
+def material_patch(widget, width, height, location=None):
+    """Copy only a control-sized backdrop; never retain another large surface."""
+    location = location or material_location(widget)
+    if location is None:
+        return None
+    if not (0 < width <= 8192 and 0 < height <= 8192 and width*height <= 16_000_000):
+        raise ValueError("Native control exceeds the material image budget")
+    source, x, y = location
+    patch = tk.PhotoImage(master=widget, width=width, height=height)
+    patch.put(widget.master.cget("background"), to=(0, 0, width, height))
+    left, top = max(0, x), max(0, y)
+    right, bottom = min(source.width(), x+width), min(source.height(), y+height)
+    if left < right and top < bottom:
+        widget.tk.call(patch, "copy", source, "-from", left, top, right, bottom,
+                       "-to", left-x, top-y, "-compositingrule", "overlay")
+    return patch
 
 
 def _refresh_children(widget):

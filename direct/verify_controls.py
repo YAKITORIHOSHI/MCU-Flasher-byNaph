@@ -956,7 +956,12 @@ class DownloaderChecks(unittest.TestCase):
         app.lib_tab.listbox.selection_set(0)
         app.lib_tab._on_select()
         self.assertEqual(app.lib_tab.version_var.get(), "1.0")
-        self.assertEqual(len(app.lib_tab.detail_canvas.find_all()), 1)
+        # The shared glass image is decoration; exactly one native details
+        # window must remain after selecting a package.
+        canvas = app.lib_tab.detail_canvas
+        content = [item for item in canvas.find_all() if canvas.type(item) == "window"]
+        self.assertEqual(content, [app.lib_tab._content_window])
+        self.assertEqual(canvas.itemcget(content[0], "window"), str(app.lib_tab._detail_content))
         app.lib_tab.search_var.set("missing")
         app.lib_tab._execute_search()
         self.assertEqual(app.lib_tab.listbox.size(), 0)

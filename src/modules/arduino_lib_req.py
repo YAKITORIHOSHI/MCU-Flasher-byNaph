@@ -292,8 +292,10 @@ DEFAULT_DOWNLOAD_DIR = os.path.join(
 
 
 
-from src.modules.tk_svg import SvgButton, SvgListbox
+from src.modules.tk_svg import SvgButton
+from src.modules.tk_material_list import GlassListbox
 from src.modules.tk_material import GlassBody, GlassLabel as SvgLabel
+from src.modules.tk_notebook import GlassNotebook
 
 class Theme:
     PALETTES = {
@@ -1647,7 +1649,7 @@ class BrowseTab:
         pane.add(left_card, minsize=200)
         left = left_card.body
 
-        self.listbox = SvgListbox(
+        self.listbox = GlassListbox(
             left, icon_for=self._row_icon, font=("Montserrat", 11),
             bg=Theme.BG_DARK, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
@@ -1970,7 +1972,7 @@ class InstalledTab:
         pane.add(left_card, minsize=200)
         left = left_card.body
 
-        self.listbox = SvgListbox(
+        self.listbox = GlassListbox(
             left, icon_for=self._row_icon, font=("Montserrat", 11),
             bg=Theme.BG_DARK, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
@@ -2994,7 +2996,7 @@ class ArduinoBrowser:
         )
 
         # Notebook (tabs)
-        self.notebook = ttk.Notebook(host)
+        self.notebook = GlassNotebook(host, Theme)
         self.notebook.pack(fill="both", expand=True, padx=16, pady=(2, 10))
         self.notebook.enable_traversal()
 

@@ -168,8 +168,13 @@ before controls; valid list/detail sash positions and saved fonts are retained.
 Its downloader follows the project selector's glass appearance: a framed
 header, rounded lit rims and directional reflections from the theme's four
 original surface colors. Folder rows, captions and detail groups continue the
-same material without dark rectangular backgrounds; native fields and package
-lists keep their editing and selection fills. The direct-file downloader shares
+same material without dark rectangular backgrounds. The native tab strip and
+unselected package rows also continue the glass, with no solid backing slabs.
+Tabs match the monitor controls: rounded borders remain visible when unselected,
+brighten on hover, and turn cyan with a bottom accent when selected.
+Fields and selected rows retain readable fills; selection, scrolling and keyboard
+navigation remain native. Rounded control corners match the material behind
+them through resizing and theme changes. The direct-file downloader shares
 this appearance, with quiet utility controls and one accented Download action.
 Empty links and duplicate availability badges leave no gaps in package details.
 Updates from Installed automatically produce an extracted folder; ordinary

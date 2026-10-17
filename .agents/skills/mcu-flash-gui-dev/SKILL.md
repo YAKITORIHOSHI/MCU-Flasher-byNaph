@@ -35,8 +35,18 @@ four theme surface stops for their directional material. `GlassScene` owns the
 shared backdrop; `tk_material.py` supplies `GlassBody` and `GlassLabel` to paint
 the owner's image at each group's screen/scroll offset. Captions, folder/status
 rows and nested detail groups must not obscure it with opaque dark fills.
-Native fields and package lists retain solid editing/selection fills and their
-existing callbacks. Keep quiet utility actions and one accented Download action;
+`GlassNotebook` and `GlassListbox` retain their real native widgets for geometry,
+selection, pointer handling and keyboard traversal, while compositing the shared
+material behind tabs and unselected rows. Keep painted rows bounded to the native
+viewport. Tabs retain rounded unselected borders, brighter hover rims and cyan
+selected rims/bottom accents like the monitor tabs. Activate the notebook's
+image client only after a full-sized crop is ready; never tile a 1px placeholder
+across its client. Settle geometry while hidden and paint material on Map.
+Native fields and selected rows retain readable fills and existing
+callbacks, including one double-click action and modifier/drag selection.
+Rounded controls composite their corners over the current owner image; refresh
+their owner offsets on resizing, scrolling and theme changes. Keep quiet utility
+actions and one accented Download action;
 do not repeat availability badges or retain empty link rows. Do not use whole-window
 opacity or add blur, animation or image-package dependencies. Setup retains its
 existing `frosted_palette` and material. Register the bundled Regular/Bold
