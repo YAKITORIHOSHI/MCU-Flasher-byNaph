@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from main.core.credential_store import (
-    CredentialStore, SecureStorageError, load_cloud_configuration, user_cloud_directory,
+    CredentialStore, SecureStorageError, user_cloud_directory,
 )
 from src.modules.offline_runtime import OfflineDependencyError, firebase_network_access
+from main.core.firebase_provider import firebase_configuration, validate_firebase_destination
 
 
 MAX_FILES = 128
@@ -319,12 +320,10 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class CloudSketchService:
-    def __init__(self, *, config_provider: Callable[[], dict] | None = None,
-                 credential_store: CredentialStore | None = None, transport=None,
+    def __init__(self, *, credential_store: CredentialStore | None = None, transport=None,
                  data_dir: Path | str | None = None,
                  source_root_provider: Callable[[], Path | str] | None = None):
         self._store = credential_store or CredentialStore()
-        self._config_provider = config_provider or (lambda: load_cloud_configuration(self._store, strict=True))
         self._transport = transport
         self._data_dir = Path(data_dir) if data_dir is not None else user_cloud_directory()
         self._source_root_provider = source_root_provider
@@ -338,28 +337,19 @@ class CloudSketchService:
         self._session_scope = ""
 
     def _config(self) -> dict:
-        cfg = self._config_provider()
-        if not isinstance(cfg, dict) or not cfg.get("firebase_api_key"):
-            raise CloudError("Cloud is not configured. Add the Firebase provider configuration for this OS user.")
-        database = urllib.parse.urlsplit(str(cfg.get("firebase_database_url", "")))
-        hostname = database.hostname or ""
+        cfg = firebase_configuration()
         try:
-            port = database.port
-        except ValueError:
-            raise CloudError("Cloud needs a valid HTTPS Firebase Realtime Database URL.") from None
-        if (database.scheme != "https" or database.username or database.password or port not in (None, 443)
-                or database.query or database.fragment or database.path not in ("", "/")
-                or not (hostname.endswith(".firebasedatabase.app") or hostname.endswith(".firebaseio.com"))):
-            raise CloudError("Cloud needs an HTTPS Firebase Realtime Database URL.")
-        cfg = {**cfg, "firebase_database_url": str(cfg["firebase_database_url"]).rstrip("/")}
+            validate_firebase_destination(cfg["firebase_database_url"])
+        except (ValueError, KeyError):
+            raise CloudError("The built-in cloud connection is invalid.") from None
         if self._uid and self._session_scope and self._configuration_scope(cfg) != self._session_scope:
-            raise CloudError("The cloud provider changed in another window. Sign out and sign in to the configured provider.")
+            raise CloudError("The cloud session belongs to another deployment. Sign out and sign in again.")
         return cfg
 
     @staticmethod
     def _configuration_scope(cfg: dict) -> str:
-        # Include provider project/API identity as well as database URL so account
-        # sessions cannot cross providers after shared settings change.
+        # Keep old account records isolated if a future application release
+        # changes the built-in deployment identity.
         identity = json.dumps([cfg["firebase_database_url"], cfg["firebase_api_key"],
                                cfg.get("firebase_project_id", "")], separators=(",", ":"))
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -378,7 +368,7 @@ class CloudSketchService:
 
     @property
     def configuration_error(self) -> str:
-        """Keep vault failures distinct from a provider that has not been set up."""
+        """Report a damaged built-in deployment separately from account failures."""
         try:
             self._config()
             return ""
@@ -411,12 +401,12 @@ class CloudSketchService:
         """Probe the configured Firebase endpoint without sending credentials or reading data."""
         try:
             endpoint = self._config()["firebase_database_url"] + "/.json?shallow=true"
-            host = urllib.parse.urlsplit(endpoint).hostname
+            host = validate_firebase_destination(endpoint)
         except SecureStorageError:
             return False
         except (CloudError, ValueError):
             endpoint = "https://identitytoolkit.googleapis.com/"
-            host = urllib.parse.urlsplit(endpoint).hostname
+            host = validate_firebase_destination(endpoint)
         request = urllib.request.Request(endpoint, headers={"Accept": "application/json"}, method="HEAD")
         try:
             with firebase_network_access(host):
@@ -437,14 +427,9 @@ class CloudSketchService:
 
     def _request(self, method: str, url: str, payload=None, *, headers=None, form=False) -> tuple[Any, dict]:
         try:
-            parsed_url = urllib.parse.urlsplit(url)
-            host = parsed_url.hostname or ""
-            port = parsed_url.port
-        except ValueError:
-            raise CloudError("The Firebase connection address is invalid.") from None
-        if (parsed_url.scheme != "https" or not host or parsed_url.username or parsed_url.password
-                or port not in (None, 443)):
-            raise CloudError("Cloud requests require a valid Firebase HTTPS endpoint.")
+            host = validate_firebase_destination(url)
+        except ValueError as error:
+            raise CloudError(str(error)) from None
         request_headers = {"Accept": "application/json", **(headers or {})}
         data = None
         if payload is not None:
@@ -512,7 +497,7 @@ class CloudSketchService:
             if status in (401, 403):
                 raise CloudError("Firebase denied access. Check your account and the deployed database security rules.") from None
             if status == 400:
-                raise CloudError("Firebase rejected this request. Check the provider configuration and account details.") from None
+                raise CloudError("Firebase rejected this request. Check your account details and try again.") from None
             raise CloudError("The cloud service is unavailable. Try again later.") from None
         except (OSError, ValueError, TypeError):
             raise CloudError("Could not reach the cloud service. Check internet access and try again.") from None

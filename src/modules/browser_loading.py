@@ -216,7 +216,10 @@ class TkTasks:
             self._call(callback, args)
         with self._lock:
             pending = self._active or self._latest or not self._queue.empty()
-        if pending and not self.closed:
+        # A completion callback can begin another task and schedule the next
+        # drain itself. Do not replace its timer ID and orphan that callback;
+        # destruction must be able to cancel the one remaining timer.
+        if pending and not self.closed and self._timer is None:
             self._timer = self.root.after(25, self._drain)
 
     def _call(self, callback, args):

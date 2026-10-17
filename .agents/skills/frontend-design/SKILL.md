@@ -44,17 +44,21 @@ when both fit. Optional panel headings and rims yield first; keep saved fonts
 and valid user sash positions. Check board controls at 200% and compact SVG
 cards in the responsive and downloader appearance fixtures.
 
-Paint the Library & Board Browser title directly on its static glass material.
-Use antialiased, smoothly faded reflections and one subtle rim; avoid stepped
-bevels, hard diagonal cuts and opaque title labels covering the surface.
+Follow the user-provided project selector reference for the Library & Board
+Browser and direct-file downloader. Use a framed glass header, lit rounded rims
+and directional reflections across the original four theme surface stops.
+`GlassScene` supplies the shared backdrop; `GlassBody` and `GlassLabel` continue
+their owner's material at the correct position so utility rows, captions and
+detail groups do not acquire opaque dark rectangles. Preserve the reflection
+direction through nested groups and scroll offsets. Use the resource palette's
+native inset fields and neutral utility actions, with one accented Download
+action. Remove empty link rows and repeated status badges.
 Keep native rounded SVG buttons and notebook keyboard navigation. The shared
 standard-library renderer serves Ubuntu and Windows; do not add blur, animation
 or image-package requirements. Retain one large material cache per surface.
-Composite reading controls in the frosted surface's color rather than using
-black container fills. Carry soft theme-colored reflected light through empty
-and selected states, with one smooth rim instead of stacked metallic bevels.
-Native Tk text controls retain readable solid composite fills; do not fake
-glass by reducing the entire window's opacity. On Ubuntu load bundled Montserrat
+Native Tk fields and package lists retain readable solid editing/selection
+fills and their original callbacks. Do not fake glass by reducing the entire
+window's opacity. Setup keeps its existing material. On Ubuntu load bundled Montserrat
 through process-local Fontconfig application fonts, without installing fonts or
 rewriting user configuration. Keep rounded native fields, keyboard focus and
 selection ink tied to the actual highlight after palette changes.
@@ -62,6 +66,9 @@ At narrow widths the header subtitle yields before saved
 package fonts or the last complete detail line. Check all three palettes at
 100–200% with `direct/verify_downloader_appearance.py`; optional `--render-dir`
 captures both selected and empty states, without live catalogs or hardware.
+Exercise StringVar caption/status updates, material alignment after scrolling,
+theme changes and destruction of queued redraws; Tcl trace callbacks receive
+three arguments and must not produce callback warnings or errors.
 
 ## MCU Flasher workspace contract
 
@@ -130,6 +137,10 @@ another active client. Check selected-tab and button contrast in all three palet
 a sleeping downloader is reopened. Coalesce static card redraws on resize.
 Use Qt logical coordinates without multiplying by DPI or devicePixelRatio;
 Tk uses native pixel/point metrics. Reduce chrome spacing before reducing text.
+Embedded Windows child windows use the host's native GetClientRect bounds;
+SetWindowPos must not receive Qt logical dimensions. Monaco takes its actual
+CSS viewport dimensions and refreshes after a DPR change without reloading
+models. Check scales below 100% and fractional monitor transitions as well.
 Preserve saved content fonts, reflow rows from their content budgets, and fit
 complete window frames to the current monitor's work area. Check at 100–200%
 scaling with `direct/verify_responsive.py`; couple physical resolution with the

@@ -1,4 +1,4 @@
-"""OS-protected cloud credentials. No passwords, tokens or keys in the checkout.
+"""OS-protected cloud credentials. No passwords or tokens in the checkout.
 
 Windows uses Credential Manager (the current user's protected credential vault).
 Ubuntu uses the desktop Secret Service through ``secret-tool``. Missing or locked
@@ -170,26 +170,12 @@ class CredentialStore:
         self._secret_tool("store", name, raw)
 
 
-_CONFIG_KEYS = {"firebase_api_key", "firebase_database_url", "firebase_project_id"}
-
-
 def load_cloud_configuration(store: CredentialStore | None = None, *, strict=False) -> dict[str, Any]:
-    """Read the user's vault; strict callers retain locked/unavailable diagnostics."""
-    cfg: dict[str, Any] = {}
-    try:
-        cfg.update((store or CredentialStore()).get("provider_configuration") or {})
-    except SecureStorageError:
-        if strict:
-            raise
-    return {key: cfg.get(key, "") for key in _CONFIG_KEYS}
+    """Compatibility reader for the fixed application deployment; no vault read."""
+    from main.core.firebase_provider import firebase_configuration
+    return firebase_configuration()
 
 
 def save_cloud_configuration(updates: dict[str, Any], store: CredentialStore | None = None) -> bool:
-    """Save and read back a provider configuration; never silently fall back."""
-    vault = store or CredentialStore()
-    old = vault.get("provider_configuration") or {}
-    old.update({key: str(value) for key, value in updates.items() if key in _CONFIG_KEYS})
-    vault.set("provider_configuration", old)
-    if vault.get("provider_configuration") != old:
-        raise SecureStorageError("Cloud configuration could not be verified after saving.")
-    return True
+    """Retired provider override API; account credential storage is unchanged."""
+    raise SecureStorageError("MCU Flasher uses its built-in cloud connection; it cannot be changed in settings.")

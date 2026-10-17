@@ -34,6 +34,7 @@ for _p in (_project_root, _modules_path, _main_path):
         sys.path.insert(0, str(_p))
 
 from src.modules.package_jobs import guarded_package_operation, package_store_lease, package_core_directory
+from main.core.project_scaffold import create_project_scaffold
 
 SCRIPT_DIR = _project_root
 
@@ -575,6 +576,7 @@ class MCUWebBackendAPI:
 
         # Restore project compile state & remembered board for active sketch
         self._last_synced_hardware_payload: Optional[tuple] = None
+        self._project_files_revision = 0
         self._hardware_state_lock = threading.Lock()
         self._hardware_state_pending = None
         self._hardware_state_running = False
@@ -848,6 +850,7 @@ class MCUWebBackendAPI:
                     "board:selected":   bus.board_selected,
                     "boards:updated":   bus.board_catalog_updated,
                     "project:updated":  bus.project_updated,
+                    "project:files":    bus.project_files_updated,
                     "project:cloud": bus.cloud_project_updated,
                     "syntax:errors":    bus.syntax_errors,
                     "notification":     bus.notification,
@@ -2355,6 +2358,31 @@ class MCUWebBackendAPI:
             return
         self._render_compat_from_state(state, filter_text=filter_text)
 
+    def _project_files_changed(self, operation: str, target: Path, old_file: Path | None = None,
+                               *, content: str | None = None) -> None:
+        """Refresh source consumers without treating a root edit as a project switch."""
+        for changed in (target, old_file):
+            if changed is not None:
+                _sketch_ram_cache.invalidate(changed)
+        self._project_files_revision = getattr(self, "_project_files_revision", 0) + 1
+        self.update_skip_compile_availability()
+        payload = {
+            "path": str(self.sketch_dir_path), "operation": operation,
+            "file": str(target), "old_file": str(old_file) if old_file else "",
+            "revision": self._project_files_revision,
+        }
+        if content is not None:
+            payload["content"] = content
+        self.emit("project:files", payload)
+        # Reuse the serialized metadata writer. A source revision makes this
+        # update distinct even while the board/port selection stays the same.
+        self._sync_project_hardware_state()
+
+    def _file_has_unsaved_changes(self, target: Path) -> bool:
+        wanted = os.path.normcase(os.path.abspath(target))
+        return any(dirty and os.path.normcase(os.path.abspath(path)) == wanted
+                   for path, dirty in getattr(self, "modified_files", {}).items())
+
     def add_project_file(self, filename: str) -> dict[str, Any]:
         """Create a new source/header file in the sketch folder."""
         if self.is_busy or getattr(self, "active_operation", None) is not None:
@@ -2382,9 +2410,7 @@ class MCUWebBackendAPI:
             with watcher.user_file_operation(target) if watcher else nullcontext():
                 with target.open("x", encoding="utf-8") as stream:
                     stream.write(content)
-            _sketch_ram_cache.invalidate()
-            self.update_skip_compile_availability()
-            self.emit("project:updated", {"path": str(self.sketch_dir_path), "active_file": str(target)})
+            self._project_files_changed("add", target, content=content)
             return {"success": True, "path": str(target)}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -2406,13 +2432,16 @@ class MCUWebBackendAPI:
             return {"success": False, "error": f"File '{old_name}' not found."}
         if new_file.exists():
             return {"success": False, "error": f"File '{new_name}' already exists."}
+        if self._file_has_unsaved_changes(old_file):
+            return {"success": False, "error": f"Save or discard unsaved changes in '{old_file.name}' before renaming it."}
         try:
             watcher = getattr(self, "ai_watcher", None)
             with watcher.user_file_operation(old_file, new_file) if watcher else nullcontext():
                 old_file.rename(new_file)
-            _sketch_ram_cache.invalidate()
-            self.update_skip_compile_availability()
-            self.emit("project:updated", {"path": str(self.sketch_dir_path), "active_file": str(new_file)})
+            if getattr(self, "active_file_path", "") == str(old_file):
+                self.active_file_path = str(new_file)
+            getattr(self, "modified_files", {}).pop(str(old_file), None)
+            self._project_files_changed("rename", new_file, old_file)
             return {"success": True, "path": str(new_file)}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -2428,6 +2457,8 @@ class MCUWebBackendAPI:
             return {"success": False, "error": "Use a source filename in the project root."}
         if not target.is_file():
             return {"success": False, "error": f"File '{filename}' not found."}
+        if self._file_has_unsaved_changes(target):
+            return {"success": False, "error": f"Save or discard unsaved changes in '{target.name}' before deleting it."}
         all_sources = get_sketch_files_fast(self.sketch_dir_path)
         if len(all_sources) <= 1:
             return {"success": False, "error": "Cannot delete the only source file in the project."}
@@ -2435,9 +2466,10 @@ class MCUWebBackendAPI:
             watcher = getattr(self, "ai_watcher", None)
             with watcher.user_file_operation(target) if watcher else nullcontext():
                 target.unlink()
-            _sketch_ram_cache.invalidate()
-            self.update_skip_compile_availability()
-            self.emit("project:updated", {"path": str(self.sketch_dir_path)})
+            getattr(self, "modified_files", {}).pop(str(target), None)
+            if getattr(self, "active_file_path", "") == str(target):
+                self.active_file_path = ""
+            self._project_files_changed("delete", target)
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -2819,61 +2851,12 @@ class MCUWebBackendAPI:
                 "error": "Creating or changing project is not allowed while an action is in progress.",
             }
 
-        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name.strip()) or "NewSketch"
-        target_dir = Path(parent_dir).resolve() / clean_name
-        if is_application_codebase_dir(parent_dir) or is_application_codebase_dir(target_dir):
-            return {"success": False, "error": "Cannot create sketch inside MCU Flasher application folder."}
         try:
-            # A new-project action must never overwrite an existing sketch.
-            target_dir.mkdir(parents=True, exist_ok=False)
+            target_dir = create_project_scaffold(
+                parent_dir, name, include_h=include_h, include_cpp=include_cpp,
+                template_type=template_type,
+            )
             ensure_hidden_read_first_md(target_dir)
-
-            ino_includes = ""
-
-            if template_type == "bare":
-                body = (
-                    "void setup() {\n"
-                    "  \n"
-                    "}\n\n"
-                    "void loop() {\n"
-                    "  \n"
-                    "}\n"
-                )
-            elif template_type == "blink":
-                body = (
-                    "void setup() {\n"
-                    "  pinMode(LED_BUILTIN, OUTPUT);\n"
-                    "}\n\n"
-                    "void loop() {\n"
-                    "  digitalWrite(LED_BUILTIN, HIGH);\n"
-                    "  delay(1000);\n"
-                    "  digitalWrite(LED_BUILTIN, LOW);\n"
-                    "  delay(1000);\n"
-                    "}\n"
-                )
-            else:  # standard
-                body = (
-                    "void setup() {\n"
-                    "\n"
-                    "}\n\n"
-                    "void loop() {\n"
-                    "\n"
-                    "}\n"
-                )
-
-            ino_file = target_dir / f"{clean_name}.ino"
-            ino_file.write_text(f"{ino_includes}{body}", encoding="utf-8")
-
-            if include_h:
-                h_file = target_dir / f"{clean_name}.h"
-                h_content = "#pragma once\n"
-                h_file.write_text(h_content, encoding="utf-8")
-
-            if include_cpp:
-                cpp_file = target_dir / f"{clean_name}.cpp"
-                cpp_content = ""
-                cpp_file.write_text(cpp_content, encoding="utf-8")
-
             return (self.open_project_window(str(target_dir)) if open_in_new_window
                     else self.open_project(str(target_dir)))
         except FileExistsError:
@@ -3053,11 +3036,13 @@ class MCUWebBackendAPI:
                     "flash_mb": board_info.get("flash_mb") if board_selected else None,
                     "has_psram": board_info.get("has_psram", False) if board_selected else False,
                 }.items())),
+                getattr(self, "_project_files_revision", 0),
             )
 
             state_data = {
                 "project_name": Path(sketch_dir).name,
                 "project_path": str(sketch_dir),
+                "source_revision": getattr(self, "_project_files_revision", 0),
                 "status_summary": status_summary,
                 "hardware": {
                     "board_selected": board_selected,

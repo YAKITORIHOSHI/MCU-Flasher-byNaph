@@ -15,6 +15,10 @@ OpenCode discovers project instructions from the project-root `AGENTS.md`;
 adds application development rules only to application checkouts. Verify the
 distinction in isolated fixtures without running metadata generation against
 live caches or modifying AI backup journals.
+Modify file operations advance the project source revision and refresh current
+AI guidance through the existing serialized metadata writer. They must not reset
+terminal/assistant sessions, unrelated panels or hardware choices. Keep root
+source enumeration current and all verification writes inside disposable fixtures.
 
 Saved hardware `upload_speed` describes the current target through
 `serial_upload_speed`, never the last ESP upload. Store null for unknown recipe
@@ -26,7 +30,9 @@ Serial Monitor setting. Verify payloads with a mocked metadata queue in
 
 The configured source container (normally `Documents/_MCUFlasherByNaph_src`)
 contains `Boards`, `Libs` and `Cloud`. Treat `Cloud/<sketch name>` sources as
-user-owned working projects. Keep credentials in the OS vault and private
+user-owned working projects. The public Firebase provider is fixed in the app;
+never generate editable provider settings or use legacy files/vault/environment
+values to override it. Keep account credentials in the OS vault and private
 account/recovery records outside this shared source folder. When adopting an
 older cloud location, copy only validated root sources and the nonsecret cloud
 link; preserve original assets, protected build caches and AI journals. Reject

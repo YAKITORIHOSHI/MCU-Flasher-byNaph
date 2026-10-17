@@ -31,15 +31,16 @@ from main.core.file_utils import (
     ensure_file_writable,
 )
 from src.modules.offline_runtime import firebase_network_access
+from main.core.firebase_provider import firebase_configuration, validate_firebase_destination
 from main.core.credential_store import (
-    CredentialStore, load_cloud_configuration, save_cloud_configuration,
+    CredentialStore,
 )
 
 _TICKETS_FILE_NAME = ".owner_tickets.json"
 _CONFIG_FILE_NAME  = ".owner_config.json"
 _DEFAULT_ROOT_COLLECTION = "owner"
 _LOCAL_KEY_ITERATIONS = 600_000
-_PROVIDER_KEYS = {"firebase_api_key", "firebase_database_url", "firebase_project_id"}
+_PROVIDER_KEYS = frozenset(firebase_configuration()) | {"firebase_root_collection", "use_firebase"}
 _OWNER_METADATA_KEYS = {"owner_email", "firebase_user_uid"}
 _AUTH_RESPONSE_BYTES = 64 * 1024
 _TICKET_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -82,11 +83,8 @@ class _NoFirebaseRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _open_firebase_request(request, *, timeout):
-    endpoint = urlsplit(request.full_url)
-    if (endpoint.scheme != "https" or endpoint.username or endpoint.password
-            or endpoint.port not in (None, 443)):
-        raise ValueError("Use a secure Firebase connection.")
-    with firebase_network_access(endpoint.hostname):
+    host = validate_firebase_destination(request.full_url)
+    with firebase_network_access(host):
         return urllib.request.build_opener(_NoFirebaseRedirect()).open(request, timeout=timeout)
 
 
@@ -106,15 +104,9 @@ def _cloud_request_error(error: Exception) -> str:
 
 def _firebase_database_url(value: str) -> str:
     clean_url = (value or "").strip().rstrip("/")
-    if "://" not in clean_url:
-        clean_url = "https://" + clean_url
-    endpoint = urlsplit(clean_url)
-    host = endpoint.hostname or ""
-    if (endpoint.scheme != "https" or endpoint.username or endpoint.password
-            or endpoint.query or endpoint.fragment or endpoint.path not in ("", "/")
-            or endpoint.port not in (None, 443)
-            or not host.endswith((".firebaseio.com", ".firebasedatabase.app"))):
-        raise ValueError("Use an HTTPS Firebase Realtime Database URL.")
+    validate_firebase_destination(clean_url)
+    if clean_url != firebase_configuration()["firebase_database_url"]:
+        raise ValueError("Use MCU Flasher's built-in Firebase database.")
     return clean_url
 
 
@@ -164,7 +156,7 @@ def get_owner_portal_storage_dir() -> Path:
 class OwnerTicketService:
     """Manages private developer issue tickets with local JSON persistence
 
-    and pluggable Firebase Realtime Database & Auth REST endpoints.
+    and the built-in Firebase Realtime Database & Auth REST endpoints.
     Completely decoupled from the local notification database (src/dbs/).
     Adheres to user-isolated database rules (/users/{$uid}/tickets).
     All operations are safe for offline operation without crashing.
@@ -208,11 +200,6 @@ class OwnerTicketService:
 
             if not self._config_file.exists():
                 default_cfg = {
-                    "firebase_api_key": "",
-                    "firebase_database_url": "",
-                    "firebase_project_id": "",
-                    "firebase_root_collection": _DEFAULT_ROOT_COLLECTION,
-                    "use_firebase": True,
                     "local_access": {},
                     "ticket_categories": list(_DEFAULT_TICKET_CATEGORIES),
                     "owner_email": "",
@@ -267,43 +254,38 @@ class OwnerTicketService:
             return False
 
     def get_config(self) -> Dict[str, Any]:
-        """Read OS-protected provider settings; never consult the application tree."""
+        """Read local access preferences and protected account metadata.
+
+        Legacy provider fields are ignored immediately. Account metadata moves to
+        the OS vault only after a verified write; local tickets/keys stay intact.
+        """
         cfg = self._read_config()
-        # Upgrade older per-user plaintext settings only after verified secure
-        # persistence. Failures leave the original settings intact for recovery.
-        provider = {key: cfg[key] for key in _PROVIDER_KEYS if cfg.get(key)}
         metadata = {key: cfg[key] for key in _OWNER_METADATA_KEYS if cfg.get(key)}
-        if provider or metadata:
-            try:
-                if provider:
-                    save_cloud_configuration(provider, self._credential_store)
-                if metadata:
-                    saved = self._credential_store.get("owner_metadata") or {}
-                    saved.update(metadata)
-                    self._credential_store.set("owner_metadata", saved)
-                    if self._credential_store.get("owner_metadata") != saved:
-                        raise ValueError("Secure save verification failed")
-                cleaned = {key: value for key, value in cfg.items()
-                           if key not in _PROVIDER_KEYS | _OWNER_METADATA_KEYS | {"owner_password_hash"}}
-                if self._write_config(cleaned):
-                    cfg = cleaned
-            except Exception:
-                pass
-        elif "owner_password_hash" in cfg:
-            cleaned = {key: value for key, value in cfg.items() if key != "owner_password_hash"}
-            if self._write_config(cleaned):
+        try:
+            if metadata:
+                saved = self._credential_store.get("owner_metadata") or {}
+                saved.update(metadata)
+                self._credential_store.set("owner_metadata", saved)
+                if self._credential_store.get("owner_metadata") != saved:
+                    raise ValueError("Secure save verification failed")
+            cleaned = {key: value for key, value in cfg.items()
+                       if key not in (_PROVIDER_KEYS - {"firebase_root_collection"}) | _OWNER_METADATA_KEYS | {"owner_password_hash"}}
+            if cleaned.get("firebase_root_collection") not in ("owner", "users"):
+                cleaned.pop("firebase_root_collection", None)
+            if cleaned != cfg and self._write_config(cleaned):
                 cfg = cleaned
+        except Exception:
+            pass
         try:
             private_metadata = self._credential_store.get("owner_metadata") or {}
         except Exception:
             private_metadata = {}
-        secure = load_cloud_configuration(self._credential_store)
-        # An unavailable keyring must not revive a legacy plaintext API key.
-        cfg.update(secure)
-        cfg.update({key: os.environ.get(key.upper()) or private_metadata.get(key, "")
-                    for key in _OWNER_METADATA_KEYS})
-        cfg["firebase_root_collection"] = cfg.get("firebase_root_collection") or _DEFAULT_ROOT_COLLECTION
-        cfg.setdefault("use_firebase", True)
+        cfg.update(firebase_configuration())
+        cfg.update({key: private_metadata.get(key, "") for key in _OWNER_METADATA_KEYS})
+        cfg["firebase_root_collection"] = (cfg.get("firebase_root_collection")
+                                           if cfg.get("firebase_root_collection") in ("owner", "users")
+                                           else _DEFAULT_ROOT_COLLECTION)
+        cfg["use_firebase"] = True
         cfg["ticket_categories"] = _normalize_ticket_categories(cfg.get("ticket_categories"))
         cfg["local_access_configured"] = self._local_access_valid(cfg.get("local_access"))
         return cfg
@@ -337,11 +319,9 @@ class OwnerTicketService:
 
     def save_config(self, new_cfg: Dict[str, Any]) -> bool:
         try:
+            if _PROVIDER_KEYS.intersection(new_cfg):
+                return False
             cfg = self._read_config()
-            provider = {key: cfg[key] for key in _PROVIDER_KEYS if cfg.get(key)}
-            provider.update({key: value for key, value in new_cfg.items() if key in _PROVIDER_KEYS})
-            if provider:
-                save_cloud_configuration(provider, self._credential_store)
             metadata = {key: cfg[key] for key in _OWNER_METADATA_KEYS if cfg.get(key)}
             metadata.update({key: value for key, value in new_cfg.items() if key in _OWNER_METADATA_KEYS})
             if metadata:
@@ -354,7 +334,9 @@ class OwnerTicketService:
                         if key not in _PROVIDER_KEYS | _OWNER_METADATA_KEYS
                         and key not in {"owner_password_hash", "local_access_configured"}})
             cfg = {key: value for key, value in cfg.items()
-                   if key not in _PROVIDER_KEYS | _OWNER_METADATA_KEYS | {"owner_password_hash", "local_access_configured"}}
+                   if key not in (_PROVIDER_KEYS - {"firebase_root_collection"}) | _OWNER_METADATA_KEYS | {"owner_password_hash", "local_access_configured"}}
+            if cfg.get("firebase_root_collection") not in ("owner", "users"):
+                cfg.pop("firebase_root_collection", None)
             return self._write_config(cfg)
         except Exception:
             return False
@@ -836,43 +818,22 @@ class OwnerTicketService:
         except Exception:
             pass
 
-    def test_firebase_connection(self, api_key: str, db_url: str) -> tuple[bool, str]:
-        """Check the endpoint without sending credentials or reading database data."""
+    def test_firebase_connection(self) -> tuple[bool, str]:
+        """Probe the fixed endpoint without credentials or database content."""
         try:
+            url = firebase_configuration()["firebase_database_url"] + "/.json?shallow=true"
+            req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "MCUFlasher-Test/1.0"})
             try:
-                clean_url = _firebase_database_url(db_url)
-            except ValueError:
-                return False, "The cloud connection needs a valid database address."
-
-            url = f"{clean_url}/.json?shallow=true"
-            try:
-                req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "MCUFlasher-Test/1.0"})
-                with _open_firebase_request(req, timeout=4.0) as resp:
-                    return True, "Connected. Sign in to continue."
-            except urllib.error.HTTPError as e:
-                e.close()
-                # Some Firebase endpoints reject HEAD with 405. Their HTTP
-                # response still proves connectivity; sign-in verifies access.
-                return True, "Connected. Sign in to continue."
-            except Exception as e:
-                return False, _cloud_request_error(e)
-        except Exception as e:
-            return False, _cloud_request_error(e)
-
-    def check_connection(self) -> tuple[bool, str]:
-        """Probe this feature's Firebase service independently of package settings."""
-        try:
-            cfg = self.get_config()
-            if cfg.get("firebase_database_url"):
-                return self.test_firebase_connection("", cfg["firebase_database_url"])
-            request = urllib.request.Request("https://identitytoolkit.googleapis.com/", method="HEAD")
-            try:
-                with _open_firebase_request(request, timeout=4.0):
+                with _open_firebase_request(req, timeout=4.0):
                     pass
             except urllib.error.HTTPError as error:
-                # The Auth API requires a specific route. Any HTTP response proves
-                # reachability, without claiming authentication or ticket access.
                 error.close()
-            return True, "Connected. Set up the cloud connection to sign in."
+                if error.code not in (401, 403, 405):
+                    return False, "The cloud service is unavailable. Try again."
+            return True, "Connected. Sign in to continue."
         except Exception as error:
             return False, _cloud_request_error(error)
+
+    def check_connection(self) -> tuple[bool, str]:
+        """Probe Firebase independently of package Offline Mode and local settings."""
+        return self.test_firebase_connection()

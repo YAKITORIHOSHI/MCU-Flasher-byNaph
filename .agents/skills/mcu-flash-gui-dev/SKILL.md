@@ -19,7 +19,8 @@ saved fonts and valid user sash positions. Verify board controls at 200% plus
 the standalone compact SVG-card fixture in downloader appearance checks.
 
 `tk_glass.py` precomposes antialiased static materials using only the standard
-library. The browser title paints on the glass itself; buttons retain native
+library. Follow the user-provided project selector reference: a framed browser
+header, directional reflection and lit rounded rims. Buttons retain native
 Tk command/focus/state behavior and SVG marks, and rounded notebook skins retain
 native traversal. Keep the material's text contrast at least 4.5:1, including
 bright reflections, hover/disabled inks and selected package rows after themes.
@@ -29,12 +30,16 @@ fonts or the last complete detail line. Verify the browser at five native scales
 on Ubuntu and Windows via `direct/verify_downloader_appearance.py`; captures use
 isolated selected/empty catalogs and belong under `temp/audit/`.
 
-Resources, setup and direct-link forms derive their reading fills with
-`frosted_palette`; keep the darker scene separate from the colored frosted
-containers. Preserve soft reflected light across large materials and readable
-semantic inks. Do not revert their reading areas to black slabs or use whole-window
-opacity. Cold setup uses the same bounded PNG material as Tk Resources;
-Qt setup derives the same surface colors. Register the bundled Regular/Bold
+Resources and direct-link forms use `resource_palette`, preserving the original
+four theme surface stops for their directional material. `GlassScene` owns the
+shared backdrop; `tk_material.py` supplies `GlassBody` and `GlassLabel` to paint
+the owner's image at each group's screen/scroll offset. Captions, folder/status
+rows and nested detail groups must not obscure it with opaque dark fills.
+Native fields and package lists retain solid editing/selection fills and their
+existing callbacks. Keep quiet utility actions and one accented Download action;
+do not repeat availability badges or retain empty link rows. Do not use whole-window
+opacity or add blur, animation or image-package dependencies. Setup retains its
+existing `frosted_palette` and material. Register the bundled Regular/Bold
 Montserrat faces through process-local Fontconfig for native Linux Tk, with no
 font installation or user-config write. Rounded field surrounds retain actual
 Entry widgets. ScrollForm must reveal the focused control after viewport/content
@@ -42,6 +47,11 @@ resizes and cancel queued callbacks on close. Verify native fonts, field bytes,
 focus rings, all themes, compact scrolling and the standalone file downloader in
 the appearance verifier, plus cold/Qt setup and responsive fixtures. No fixture
 may start downloads, Bootstrap installers, accounts or live metadata workers.
+Use `direct/tk_capture.py` for native Tk evidence: validate painted pixels and
+release X11 images/displays. A non-null but uniform black screenshot is a failure.
+Verify material alignment through nested groups, scrolling, resizing and theme
+changes. Exercise StringVar captions/status updates and close pending redraws
+without Tcl callback errors; variable-trace callbacks receive three arguments.
 
 ## SVG action contract
 
@@ -123,11 +133,25 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   navigation and compact/wide palettes in `direct/verify_project_search.py`.
 - Keep C++ brace Enter rules in the lazy language configuration and respect each
   model's tab/space settings. Empty projects/new sketches use empty setup/loop;
-  new .cpp/.c are empty, headers only `#pragma once`. Preserve explicit Blink.
+  Modify's new .cpp/.c are empty, headers only `#pragma once`. New Project's
+  checked .h also adds its exact quoted include to the generated .ino and
+  optional .cpp through `main/core/project_scaffold.py`. Without .h, its .cpp
+  remains empty. Keep backend and standalone selector templates identical,
+  preserve explicit Blink, and never overwrite an existing sketch folder.
 - Wrap Modify Add/Rename/Delete in `AIEditWatcher.user_file_operation` before
   mutation. Invalidate in-flight scans, baseline success/failure and deleted paths,
   and refuse changes to a file with a pending review. Never classify these manual
   actions as AI. Watch root .txt notes and source files, excluding symlinks.
+  Emit the dedicated project-file event rather than the project-switch event.
+  Use `src/editor/project_files.js` to reconcile affected tabs through the
+  bundle's narrow file-store hook while retaining unrelated models, undo stacks, dirty
+  buffers and tab order; keep terminals, assistant, logs and hardware selection.
+  Refuse Rename/Delete of an unsaved affected buffer. Queue current AI source
+  metadata through the existing serialized writer, and reject stale renderer or
+  project generations. Successful local/cloud selection closes and disposes the
+  selector; stop its pending preview/foreground work without disturbing the chosen
+  workspace. Verify rapid file operations, project/renderer changes and full-load
+  overlap with `direct/verify_project_file_lifecycle.py` in isolated fixtures.
 - AI Changes uses timestamped per-file cards grouped by known submitted input.
   Observe PTY input passively; capability replies/Unicode/paste must still pass
   unchanged. Unknown external prompts use labeled activity groups, never invented
@@ -206,6 +230,17 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   or call `QWebEngineView.update()` merely to resize: both can cascade canvas
   repaints and expose a black frame. Preserve existing Monaco models, dirty tabs
   and focus. Verify the scheduling fixture with `node direct/verify_editor_layout_scheduling.js`.
+  Keep the flex viewport pinned to its host and supply its current CSS dimensions
+  to Monaco. A DPR change must schedule layout even when CSS dimensions stay
+  unchanged; never multiply CSS dimensions by DPR. Embedded Windows terminal and
+  assistant children use native GetClientRect bounds for SetWindowPos, with
+  coalesced synchronization after Qt resize/show/screen/DPR events. Preserve
+  sessions and verify scales below 100% as well as fractional/high scales.
+  Current Ubuntu Qt 6.12/Chromium probes reproduce underpaint at forced
+  `QT_SCALE_FACTOR=0.75` even with correct CSS bounds, on offscreen and xcb.
+  Do not claim sub-100% paint support from DOM assertions or multiply DPI to
+  conceal that compositor limitation. Keep native painted evidence separate
+  from logical geometry and synthetic window-manager fixture constraints.
 - Offline mode defaults off. Windows and Ubuntu startup require the local runtime
   and certified configured board packs in both modes. SCons-only installations
   enter Bootstrap automatically; Windows --repair must prepare the full plan,
@@ -223,8 +258,8 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   Distinguish configured, Firebase signed-in and local access; endpoint tests
   prove reachability only. Test the configured Firebase HTTPS endpoint directly;
   a generic internet probe must not veto authentication or ticket synchronization.
-  The compact Developer Access form opens cloud settings before login and shows
-  a readable connection reason. Run initialization, credential/config reads,
+  The compact Developer Access form shows a readable connection reason and
+  Retry action; its settings only manage the local access key. Run initialization, credential/config reads,
   account authentication, endpoint diagnostics and ticket CRUD off Qt through
   serialized background tasks and queued slots; filters use the retained ticket
   snapshot. Preserve literal passwords, validate returned token and UID, redact
@@ -282,14 +317,18 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   `CloudSketchPanel`. All provider/keyring/Auth/RTDB/source operations run through
   a bounded serialized worker. Cloud connectivity is independent of package
   Offline Mode: the Cloud tab probes its Firebase endpoint with an unauthenticated
-  HEAD request that reads no database body, or Firebase Auth when unconfigured.
+  HEAD request that reads no database body.
   That status informs the user but never gates sign-in. Offline Mode applies only
   to board/library preparation; application networking remains available. Validate
-  every Firebase HTTPS destination. Provider settings are write-only in the
-  UI: mask new values, save them only in per-user Windows Credential Manager or
-  Ubuntu Secret Service (`secret-tool`), and never read them back into visible
-  fields, environment variables or the checkout. Never add a fixed key, repo vault,
-  plaintext fallback, password/token argv or Admin SDK credential. Save login and Remember
+  every Firebase HTTPS destination against the built-in application provider.
+  Pin the public client configuration to the `mcu-flasher-c46e3` deployment;
+  never expose provider editing in Cloud or Developer Access, or honor legacy
+  provider settings from files, environment variables or the OS vault. Public
+  Firebase identifiers are not credentials; bundled encryption cannot make them
+  secret or tamper-proof. Enforce authorization through deployed UID rules and
+  administrative API restrictions. Save account credentials only in per-user
+  Windows Credential Manager or Ubuntu Secret Service (`secret-tool`). Never add
+  a repo credential vault, plaintext fallback, password/token argv or Admin SDK credential. Save login and Remember
   me are separate options. Keep sign-in and account creation as separate views
   inside the selector's Cloud tab, and hide/gate sketch management until Firebase
   confirms authentication. Store no account credentials in the checkout. An
@@ -699,7 +738,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `notif_panel.py`: Per-sketch notification log viewer.
      - `settings_dialog.py`: Preferences modal (themes, CPU jobs, auto-save, baud reset).
      - `project_dialog.py`: Project selector & new project scaffolding wizard. Keep the Existing path blank at startup; selecting a source file preserves that file as the editor's active file, while folder validation stays at the project root. At compact widths shorten Recent/Open-window action labels but retain full accessible names.
-     - `owner_ticket_dialog.py` / `owner_ticket_style.py`: Private developer tickets, login and Firebase settings; cached neobrutalist paper cards and responsive forms.
+     - `owner_ticket_dialog.py` / `owner_ticket_style.py`: Private developer tickets, login, connection status and local access settings; cached neobrutalist paper cards and responsive forms.
      - `modify_dialog.py`: Project sketch file management dialog (add, rename, delete).
      - `download_dialog.py`: Explicit handoff to the separate host bootstrap process.
      - `package_progress.py`: Window-owned, focus-preserving package job card with stage/progress display and a Notifications action.
@@ -707,7 +746,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `theme.py`: QSS generator for Glass Smoked Dark, Glass Frosted Light and Solarized Dark.
 
    **Theme and log readability**
-   - Developer tickets use their own neobrutalist NeoCard/PortalDialog surfaces and original SVG vectors. Exactly five completed left-clicks on the toolbar brand and a brief pause open the portal; local tickets remain available and cloud synchronization checks Firebase directly, independently of package Offline Mode. Count each completed click once, including double-click sequences. Use portal inks checked against solid paper and accent fills; retain the same appearance, keyboard focus, masked access keys, drafts and filters through workspace theme changes. Center the compact login card, scroll short forms and pin actions. Report failed cloud configuration writes without dropping entered values. Run `direct/verify_owner_tickets.py` with a mocked service and network; verify that every developer screen is free of glass primitives and gradients. Only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
+   - Developer tickets use their own neobrutalist NeoCard/PortalDialog surfaces and original SVG vectors. Exactly five completed left-clicks on the toolbar brand and a brief pause open the portal; local tickets remain available and cloud synchronization checks Firebase directly, independently of package Offline Mode. Count each completed click once, including double-click sequences. Use portal inks checked against solid paper and accent fills; retain the same appearance, keyboard focus, masked access keys, drafts and filters through workspace theme changes. Center the compact login card, scroll short forms and pin actions. Report failed local-access settings writes without dropping entered values. Keep Firebase provider configuration fixed. Run `direct/verify_owner_tickets.py` with a mocked service and network; verify that every developer screen is free of glass primitives and gradients. Only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
    - Build and serial output, ANSI foregrounds, connection state and transient status-bar messages use semantic colors with readable contrast against the active theme. Recolor retained output after theme changes instead of leaving stale inline colors.
    - Check rendered compatibility logs, syntax severity/status brushes and notification cards against their actual reading surfaces. Share terminal ANSI colors between Windows and POSIX and enforce xterm minimumContrastRatio=4.5 for truecolor/indexed CLI text. Verify with `direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`.
    - The workspace owns one theme signal connection and one propagation pass. Hosted panels opt out of direct theme subscriptions; standalone panels retain them. Status timers are window-owned, restart for the latest message and never clear a newer operation status. Failed notification clears preserve history; filters use bounded retained records and apply to live events. Refresh external history off the GUI thread on panel reveal, discard stale project results and preserve unpersisted live events. Report failed history writes without recursively persisting the warning. Notification replacement must be atomic; verify failure preservation with the isolated notification persistence/writes verifiers.
@@ -932,6 +971,7 @@ MCU Flasher by Naph/
 │   │   ├── index.html               # Monaco Editor host page with QWebChannel bridge
 │   │   ├── terminal.html            # Native Linux xterm frontend and parsed-output ACKs
 │   │   ├── bundle.js                # Offline Monaco Editor JS bundle (no CDN)
+│   │   ├── project_files.js         # Incremental Modify updates without resetting models
 │   │   ├── qwebchannel.js           # Bidirectional Qt-to-JavaScript communication bridge
 │   │   ├── editor.worker.js         # Monaco Editor web worker
 │   │   └── *.ttf                    # Offline icon and font assets
@@ -1015,12 +1055,12 @@ MCU Flasher by Naph/
   Verify `direct/verify_bootstrap_cold_cache.py` and the Ubuntu launcher regression
   with isolated directories and mocked installation, including unchanged mtimes.
 - Ubuntu cloud prerequisites include both the libsecret client and a Secret Service
-  provider (`gnome-keyring`). Preserve strict vault errors for Cloud configuration;
+  provider (`gnome-keyring`). Preserve strict vault errors for saved account credentials;
   do not replace a locked vault with empty settings or a successful fallback probe.
   Label endpoint reachability separately from sign-in/database access. HTTP
   401/403/405 can establish reachability, but redirects, 404, 429 and server failures
   cannot establish health. Keep account mutations non-replaying and credentials
-  encrypted; refresh configuration on explicit Check connection after unlock.
+  encrypted; retry account access on explicit Check connection after unlock.
 - Windows release-first preparation uses the pinned archive size/SHA256 and `bootstrap_seed.py` to inspect genuine package metadata and usable manifests. Import only absent compatible package groups; preserve existing destinations, archives and failed checkpoints. Reinspect after importing platforms, then resolve missing packages normally before readiness. Do not fabricate `.piopm`, overlay installed directories, auto-prune incompatible SCons, or treat the release as a complete plan certificate. Native Ubuntu never imports the Windows seed. Verify with isolated `direct/verify_bootstrap_seed.py` fixtures.
 - Read update versions from the same explicit interpreter used by pip, with fresh distribution metadata and PEP440 ordering. Reject conflicting metadata, verify actual installed versions after upgrades and keep the base runtime separate from the application venv. Never seed or sync individual missing package/metadata trees in either direction; use target pip for missing dependencies. An incomplete check must not report all utilities current. Use `direct/verify_bootstrap_updates.py` without installing packages.
 - Serial output wraps to the viewport by default (`serial_line_wrap`), with a saved Wrap lines action in the output context menu and compact Options. Reflow changes display only; Copy retains original logical line breaks. Anchor wrapped output by UTF-16 character and visual row, retain the character across consecutive resizes, and coalesce deferred layout following with one owned timer. Cancel pending restoration on reader input, selection changes and Clear. Verify with `direct/verify_serial_wrap.py`.
@@ -1046,9 +1086,9 @@ MCU Flasher by Naph/
 - Mbed 6.17 needs `setuptools==80.9.0` for `distutils.spawn`/`LooseVersion` and `future==1.0.0` to avoid removed `imp.reload`. Both host setup paths install and validate these providers normally. `mbed_compat.py` preloads their packages only when importing the installed Mbed adapter inside the selected package store, before its bundled future/past can shadow them. Validate pinned distribution/module origins and APIs; reject stale already-loaded providers without evicting them. Bootstrap scopes the lazy finder reversibly; guarded runtime installs it idempotently and never installs dependencies. Warm health checks fingerprint required provider files and selector sources. Verify synthetic bundled-provider precedence, missing/version/origin failures, package containment and hook/guard preservation with `direct/verify_mbed_compat.py`; no live builders or package edits in verification.
 - Reviewed STM32 20.0.0 Arduino preparation groups boards only by exact core and full package specifications after matching platform, framework and nested variant script fingerprints. Its Arduino checks reduce from 163 to 7; retain every other framework's probes and separate checks for unknown or modified scripts. Replan after package preparation so missing scripts cannot grant sharing. Verify isolated signatures and source edits with `direct/verify_bootstrap_builders.py`.
 - Scope extended paths to PlatformIO's installer-module copying and cleanup only after canonical containment within the configured package/platform/library store or its `pkg-installing` staging directories. Preserve literal trailing-dot TAR entries; leave global filesystem modules and unrelated/native Linux calls untouched. Verify local TAR entries, deep ZIP/TAR paths, overwrite/version detachment, traversal rejection, junction escapes and hook restoration with `direct/verify_bootstrap_archives.py`; no live install/cache writes in verification.
-- The downloader (`arduino_lib_req.py`) retains Tk/ttk network and archive workflows. `tk_glass.py` supplies static glass cards around package lists, details and installed items in all three palettes; advanced URLs live behind **Board indexes**. Normalize comma/newline-separated HTTP(S) sources, validate extensible package structures, deduplicate URLs and retain usable catalogs on source errors. Failed atomic settings writes preserve the previous active/saved list and report failure. Preserve search, installed-item details, version selection, checksum validation and extraction cancellation. Reopening refreshes the per-user theme without rebuilding widgets or losing state. Extracted/both downloads start explicit background preparation; Archive Only remains unprepared until **Prepare board support** is chosen. Retain the previous extracted payload if promotion fails and use nonmodal completion status/history.
-  Use bounded static shaded rims/reflections and panel headings, with opaque
-  reading surfaces. Headings yield to native reading-line budgets on short
+- The downloader (`arduino_lib_req.py`) retains Tk/ttk network and archive workflows. `tk_glass.py` supplies the selector-style static glass scene, framed header and cards around package lists, details and installed items in all three palettes; `tk_material.py` composites captions/groups over their owner without opaque backgrounds. Advanced URLs live behind **Board indexes**. Normalize comma/newline-separated HTTP(S) sources, validate extensible package structures, deduplicate URLs and retain usable catalogs on source errors. Failed atomic settings writes preserve the previous active/saved list and report failure. Preserve search, installed-item details, version selection, checksum validation and extraction cancellation. Reopening refreshes the per-user theme without rebuilding widgets or losing state. Updates initiated from Installed automatically choose an extracted folder without a format prompt; ordinary catalog downloads retain the archive/folder choices. Extracted/both downloads start explicit background preparation; Archive Only remains unprepared until **Prepare board support** is chosen. Retain the previous extracted payload if promotion fails and use nonmodal completion status/history.
+  Use bounded static directional reflections and lit rounded rims. Native fields
+  and package lists retain solid editing/selection fills. Headings yield to native reading-line budgets on short
   panes; folder, vendor URL and version rows reflow from native Tk font widths.
   Fit the complete frame on monitor changes without applying Qt scaling.
   Verify `direct/verify_downloader_appearance.py` in fresh native processes at
@@ -1060,7 +1100,7 @@ MCU Flasher by Naph/
 - Verify screen changes and 100/125/150/175/200% scale in fresh processes with `direct/verify_responsive.py`. Couple physical screen dimensions with each scale and taskbar/work-area reservation; convert once to Qt logical pixels. Include half-monitor and full-width windows, portrait and short laptop areas, and chosen content fonts. Assert effective rendered fonts, complete button visibility through ancestors and a complete padded text line. Keep the same hardware-free persistence mocks as the controls verifier. Check full baud digits beside combo padding/arrows and footer visibility. Narrow, short Controls use fewer rows; very short windows retain Timestamps/Skip Compile in Options. Serial Options retains collapsed display/Copy/Clear actions, and all layouts restore when space returns. Reserve Build/Serial output using the document's chosen font, reading margin and scrollbar/frame chrome, and refit after font changes.
 - Short-screen pane budgets use the active tool's minimum size hint. Keep log views shrinkable while preserving headers and serial send controls. Check every tool tab in the runtime preview. Mock terminal session creation for layout probes; real PTY checks belong in `direct/verify_terminal.py`.
 - Terminal tab scroll buttons keep cached palette glyphs for normal, active and disabled states after Qt tab layouts. Native Qt styles can assign standard icons instead of arrow types; identify their scroll actions by the stable button names in fixtures, retain actual click/offset checks and verify rendered ink after repeated layouts and theme changes. Never replace the buttons, take ownership of the application style, or add idle polling.
-- Hide terminal output scrollbars with viewport-scoped CSS in both host renderers. Preserve xterm overflow, scrollback, wheel and keyboard scrolling, output acknowledgement and PTY input. Do not hide session-tab navigation or change the bundled xterm distribution. `direct/verify_terminal_scroll.py` verifies both actual offline pages with fixture transports, computed styles, real wheel/Shift+PageUp events, retained history and no PTY input.
+- Hide terminal output scrollbars with viewport-scoped CSS in both host renderers. Preserve xterm overflow, scrollback, wheel and keyboard scrolling, output acknowledgement and PTY input. Do not hide session-tab navigation or change the bundled xterm distribution. Align the fit addon's cached scrollbar width with the hidden viewport's measured width; keep reading padding on the xterm element so fitting subtracts it once. `direct/verify_terminal_scroll.py` verifies both actual offline pages with fixture transports, computed styles, real wheel/Shift+PageUp events, retained history, viewport fill at lower/fractional scales and no PTY input.
 - `_heal_private_python_runtime()`: Auto-detects and repairs damaged/missing portable Python.
 - `_ensure_platformio_core_prebuilt()`: Downloads pre-built PlatformIO toolchain zip with progress bar, resume, and SHA-256 verification.
 - **Strict Private Python Guard**: `src/modules/private_python_guard.py` ensures the application never executes under desktop/system Python.

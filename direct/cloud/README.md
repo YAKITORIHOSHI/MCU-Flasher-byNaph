@@ -1,19 +1,20 @@
 # Firebase cloud sketches
 
 The application uses Firebase Authentication email/password accounts and the
-existing Firebase Realtime Database. Client configuration is loaded only from
-the current OS user's secure credential store. The selector never reads saved
-connection values back into the UI; entry fields are masked, and settings stay
-in the system vault rather than the application checkout or environment.
+existing Firebase Realtime Database. The application's built-in provider is
+fixed to the `mcu-flasher-c46e3` deployment. The selector and Developer Access
+offer no database, project or API-key editing controls. Environment variables,
+legacy configuration files and saved vault provider values cannot select a
+different deployment.
 Passwords, tokens, service-account keys and developer unlock keys are never
 loaded from the checkout. Firebase's web API key identifies a project; database
 security comes from authenticated user isolation and deployed rules.
 
-## Provider setup and migration
+## Deployment administration and migration
 
 1. In the Firebase project owned by this application, enable the **Email/Password**
-   sign-in provider. Use that project's web API key and HTTPS Realtime Database
-   endpoint in the selector's Cloud configuration.
+   sign-in provider. The application already includes this project's public
+   client configuration; users only sign in to their accounts.
 2. Back up the existing database with Firebase's owner tools. Review the rules in
    `database.rules.json`, merge any unrelated existing application paths, and
    validate them in the Firebase Rules Simulator or Emulator before publishing.
@@ -25,23 +26,32 @@ security comes from authenticated user isolation and deployed rules.
    Authentication alone does not enable sketch storage. `Permission denied`
    means the cloud endpoint was reached but this operation was denied by its
    rules; it does not mean the computer lacks internet access.
-4. Save provider settings through `save_cloud_configuration` into the user's OS
-   credential vault. Verify vault readback in isolated tests; never add settings
-   to the source tree or use an embedded encryption seed. Rotate
-   any private credentials formerly shipped in it. Never distribute an Admin
-   SDK/service-account private key or make database rules public as a workaround.
+4. Restrict the public API key to the Firebase APIs this app needs, and review
+   Authentication quotas for expected traffic. Never distribute an Admin SDK or
+   service-account private key, or make database rules public as a workaround.
+   Accounts and working copies from another provider are not migrated into this
+   deployment automatically.
 5. The client only operates on the authenticated account. Legacy ticket records
    remain at their existing paths; no automatic remote database rewrite runs at
    startup. Administrative account or data migration belongs in a private server
    tool, outside the application checkout.
 
-No rules or provider settings are automatically deployed by the desktop client.
+No rules or API restrictions are automatically deployed by the desktop client.
 Publishing requires administrative access to the correct Firebase project.
 The rules enforce UID isolation, cloud field types and retained revision leaf
 values. RTDB's rule language cannot count arbitrary children or sum source-byte
 sizes; aggregate sketch/file/byte quotas are client limits. A production service
 that needs abuse-resistant storage/billing quotas must additionally validate
 aggregate writes through a private server and restrict direct client writes.
+
+The Firebase web configuration is public client identification, not an
+authorization secret. Encrypting it with a decryption key shipped in the same
+desktop application cannot prevent extraction or modification by the machine's
+owner. The supported app pins its provider, but database protection must remain
+on the server: authenticated UID rules, restricted API usage and suitable abuse
+controls. Firebase App Check requires a separately provisioned attestation flow;
+it is not enabled by embedding this configuration. See Firebase's
+[API-key security guidance](https://firebase.google.com/docs/projects/api-keys).
 
 ## Credentials on each host
 
@@ -160,8 +170,7 @@ push creates a new revision; it never rewrites an old revision. Save pending
 editor changes and confirm replacement before using Pull/Revert. All network
 and source-storage work runs off the GUI thread. Opening the Cloud tab checks
 reachability with a credential-free HTTPS `HEAD` request to the configured
-Firebase database endpoint, or Firebase Authentication when no database is
-configured. It reads no database contents. This cloud-only check and Firebase
+Firebase database endpoint. It reads no database contents. This cloud-only check and Firebase
 authentication/sync work independently of the package Offline Mode preference;
 Offline Mode applies only to board/library preparation and never disables
 application networking. Cloud and Developer Access each check Firebase directly.

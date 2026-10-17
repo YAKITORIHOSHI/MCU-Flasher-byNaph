@@ -60,7 +60,7 @@ class _ServiceTask(QObject):
             result = self.operation, value, ""
         except Exception:
             result = (self.operation, None,
-                      "The operation could not finish. Check cloud settings and try again.")
+                      "The operation could not finish. Check your connection and try again.")
         finally:
             self.function = None
         try:
@@ -426,24 +426,14 @@ class FirebaseSettingsDialog(_TaskPortal):
         super().__init__(parent, preferred=(640, 530))
         self.service = service
         cfg = dict(config if config is not None else getattr(parent, "_config", {}))
-        self.setWindowTitle("Connection settings — MCU Flasher")
-        self.content.addWidget(heading(self.backdrop, "Connection settings"))
+        self.setWindowTitle("Connection and local access — MCU Flasher")
+        self.content.addWidget(heading(self.backdrop, "Connection and local access"))
         self.scroll, body, layout = scroll_body(self.backdrop)
         card = NeoCard(body)
         form = QVBoxLayout(card)
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
-        form.addWidget(label("Enter new connection details. Saved values stay encrypted and hidden on this device.", card, "muted", wrap=True))
-        self.db_input = QLineEdit(card)
-        self.db_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.db_input.setAccessibleName("New Firebase database address; hidden while typing")
-        self.db_input.setPlaceholderText("Enter HTTPS database address")
-        form.addWidget(field("Realtime Database URL", self.db_input, card))
-        self.key_input = QLineEdit(card)
-        self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_input.setAccessibleName("New Firebase Web API key; hidden while typing")
-        self.key_input.setPlaceholderText("Firebase Web API key")
-        form.addWidget(field("Web API key", self.key_input, card))
+        form.addWidget(label("MCU Flasher uses its built-in cloud service. Check its availability below.", card, "muted", wrap=True))
         self.test_button = button("Test connection", card, self._run_test, vector="reload")
         form.addWidget(self.test_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.feedback = label("", card, "feedback", wrap=True)
@@ -475,9 +465,8 @@ class FirebaseSettingsDialog(_TaskPortal):
         self.content.addWidget(self.scroll, 1)
         footer = QHBoxLayout()
         footer.addStretch(1)
-        footer.addWidget(button("Cancel", self.backdrop, self.reject, role="quiet"))
-        self.save_button = button("Save settings", self.backdrop, self._save, role="primary", vector="save")
-        footer.addWidget(self.save_button)
+        self.close_button = button("Close", self.backdrop, self.reject, role="quiet")
+        footer.addWidget(self.close_button)
         self.content.addLayout(footer)
         self._set_busy(False)
         self.apply_theme(self._theme_name)
@@ -489,25 +478,16 @@ class FirebaseSettingsDialog(_TaskPortal):
         self.scroll.ensureWidgetVisible(self.feedback)
 
     def _run_test(self):
-        url, key = self.db_input.text().strip(), self.key_input.text().strip()
-        if not url or not key:
-            self._show_feedback("Enter both the database URL and API key to test the Firebase endpoint.", "warn")
-            (self.db_input if not url else self.key_input).setFocus()
-            return
         self.feedback.hide()
-        self._run_task("test", lambda: self.service.test_firebase_connection(key, url), self._tested)
+        self._run_task("test", self.service.check_connection, self._tested)
 
     def _set_busy(self, busy):
         self.test_button.setEnabled(not busy)
-        self.save_button.setEnabled(not busy)
-        self.db_input.setEnabled(not busy)
-        self.key_input.setEnabled(not busy)
         local_allowed = not busy and (not self._local_configured or self._local_unlocked)
         self.local_key.setEnabled(local_allowed)
         self.local_confirm.setEnabled(local_allowed)
         self.local_save.setEnabled(local_allowed)
         self.test_button.setText("Testing connection…" if busy and self._task_name == "test" else "Test connection")
-        self.save_button.setText("Saving…" if busy and self._task_name == "save" else "Save settings")
 
     def _configure_local_access(self):
         if self._task_name:
@@ -546,22 +526,6 @@ class FirebaseSettingsDialog(_TaskPortal):
         ok, message = result
         self._show_feedback(message, "ok" if ok else "fail")
 
-    def _save(self):
-        url = self.db_input.text().strip()
-        key = self.key_input.text().strip()
-        if not url or not key:
-            self._show_feedback("Enter both the database URL and API key to save the Firebase settings.", "warn")
-            (self.db_input if not url else self.key_input).setFocus()
-            return
-        updates = {"firebase_database_url": url, "firebase_api_key": key,
-                   "use_firebase": bool(url)}
-        self._run_task("save", lambda: self.service.save_config(updates), self._saved)
-
-    def _saved(self, ok, error):
-        if ok:
-            self.accept()
-        else:
-            self._show_feedback(error or "Settings could not be saved. Your changes are still here; try again.", "fail")
 
 
 class OwnerTicketDialog(_TaskPortal):
@@ -1151,7 +1115,7 @@ class OwnerTicketDialog(_TaskPortal):
         elif not self._config.get("use_firebase"):
             text, tone, message = "Online" if self._endpoint_state else "Local tickets", "muted", "Use your local access key to sign in on this device."
         elif not (self._config.get("firebase_database_url") and self._config.get("firebase_api_key")):
-            text, tone, message = "Online" if self._endpoint_state else "Not set up", "active", "Open Connection settings to set up cloud sign-in."
+            text, tone, message = "Online" if self._endpoint_state else "Not set up", "active", "The built-in cloud connection is unavailable."
         elif self._endpoint_state is True:
             text, tone, message = "Online", "ok", "Connected. Sign in to continue."
         else:

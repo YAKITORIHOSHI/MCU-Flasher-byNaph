@@ -33,6 +33,7 @@ from main.qt.glass import WorkspaceTabBar
 from src.modules.ui_palette import readable_foreground, setup_text_palette
 
 from main.core.constants import is_application_codebase_dir
+from main.core.project_scaffold import create_project_scaffold, sanitized_project_name
 
 # Supported sketch file extensions
 SUPPORTED_EXTS = {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}
@@ -739,6 +740,7 @@ class ProjectDialog(QDialog):
         self._template_combo.addItem("Blink (LED_BUILTIN)", "blink")
         form.addRow("Template", self._template_combo)
         self._cb_include_h = QCheckBox("Include header file (.h)", self._form_box)
+        self._cb_include_h.setToolTip("Create the project header and include it in the generated sketch sources.")
         self._cb_include_h.stateChanged.connect(self._update_new_preview)
         form.addRow(self._cb_include_h)
         self._cb_include_cpp = QCheckBox("Include implementation file (.cpp)", self._form_box)
@@ -910,7 +912,7 @@ class ProjectDialog(QDialog):
             self._existing_preview_lbl.show()
 
     def _update_new_preview(self) -> None:
-        name = re.sub(r'[^a-zA-Z0-9_-]', '_', self._new_name_edit.text().strip()) or "MySketch"
+        name = sanitized_project_name(self._new_name_edit.text(), fallback="MySketch")
         parent = self._new_parent_edit.text().strip() or str(Path.home() / "Documents")
         target = Path(parent) / name
         files = [f"{name}.ino"]
@@ -918,9 +920,11 @@ class ProjectDialog(QDialog):
             files.append(f"{name}.h")
         if self._cb_include_cpp.isChecked():
             files.append(f"{name}.cpp")
+        include_note = (f'\nSketch sources include "{name}.h".'
+                        if self._cb_include_h.isChecked() else "")
         self._new_preview_lbl.setText(
             f"Target: {target}\n"
-            f"Files to create: {', '.join(files)}"
+            f"Files to create: {', '.join(files)}{include_note}"
         )
 
     def _browse_folder(self) -> None:
@@ -1038,20 +1042,33 @@ class ProjectDialog(QDialog):
             self._new_status.setText("Cannot create sketch inside MCU Flasher application folder.")
             return
 
-        clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
-        target = Path(parent) / clean_name
+        clean_name = sanitized_project_name(name)
+        target = Path(parent).resolve() / clean_name
         tmpl = self._template_combo.currentData() or "standard"
+
+        def create(in_new_window: bool) -> dict:
+            options = {
+                "include_h": self._cb_include_h.isChecked(),
+                "include_cpp": self._cb_include_cpp.isChecked(),
+                "template_type": tmpl,
+            }
+            if self._backend:
+                return self._backend.create_project(
+                    parent_dir=parent, name=name,
+                    open_in_new_window=in_new_window, **options,
+                )
+            try:
+                created = create_project_scaffold(parent, name, **options)
+                from main.core.file_utils import ensure_hidden_read_first_md
+                ensure_hidden_read_first_md(created)
+                return {"success": True}
+            except FileExistsError:
+                return {"success": False, "error": "That project folder already exists. Open it as an existing project."}
+
         self._dispatch_project_action(
             str(target),
             clean_name,
-            lambda in_new_window: self._backend.create_project(
-                parent_dir=parent,
-                name=name,
-                include_h=self._cb_include_h.isChecked(),
-                include_cpp=self._cb_include_cpp.isChecked(),
-                template_type=tmpl,
-                open_in_new_window=in_new_window,
-            ) if self._backend else {"success": True},
+            create,
             lambda: self._accept_selected_project(target),
             self._new_status,
         )
@@ -1286,8 +1303,6 @@ class ProjectDialog(QDialog):
 
     def _accept_selected_project(self, project: Path) -> None:
         self.selected_project = project
-        self.hide()
-        QApplication.processEvents()
         self.accept()
 
     def _dispatch_project_action(
@@ -1477,20 +1492,22 @@ class ProjectDialog(QDialog):
 
     def _cloud_opened(self, path: str) -> None:
         self.cloud_window_opened = True
-        if not self._allow_window_choice:
-            # Startup has no workspace to replace. Its newly opened cloud
-            # child owns the sketch; do not open it again in the parent.
-            self.reject()
-        else:
-            self._load_open_projects()
+        # Cloud always opens an independent workspace. Finish the selector in
+        # both startup and workspace flows once that window owns the sketch.
+        self.reject()
 
     def done(self, code) -> None:
         panel = getattr(self, "_cloud_panel", None)
-        if panel and (panel._busy or panel._waiting_for_save):
+        if (panel and (panel._busy or panel._waiting_for_save)
+                and self.selected_project is None and not self.cloud_window_opened):
             panel._status.setText("Wait for the cloud operation to finish before closing the project selector.")
             return
         if panel:
             panel.dispose()
+        self._existing_preview_timer.stop()
+        self._existing_preview_revision += 1
+        self._existing_preview_pending = None
+        self._existing_preview_pool.clear()
         super().done(code)
 
     def _focus_open_project(self, item=None) -> None:

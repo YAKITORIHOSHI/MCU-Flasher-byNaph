@@ -11,6 +11,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,7 +23,7 @@ os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
 if sys.platform == 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixture
-from PySide6.QtCore import QRect, QPoint, QSize, QObject, Signal, Qt, QTimer
+from PySide6.QtCore import QRect, QPoint, QSize, QObject, Signal, Qt, QTimer, QEvent
 from PySide6.QtGui import QIcon, QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
@@ -31,7 +32,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
 from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
 from main.qt.serial_panel import SerialPanel
 from main.qt.theme import build_stylesheet, register_fonts, get_palette
-from main.qt.responsive import clamp_window, fit_dialog, ScreenWatcher
+from main.qt.responsive import (clamp_window, fit_dialog, ScreenWatcher,
+                                EmbeddedGeometryWatcher)
 from src.modules.ui_metrics import WorkArea, fit_rect, preferred_size
 
 RENDER_DIR = None
@@ -41,6 +43,20 @@ def pump():
     for _ in range(5):
         APP.processEvents()
         time.sleep(.025)
+
+
+def resize_within(widget, width, height):
+    """Retry once when native pixel rounding exceeds a logical size budget."""
+    widget.resize(width, height)
+    pump()
+    # At 75%, for example, 850 logical pixels can round through a 638px
+    # native client area to 851. Keep the strict original budget assertions;
+    # request the measured excess back rather than granting extra space.
+    excess_width = max(0, widget.width() - width)
+    excess_height = max(0, widget.height() - height)
+    if excess_width or excess_height:
+        widget.resize(max(1, width - excess_width), max(1, height - excess_height))
+        pump()
 
 
 def capture(widget, name):
@@ -69,6 +85,48 @@ class QtResponsiveChecks(ControlChecks):
             self.stack.enter_context(patch.object(panel, name))
         sent = self.stack.enter_context(patch.object(panel, '_send_control'))
         return panel, sent
+
+    def test_native_embeds_fill_actual_client_bounds_at_every_scale(self):
+        from main.qt import terminal_panel, ai_panel
+        constants = SimpleNamespace(**{name: 1 << index for index, name in enumerate((
+            'SWP_FRAMECHANGED', 'SWP_NOZORDER', 'SWP_NOACTIVATE',
+            'SWP_SHOWWINDOW', 'SWP_HIDEWINDOW', 'SW_SHOW', 'SW_HIDE'))})
+        container = SimpleNamespace(winId=lambda: 44)
+        for module, method, field in ((terminal_panel, terminal_panel.TerminalPanel._resize_embedded_terminal, '_term_hwnd'),
+                                      (ai_panel, ai_panel.AIPanel._resize_embedded_ai, '_ai_hwnd')):
+            for scale in (0.75, 1, 1.25, 1.5, 1.75, 2):
+                # Native rounding belongs to the OS. Deliberately choose a
+                # client rectangle unlike a rounded logical-size product.
+                width, height = round(641 * scale) + 1, round(283 * scale) + 1
+                native = Mock()
+                native.IsWindow.return_value = True
+                native.GetClientRect.return_value = (0, 0, width, height)
+                panel = SimpleNamespace(_is_embedded=True, _embed_container=container,
+                                        _is_ready=True, _sessions_meta={'audit': {}},
+                                        _port=None, isVisible=lambda: True, **{field: 55})
+                with self.subTest(panel=module.__name__, scale=scale), \
+                     patch.object(module, 'win32gui', native), patch.object(module, 'win32con', constants):
+                    method(panel)
+                    native.GetClientRect.assert_called_once_with(44)
+                    self.assertEqual(native.SetWindowPos.call_args.args[0:6], (55, 0, 0, 0, width, height))
+
+    def test_embedded_geometry_changes_coalesce_after_native_dispatch(self):
+        host = self.own(QWidget())
+        changes = []
+        watcher = EmbeddedGeometryWatcher(host, lambda: changes.append(host.size()))
+        host.show()
+        pump()
+        changes.clear()
+        for _ in range(30):
+            APP.sendEvent(host, QEvent(QEvent.Type.DevicePixelRatioChange))
+            APP.sendEvent(host, QEvent(QEvent.Type.ScreenChangeInternal))
+        host.resize(640, 360)
+        self.assertEqual(changes, [], 'Native child sizing must wait until Qt commits host geometry')
+        pump()
+        self.assertEqual(changes, [QSize(640, 360)])
+        pump()
+        self.assertEqual(changes, [QSize(640, 360)], 'Geometry watcher must be idle after the burst')
+        self.assertFalse(watcher._timer.isActive())
 
     def test_coordinate_bounds(self):
         for area in (WorkArea(0, 0, 640, 480), WorkArea(-1280, 40, 1280, 680), WorkArea(1920, -900, 900, 900)):
@@ -199,7 +257,7 @@ class QtResponsiveChecks(ControlChecks):
         layout.addWidget(serial)
         host.show()
         for width in (1920, 1366, 1372, 1371, 1350, 1349, 1024, 800, 640, 480, 464, 320, 800, 1920):
-            host.resize(width, 620)
+            resize_within(host, width, 620)
             toolbar.set_responsive_width(width)
             pump()
             self.assertLessEqual(host.width(), width, 'A layout minimum forced the window wider')
@@ -795,8 +853,7 @@ class QtResponsiveChecks(ControlChecks):
                     console._flush_queue()
                 for width in (320, 400, 480, 640, 850, 1100, 1920, 480, 1920):
                     with self.subTest(theme=mode, font=point_size, width=width):
-                        container.resize(width, 520)
-                        pump()
+                        resize_within(container, width, 520)
                         self.assertLessEqual(container.width(), width,
                                              'Build header size hints must not force a wider window')
                         self.assertEqual(console.font(), content_font)
@@ -1145,7 +1202,9 @@ class TkResponsiveChecks(DownloaderChecks):
             self.assertTrue(canvas.winfo_ismapped(), 'Installed metadata needs a visible reading viewport')
             self.assertGreaterEqual(canvas.winfo_height(), detail.lbl_name.winfo_reqheight(),
                                     'A complete padded title line must fit at the native font scale')
-            bounds = canvas.bbox('all')
+            # The composited material is a background image, not scrollable
+            # metadata. Measure the same content window used by ScrollBody.
+            bounds = canvas.bbox(detail._details_view._window)
             self.assertIsNotNone(bounds, 'Installed metadata needs a scrollable content region')
             content_height = max(1, bounds[3] - bounds[1])
             content = detail._details_view.body

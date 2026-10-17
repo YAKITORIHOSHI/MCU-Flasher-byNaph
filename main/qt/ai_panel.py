@@ -54,11 +54,8 @@ class _AIEmbedContainer(QWidget):
         self.setStyleSheet("background: #0c0d10;")
         self.setMinimumWidth(200)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if hasattr(self._panel, "_resize_embedded_ai"):
-            self._panel._resize_embedded_ai()
+        from main.qt.responsive import EmbeddedGeometryWatcher
+        self._geometry_watcher = EmbeddedGeometryWatcher(self, panel._resize_embedded_ai)
 
 
 class AIPanel(QWidget):
@@ -514,11 +511,8 @@ class AIPanel(QWidget):
             if not win32gui.IsWindow(int(self._ai_hwnd)):
                 self._ai_hwnd = None
                 return
-            w = self._embed_container.width()
-            h = self._embed_container.height()
-            if w <= 100 or h <= 80:
-                w = max(self._stack.width(), self.width(), 100)
-                h = max(self._stack.height(), self.height() - 34, 80)
+            from main.qt.responsive import native_client_size
+            w, h = native_client_size(self._embed_container, win32gui)
 
             should_show = self._is_ready if show is None else show
             flags = win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER

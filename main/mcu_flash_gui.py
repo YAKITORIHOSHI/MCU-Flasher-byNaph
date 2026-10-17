@@ -336,12 +336,16 @@ def main() -> int:
                             pass
 
             if QTimer is not None:
-                QTimer.singleShot(0, _assert_dlg_foreground)
-                QTimer.singleShot(50, _assert_dlg_foreground)
-                QTimer.singleShot(150, _assert_dlg_foreground)
-                QTimer.singleShot(350, _assert_dlg_foreground)
+                QTimer.singleShot(0, dlg, _assert_dlg_foreground)
+                QTimer.singleShot(50, dlg, _assert_dlg_foreground)
+                QTimer.singleShot(150, dlg, _assert_dlg_foreground)
+                QTimer.singleShot(350, dlg, _assert_dlg_foreground)
 
-            if dlg.exec() != QDialog.DialogCode.Accepted or not api.sketch_dir_path:
+            try:
+                selected = dlg.exec() == QDialog.DialogCode.Accepted and api.sketch_dir_path
+            finally:
+                dlg.deleteLater()
+            if not selected:
                 # User cancelled project selection -> clean exit
                 mark_session_clean_exit(os.getpid())
                 return 0

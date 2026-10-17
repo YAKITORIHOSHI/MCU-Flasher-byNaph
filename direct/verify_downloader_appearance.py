@@ -14,13 +14,23 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from direct.tk_downloader_fixture import TkDownloaderFixture
+from direct.tk_capture import save_tk_capture
 from src.modules.tk_glass import DialogFit, GlassCard, BrowserHeader, NativeResizeFocus, _desktop_work_area, _native_frame, _x11_work_area, ui_scale
+from src.modules.tk_material import GlassBody, GlassLabel
 from src.modules.ui_metrics import WorkArea
 from src.modules.ui_palette import contrast_ratio
 
 SCALE = 1.0
 RENDER_DIR = None
 CAPTURE_APP = None
+
+
+def capture(widget, filename):
+    global CAPTURE_APP
+    if sys.platform == "win32" and CAPTURE_APP is None:
+        from PySide6.QtWidgets import QApplication
+        CAPTURE_APP = QApplication.instance() or QApplication([])
+    return save_tk_capture(widget, RENDER_DIR / filename, capture_app=CAPTURE_APP)
 
 
 class NativeWorkAreaChecks(unittest.TestCase):
@@ -194,7 +204,7 @@ class AppearanceChecks(TkDownloaderFixture):
                         material = "#" + "".join(f"{int(channel):02x}" for channel in rgb)
                         self.assertGreaterEqual(contrast_ratio(button.cget("foreground"), material), 4.5)
                 self.assertIs(self.root.focus_get(), app.lib_tab.search_entry)
-                header = next(child for child in self.root.winfo_children() if isinstance(child, BrowserHeader))
+                header = app._header
                 for item in header.find_withtag("subtitle"):
                     ink = header.itemcget(item, "fill")
                     rgb = self.root.tk.call(str(header._surface), "get", header.winfo_width() // 2, 2)
@@ -218,28 +228,29 @@ class AppearanceChecks(TkDownloaderFixture):
                     self.assertNotEqual(top, bottom, "The material must retain reflective depth")
                     self.assertLessEqual(len(card.find_withtag("glass")), 2, "Resize painting must stay bounded")
                     self.assertIsNone(card._redraw_id, "A settled surface must have no paint timer")
+                owner = app.lib_tab._responsive_panes.right
+                for surface in (owner.body, app.lib_tab.detail_canvas, app.lib_tab._detail_content,
+                                app.lib_tab.lbl_name, app.lib_tab.lbl_paragraph):
+                    self.assertIsInstance(surface, (GlassBody, GlassLabel))
+                    self.assertIs(surface._material_photo, owner._material_image,
+                                  "Labels and native containers must continue the same glass after themes")
+                    self.assertEqual(surface.coords(surface._material_item), [
+                        surface.canvasx(0) + owner.winfo_rootx() - surface.winfo_rootx(),
+                        surface.canvasy(0) + owner.winfo_rooty() - surface.winfo_rooty()])
                 self.assertGreaterEqual(contrast_ratio(self.module.Theme.TEXT_BRIGHT, self.module.Theme.BG_MID), 4.5)
         if RENDER_DIR:
-            # Only this optional native capture uses Qt. The browser's glass
-            # and SVG rasterizers remain standard-library-only before setup.
-            import os
-            os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "xcb")
-            from PySide6.QtWidgets import QApplication
-            capture_app = QApplication.instance() or QApplication([])
+            # Read X11 Tk drawables directly; a non-null Qt grab can be black
+            # under Xwayland. Windows retains its existing Qt capture backend.
             for mode in ("default", "light", "solarized_dark"):
                 with patch.object(self.module, "_resolve_lib_req_theme", return_value=mode):
                     app._apply_current_theme()
                 self.show()
-                capture_app.processEvents()
-                image = capture_app.primaryScreen().grabWindow(int(self.root.winfo_id()))
-                self.assertFalse(image.isNull())
-                self.assertTrue(image.save(str(RENDER_DIR / f"browser-{mode}-selected.png")))
+                capture(self.root, f"browser-{mode}-selected.png")
                 app.lib_tab.detail_canvas.pack_forget()
                 app.lib_tab.detail_scroll.pack_forget()
                 app.lib_tab.lbl_placeholder.pack(fill="both", expand=True)
                 self.pump()
-                self.assertTrue(capture_app.primaryScreen().grabWindow(int(self.root.winfo_id())).save(
-                    str(RENDER_DIR / f"browser-{mode}-empty.png")))
+                capture(self.root, f"browser-{mode}-empty.png")
                 app.lib_tab._on_select()
                 self.pump()
         self.show(480)
@@ -309,14 +320,86 @@ class AppearanceChecks(TkDownloaderFixture):
                                  card.body.winfo_rooty() + card.body.winfo_height())
 
 
+class NativeMaterialChecks(unittest.TestCase):
+    def test_shared_material_variable_scroll_bindings_and_close_cleanup(self):
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk desktop unavailable: {error}")
+        self.addCleanup(root.destroy)
+        root.tk.call("tk", "scaling", SCALE * 96 / 72)
+        root.geometry("420x280+20+20")
+        errors = []
+        root.report_callback_exception = lambda *args: errors.append(args)
+        owner = tk.Frame(root, bg="#182a38")
+        owner.pack(fill="both", expand=True)
+        owner._material_image = tk.PhotoImage(master=root, width=420, height=280)
+        owner._material_image.put("#284858", to=(0, 0, 420, 280))
+        owner._material_bounds = ("#284858", "#284858")
+        value = tk.StringVar(master=root, value="Original metadata")
+        label = GlassLabel(owner, textvariable=value, bg="#445566", fg="#ffffff", anchor="w")
+        label.pack(fill="x", padx=13, pady=9)
+        canvas = GlassBody(owner, bg="#445566", height=120)
+        canvas.pack(fill="both", expand=True, padx=13)
+        content = GlassBody(canvas, bg="#445566")
+        tk.Entry(content).pack(fill="x")
+        tk.Frame(content, width=1, height=900).pack()
+        window = canvas.create_window(0, 0, window=content, anchor="nw")
+
+        # These are replacement bindings, as used by the production details
+        # view. They must not replace the material's owned geometry hooks.
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox(window)))
+        root.update()
+
+        def assert_material(widget):
+            self.assertIs(widget._material_photo, owner._material_image)
+            self.assertEqual(widget.itemcget(widget._material_item, "image"), str(owner._material_image))
+            self.assertEqual(widget.coords(widget._material_item), [
+                widget.canvasx(0) + owner.winfo_rootx() - widget.winfo_rootx(),
+                widget.canvasy(0) + owner.winfo_rooty() - widget.winfo_rooty()])
+
+        for widget in (label, canvas, content):
+            assert_material(widget)
+        self.assertEqual(label.cget("background"), "#445566", "Explicit bg must override inherited fallback")
+        self.assertGreaterEqual(content.winfo_reqheight(), 900)
+        region = tuple(map(float, canvas.cget("scrollregion").split()))
+        self.assertEqual(region, tuple(map(float, canvas.bbox(window))))
+        self.assertNotEqual(region, tuple(map(float, canvas.bbox("all"))),
+                            "The shared background extends outside content and must not enlarge its scrollregion")
+
+        literal = "Updated metadata Ω $literal — no callback argument loss"
+        value.set(literal)
+        root.update()
+        self.assertEqual(label.itemcget(label._text_item, "text"), literal)
+        self.assertEqual(label["text"], literal, "Label option access must not fall through to native Canvas options")
+        canvas.yview_moveto(.5)
+        root.update()
+        self.assertGreater(canvas.yview()[0], 0)
+        for widget in (label, canvas, content):
+            assert_material(widget)
+        self.assertEqual(tuple(map(float, canvas.cget("scrollregion").split())),
+                         tuple(map(float, canvas.bbox(window))))
+
+        owned_commands = [command for widget in (label, canvas, content)
+                          for command in widget._material_bindings.values()]
+        owned_commands.append(label._variable_trace[1])
+        owner.destroy()
+        root.update()
+        value.set("After close")
+        root.update()
+        self.assertEqual(errors, [])
+        self.assertEqual(value.trace_info(), [])
+        for widget in (label, canvas, content):
+            self.assertIsNone(widget._redraw_id)
+        for command in owned_commands:
+            self.assertFalse(root.tk.call("info", "commands", command), "Owned Tcl callbacks must be released")
+
+
 class FileDownloaderChecks(unittest.TestCase):
     def test_themes_compact_scrolling_and_literal_fields_without_network(self):
         from src.modules import downloader
         from src.modules.tk_glass import ui_scale
-        global CAPTURE_APP
-        if RENDER_DIR:
-            from PySide6.QtWidgets import QApplication
-            CAPTURE_APP = QApplication.instance() or QApplication([])
         initialize = tk.Tk.__init__
         def scaled_initialize(window, *args, **kwargs):
             initialize(window, *args, **kwargs)
@@ -355,9 +438,7 @@ class FileDownloaderChecks(unittest.TestCase):
                         for control in (window.url_entry, window.folder_entry, window.browse_btn, window.download_btn):
                             self.assertLessEqual(control.winfo_x() + control.winfo_width(), control.master.winfo_width() + 1)
                         if RENDER_DIR:
-                            CAPTURE_APP.processEvents()
-                            image = CAPTURE_APP.primaryScreen().grabWindow(int(window.winfo_id()))
-                            self.assertTrue(image.save(str(RENDER_DIR / f"file-downloader-{mode}-{width}.png")))
+                            capture(window, f"file-downloader-{mode}-{width}.png")
                     self.assertEqual(errors, [])
                 finally:
                     window.destroy()
@@ -373,6 +454,6 @@ if __name__ == "__main__":
     if RENDER_DIR:
         RENDER_DIR.mkdir(parents=True, exist_ok=True)
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
-                               for cls in (NativeWorkAreaChecks, AppearanceChecks, FileDownloaderChecks))
+                               for cls in (NativeWorkAreaChecks, NativeMaterialChecks, AppearanceChecks, FileDownloaderChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

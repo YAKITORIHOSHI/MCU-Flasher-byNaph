@@ -263,13 +263,13 @@ class DownloaderApp(tk.Tk):
         from src.modules.tk_font_runtime import register_tk_fonts
         from main.core.theme import Theme
         from types import SimpleNamespace
-        from src.modules.ui_palette import frosted_palette
+        from src.modules.ui_palette import resource_palette
         register_tk_fonts()
         if theme_mode is None:
             from main.core.config import get_theme_mode
             theme_mode = get_theme_mode()
         mode = theme_mode if theme_mode in Theme.PALETTES else "default"
-        self.palette = SimpleNamespace(**frosted_palette(Theme.PALETTES[mode]), active_theme=mode)
+        self.palette = SimpleNamespace(**resource_palette(Theme.PALETTES[mode]), active_theme=mode)
         super().__init__()
         self.title("MCU Flasher — Download files")
         from src.modules.tk_glass import DialogFit
@@ -282,12 +282,15 @@ class DownloaderApp(tk.Tk):
         self._build_widgets()
 
     def _build_widgets(self):
-        from src.modules.tk_glass import BrowserHeader, GlassButton, GlassCard, FieldRow, ScrollForm, EntryWell
+        from src.modules.tk_glass import BrowserHeader, GlassButton, GlassCard, GlassScene, FieldRow, ScrollForm, EntryWell, ui_scale
+        from src.modules.tk_material import GlassBody, GlassLabel
         from src.modules.ui_palette import readable_foreground
         p = self.palette
-        self._header = BrowserHeader(self, p, title="Download files", subtitle="Direct links and Google Drive")
+        self._scene = GlassScene(self, p)
+        self._scene.pack(fill="both", expand=True)
+        self._header = BrowserHeader(self._scene.body, p, title="Download files", subtitle="Direct links and Google Drive", framed=True)
         self._header.pack(fill="x", padx=12, pady=(12, 10))
-        self._form = ScrollForm(self, p.WINDOW_BG, fill_viewport=True)
+        self._form = ScrollForm(self._scene.body, p.WINDOW_BG, fill_viewport=True, material=True)
         self._form.pack(fill="both", expand=True, padx=12, pady=(0, 12))
         self._card = GlassCard(self._form.body, p, padding=14)
         self._card.pack(fill="both", expand=True)
@@ -295,14 +298,14 @@ class DownloaderApp(tk.Tk):
         body = self._card.body
 
         def label(parent, text):
-            return tk.Label(parent, text=text, font=("Montserrat", 10), bg=p.BG_MID, fg=p.TEXT,
+            return GlassLabel(parent, text=text, font=("Montserrat", 10), bg=p.BG_MID, fg=p.TEXT,
                             anchor="w", bd=0)
 
         def entry(parent, **options):
             return EntryWell(parent, p, font=("Montserrat", 10), **options)
 
         def button(parent, text, callback, *, primary=False, state="normal"):
-            base, hover = (p.BTN_MONITOR, p.BTN_MONITOR_H) if primary else (p.BTN_CLEAR, p.BTN_CLEAR_H)
+            base, hover = (p.BTN_MONITOR, p.BTN_MONITOR_H) if primary else (p.BG_LIGHT, p.BG_HOVER)
             return GlassButton(parent, text=text, command=callback, state=state,
                                font=("Montserrat", 9, "bold"), bg=base, activebackground=hover,
                                fg=readable_foreground(base), activeforeground=readable_foreground(hover),
@@ -312,8 +315,8 @@ class DownloaderApp(tk.Tk):
         label(body, "Download link").pack(fill="x", pady=(0, 7))
         self._url_well = entry(body, width=1)
         self.url_entry = self._url_well.entry
-        self._url_well.pack(fill="x", ipady=5, pady=(0, 14))
-        folder = tk.Frame(body, bg=p.BG_MID)
+        self._url_well.pack(fill="x", pady=(0, 14))
+        folder = GlassBody(body, bg=p.BG_MID)
         folder.pack(fill="x", pady=(0, 16))
         self._folder_well = entry(folder, textvariable=self.download_dir, width=1)
         self.folder_entry = self._folder_well.entry
@@ -325,8 +328,17 @@ class DownloaderApp(tk.Tk):
                         bordercolor=p.WINDOW_BG, arrowcolor=p.TEXT_DIM,
                         lightcolor=p.BG_MID, darkcolor=p.BG_MID)
         style.map("Vertical.TScrollbar", background=[("active", p.BG_HOVER)])
+        # Clam fixes its progress element at 18px; scope the configurable native
+        # elements to this track so its requested height follows our 4px budget.
+        for part in ("trough", "pbar"):
+            style.element_create(f"FileDownload.{part}", "from", "default", f"Horizontal.Progressbar.{part}")
+        style.layout("FileDownload.Horizontal.TProgressbar", [
+            ("FileDownload.trough", {"sticky": "nswe", "children": [
+                ("FileDownload.pbar", {"side": "left", "sticky": "ns"})]})])
         style.configure("FileDownload.Horizontal.TProgressbar", background=p.CYAN,
-                        troughcolor=p.BG_DARK, borderwidth=0, lightcolor=p.CYAN, darkcolor=p.CYAN)
+                        troughcolor=p.BG_LIGHT, bordercolor=p.BG_LIGHT,
+                        borderwidth=0, troughborderwidth=0, thickness=round(4 * ui_scale(self)),
+                        lightcolor=p.BG_LIGHT, darkcolor=p.BG_LIGHT)
         self.progress = ttk.Progressbar(body, orient="horizontal", mode="determinate",
                                        style="FileDownload.Horizontal.TProgressbar")
         self.progress.pack(fill="x", pady=(0, 10))
@@ -334,7 +346,7 @@ class DownloaderApp(tk.Tk):
         self.status_label.configure(textvariable=self.status_text, justify="left", fg=p.TEXT_DIM)
         self.status_label.pack(fill="x", pady=(0, 16))
         body.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(80, event.width - 4)), add="+")
-        actions = tk.Frame(body, bg=p.BG_MID)
+        actions = GlassBody(body, bg=p.BG_MID)
         actions.pack(fill="x")
         self.download_btn = button(actions, "Download", self._start_download, primary=True)
         self.download_btn.pack(side="right")

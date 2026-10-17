@@ -19,6 +19,7 @@ SCHEMA = 4
 MARKER = ".mcu-offline-ready.json"
 ASSETS = (
     "src/editor/index.html", "src/editor/bundle.js", "src/editor/18.bundle.js",
+    "src/editor/project_files.js",
     "src/editor/editor.worker.js", "src/editor/8f3abbcbc983396e1f13.ttf",
     "src/editor/qwebchannel.js", "src/editor/terminal.html",
     "src/assets/xterm/xterm.css", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm-addon-fit.js",

@@ -201,6 +201,45 @@ class TerminalScrollChecks(unittest.TestCase):
     def test_ubuntu_output_scrollbar_hidden_history_still_scrolls(self):
         self.check_scrolling('ubuntu')
 
+    def check_filled_geometry(self, variant):
+        self.load_renderer(variant)
+        self.js('window.auditOriginalTerminal=auditTerm; true')
+        for zoom, width, height in ((1.75,1000,520),(.75,1200,700),(1,640,360),
+                                    (1.25,850,480),(2,900,500),(1,1200,700)):
+            with self.subTest(renderer=variant,zoom=zoom,width=width,height=height):
+                self.page.setZoomFactor(zoom)
+                self.view.resize(width,height)
+                self.wait_for(lambda: abs(self.js('innerWidth') - self.view.contentsRect().width()/zoom) <= 1,
+                              'Renderer viewport did not match actual host bounds')
+                QTest.qWait(80)
+                geometry = json.loads(self.js(r'''JSON.stringify((() => {
+                  const term=auditTerm, host=term.element.parentElement,
+                    screen=term.element.querySelector('.xterm-screen');
+                  const rect=element=>{const r=element.getBoundingClientRect();
+                    return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};};
+                  return {viewport:{width:innerWidth,height:innerHeight},host:rect(host),screen:rect(screen),
+                    rows:term.rows,cols:term.cols,same:term===auditOriginalTerminal};
+                })())'''))
+                viewport, host, screen = geometry['viewport'], geometry['host'], geometry['screen']
+                self.assertTrue(geometry['same'],'Display changes must retain the running terminal')
+                self.assertAlmostEqual(host['width'],viewport['width'],delta=1)
+                self.assertAlmostEqual(host['height'],viewport['height'],delta=1)
+                # A terminal grid can leave at most one partial character cell
+                # plus its existing reading padding at its right/bottom edge.
+                self.assertLessEqual(host['right']-screen['right'],screen['width']/geometry['cols']+16)
+                self.assertLessEqual(host['bottom']-screen['bottom'],screen['height']/geometry['rows']+16)
+                self.assertGreaterEqual(screen['left'],host['left'])
+                self.assertGreaterEqual(screen['top'],host['top'])
+                self.assertLessEqual(screen['right'],host['right']+1)
+                self.assertLessEqual(screen['bottom'],host['bottom']+1)
+                self.assertEqual(self.js('auditInput.length'),0,'Display scaling must not type into the PTY')
+
+    def test_windows_terminal_fills_lower_and_fractional_scale_viewports(self):
+        self.check_filled_geometry('windows')
+
+    def test_ubuntu_terminal_fills_lower_and_fractional_scale_viewports(self):
+        self.check_filled_geometry('ubuntu')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(add_help=False)

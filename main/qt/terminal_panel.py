@@ -74,6 +74,8 @@ class _EmbedContainer(QWidget):
         self.setMinimumSize(40, 40)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        from main.qt.responsive import EmbeddedGeometryWatcher
+        self._geometry_watcher = EmbeddedGeometryWatcher(self, panel._resize_embedded_terminal)
 
     def mousePressEvent(self, event) -> None:
         super().mousePressEvent(event)
@@ -82,11 +84,6 @@ class _EmbedContainer(QWidget):
     def focusInEvent(self, event) -> None:
         super().focusInEvent(event)
         self._panel.focus_terminal()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if hasattr(self._panel, "_resize_embedded_terminal"):
-            self._panel._resize_embedded_terminal()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -956,11 +953,8 @@ class TerminalPanel(QWidget):
                 self._term_hwnd = None
                 return
 
-            w = self._embed_container.width()
-            h = self._embed_container.height()
-            if w <= 10 or h <= 10:
-                w = max(self._stack.width(), self.width(), 100)
-                h = max(self._stack.height(), self.height() - 28, 60)
+            from main.qt.responsive import native_client_size
+            w, h = native_client_size(self._embed_container, win32gui)
 
             has_sessions = len(self._sessions_meta) > 0
             # Delayed resize callbacks may arrive after hiding or closing the

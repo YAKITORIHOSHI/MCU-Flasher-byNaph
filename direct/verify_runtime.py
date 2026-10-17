@@ -51,10 +51,11 @@ class RuntimeChecks(unittest.TestCase):
                     failure_callback=lambda: results.append(False))
                 token = panel._cloud_reload_pending
                 deadline = time.monotonic() + 5
-                while not scripts and time.monotonic() < deadline:
+                while not any("window.reloadCloudSnapshot(" in script for script in scripts) and time.monotonic() < deadline:
                     QApplication.instance().processEvents()
                     time.sleep(0.005)
-                self.assertEqual(len(scripts), 1)
+                self.assertEqual(sum("window.reloadCloudSnapshot(" in script for script in scripts), 1)
+                self.assertEqual(sum("invalidateProjectFileOperations" in script for script in scripts), 1)
                 bridge.finish_cloud_reload("unrelated request", True)
                 self.assertEqual(results, [])
                 if replaced:

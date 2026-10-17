@@ -123,7 +123,7 @@ class AIChangesChecks(unittest.TestCase):
         self.assertFalse(self.manager.has_any_pending_ai_edits())
         self.assertFalse(watcher._user_operations)
 
-    def test_manual_backend_templates_and_new_project_are_empty(self):
+    def test_manual_backend_templates_and_new_project_header_are_minimal(self):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         api.sketch_dir_path = self.root
@@ -142,10 +142,10 @@ class AIChangesChecks(unittest.TestCase):
                 self.assertEqual((self.root / name).read_text(), expected)
             self.assertTrue(api.create_project(parent_dir=str(self.root), name="Fresh", include_h=True,
                                                include_cpp=True)["success"])
-        self.assertEqual((self.root / "Fresh/Fresh.cpp").read_text(), "")
+        self.assertEqual((self.root / "Fresh/Fresh.cpp").read_text(), '#include "Fresh.h"\n')
         self.assertEqual((self.root / "Fresh/Fresh.h").read_text(), "#pragma once\n")
         self.assertEqual((self.root / "Fresh/Fresh.ino").read_text(),
-                         "void setup() {\n\n}\n\nvoid loop() {\n\n}\n")
+                         '#include "Fresh.h"\n\nvoid setup() {\n\n}\n\nvoid loop() {\n\n}\n')
         self.scan(api.ai_watcher)
         self.assertFalse(self.manager.has_any_pending_ai_edits())
 

@@ -34,6 +34,62 @@ def record(version='1.0.0'):
                                                            checksum='SHA-256:fixture', archiveFileName='sensor.zip')]}}
 
 
+class TkTaskLifecycleChecks(unittest.TestCase):
+    """Model Tcl's timer ownership without constructing a desktop window."""
+
+    def setUp(self):
+        self.root = Mock()
+        self.pending = {}
+        self.sequence = 0
+
+        def schedule(_delay, callback):
+            self.sequence += 1
+            token = f'after#{self.sequence}'
+            self.pending[token] = callback
+            return token
+
+        self.root.after.side_effect = schedule
+        self.root.after_cancel.side_effect = self.pending.pop
+        self.tasks = loading.TkTasks(self.root)
+        self.addCleanup(self.root.report_callback_exception.assert_not_called)
+
+    def tick(self):
+        token = next(iter(self.pending))
+        self.pending.pop(token)()
+
+    def test_callback_launched_task_keeps_one_timer_that_close_cancels(self):
+        self.assertTrue(self.tasks.begin())
+        self.tasks.post(self.tasks.begin)
+        self.tasks.end()
+        self.tick()
+        self.assertEqual(self.tasks._active, 1)
+        self.assertEqual(len(self.pending), 1, 'A completion callback orphaned a drain timer')
+        self.assertIn(self.tasks._timer, self.pending)
+        self.tasks._destroy(SimpleNamespace(widget=self.root))
+        self.assertTrue(self.tasks.closed)
+        self.assertEqual(self.pending, {})
+        self.assertIsNone(self.tasks._timer)
+
+    def test_callback_launched_task_retires_without_an_orphan_timer(self):
+        self.assertTrue(self.tasks.begin())
+        self.tasks.post(self.tasks.begin)
+        self.tasks.end()
+        self.tick()
+        self.tasks.end()
+        self.tick()
+        self.assertEqual(self.tasks._active, 0)
+        self.assertIsNone(self.tasks._timer)
+        self.assertEqual(self.pending, {})
+
+    def test_destroy_from_completion_does_not_reschedule(self):
+        self.assertTrue(self.tasks.begin())
+        self.tasks.post(self.tasks._destroy, SimpleNamespace(widget=self.root))
+        self.tick()
+        self.assertTrue(self.tasks.closed)
+        self.assertIsNone(self.tasks._timer)
+        self.assertEqual(self.pending, {})
+
+
 class CacheChecks(unittest.TestCase):
     def setUp(self):
         parent = ROOT / 'temp/audit/downloader'
@@ -213,6 +269,117 @@ assert not any(name.split('.')[0] in {'PySide6', 'PyQt5', 'shiboken6'} for name 
                         '_browser_cache_written': False}
         missing = str(self.folder / 'missing-boards.json')
         self.assertEqual(browser._read_board_catalog([missing], {missing: fresh_boards})['Core']['versions'][0]['version'], '2.0.0')
+
+
+class InstalledUpdateChecks(unittest.TestCase):
+    """Exercise the Installed update path without opening Tk or a transfer."""
+
+    def setUp(self):
+        parent = ROOT / 'temp/audit/downloader'
+        parent.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=parent)
+        self.addCleanup(temporary.cleanup)
+        self.folder = Path(temporary.name)
+        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
+        app.root = Mock()
+        app._busy = False
+        app.lib_tab, app.board_tab = Mock(), Mock()
+        app.installed_tab = Mock()
+        app._download_dir = str(self.folder)
+        app._cancel_event = threading.Event()
+        app._tasks = Mock()
+        app._progress_interval = 100
+        app.progress = Mock()
+        app._prompt_download_option = Mock(side_effect=AssertionError('Installed updates must not prompt for a format'))
+        app._package_metadata = Mock(return_value={'name': 'Fixture'})
+        app._begin_package_job = Mock(side_effect=lambda _name: setattr(app, '_active_package_job', 'installed-fixture'))
+        app._set_status, app._publish_job, app._post_ui = Mock(), Mock(), Mock()
+        app._handoff_board_preparation = Mock()
+        self.app = app
+
+    def _release(self, is_board):
+        tab = self.app.board_tab if is_board else self.app.lib_tab
+        release = dict(version='2.0.0', url='https://fixture.invalid/core.zip', archiveFileName='core-2.zip')
+        tab.all_items = {'Fixture': dict(name='Fixture', versions=[release])}
+        return tab, release
+
+    def test_installed_library_and_board_updates_choose_folder_without_prompt(self):
+        app = self.app
+        for is_board in (False, True):
+            with self.subTest(is_board=is_board):
+                app._busy = False
+                app._tasks.reset_mock()
+                app._package_metadata.reset_mock()
+                app._cancel_event.set()
+                tab, release = self._release(is_board)
+                app._download_update('Fixture', is_board, 'old-folder', 'old.zip')
+                call = app._tasks.start.call_args
+                self.assertEqual(call.args, (app._download_worker, tab, release['url'], release['archiveFileName'],
+                    str(self.folder / ('Boards' if is_board else 'Libs')), 'folder', ('old-folder', 'old.zip'),
+                    {'name': 'Fixture'}, 'installed-fixture'))
+                app._package_metadata.assert_called_once_with(tab.all_items['Fixture'], release, is_board=is_board)
+                self.assertTrue(app._busy)
+                self.assertIs(app._active_download_tab, tab)
+                self.assertFalse(app._cancel_event.is_set())
+                tab.download_btn.config.assert_called_with(text='Cancel', command=app._cancel_download, state='normal')
+                app.installed_tab.update_btn.config.assert_called_with(text='Cancel', command=app._cancel_download, state='normal')
+        app._prompt_download_option.assert_not_called()
+
+    def test_busy_or_invalid_metadata_does_not_dispatch_an_installed_update(self):
+        app = self.app
+        self._release(True)
+        app._busy = True
+        app._download_update('Fixture', True)
+        app._package_metadata.assert_not_called()
+        app._tasks.start.assert_not_called()
+        app._busy = False
+        app._package_metadata.side_effect = ValueError('Invalid fixture platform')
+        app._download_update('Fixture', True)
+        app._tasks.start.assert_not_called()
+        app._set_status.assert_called_once_with('Custom platform settings are invalid: Invalid fixture platform')
+        self.assertFalse(app._busy)
+        app._prompt_download_option.assert_not_called()
+
+    def test_folder_update_verifies_extracts_and_preserves_old_payload_on_failure(self):
+        app = self.app
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, 'w') as archive:
+            archive.writestr('library.properties', 'name=Fixture\nversion=2.0.0\n')
+        data = payload.getvalue()
+        for failure in ('checksum', 'extraction', None):
+            with self.subTest(failure=failure):
+                destination = self.folder / str(failure) / 'Libs'
+                old_folder = destination / 'core-1'
+                old_folder.mkdir(parents=True)
+                old_bytes = b'Previous installed payload'
+                (old_folder / 'keep.txt').write_bytes(old_bytes)
+                old_archive = destination / 'core-1.zip'
+                old_archive.write_bytes(b'Previous archive')
+                metadata = dict(name='Fixture', size=len(data),
+                    checksum='SHA-256:' + ('0' * 64 if failure == 'checksum' else hashlib.sha256(data).hexdigest()))
+                response = Mock(status_code=200, raw=None, headers={'content-length': str(len(data))},
+                    raise_for_status=Mock(), iter_content=Mock(return_value=iter([data])), close=Mock())
+                app._post_ui.reset_mock()
+                extractor = (patch.object(browser, '_extract_archive', side_effect=RuntimeError('Fixture extraction failed'))
+                    if failure == 'extraction' else patch.object(browser, '_extract_archive', wraps=browser._extract_archive))
+                with patch.object(browser.requests, 'get', return_value=response), extractor:
+                    app._download_worker(app.lib_tab, 'https://fixture.invalid/core.zip', 'core-2.zip',
+                        str(destination), 'folder', (str(old_folder), old_archive.name), metadata, 'installed-fixture')
+                self.assertFalse((destination / 'core-2.zip').exists())
+                self.assertFalse((destination / 'core-2.zip.part').exists())
+                if failure:
+                    self.assertEqual((old_folder / 'keep.txt').read_bytes(), old_bytes)
+                    self.assertEqual(old_archive.read_bytes(), b'Previous archive')
+                    self.assertFalse((destination / 'core-2').exists())
+                    self.assertEqual(app._post_ui.call_args.args[0], app._download_error)
+                else:
+                    self.assertEqual((destination / 'core-2/library.properties').read_text(encoding='utf-8'),
+                        'name=Fixture\nversion=2.0.0\n')
+                    self.assertFalse(old_folder.exists())
+                    self.assertFalse(old_archive.exists())
+                    self.assertEqual(app._post_ui.call_args.args,
+                        (app._download_done, app.lib_tab, str(destination / 'core-2'), False))
+                app._handoff_board_preparation.assert_not_called()
 
 
 class BrowserLoadingChecks(TkDownloaderFixture):
@@ -670,6 +837,7 @@ class BrowserLoadingChecks(TkDownloaderFixture):
                                     iter_content=Mock(return_value=iter([data])), close=Mock())
                     with patch.object(app, '_prompt_download_option', return_value='zip'), \
                             patch.object(browser.requests, 'get', return_value=response) as get, \
+                            patch('src.modules.board_preparation.start_preparation') as prepare, \
                             patch('urllib.request.urlopen', side_effect=AssertionError('Live transfer attempted')), \
                             patch.object(browser.messagebox, 'showerror') as show_error, \
                             patch.object(browser.messagebox, 'showinfo') as show_info:
@@ -704,8 +872,18 @@ class BrowserLoadingChecks(TkDownloaderFixture):
                         self.until(lambda: not app._busy and app._tasks._timer is None)
                         get.assert_called_once()
                         response.close.assert_called_once()
-                        self.assertEqual((destination / 'fixture.zip').read_bytes(), data)
-                        self.assertEqual(app.status_var.get(), 'Download complete')
+                        if updating:
+                            self.assertFalse((destination / 'fixture.zip').exists())
+                            self.assertTrue((destination / 'fixture' / ('boards.txt' if is_board else 'library.properties')).exists())
+                        else:
+                            self.assertEqual((destination / 'fixture.zip').read_bytes(), data)
+                        if updating and is_board:
+                            prepare.assert_called_once()
+                            self.assertEqual(prepare.call_args.kwargs['package_metadata']['version'], '2.0.0')
+                            self.assertEqual(app.status_var.get(), 'Board preparation is running in the background')
+                        else:
+                            prepare.assert_not_called()
+                            self.assertEqual(app.status_var.get(), 'Download complete')
                         self.assertEqual(app._tasks._active, 0)
                         show_error.assert_called_once()
                         show_info.assert_not_called()
@@ -746,7 +924,7 @@ class BrowserLoadingChecks(TkDownloaderFixture):
 
 if __name__ == '__main__':
     suite = unittest.TestSuite()
-    for cls in (CacheChecks, BrowserLoadingChecks):
+    for cls in (TkTaskLifecycleChecks, CacheChecks, InstalledUpdateChecks, BrowserLoadingChecks):
         for name in cls.__dict__:
             if name.startswith('test_'):
                 suite.addTest(cls(name))

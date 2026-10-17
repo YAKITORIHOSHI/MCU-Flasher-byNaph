@@ -105,6 +105,26 @@ class EditorBridgeAPI(QObject):
     def finish_cloud_reload(self, token: str, success: bool) -> None:
         self.cloud_reload_finished.emit(token, success)
 
+    @Slot(str, str, bool)
+    def finish_project_file_refresh(self, token: str, project: str, success: bool) -> None:
+        if (not success and self._backend
+                and token == self._renderer_token
+                and str(self._backend.sketch_dir_path) == project):
+            self._backend.emit("notification", {
+                "title": "Editor File Refresh",
+                "message": "The project file changed on disk, but its editor tab could not refresh. Save your remaining changes before reopening the project.",
+                "type": "warning",
+            })
+
+    @Slot(str, str, "QVariant", result=bool)
+    def save_project_tab_order(self, token: str, project: str, paths: list) -> bool:
+        if (token != self._renderer_token or not self._backend
+                or project != str(self._backend.sketch_dir_path)
+                or not isinstance(paths, list)):
+            return False
+        self._backend.save_tab_order(paths)
+        return True
+
     @Slot(result="QVariant")
     def get_project_files(self) -> list:
         """Return all editable files in the project folder."""
@@ -693,6 +713,7 @@ class MonacoEditorPanel(QWidget):
         self._load_editor()
 
     def _load_editor(self) -> None:
+        self._project_files_generation = 0
         if self._editor_html.exists():
             url = QUrl.fromLocalFile(str(self._editor_html.resolve()))
             url.setQuery("renderer=" + self._bridge.begin_renderer_load())
@@ -781,7 +802,11 @@ class MonacoEditorPanel(QWidget):
 
     def reload_project(self) -> None:
         """Trigger Monaco to reload project files and tabs."""
+        self._project_files_generation = getattr(self, "_project_files_generation", 0) + 1
         js = (
+            f"window.invalidateProjectFileOperations?.({self._project_files_generation}, "
+            f"{json.dumps(str(getattr(self._backend, 'sketch_dir_path', '') or ''))}, "
+            f"{json.dumps(self._bridge._renderer_token)});"
             "if (typeof window.safeLoadProject === 'function') { "
             "  window.safeLoadProject(); "
             "} else if (typeof window.loadProject === 'function') { "
@@ -796,6 +821,12 @@ class MonacoEditorPanel(QWidget):
             if failure_callback:
                 failure_callback()
             return
+        self._project_files_generation = getattr(self, "_project_files_generation", 0) + 1
+        self._view.page().runJavaScript(
+            f"window.invalidateProjectFileOperations?.({self._project_files_generation}, "
+            f"{json.dumps(str(getattr(self._backend, 'sketch_dir_path', '') or ''))}, "
+            f"{json.dumps(self._bridge._renderer_token)});"
+        )
         import uuid
         token = uuid.uuid4().hex
         renderer_token = self._bridge._renderer_token
@@ -1064,6 +1095,7 @@ class MonacoEditorPanel(QWidget):
         sig_bus.editor_set_theme.connect(self.set_theme)
         sig_bus.syntax_errors.connect(self.set_markers)
         sig_bus.project_updated.connect(self._on_project_updated)
+        sig_bus.project_files_updated.connect(self._on_project_files_updated)
         if hasattr(sig_bus, "editor_font_size_changed"):
             sig_bus.editor_font_size_changed.connect(self.set_font_size)
         if connect_theme and hasattr(sig_bus, "theme_changed"):
@@ -1105,6 +1137,33 @@ class MonacoEditorPanel(QWidget):
         active = payload.get("active_file")
         if active:
             self.open_file(active)
+
+    @Slot(dict)
+    def _on_project_files_updated(self, payload: dict) -> None:
+        """Apply only the affected tab while retaining every other source model."""
+        if (not self._backend or payload.get("path") != str(self._backend.sketch_dir_path)):
+            return
+        self._bridge._syntax_generation += 1
+        self._bridge._syntax_pending = None
+        removed = payload.get("old_file") if payload.get("operation") == "rename" else (
+            payload.get("file") if payload.get("operation") == "delete" else "")
+        if removed:
+            key = str(Path(removed).resolve())
+            self._bridge._buffer_snapshots.pop(key, None)
+            self._bridge._recovery_buffers.pop(key, None)
+        search = getattr(self, "_search_dialog", None)
+        if search and not search._closed:
+            search._queue_search()
+        change = dict(payload, renderer=self._bridge._renderer_token,
+                      generation=getattr(self, "_project_files_generation", 0))
+        token_json = json.dumps(self._bridge._renderer_token)
+        self._view.page().runJavaScript(
+            "Promise.resolve(window.__mcuInitialProjectLoad).then(() => "
+            f"window.reconcileProjectFiles?.({json.dumps(change)})).then(ok => "
+            f"window.editorBridge?.finish_project_file_refresh({token_json}, {json.dumps(payload['path'])}, ok === true))"
+            ".catch(error => { console.error('Editor file refresh failed:', error); "
+            f"window.editorBridge?.finish_project_file_refresh({token_json}, {json.dumps(payload['path'])}, false); }});"
+        )
 
     def goto_line(self, file_path: str, line_no: int) -> None:
         """Navigate to file and scroll to line in Monaco editor."""

@@ -964,7 +964,7 @@ class PerformanceChecks(unittest.TestCase):
                 provider = site / name
                 provider.parent.mkdir(parents=True, exist_ok=True)
                 provider.write_text("isolated compatibility presence fixture", encoding="utf-8")
-            for name in ("src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js", "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css"):
+            for name in ("src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js", "src/editor/project_files.js", "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css"):
                 asset = fixture / name
                 asset.parent.mkdir(parents=True, exist_ok=True)
                 asset.write_text("offline asset fixture", encoding="utf-8")

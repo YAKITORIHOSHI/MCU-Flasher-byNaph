@@ -3,6 +3,7 @@
 
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MCU Flasher — Embedded Code Editor</title>
   <style>
     @font-face {
@@ -140,6 +141,7 @@
 
     html,
     body {
+      width: 100%;
       height: 100%;
       margin: 0;
       padding: 0;
@@ -152,7 +154,10 @@
     #app-container {
       display: flex;
       flex-direction: column;
-      height: 100%;
+      position: absolute;
+      inset: 0;
+      min-width: 0;
+      min-height: 0;
     }
 
     #editor-tab-row {
@@ -370,7 +375,6 @@
       min-height: 0 !important;
       min-width: 0 !important;
       width: 100% !important;
-      height: 100% !important;
       position: relative;
       background: var(--bg-darkest);
       overflow: hidden;
@@ -1248,6 +1252,7 @@
   </script>
   <!-- Local C-family Monaco bundle. No CDN / network dependency. -->
   <script src="bundle.js"></script>
+  <script src="project_files.js"></script>
   <script>
     // Extend the offline C++ language after its lazy configuration loads.
     // Monaco keeps its normal undo, multicursor and tab/space settings.
@@ -1560,6 +1565,20 @@
         }
       };
 
+      const reloadCloudSnapshot = window.reloadCloudSnapshot;
+      let cloudProjectLoad = null;
+      window.reloadCloudSnapshot = function (manifest) {
+        if (cloudProjectLoad) return Promise.resolve(false);
+        const request = reloadCloudSnapshot(manifest);
+        cloudProjectLoad = request;
+        const finished = () => { if (cloudProjectLoad === request) cloudProjectLoad = null; };
+        request.then(finished, finished);
+        return request;
+      };
+      // Structural file events wait for the current full load, including a
+      // same-page project switch and the entire confirmed Cloud replacement.
+      window.waitForProjectLoad = () => cloudProjectLoad || projectLoadInFlight || Promise.resolve(true);
+
       function dedupeProjectTabs() {
         const seen = new Map();
         document.querySelectorAll('#tab-bar .tab').forEach((tab) => {
@@ -1636,6 +1655,7 @@
       let editorLayoutForced = false;
       let lastEditorLayoutWidth = -1;
       let lastEditorLayoutHeight = -1;
+      let lastEditorLayoutRatio = -1;
 
       function scheduleEditorLayout(force = false) {
         editorLayoutForced = editorLayoutForced || !!force;
@@ -1648,11 +1668,16 @@
           const editor = window.editorInstance;
           const width = editorContainerElem ? editorContainerElem.clientWidth : 0;
           const height = editorContainerElem ? editorContainerElem.clientHeight : 0;
+          const ratio = window.devicePixelRatio || 1;
           if (!editor || typeof editor.layout !== 'function' || width < 1 || height < 1) return;
-          if (!mustLayout && width === lastEditorLayoutWidth && height === lastEditorLayoutHeight) return;
+          if (!mustLayout && width === lastEditorLayoutWidth && height === lastEditorLayoutHeight
+              && ratio === lastEditorLayoutRatio) return;
           lastEditorLayoutWidth = width;
           lastEditorLayoutHeight = height;
-          editor.layout();
+          lastEditorLayoutRatio = ratio;
+          // Monaco receives CSS pixels, never physical screen pixels. Supplying
+          // the current flex viewport also avoids a stale anchor measurement.
+          editor.layout({ width, height });
         };
         if (typeof window.requestAnimationFrame === 'function') {
           window.requestAnimationFrame(flush);
@@ -1669,6 +1694,21 @@
       }
 
       window.addEventListener('resize', () => scheduleEditorLayout(), { passive: true });
+
+      // A display-scale change can retain the same CSS dimensions. Observe the
+      // old resolution once, then re-arm for the new screen without polling.
+      let editorResolutionQuery = null;
+      function watchEditorResolution() {
+        if (!window.matchMedia) return;
+        if (editorResolutionQuery) editorResolutionQuery.removeEventListener('change', onEditorResolutionChange);
+        editorResolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        editorResolutionQuery.addEventListener('change', onEditorResolutionChange);
+      }
+      function onEditorResolutionChange() {
+        watchEditorResolution();
+        scheduleEditorLayout(true);
+      }
+      watchEditorResolution();
 
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) scheduleEditorLayout(true);
@@ -1709,16 +1749,24 @@
       let fileList = [];
 
       let syncInFlight = null;
+      let syncGeneration = -1;
+      let syncListRevision = -1;
       function syncTabPaths() {
         clearTimeout(tabSyncTimer);
         tabSyncTimer = null;
-        if (syncInFlight) return syncInFlight;
+        const generation = window.__mcuProjectFilesGeneration || 0;
+        const listRevision = window.__mcuProjectFileListRevision || 0;
+        if (syncInFlight && syncGeneration === generation && syncListRevision === listRevision) return syncInFlight;
         if (!window.pywebview || !window.pywebview.api ||
             !window.pywebview.api.get_project_files) {
           return Promise.resolve([]);
         }
-        syncInFlight = window.pywebview.api.get_project_files()
+        syncGeneration = generation;
+        syncListRevision = listRevision;
+        const request = window.pywebview.api.get_project_files()
           .then((files) => {
+            if (syncInFlight !== request || generation !== (window.__mcuProjectFilesGeneration || 0)
+                || listRevision !== (window.__mcuProjectFileListRevision || 0)) return [];
             fileList = Array.isArray(files) ? files : [];
             window.projectFileList = fileList;
             const tabs = Array.from(document.querySelectorAll('#tab-bar .tab'));
@@ -1741,8 +1789,9 @@
             console.error('Could not map editor tabs to project files:', error);
             return [];
           })
-          .finally(() => { syncInFlight = null; });
-        return syncInFlight;
+          .finally(() => { if (syncInFlight === request) syncInFlight = null; });
+        syncInFlight = request;
+        return request;
       }
 
       window.syncTabPaths = syncTabPaths;
@@ -2115,6 +2164,12 @@
         }
         syntaxCheckTimeout = setTimeout(runMonacoSyntaxCheck, window.__mcuResourceConstrained ? 600 : 300);
       }
+
+      window.refreshProjectSyntax = function () {
+        lastCheckedModel = null;
+        lastCheckedVersion = -1;
+        scheduleSyntaxCheck();
+      };
 
       function syncModelLanguageForActiveTab() {
         if (!window.editorInstance || typeof monaco === 'undefined' || !monaco.editor) return;

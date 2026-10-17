@@ -325,6 +325,12 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 const fit = new FitAddon.FitAddon();
                 term.loadAddon(fit);
                 term.open(host);
+                // The hidden output scrollbar measures zero. xterm's fallback
+                // otherwise reserves 15px in FitAddon and leaves an empty strip.
+                const viewport = term.element.querySelector('.xterm-viewport');
+                if (term._core?.viewport && viewport) {
+                    term._core.viewport.scrollBarWidth = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+                }
                 terminals[kind] = term;
                 fitAddons[kind] = fit;
                 term.onData(data => {

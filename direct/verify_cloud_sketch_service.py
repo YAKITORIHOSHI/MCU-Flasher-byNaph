@@ -26,8 +26,7 @@ from main.core import cloud_sketch_service as cloud
 from main.core.credential_store import CredentialStore, SecureStorageError
 from src.modules import offline_runtime as offline
 
-CONFIG = {"firebase_api_key": "fixture-key", "firebase_database_url": "https://fixture.firebasedatabase.app",
-          "firebase_project_id": "fixture-project"}
+CONFIG = cloud.firebase_configuration()
 
 
 class CloudStatusChecks(unittest.TestCase):
@@ -165,7 +164,7 @@ class MemoryHTTP:
         if url.hostname == "securetoken.googleapis.com":
             return {"user_id": self.uid, "id_token": "fixture-refreshed-id-token",
                     "refresh_token": "fixture-new-refresh", "expires_in": "3600"}, {}
-        assert url.hostname == "fixture.firebasedatabase.app"
+        assert url.hostname == urllib.parse.urlsplit(CONFIG["firebase_database_url"]).hostname
         if request.get_method() == "HEAD":
             return None, {}
         assert urllib.parse.parse_qs(url.query)["auth"][0].startswith("fixture-")
@@ -212,7 +211,7 @@ class CloudChecks(unittest.TestCase):
         self.addCleanup(real_network.stop)
 
     def make_service(self):
-        return cloud.CloudSketchService(config_provider=lambda: dict(CONFIG), credential_store=self.store,
+        return cloud.CloudSketchService(credential_store=self.store,
                                         transport=self.http, data_dir=self.folder / "user-cloud",
                                         source_root_provider=lambda: self.folder / "_MCUFlasherByNaph_src")
 
@@ -343,41 +342,33 @@ class CloudChecks(unittest.TestCase):
         self.assertTrue(self.service.check_connection())
         request = self.http.calls[0]
         self.assertEqual(request.get_method(), "HEAD")
-        self.assertEqual(urllib.parse.urlsplit(request.full_url).hostname, "fixture.firebasedatabase.app")
+        self.assertEqual(urllib.parse.urlsplit(request.full_url).hostname, urllib.parse.urlsplit(CONFIG["firebase_database_url"]).hostname)
         self.assertIsNone(request.data)
         self.assertEqual(urllib.parse.urlsplit(request.full_url).query, "shallow=true")
 
-    def test_provider_configuration_is_read_only_from_secure_vault(self):
-        names = {"FIREBASE_API_KEY": "environment-key",
-                 "FIREBASE_DATABASE_URL": "https://environment.firebasedatabase.app",
-                 "FIREBASE_PROJECT_ID": "environment-project"}
+    def test_provider_configuration_ignores_vault_and_environment_overrides(self):
+        names = {"FIREBASE_API_KEY": "environment-key", "FIREBASE_DATABASE_URL": "https://evil.invalid", "FIREBASE_PROJECT_ID": "other"}
+        self.store.set("provider_configuration", names)
         with patch.dict(os.environ, names, clear=False):
-            self.assertFalse(any(cloud.load_cloud_configuration(self.store).values()))
-            self.store.set("provider_configuration", CONFIG)
-            self.assertEqual(cloud.load_cloud_configuration(self.store), CONFIG)
+            self.assertEqual(self.service._config(), CONFIG)
+            copy = cloud.firebase_configuration()
+            copy["firebase_api_key"] = "modified"
+            self.assertEqual(self.service._config(), CONFIG)
 
-    def test_unconfigured_connection_probe_checks_firebase_auth_host(self):
+
+    def test_removed_runtime_provider_override_cannot_redirect_probe(self):
         self.service._config_provider = lambda: {}
         self.assertTrue(self.service.check_connection())
-        request = self.http.calls[-1]
-        self.assertEqual(request.get_method(), "HEAD")
-        self.assertEqual(urllib.parse.urlsplit(request.full_url).hostname, "identitytoolkit.googleapis.com")
-        self.assertIsNone(request.data)
+        self.assertEqual(urllib.parse.urlsplit(self.http.calls[-1].full_url).hostname,
+                         urllib.parse.urlsplit(CONFIG["firebase_database_url"]).hostname)
 
-    def test_locked_provider_vault_reports_error_without_claiming_connectivity(self):
-        service = cloud.CloudSketchService(credential_store=self.store,
-            transport=self.http, data_dir=self.service._data_dir)
+
+    def test_locked_credential_vault_does_not_change_builtin_provider(self):
         with patch.object(self.store, "get", side_effect=SecureStorageError("Desktop keyring is locked")):
-            self.assertFalse(service.configured)
-            self.assertIn("keyring is locked", service.configuration_error)
-            self.assertFalse(service.check_connection())
-            with self.assertRaisesRegex(cloud.CloudError, "keyring is locked"):
-                service.sign_in("fixture@example.com", "password")
-        self.assertFalse(self.http.calls)
-        self.store.set("provider_configuration", CONFIG)
-        self.assertTrue(service.configured)
-        self.assertEqual(service.configuration_error, "")
-        self.assertTrue(service.check_connection())
+            self.assertTrue(self.service.configured)
+            self.assertEqual(self.service.configuration_error, "")
+            self.assertTrue(self.service.check_connection())
+
 
     def test_probe_rejects_server_errors_and_redirects_but_accepts_auth_required(self):
         for code in (301, 302, 400, 401, 403, 404, 405, 429, 500, 503):
@@ -562,18 +553,15 @@ class CloudChecks(unittest.TestCase):
         self.assertEqual((working / "Sketch.ino").read_bytes(), b"// second cloud sketch\n")
         self.assertEqual(list(working.parent.iterdir()), [working])
 
-    def test_same_uid_different_provider_cannot_adopt_or_replace_folder(self):
+    def test_cloud_link_for_another_provider_is_rejected(self):
         meta = self.upload()
-        before = (self.local / "Sketch.ino").read_bytes()
-        state, _ = cloud._local_pull_state(self.local)
-        self.service._config_provider = lambda: {**CONFIG, "firebase_project_id": "other-provider"}
-        self.login()
-        with self.assertRaisesRegex(cloud.CloudError, "another cloud account"):
-            self.service.working_directory(meta["id"], meta["name"])
-        with self.assertRaisesRegex(cloud.CloudError, "another cloud sketch or account"):
-            self.service.pull_project(meta["id"], self.local, replace_existing=True,
-                expected_local_state=state, expected_revision=1)
-        self.assertEqual((self.local / "Sketch.ino").read_bytes(), before)
+        link_path = self.local / cloud.LINK_NAME
+        link = json.loads(link_path.read_text(encoding="utf-8"))
+        link["provider"] = "untrusted-provider"
+        link_path.write_text(json.dumps(link), encoding="utf-8")
+        with self.assertRaises(cloud.CloudError):
+            self.service.push_project(self.local, meta["id"], 1)
+
 
     def test_existing_legacy_saved_sources_are_copied_and_journals_left_untouched(self):
         self.login()
@@ -1030,8 +1018,8 @@ class CloudChecks(unittest.TestCase):
                 cloud._source_name(filename)
         self.assertEqual(cloud._source_name("測定.Header.hpp"), "測定.Header.hpp")
         for url in ("http://fixture.firebasedatabase.app", "https://example.com", "https://user:pw@fixture.firebasedatabase.app"):
-            self.service._config_provider = lambda url=url: {**CONFIG, "firebase_database_url": url}
-            self.assertFalse(self.service.configured)
+            with self.assertRaises(cloud.CloudError):
+                self.service._request("GET", url)
 
     def test_missing_linux_keyring_has_no_file_fallback(self):
         store = CredentialStore(platform="linux")
@@ -1078,22 +1066,22 @@ class CloudChecks(unittest.TestCase):
         link_path.write_text(json.dumps(link), encoding="utf-8")
         self.assertIsNone(cloud.read_project_link(self.local))
 
-    def test_other_window_provider_change_never_sends_old_account_token(self):
+    def test_external_provider_record_cannot_change_authenticated_destination(self):
         self.login(remember_me=True, save_login=True)
         old_scope = self.service._scope()
-        self.service._config_provider = lambda: {**CONFIG, "firebase_api_key": "another-provider-key"}
+        self.store.set("provider_configuration", {"firebase_database_url": "https://evil.invalid", "firebase_api_key": "other"})
+        self.service._config_provider = lambda: {"firebase_database_url": "https://evil.invalid"}
         self.http.calls.clear()
-        with self.assertRaisesRegex(cloud.CloudError, "provider changed"):
-            self.service.list_sketches()
-        self.assertFalse(self.http.calls)
-        self.service.sign_out(forget_saved=True)
-        self.assertNotIn("session:" + old_scope, self.store.values)
-        self.assertNotIn("login:" + old_scope, self.store.values)
+        self.service.list_sketches()
+        self.assertTrue(all(urllib.parse.urlsplit(row.full_url).hostname ==
+                            urllib.parse.urlsplit(CONFIG["firebase_database_url"]).hostname for row in self.http.calls))
+        self.assertEqual(self.service._scope(), old_scope)
 
-    def test_unconfigured_service_saved_login_is_empty(self):
-        self.service._config_provider = lambda: {}
-        self.assertFalse(self.service.configured)
+
+    def test_builtin_service_has_no_user_provider_configuration_requirement(self):
+        self.assertTrue(self.service.configured)
         self.assertEqual(self.service.saved_login(), {})
+
 
     def test_failed_rollback_requires_editor_reload_and_keeps_recovery(self):
         meta = self.upload()

@@ -636,6 +636,91 @@ class ProjectChecks(unittest.TestCase):
             self.assertFalse(api.create_project(str(self.folder), "new", open_in_new_window=True)["success"])
             self.assertEqual(sketch.read_text(), "user edits")
 
+    def test_new_project_header_is_included_in_every_generated_sketch_source(self):
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        api.open_project = Mock(return_value={"success": True})
+        api.open_project_window = Mock(return_value={"success": True})
+        for template in ("standard", "bare", "blink"):
+            for include_h in (False, True):
+                for include_cpp in (False, True):
+                    for new_window in (False, True):
+                        with self.subTest(template=template, header=include_h,
+                                          cpp=include_cpp, new_window=new_window):
+                            # Quotes, slashes and spaces must never enter an include
+                            # or make the generated source escape its new root.
+                            name = f'{template} / "{int(include_h)}{int(include_cpp)}{int(new_window)}"'
+                            clean = f"{template}____{int(include_h)}{int(include_cpp)}{int(new_window)}_"
+                            target = self.folder / clean
+                            with patch.object(web_bridge, "ensure_hidden_read_first_md") as guidance:
+                                result = api.create_project(
+                                    str(self.folder), name, include_h=include_h,
+                                    include_cpp=include_cpp, template_type=template,
+                                    open_in_new_window=new_window,
+                                )
+                            self.assertTrue(result["success"], result)
+                            guidance.assert_called_once_with(target)
+                            opener = api.open_project_window if new_window else api.open_project
+                            opener.assert_called_with(str(target))
+                            source = (target / f"{clean}.ino").read_text(encoding="utf-8")
+                            include = f'#include "{clean}.h"\n'
+                            self.assertEqual(source.count(include), int(include_h))
+                            self.assertEqual(source.count("#include"), int(include_h))
+                            if include_h:
+                                self.assertTrue(source.startswith(include + "\n"))
+                                self.assertEqual((target / f"{clean}.h").read_text(), "#pragma once\n")
+                            else:
+                                self.assertFalse((target / f"{clean}.h").exists())
+                            if include_cpp:
+                                self.assertEqual((target / f"{clean}.cpp").read_text(),
+                                                 include if include_h else "")
+                            else:
+                                self.assertFalse((target / f"{clean}.cpp").exists())
+                            if template == "blink":
+                                self.assertIn("pinMode(LED_BUILTIN, OUTPUT);", source)
+                                self.assertEqual(source.count("delay(1000);"), 2)
+                            else:
+                                self.assertRegex(source, r"void setup\(\) \{\s*\}")
+                                self.assertRegex(source, r"void loop\(\) \{\s*\}")
+                            self.assertEqual(len(list(target.iterdir())), 1 + include_h + include_cpp)
+
+    def test_standalone_new_project_creates_checked_header_and_refuses_existing_folder(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                dialog = ProjectDialog(initial_dir=str(self.folder / "sketch"))
+                target = self.folder / ("existing_header" if existing else "standalone_header")
+                if existing:
+                    target.mkdir()
+                    (target / f"{target.name}.ino").write_text("user source\n")
+                    (target / f"{target.name}.h").write_text("user declarations\n")
+                try:
+                    dialog._new_parent_edit.setText(str(self.folder))
+                    dialog._new_name_edit.setText(target.name)
+                    dialog._cb_include_h.setChecked(True)
+                    dialog._cb_include_cpp.setChecked(True)
+                    self.assertIn(f'Sketch sources include "{target.name}.h".',
+                                  dialog._new_preview_lbl.text())
+                    with patch("main.core.file_utils.ensure_hidden_read_first_md") as guidance:
+                        dialog._create_project()
+                    if existing:
+                        self.assertIsNone(dialog.selected_project)
+                        self.assertIn("already exists", dialog._new_status.text())
+                        guidance.assert_not_called()
+                        self.assertEqual((target / f"{target.name}.ino").read_text(), "user source\n")
+                        self.assertEqual((target / f"{target.name}.h").read_text(), "user declarations\n")
+                        self.assertFalse((target / f"{target.name}.cpp").exists())
+                    else:
+                        self.assertEqual(dialog.selected_project, target)
+                        guidance.assert_called_once_with(target)
+                        include = f'#include "{target.name}.h"\n'
+                        self.assertTrue((target / f"{target.name}.ino").read_text().startswith(include))
+                        self.assertEqual((target / f"{target.name}.cpp").read_text(), include)
+                        self.assertEqual((target / f"{target.name}.h").read_text(), "#pragma once\n")
+                finally:
+                    dialog.close()
+                    dialog.deleteLater()
+                    APP.processEvents()
+
     def test_reused_process_id_does_not_restore_old_port_or_project_ownership(self):
         self.assertTrue(config._save_raw_config({"instances": {"101": {
             "create_time": 1, "selected_port": "COM999", "active_sketch_dir": "old"}}, "shared": {}}))
@@ -805,6 +890,60 @@ class ProjectChecks(unittest.TestCase):
             dialog.close()
             dialog.deleteLater()
             parent.deleteLater()
+            APP.processEvents()
+
+    def test_successful_local_and_cloud_selection_finish_the_selector(self):
+        for workspace_picker in (False, True):
+            for source in ("local", "cloud"):
+                with self.subTest(workspace_picker=workspace_picker, source=source):
+                    api = self.backend()
+                    api.is_busy, api.active_operation = False, None
+                    api.get_recent_projects = Mock(return_value=[])
+                    dialog = ProjectDialog(api, open_in_new_window=workspace_picker)
+                    try:
+                        dialog.show()
+                        APP.processEvents()
+                        panel = dialog._cloud_panel
+                        if source == "local":
+                            # A passive Cloud connection check must not keep an
+                            # already selected local project in a hidden exec().
+                            panel._busy = True
+                            dialog._accept_selected_project(self.folder / "sketch")
+                            self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+                        else:
+                            dialog._cloud_opened(str(self.folder / "cloud-sketch"))
+                            self.assertTrue(dialog.cloud_window_opened)
+                            self.assertEqual(dialog.result(), QDialog.DialogCode.Rejected)
+                        self.assertFalse(dialog.isVisible())
+                        self.assertTrue(panel._closed)
+                        self.assertFalse(dialog._existing_preview_timer.isActive())
+                        self.assertFalse(any(timer.isActive() for timer in dialog._foreground_timers))
+                        self.assertIsNone(dialog._existing_preview_pending)
+                    finally:
+                        dialog._cloud_panel._busy = False
+                        dialog.close()
+                        dialog.deleteLater()
+                        APP.processEvents()
+
+    def test_standalone_cloud_selector_finishes_after_opening_a_sketch(self):
+        from main.qt.cloud_sketch_panel import CloudSketchDialog
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        dialog = CloudSketchDialog(api)
+        try:
+            dialog.show()
+            deadline = time.monotonic() + 3
+            while dialog.panel._busy and time.monotonic() < deadline:
+                APP.processEvents()
+                time.sleep(.005)
+            self.assertFalse(dialog.panel._busy)
+            dialog.panel.cloud_opened.emit(str(self.folder / "cloud-sketch"))
+            self.assertFalse(dialog.isVisible())
+            self.assertTrue(dialog.panel._closed)
+            self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
             APP.processEvents()
 
     def test_selected_ino_is_preserved_for_new_window_and_same_project_navigation(self):

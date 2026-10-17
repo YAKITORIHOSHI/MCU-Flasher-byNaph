@@ -462,38 +462,22 @@ class PortalChecks(unittest.TestCase):
             self.assertIs(self.dialog.form_card._cached_surface, cached)
         self.assertIsNone(self.dialog.auth_card.graphicsEffect())
 
-    def test_cloud_failure_stays_open_and_connection_feedback(self):
+    def test_cloud_connection_is_fixed_and_retry_keeps_local_access_controls(self):
         cloud = portal.FirebaseSettingsDialog(self.service, self.dialog, config={
             "firebase_database_url": "https://stored-secret.firebasedatabase.app/",
             "firebase_api_key": "stored-secret-key",
         })
         show(cloud, (500, 360))
-        self.assertEqual(cloud.db_input.echoMode(), QLineEdit.EchoMode.Password)
-        self.assertEqual(cloud.key_input.echoMode(), QLineEdit.EchoMode.Password)
-        self.assertEqual(cloud.db_input.text(), "")
-        self.assertEqual(cloud.key_input.text(), "")
-        cloud._run_test()
-        self.service.test_firebase_connection.assert_not_called()
-        self.assertIn("URL", cloud.feedback.text())
-        cloud.db_input.setText("https://fixture.invalid/")
-        cloud.key_input.setText("fixture-key")
+        self.assertFalse(hasattr(cloud, "db_input"))
+        self.assertFalse(hasattr(cloud, "key_input"))
+        self.assertFalse(hasattr(cloud, "save_button"))
         cloud._run_test()
         settle(cloud)
-        self.service.test_firebase_connection.assert_called_once_with("fixture-key", "https://fixture.invalid/")
         self.assertTrue(cloud.test_button.isEnabled())
-        self.assertTrue(cloud.save_button.isEnabled())
-        self.service.save_config.return_value = False
-        cloud._save()
-        settle(cloud)
+        self.assertTrue(cloud.local_save.isEnabled())
         self.assertTrue(cloud.isVisible())
-        self.assertEqual(cloud.db_input.text(), "https://fixture.invalid/")
-        self.assertEqual(cloud.feedback.property("tone"), "fail")
-        capture(cloud, "cloud-save-error-default")
-        self.service.save_config.return_value = True
-        cloud._save()
-        settle(cloud)
-        self.assertEqual(cloud.result(), QDialog.DialogCode.Accepted)
         cloud.deleteLater()
+
 
     def test_connection_status_is_independent_from_package_offline_mode(self):
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.invalid", firebase_api_key="fixture-key")
@@ -743,7 +727,7 @@ class PortalChecks(unittest.TestCase):
                     self.assertTrue(scroll.viewport().rect().contains(QRect(
                         action.mapTo(scroll.viewport(), QPoint()), action.size())))
                 self.assertTrue(cloud.rect().contains(QRect(
-                    cloud.save_button.mapTo(cloud, QPoint()), cloud.save_button.size())))
+                    cloud.close_button.mapTo(cloud, QPoint()), cloud.close_button.size())))
 
     def test_cloud_diagnosis_is_async_and_never_claims_sign_in(self):
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")

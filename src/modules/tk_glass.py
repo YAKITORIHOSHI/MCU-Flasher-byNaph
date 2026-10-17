@@ -372,16 +372,18 @@ class FieldRow:
 class ScrollBody(tk.Frame):
     """Keep installed-item metadata reachable when the detail pane is short."""
 
-    def __init__(self, parent, background, *, fill_viewport=False):
+    def __init__(self, parent, background, *, fill_viewport=False, material=False):
         super().__init__(parent, bg=background)
         self._fill_viewport = fill_viewport
         self._fit_after = None
-        self.canvas = tk.Canvas(self, bg=background, highlightthickness=0)
+        from src.modules.tk_material import GlassBody
+        container = GlassBody if material else tk.Canvas
+        self.canvas = container(self, bg=background, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         scrollbar.pack(side="right", fill="y")
         self.canvas.pack(fill="both", expand=True)
         self.canvas.configure(yscrollcommand=scrollbar.set)
-        self.body = tk.Frame(self.canvas, bg=background)
+        self.body = (GlassBody if material else tk.Frame)(self.canvas, bg=background)
         self._window = self.canvas.create_window(0, 0, window=self.body, anchor="nw")
         self.canvas.bind("<Configure>", self._fit_body)
         self.body.bind("<Configure>", self._content_changed)
@@ -389,6 +391,10 @@ class ScrollBody(tk.Frame):
         self._bindings = [(sequence, self._toplevel.bind(sequence, self._wheel, add="+"))
                           for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>")]
         self.bind("<Destroy>", self._detach, add="+")
+
+    def refresh_material(self):
+        if hasattr(self.canvas, "refresh_material"):
+            self.canvas.refresh_material()
 
     def _fit_body(self, _event=None):
         options = {"width": max(1, self.canvas.winfo_width())}
@@ -410,7 +416,7 @@ class ScrollBody(tk.Frame):
     def _content_changed(self, _event=None):
         if self._fill_viewport:
             self._fit_body()
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.canvas.configure(scrollregion=self.canvas.bbox(self._window))
 
     def _wheel(self, event):
         widget = event.widget
@@ -437,8 +443,8 @@ class ScrollBody(tk.Frame):
 class ScrollForm(ScrollBody):
     """Scrollable utility form which reveals fields reached with Tab."""
 
-    def __init__(self, parent, background, *, fill_viewport=False):
-        super().__init__(parent, background, fill_viewport=fill_viewport)
+    def __init__(self, parent, background, *, fill_viewport=False, material=False):
+        super().__init__(parent, background, fill_viewport=fill_viewport, material=material)
         self._reveal_after = None
         self._focus_binding = self._toplevel.bind("<FocusIn>", self._focus_in, add="+")
         self.canvas.bind("<Configure>", self._queue_reveal, add="+")
@@ -512,6 +518,8 @@ def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=T
     rounded = radius > 0
     radius = min(max(1, radius), width / 2, height / 2)
     top, bottom, edge, outside = map(_rgb, (base, lower, rim, surround))
+    reflected_light = _blend(top, (255, 255, 255), .32)
+    reflected_shade = _blend(bottom, edge, .48)
     rows = bytearray()
     # Smooth coverage at the rounded boundary: each scanline only needs four
     # edge pixels, and broad interior runs are built as repeated RGB bytes.
@@ -531,15 +539,17 @@ def glass_png(width, height, base, lower, rim, surround, radius=12, reflection=T
             x0, x1 = round(width * step / samples), round(width * (step + 1) / samples)
             x = (x0 + x1) / 2
             glow = max(0., 1 - abs(x / width + vertical * .32 - .18) / .65)
-            sheen = (.06 if sum(top) < 500 else .035) * glow * max(0., 1 - vertical * 1.2) if reflection else 0.
+            sheen = (.025 if sum(top) < 500 else .012) * glow * max(0., 1 - vertical * 1.2) if reflection else 0.
             fill = _blend(color, (255, 255, 255), sheen)
             if reflection and width * height > 65536:
                 # Broad defocused light through the material, rather than
                 # black slabs or bands painted around an opaque center.
                 left = max(0., 1 - ((x / width - .12) ** 2 / .45 + (vertical - .18) ** 2 / .65)) ** 2
                 right = max(0., 1 - ((x / width - .92) ** 2 / .42 + (vertical - .7) ** 2 / .7)) ** 2
-                fill = _blend(fill, (142, 219, 219), .18 * left)
-                fill = _blend(fill, (145, 160, 224), .14 * right)
+                # Reflections inherit the material's own tint. Broad, quiet
+                # light should not turn every theme into cyan/violet metal.
+                fill = _blend(fill, reflected_light, .025 * left)
+                fill = _blend(fill, reflected_shade, .03 * right)
             if not rounded or (x0 >= inner_inset + 1 and x1 <= width - inner_inset - 1 and 1 <= y < height - 1):
                 rows.extend(bytes(fill) * (x1 - x0))
                 continue
@@ -560,6 +570,144 @@ def glass_photo(master, width, height, base, lower, rim, surround, radius=12, re
     renderer = glass_png if width * height <= 65536 else glass_png.__wrapped__
     return tk.PhotoImage(master=master, data=base64.b64encode(
         renderer(width, height, base, lower, rim, surround, radius, reflection)), format="png")
+
+
+@lru_cache(maxsize=32)
+def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scene=False):
+    """Bake the project selector's directional material into native row runs.
+
+    Split at the reflection edges as well as bounded gradient samples, keeping
+    diagonal highlights smooth without a full Python loop over every pixel.
+    """
+    width, height = max(1, int(width)), max(1, int(height))
+    if width > 8192 or height > 8192 or width * height > 16_000_000:
+        raise ValueError("Glass surface exceeds the native image budget")
+    colors = tuple(map(_rgb, stops))
+    edge, light_edge, outside = map(_rgb, (rim, lit, surround))
+    white = (255, 255, 255)
+    light = readable_foreground(stops[-1]) == "#000000"
+    rounded = radius > 0
+    radius = min(max(1, radius), width / 2, height / 2)
+    direction = width * .25
+    denominator = direction * direction + height * height
+    positions = (0., .22, .72, 1.)
+    samples = min(64, max(1, width // 8))
+    base_breaks = {round(width * step / samples) for step in range(samples + 1)}
+    rows = bytearray()
+    for y in range(height):
+        center, vertical = y + .5, (y + .5) / height
+        dy = max(0., radius - min(center, height - center))
+        inset = radius - math.sqrt(max(0., radius * radius - dy * dy)) if rounded else 0
+        inner_radius = max(.1, radius - 1)
+        inner_dy = max(0., inner_radius - min(center - 1, height - center - 1))
+        inner_inset = 1 + inner_radius - math.sqrt(max(0., inner_radius**2 - inner_dy**2))
+        band_left = width * max(0., .36 * (vertical - .52) / .28)
+        band_right = width * (.62 - .26 * vertical / .8)
+        streak_left = width * (.64 - .24 * vertical / .8)
+        streak_right = width * (.68 - .25 * vertical / .8)
+        fade = min(1., vertical / .8)
+        reflection = ((92 if light else 46) + ((34 if light else 17) - (92 if light else 46)) * fade / .38
+                      if fade < .38 else (34 if light else 17) * (1 - fade) / .62) / 255
+        breaks = set(base_breaks)
+        for boundary in (inset, inner_inset, width-inset, width-inner_inset,
+                         band_left, band_right, streak_left, streak_right):
+            for offset in (-1, 0, 1):
+                breaks.add(max(0, min(width, round(boundary) + offset)))
+        breaks = sorted(breaks)
+        rows.append(0)
+        for x0, x1 in zip(breaks, breaks[1:]):
+            if x1 <= x0:
+                continue
+            x = (x0 + x1) / 2
+            position = min(1., (x * direction + center * height) / denominator)
+            segment = next((i for i in range(3) if position <= positions[i+1]), 2)
+            amount = (position - positions[segment]) / (positions[segment+1] - positions[segment])
+            fill = _blend(colors[segment], colors[segment+1], amount)
+            if vertical < .8:
+                band = max(0., min(1., x-band_left+.5, band_right-x+.5))
+                streak = max(0., min(1., x-streak_left+.5, streak_right-x+.5))
+                fill = _blend(fill, white, reflection * band)
+                fill = _blend(fill, white, (55 if light else 23) / 255 * (1-fade) * streak)
+            if scene:
+                rows.extend(bytes((*fill, 255)) * (x1-x0))
+                continue
+            # Keep native compositing opaque, with a lit upper edge and one
+            # antialiased rim matching the selector rather than a thick slab.
+            boundary_color = _blend(edge, light_edge, max(0., 1-vertical*3) * .55)
+            if y < 2:
+                boundary_color = _blend(boundary_color, white, .26 if light else .18)
+            if x0 >= inner_inset+1 and x1 <= width-inner_inset-1 and 1 <= y < height-1:
+                rows.extend(bytes((*fill, 255)) * (x1-x0))
+                continue
+            for pixel in range(x0, x1):
+                distance = min(pixel+.5, width-pixel-.5)
+                coverage = min(1., max(0., distance-inset+.5))
+                interior = min(1., max(0., distance-inner_inset+.5))
+                interior *= min(1., max(0., center-1), max(0., height-center-1))
+                rows.extend((*_blend(boundary_color, fill, interior), round(255 * coverage)))
+    def chunk(kind, data):
+        return struct.pack('!I', len(data)) + kind + data + struct.pack('!I', zlib.crc32(kind + data) & 0xffffffff)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('!2I5B', width, height, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(rows, 3)) + chunk(b'IEND', b''))
+
+
+def resource_photo(master, width, height, palette, surround, radius=12, *, scene=False):
+    stops = tuple(getattr(palette, key) for key in ("BG_LIGHT", "BG_MID", "BG_DARK", "BG_DARKEST"))
+    key = (width, height, stops, palette.BORDER, palette.BORDER_LIT, surround, radius, scene)
+    renderer = resource_glass_png if width * height <= 65536 else resource_glass_png.__wrapped__
+    return tk.PhotoImage(master=master, data=base64.b64encode(renderer(*key)), format="png")
+
+
+def _material_underlay(widget):
+    """Let rounded corners reveal the owning scene instead of a dark square."""
+    from src.modules.tk_material import _owner
+    widget.delete("material-underlay")
+    owner = _owner(widget)
+    if owner is not None:
+        widget._underlay_image = owner._material_image
+        widget.create_image(owner.winfo_rootx()-widget.winfo_rootx(), owner.winfo_rooty()-widget.winfo_rooty(),
+                            image=widget._underlay_image, anchor="nw", tags="material-underlay")
+        widget.tag_lower("material-underlay")
+
+
+class GlassScene(tk.Canvas):
+    """One static backdrop shared by otherwise transparent utility rows."""
+
+    def __init__(self, parent, palette):
+        super().__init__(parent, bg=palette.WINDOW_BG, bd=0, highlightthickness=0, width=1, height=1)
+        from src.modules.tk_material import GlassBody
+        self.palette = palette
+        self._redraw_id = None
+        self.body = GlassBody(self, bg=palette.WINDOW_BG)
+        self._body_window = self.create_window(0, 0, window=self.body, anchor="nw")
+        self.bind("<Configure>", self._schedule, add="+")
+        self.bind("<Destroy>", self._cancel, add="+")
+
+    def _schedule(self, _event=None):
+        if self._redraw_id is None:
+            self._redraw_id = self.after(40, self._draw)
+
+    def _cancel(self, event):
+        if event.widget is self and self._redraw_id is not None:
+            self.after_cancel(self._redraw_id)
+            self._redraw_id = None
+
+    def _draw(self):
+        self._redraw_id = None
+        width, height = self.winfo_width(), self.winfo_height()
+        if width < 2 or height < 2:
+            return
+        self.itemconfigure(self._body_window, width=width, height=height)
+        p = self.palette
+        key = (width, height, p.BG_LIGHT, p.BG_MID, p.BG_DARK, p.BG_DARKEST, p.BORDER, p.BORDER_LIT)
+        if key != getattr(self, "_surface_key", None):
+            self._surface_key = key
+            self._material_image = resource_photo(self, width, height, p, p.WINDOW_BG, 0, scene=True)
+            self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if readable_foreground(p.BG_DARKEST) == "#000000" else .18))
+        self.delete("material")
+        self.create_image(0, 0, image=self._material_image, anchor="nw", tags="material")
+        self.tag_lower("material")
+        self.body.refresh_material()
 
 
 from src.modules.tk_svg import SvgButton, photo as svg_photo
@@ -687,7 +835,7 @@ class EntryWell(tk.Canvas):
     def __init__(self, parent, palette, **options):
         super().__init__(parent, bg=parent.cget("background"), bd=0, highlightthickness=0, width=1, height=1)
         self.palette = palette
-        options.update(bg=palette.BG_DARK, fg=palette.TEXT_BRIGHT, insertbackground=palette.CYAN,
+        options.update(bg=getattr(palette, "FIELD_BG", palette.BG_DARK), fg=palette.TEXT_BRIGHT, insertbackground=palette.CYAN,
                        selectbackground=palette.CYAN_DIM, selectforeground=readable_foreground(palette.CYAN_DIM),
                        bd=0, relief="flat", highlightthickness=0)
         self.entry = tk.Entry(self, **options)
@@ -706,8 +854,9 @@ class EntryWell(tk.Canvas):
         width, pad = max(1, self.winfo_width()), round(10 * scale)
         self.coords(self._field, pad, height / 2)
         self.itemconfigure(self._field, width=max(1, width - 2 * pad))
-        key = (width, height, p.BG_DARK, p.BG_DARK,
-               p.CYAN if self.entry.focus_get() is self.entry else mix(p.BORDER, p.BG_DARK, .55),
+        fill = getattr(p, "FIELD_BG", p.BG_DARK)
+        key = (width, height, fill, fill,
+               p.CYAN if self.entry.focus_get() is self.entry else mix(p.BORDER, fill, .55),
                self.cget("background"), round(7 * scale), False)
         if key != self._surface_key:
             self._surface_key = key
@@ -723,10 +872,11 @@ class EntryWell(tk.Canvas):
 class BrowserHeader(tk.Canvas):
     """Paint the title directly on glass so opaque labels cannot hide it."""
 
-    def __init__(self, parent, palette, *, title="Libraries & boards", subtitle="MCU Flasher by Naph · Arduino packages"):
+    def __init__(self, parent, palette, *, title="Libraries & boards", subtitle="MCU Flasher by Naph · Arduino packages", framed=True):
         super().__init__(parent, bg=getattr(palette, "WINDOW_BG", palette.BG_DARKEST), height=1, bd=0, highlightthickness=0)
         self.palette = palette
         self.title, self.subtitle = title, subtitle
+        self.framed = framed
         self._redraw_id = None
         self._title_font = tkfont.Font(root=self, family="Montserrat", size=14, weight="bold")
         self._subtitle_font = tkfont.Font(root=self, family="Montserrat", size=8)
@@ -745,10 +895,13 @@ class BrowserHeader(tk.Canvas):
             self.after_cancel(self._redraw_id)
             self._redraw_id = None
 
+    def refresh_material(self):
+        self._schedule()
+
     def _draw(self):
         self._redraw_id = None
         p, scale = self.palette, ui_scale(self)
-        width, pad = self.winfo_width(), round(10 * scale)
+        width, pad = self.winfo_width(), round((10 if self.framed else 6) * scale)
         mark_size, gap = round(32 * scale), round(10 * scale)
         title_height = self._title_font.metrics("linespace") + self._subtitle_font.metrics("linespace") + round(4 * scale)
         title_width = mark_size + gap + max(self._title_font.measure(self.title),
@@ -766,13 +919,25 @@ class BrowserHeader(tk.Canvas):
         if width < 2:
             return
         self.delete("material")
-        top = mix(p.BG_MID, "#ffffff", .045)
-        key = (width, height, top, p.BG_DARK, mix(p.BORDER, p.CYAN, .22), self.cget("background"), round(14 * scale))
+        outside = self.cget("background")
+        top = mix(p.BG_MID, "#ffffff", .025) if self.framed else outside
+        bottom = p.BG_DARK if self.framed else outside
+        key = (width, height, top, bottom, mix(p.BORDER, p.CYAN, .10) if self.framed else outside,
+               outside, round(14 * scale) if self.framed else 0, self.framed)
+        resource = getattr(p, "RESOURCE_GLASS", False) and self.framed
+        if resource:
+            _material_underlay(self)
+            top = mix(p.BG_LIGHT, "#ffffff", .36 if readable_foreground(p.BG_DARKEST) == "#000000" else .18)
+            bottom = p.BG_DARKEST
+            key = (width, height, top, bottom, p.BORDER, outside, round(12 * scale), True)
         if key != getattr(self, "_surface_key", None):
             self._surface_key = key
-            self._surface = glass_photo(self, *key)
+            self._surface = (resource_photo(self, width, height, p, outside, round(12 * scale))
+                             if resource else glass_photo(self, *key))
+        self._material_image = self._surface
+        self._material_bounds = (top, bottom)
         self.create_image(0, 0, image=self._surface, anchor="nw", tags="material")
-        self._brand = svg_photo(self, "brand", material_ink(p.CYAN, top, p.BG_DARK, 3), mark_size)
+        self._brand = svg_photo(self, "brand", material_ink(p.CYAN, top, bottom, 3), mark_size)
         self.create_image(pad, pad + max(mark_size, title_height) / 2, image=self._brand,
                           anchor="w", tags="material")
         title_x = pad + mark_size + gap
@@ -781,13 +946,13 @@ class BrowserHeader(tk.Canvas):
         if not stacked:
             self.create_text(title_x, pad + self._title_font.metrics("linespace") + round(4 * scale),
                              text=self.subtitle, anchor="nw",
-                             font=self._subtitle_font, fill=material_ink(p.TEXT_DIM, top, p.BG_DARK), tags=("material", "subtitle"))
+                             font=self._subtitle_font, fill=material_ink(p.TEXT_DIM, top, bottom), tags=("material", "subtitle"))
         action_y = height - pad - action_height if stacked else (height - action_height) / 2
         self.coords(self._actions_window, width - pad, action_y)
         self.tag_lower("material", self._actions_window)
         # Native button focus and commands stay native. Blend their surrounding
         # pixels with the material immediately behind the action row.
-        background = mix(top, p.BG_DARK, min(1., (action_y + action_height / 2) / height * 1.25))
+        background = mix(top, bottom, min(1., (action_y + action_height / 2) / height * 1.25))
         if self.actions.cget("background") != background:
             self.actions.configure(bg=background)
         self._actions_surface = tk.PhotoImage(master=self, width=action_width, height=action_height)
@@ -839,6 +1004,9 @@ class GlassEmptyState(tk.Canvas):
         if self._redraw_id is None:
             self._redraw_id = self.after(40, self._draw)
 
+    def refresh_material(self):
+        self._schedule()
+
     def _cancel(self, event):
         if event.widget is self and self._redraw_id is not None:
             self.after_cancel(self._redraw_id)
@@ -856,7 +1024,17 @@ class GlassEmptyState(tk.Canvas):
             self._surface_key = key
             self._surface = glass_photo(self, *key)
         self.delete("all")
-        self.create_image(0, 0, image=self._surface, anchor="nw")
+        if getattr(p, "RESOURCE_GLASS", False):
+            from src.modules.tk_material import _owner
+            owner = _owner(self)
+            if owner is not None:
+                self._surface = owner._material_image
+                self.create_image(owner.winfo_rootx()-self.winfo_rootx(), owner.winfo_rooty()-self.winfo_rooty(),
+                                  image=self._surface, anchor="nw")
+            else:
+                self.create_image(0, 0, image=self._surface, anchor="nw")
+        else:
+            self.create_image(0, 0, image=self._surface, anchor="nw")
         center = height // 2
         compact = height < round(145 * scale)
         if not compact:
@@ -886,7 +1064,10 @@ class GlassCard(tk.Canvas):
         self.heading = heading
         self._heading_font = tkfont.Font(root=self, family="Montserrat", size=9, weight="bold") if heading else None
         self._redraw_id = None
-        self.body = tk.Frame(self, bg=palette.BG_MID)
+        resource = getattr(palette, "RESOURCE_GLASS", False)
+        if resource:
+            from src.modules.tk_material import GlassBody
+        self.body = (GlassBody if resource else tk.Frame)(self, bg=palette.BG_MID)
         self._body_window = self.create_window(self.padding, self.padding, window=self.body, anchor="nw")
         self.bind("<Configure>", self._schedule)
         self.body.bind("<Configure>", self._schedule)
@@ -895,6 +1076,9 @@ class GlassCard(tk.Canvas):
     def _schedule(self, _event=None):
         if self._redraw_id is None:
             self._redraw_id = self.after(40, self._draw)
+
+    def refresh_material(self):
+        self._schedule()
 
     def _cancel(self, event):
         if event.widget is self and self._redraw_id is not None:
@@ -960,18 +1144,26 @@ class GlassCard(tk.Canvas):
         self.delete("glass")
         if width < 4 or height < 4:
             return
+        if getattr(p, "RESOURCE_GLASS", False):
+            _material_underlay(self)
         # The reading body stays opaque; the enclosing material uses a soft,
         # continuous reflection and a single smooth rim, without stacked bevels.
-        top = mix(p.BG_MID, p.BG_LIGHT, .18)
-        bottom = mix(p.BG_MID, p.BG_DARKEST, .12)
-        rim = mix(p.BORDER, p.BG_MID, .70)
+        light = readable_foreground(p.BG_MID) == "#000000"
+        top = mix(p.BG_MID, "#ffffff", .28 if light else .012)
+        bottom = p.BG_MID
+        rim = p.BORDER if light else mix(p.BORDER, "#ffffff", .10)
         key = (width, height, top, bottom, rim, self.cget("background"), round(14 * ui_scale(self)))
         if key != getattr(self, "_surface_key", None):
             self._surface_key = key
-            self._surface = glass_photo(self, *key)
+            self._surface = (resource_photo(self, width, height, p, self.cget("background"), round(12 * ui_scale(self)))
+                             if getattr(p, "RESOURCE_GLASS", False) else glass_photo(self, *key))
+        self._material_image = self._surface
+        self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if light else .18))
         self.create_image(0, 0, image=self._surface, anchor="nw", tags="glass")
         if heading_height:
             self.create_text(self.padding + 2, self.padding + heading_height // 2,
                              text=self.heading, anchor="w", font=self._heading_font,
-                             fill=p.TEXT_BRIGHT, tags="glass")
+                             fill=material_ink(p.TEXT_BRIGHT, *self._material_bounds), tags="glass")
         self.tag_lower("glass", self._body_window)
+        if hasattr(self.body, "refresh_material"):
+            self.body.refresh_material()

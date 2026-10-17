@@ -191,6 +191,8 @@ class MCUSignals(QObject):
     # ── Project ──────────────────────────────────────────────────────────────
     # Payload: {"path": str, "name": str, "files": list, "active_file": str}
     project_updated = Signal(dict)
+    # Root file operations keep the current workspace and its live PTYs.
+    project_files_updated = Signal(dict)
     cloud_project_updated = Signal(dict)
 
     # ── Syntax Diagnostics ───────────────────────────────────────────────────

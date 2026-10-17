@@ -18,11 +18,19 @@ most three concurrent workers to limit cold-start load.
 
 Ubuntu amd64/ARM64 setup prepares both `libsecret-tools` and `gnome-keyring`.
 Cloud credentials require an unlocked keyring in the current desktop session.
-Vault errors now remain visible instead of appearing as missing cloud configuration.
+Vault errors remain visible for saved account credentials.
 “Firebase reachable” indicates endpoint reachability only; authentication and
 database permissions are checked separately. Redirects and failed server responses
 no longer count as a healthy endpoint. Use **Check connection** after unlocking
-the keyring to refresh configuration availability without restarting.
+the keyring to retry access without restarting.
+
+Firebase uses the fixed application deployment. Database, project and API-key
+editing controls have been removed from Cloud and Developer Access; legacy
+provider settings and environment overrides do not select another server.
+Account passwords and remembered sessions still use the OS credential vault.
+Public Firebase client settings cannot be made secret by shipping encrypted
+values and their decryption key together. Server-side rules and API restrictions
+protect data; see [Firebase deployment security](direct/cloud/README.md).
 
 The isolated regression `direct/verify_bootstrap_cold_cache.py` reproduces a new
 package remaining invisible when the installation directory timestamp is unchanged.
@@ -91,6 +99,12 @@ Qt sizing uses logical pixels and follows the window's current monitor and
 available work area, including taskbars and negative monitor coordinates.
 Qt applies display scaling once; Tk uses its own native font and pixel metrics.
 Monitor and resize changes are coalesced without an idle polling loop.
+Embedded Windows terminal and assistant windows use their native host's client
+bounds, including fractional display scales. Monaco fills its available CSS
+viewport and refreshes its layout when display scale changes, even if the
+logical window size stays the same. Terminal fitting uses the actual hidden
+scrollbar width and retains its reading padding. These updates retain buffers
+and sessions.
 Sketch projects keep app-generated build inputs and history in the hidden
 `.mcu_flasher_build_cache` container. On Windows, generated root instructions,
 ignore rules, proven MCU Flasher IDE metadata and first-use sentinels are hidden
@@ -151,6 +165,17 @@ their bounded reading area. Reflow preserves the same draft and focus widgets.
 The Resources browser also reserves complete native SVG button heights in
 short detail panes, including 200% scaling. Optional headings and padding yield
 before controls; valid list/detail sash positions and saved fonts are retained.
+Its downloader follows the project selector's glass appearance: a framed
+header, rounded lit rims and directional reflections from the theme's four
+original surface colors. Folder rows, captions and detail groups continue the
+same material without dark rectangular backgrounds; native fields and package
+lists keep their editing and selection fills. The direct-file downloader shares
+this appearance, with quiet utility controls and one accented Download action.
+Empty links and duplicate availability badges leave no gaps in package details.
+Updates from Installed automatically produce an extracted folder; ordinary
+Libraries and Boards downloads retain their archive/folder choices. Materials
+are static and require no blur or animation dependencies. Native previews
+reject blank captures.
 Selecting installed-package metadata also refreshes the card's reading budget
 when its title changes, including native Windows font metrics.
 On short scaled desktops, the active tool's controls and first output line get
@@ -160,7 +185,7 @@ editor widths, source metadata yields to full review decisions and navigation;
 complete metadata remains available in tooltips and accessible descriptions.
 Serial Options uses explicit theme colors and an SVG menu indicator so its
 native button stays readable in dark, light and Solarized palettes.
-Failed Firebase settings writes keep the form open with an explanation. The same
+Failed local-access settings writes keep the form open with an explanation. The same
 native portal UI is used on Windows and Ubuntu.
 Original SVG chip artwork and a compact circuit divider bring color to the
 login card. Email, access-key, password visibility and recovery actions use
@@ -186,8 +211,9 @@ Developer requests run in bounded background workers and check the Firebase
 endpoint directly. A failed generic internet probe cannot veto cloud access.
 Local access requires an explicitly configured key; there is no built-in unlock
 password. The local key uses salted PBKDF2, and cloud ticket caches are isolated
-by authenticated account. Provider settings live in the OS credential vault;
-the old code-encrypted repository vault is no longer used or distributed.
+by authenticated account. The provider is built into the application; account
+credentials live in the OS credential vault. There is no editable Firebase
+configuration or repository credential vault.
 AI Changes lists each edited filename above its timestamp, with the decision
 alongside it, retaining full paths in tooltips even at compact widths.
 Update logs show the readable interpreter path; Windows tools can still use
@@ -258,7 +284,7 @@ discard the replacement's recovery buffers.
 Cloud Pull scans its source list in a worker and acknowledges its editor refresh
 only after a successful scan, complete model loading and confirmation from the
 same renderer. A failed or interrupted
-refresh keeps the editor protected and offers Retry. Cloud configuration and
+refresh keeps the editor protected and offers Retry. Cloud sign-in and
 upload prompts retain mouse access to their fields, scroll short forms and keep
 their actions visible when the monitor or display scale changes.
 Terminal tab scroll arrows use the selected palette and remain readable when
@@ -1198,6 +1224,12 @@ MCU Flasher by Naph/
 - **Existing project validation**: Select the sketch folder itself, not the whole Documents folder. It must contain a non-empty top-level `.ino`, `.cpp`, or `.c` source file. Invalid folders are rejected before the app switches windows, saves buffers, creates files, updates history, or writes project metadata. Use **New project** for an empty folder.
 - **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
 - **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
+  File changes update the editor and related project information without
+  restarting terminal/assistant sessions or resetting unrelated panels.
+  Successful local or cloud project selection closes the project selector,
+  including when a separate workspace opens or an existing window is focused.
+  The isolated `direct/verify_project_file_lifecycle.py` regression checks
+  incremental file events, dirty models, undo history and rapid file operations.
 
 #### Cloud sketches
 
@@ -1228,7 +1260,7 @@ or Ubuntu's Secret Service with an unlocked desktop keyring. They never store
 passwords or tokens in the application, sketch, process arguments or database.
 Ubuntu Bootstrap installs `libsecret-tools`; a locked or unavailable keyring
 reports a saving error, with no plaintext fallback. New computers require
-their own provider configuration through **Cloud configuration**.
+only their own account sign-in; the application's Firebase deployment is fixed.
 
 **Upload local sketch** creates a private cloud copy of root `.ino`, `.cpp`,
 `.c`, `.h`, `.hpp` and `.txt` files, preserving the local project. Cloud sketches
@@ -1460,8 +1492,10 @@ unresponsive storage show a recovery message instead of remaining on Searching.
 Search runs in one bounded background worker and excludes build/cache folders.
 Enter between C++ braces follows the
 model's saved tab/space indentation. New sketches contain empty `setup()` and
-`loop()` functions; optional `.cpp` files are empty and headers contain only
-`#pragma once`. Modify starts with the sketch's filename and scrolls on short
+`loop()` functions. Checking **.h** creates a `#pragma once` header and includes
+it automatically in the generated `.ino` and optional `.cpp`, using the same
+sanitized project filename. Without **.h**, the optional `.cpp` stays empty.
+Modify starts with the sketch's filename and scrolls on short
 screens. Explicit Blink remains available.
 
 The **AI Changes** tool tab retains recent timestamped file previews grouped by
@@ -1944,6 +1978,13 @@ and full-width workspaces, portrait screens and chosen content fonts; check the
 effective rendered font, complete frames and readable viewports. Short setup
 fixtures cover active packages, long statuses, hours on the clock and both logs.
 Use `--render-dir temp/audit/responsive` for previews.
+The current Ubuntu Qt 6.12/Chromium build still paints WebEngine content too
+small when forced to `QT_SCALE_FACTOR=0.75`, on both offscreen and xcb, despite
+correct CSS/model dimensions. Below-100% display scaling remains an unresolved
+rendering limit; passing DOM checks alone does not certify its painted surface.
+The complete 125% logical geometry matrix passes. Native window-manager focus,
+maximization and synthetic tiny-monitor checks require separate native evidence;
+Ubuntu fixtures do not certify Windows monitor transitions.
 The project verifier checks competing processes, stale settings snapshots,
 exclusive project/port claims, independent opening during compile, existing
 folder protection and themed project-picker captures. It mocks GUI spawning

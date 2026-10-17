@@ -78,8 +78,8 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.service._is_authenticated = False
         self.service._active_root_collection = None
         self.config = {
-            "firebase_api_key": "fixture-web-api-key",
-            "firebase_database_url": "https://fixture.firebasedatabase.app/",
+            "firebase_api_key": owner.firebase_configuration()["firebase_api_key"],
+            "firebase_database_url": "https://mcu-flasher-c46e3-default-rtdb.asia-southeast1.firebasedatabase.app/",
             "firebase_project_id": "fixture-project",
             "firebase_user_uid": "configured-fixture-uid",
             "firebase_root_collection": "owner",
@@ -99,7 +99,6 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.service.save_config = Mock(
             side_effect=AssertionError("Live configuration writes are forbidden in this fixture")
         )
-        self.patch(owner, "load_cloud_configuration", side_effect=AssertionError("Live vault reads are forbidden"))
         self.patch(owner, "CredentialStore", side_effect=AssertionError("Live vault access is forbidden"))
         self.disabled = self.patch(offline_runtime, "network_access_disabled", return_value=False)
         self.http = self.patch(
@@ -156,9 +155,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         operations = (
             lambda: self.service.authenticate("developer@example.com", "firebase-fixture-password"),
             lambda: self.service.send_password_reset_email("developer@example.com"),
-            lambda: self.service.test_firebase_connection(
-                "fixture-web-api-key", "https://fixture.firebasedatabase.app/"
-            ),
+            lambda: self.service.test_firebase_connection(),
         )
         for operation in operations:
             with self.subTest(operation=operation):
@@ -177,7 +174,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertTrue(self.service.check_connection()[0])
         request = self.http.call_args.args[0]
         self.assertEqual(request.get_method(), "HEAD")
-        self.assertEqual(request.full_url, "https://fixture.firebasedatabase.app/.json?shallow=true")
+        self.assertEqual(request.full_url, "https://mcu-flasher-c46e3-default-rtdb.asia-southeast1.firebasedatabase.app/.json?shallow=true")
         self.assertIsNone(request.data)
         self.assertNotIn("key=", request.full_url)
         self.assertNotIn("auth=", request.full_url)
@@ -192,13 +189,14 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertTrue(self.service.check_connection()[0])
         response.read.assert_not_called()
 
-    def test_unconfigured_connection_checker_probes_firebase_auth_without_credentials(self):
+    def test_connection_checker_ignores_legacy_empty_provider(self):
         self.config["firebase_database_url"] = ""
-        self.http.side_effect = self.http_error("https://identitytoolkit.googleapis.com/", 404, {}, "route missing")
+        self.http.side_effect = None
+        self.http.return_value = Response({})
         self.assertTrue(self.service.check_connection()[0])
-        self.assertEqual(self.http.call_args.args[0].full_url, "https://identitytoolkit.googleapis.com/")
-        self.assertEqual(self.http.call_args.args[0].get_method(), "HEAD")
-        self.assertFalse(self.service.is_cloud_authenticated)
+        self.assertEqual(self.http.call_args.args[0].full_url,
+                         owner.firebase_configuration()["firebase_database_url"] + "/.json?shallow=true")
+
 
     def test_no_preflight_network_requests(self):
         self.http.assert_not_called()
@@ -216,7 +214,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(
             request.full_url,
-            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fixture-web-api-key",
+            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + owner.firebase_configuration()["firebase_api_key"],
         )
         self.assertEqual(json.loads(request.data)["email"], "developer@example.com")
 
@@ -227,18 +225,17 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertTrue(ok, message)
         self.internet_probe.assert_not_called()
         self.http.return_value = Response({})
-        ok, message = self.service.test_firebase_connection("fixture-web-api-key", "https://fixture.firebasedatabase.app/")
+        ok, message = self.service.test_firebase_connection()
         self.assertTrue(ok, message)
         self.internet_probe.assert_not_called()
 
-    def test_endpoint_test_rejects_non_firebase_https_hosts_before_http(self):
-        for url in ("http://fixture.firebasedatabase.app/", "https://fixture.firebasedatabase.app.evil.invalid/",
-                    "https://user:password@fixture.firebasedatabase.app/", "https://fixture.firebasedatabase.app/private",
-                    "https://evil.invalid/firebasedatabase.app/"):
-            with self.subTest(url=url):
-                ok, _ = self.service.test_firebase_connection("fixture-web-api-key", url)
-                self.assertFalse(ok)
+    def test_destination_validator_rejects_other_database_hosts(self):
+        for url in ("http://fixture.firebasedatabase.app/", "https://fixture.firebasedatabase.app/",
+                    "https://user:password@fixture.firebasedatabase.app/", "https://evil.invalid/"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                owner.validate_firebase_destination(url)
         self.http.assert_not_called()
+
 
     def test_cloud_authentication_preserves_password_spaces(self):
         self.cloud_response()
@@ -327,7 +324,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.http.assert_not_called()
 
     def test_http_helper_ignores_package_mode_and_never_follows_redirects(self):
-        request = owner.urllib.request.Request("https://fixture.firebasedatabase.app/.json?auth=fixture-token")
+        request = owner.urllib.request.Request("https://mcu-flasher-c46e3-default-rtdb.asia-southeast1.firebasedatabase.app/.json?auth=fixture-token")
         with patch.object(owner.urllib.request, "build_opener") as create_opener:
             self.disabled.return_value = True
             REAL_OPEN_FIREBASE_REQUEST(request, timeout=4.0)
@@ -374,15 +371,14 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         for code in (401, 403, 404, 405, 503):
             with self.subTest(code=code):
                 self.http.side_effect = self.http_error(
-                    "https://fixture.firebasedatabase.app/.json?shallow=true", code,
+                    "https://mcu-flasher-c46e3-default-rtdb.asia-southeast1.firebasedatabase.app/.json?shallow=true", code,
                     {"error": "Permission denied"}, "Permission denied",
                 )
-                ok, message = self.service.test_firebase_connection(
-                    "fixture-web-api-key", "https://fixture.firebasedatabase.app/"
-                )
-                self.assertTrue(ok, message)
-                self.assertIn("connected", message.lower())
-                self.assertIn("sign in", message.lower())
+                ok, message = self.service.test_firebase_connection()
+                self.assertEqual(ok, code in (401, 403, 405), message)
+                if ok:
+                    self.assertIn("connected", message.lower())
+                    self.assertIn("sign in", message.lower())
                 self.assertFalse(self.service.is_cloud_authenticated)
                 self.assertTrue(self.http.side_effect.fp.closed)
 
@@ -436,7 +432,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.assertFalse(ok)
         self.assertNotIn(marker, message)
         self.assertNotIn("https://", message)
-        ok, message = self.service.test_firebase_connection("fixture-key", "https://fixture.firebasedatabase.app/")
+        ok, message = self.service.test_firebase_connection()
         self.assertFalse(ok)
         self.assertNotIn(marker, message)
         self.assertNotIn("https://", message)
@@ -466,7 +462,8 @@ class OwnerTicketServiceChecks(unittest.TestCase):
             self.service._uid = "account-a"
             self.assertEqual(self.service._read_local_tickets(), [{"id": "account-a-private"}])
             self.config["firebase_database_url"] = "https://another.firebasedatabase.app/"
-            self.assertNotEqual(first, self.service._ticket_cache_path())
+            with self.assertRaises(ValueError):
+                self.service._ticket_cache_path()
             self.assertEqual(self.service._read_local_tickets(), [])
             self.service.logout()
             self.assertEqual(self.service._read_local_tickets(), [{"id": "local-only"}])

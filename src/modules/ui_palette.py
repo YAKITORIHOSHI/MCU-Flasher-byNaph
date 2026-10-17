@@ -35,6 +35,28 @@ def frosted_palette(palette: dict[str, str], *, prefix="") -> dict[str, str]:
     return result
 
 
+def resource_palette(palette: dict[str, str]) -> dict[str, str]:
+    """Use the selector's glass stops, with solid native editing wells.
+
+    Containers and captions paint the same composited material. Preserve the
+    theme's four stops instead of flattening them into opaque blue panels.
+    """
+    result = dict(palette)
+    light = readable_foreground(palette["BG_DARKEST"]) == "#000000"
+    scene = palette["BG_DARKEST"]
+    field = mix(palette["BG_DARK"], scene, .22)
+    quiet = palette["BG_MID"]
+    hover = mix(quiet, palette["CYAN"], .08)
+    primary = mix(palette["BTN_MONITOR"], palette["BG_DARK"], .22 if light else .16)
+    primary_hover = mix(primary, palette["CYAN"], .14)
+    result.update(WINDOW_BG=scene, FIELD_BG=field, BG_HOVER=hover, RESOURCE_GLASS=True)
+    for name in ("BTN_CLEAR", "BTN_DIM", "BTN_FULL"):
+        result[name], result[name + "_H"] = quiet, hover
+    for name in ("BTN_COMPILE", "BTN_MONITOR", "BTN_UPLOAD"):
+        result[name], result[name + "_H"] = primary, primary_hover
+    return result
+
+
 def contrast_ratio(foreground: str, background: str) -> float:
     """Relative-luminance contrast without loading either GUI toolkit."""
     def luminance(color):

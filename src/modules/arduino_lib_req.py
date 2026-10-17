@@ -292,7 +292,8 @@ DEFAULT_DOWNLOAD_DIR = os.path.join(
 
 
 
-from src.modules.tk_svg import SvgButton, SvgLabel, SvgListbox
+from src.modules.tk_svg import SvgButton, SvgListbox
+from src.modules.tk_material import GlassBody, GlassLabel as SvgLabel
 
 class Theme:
     PALETTES = {
@@ -462,8 +463,8 @@ try:
 except ImportError:
     pass
 
-from src.modules.ui_palette import frosted_palette
-Theme.PALETTES = {name: frosted_palette(values) for name, values in Theme.PALETTES.items()}
+from src.modules.ui_palette import resource_palette
+Theme.PALETTES = {name: resource_palette(values) for name, values in Theme.PALETTES.items()}
 Theme.apply_theme("default")
 
 
@@ -547,7 +548,7 @@ class CircularLoadingOverlay(tk.Frame):
         self.is_animating = True
         self._after_id = None
 
-        self.center_frame = tk.Frame(self, bg=bg_color)
+        self.center_frame = GlassBody(self, bg=bg_color)
         self.center_frame.place(relx=0.5, rely=0.5, anchor="center")
 
         self.size = 56
@@ -1621,7 +1622,7 @@ class BrowseTab:
 
     def _build(self, parent: ttk.Frame):
         # Search bar
-        top = tk.Frame(parent, bg=Theme.WINDOW_BG, pady=4)
+        top = GlassBody(parent, bg=Theme.WINDOW_BG)
         top.pack(fill="x")
 
         SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG).pack(side="left")
@@ -1641,7 +1642,7 @@ class BrowseTab:
 
         # --- Left: item list ---
         from src.modules.tk_glass import GlassCard
-        left_card = GlassCard(pane, Theme, padding=3, expand=True,
+        left_card = GlassCard(pane, Theme, padding=10, expand=True,
                               heading="Available libraries" if self._detail_builder == self.app._build_library_detail else "Available boards")
         pane.add(left_card, minsize=200)
         left = left_card.body
@@ -1650,7 +1651,7 @@ class BrowseTab:
             left, icon_for=self._row_icon, font=("Montserrat", 11),
             bg=Theme.BG_DARK, fg=Theme.TEXT_BRIGHT,
             selectbackground=Theme.CYAN_DIM, selectforeground="#ffffff",
-            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_DARK,
+            highlightcolor=Theme.CYAN, highlightbackground=Theme.BG_MID,
             highlightthickness=1, borderwidth=0, relief=tk.FLAT,
             activestyle="none", selectborderwidth=0,
             exportselection=False
@@ -1663,7 +1664,7 @@ class BrowseTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        detail_card = GlassCard(pane, Theme, padding=4, expand=True, heading="Package details")
+        detail_card = GlassCard(pane, Theme, padding=14, expand=True)
         pane.add(detail_card, minsize=350)
         self.detail_frame = detail_card.body
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
@@ -1676,7 +1677,7 @@ class BrowseTab:
         self.lbl_placeholder.pack(fill="both", expand=True)
 
         # Scrollable Canvas container for detail panel (Scrollable IF AND ONLY IF content overflows)
-        self.detail_canvas = tk.Canvas(self.detail_frame, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0)
+        self.detail_canvas = GlassBody(self.detail_frame, bg=Theme.BG_DARKEST, highlightthickness=0, borderwidth=0)
         self.detail_scroll = ttk.Scrollbar(self.detail_frame, orient="vertical", style="Vertical.TScrollbar",
                                            command=self.detail_canvas.yview)
         self.detail_canvas.configure(yscrollcommand=self.detail_scroll.set)
@@ -1689,7 +1690,7 @@ class BrowseTab:
                     self.detail_scroll.pack_forget()
                     self._scroll_state["visible"] = False
                 return
-            bbox = self.detail_canvas.bbox("all")
+            bbox = self.detail_canvas.bbox(self._content_window)
             content_height = (bbox[3] - bbox[1]) if bbox else 0
             view_height = self.detail_canvas.winfo_height()
             needs_scroll = content_height > view_height + 2
@@ -1705,7 +1706,7 @@ class BrowseTab:
 
         def _on_canvas_configure(event):
             self.detail_canvas.itemconfigure(self._content_window, width=event.width)
-            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
+            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox(self._content_window))
             _sync_detail_scrollbar()
 
             pad = 30
@@ -1713,7 +1714,7 @@ class BrowseTab:
                 lbl.configure(wraplength=max(event.width - pad, 100))
 
         def _on_content_configure(event=None):
-            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox("all"))
+            self.detail_canvas.configure(scrollregion=self.detail_canvas.bbox(self._content_window))
             _sync_detail_scrollbar()
 
         def _on_mousewheel(event):
@@ -1731,7 +1732,7 @@ class BrowseTab:
         self.detail_canvas.bind("<Button-5>", _on_mousewheel)
 
         # Detail content
-        self._detail_content = tk.Frame(self.detail_canvas, bg=Theme.BG_DARKEST)
+        self._detail_content = GlassBody(self.detail_canvas, bg=Theme.BG_DARKEST)
         self._content_window = self.detail_canvas.create_window((0, 0), window=self._detail_content, anchor="nw")
         self._detail_content.bind("<Configure>", _on_content_configure)
         self._detail_content.bind("<MouseWheel>", _on_mousewheel)
@@ -1945,7 +1946,7 @@ class InstalledTab:
 
     def _build(self, parent: ttk.Frame):
         # Search bar
-        top = tk.Frame(parent, bg=Theme.WINDOW_BG, pady=4)
+        top = GlassBody(parent, bg=Theme.WINDOW_BG)
         top.pack(fill="x")
 
         SvgLabel(top, text="Search:", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG).pack(side="left")
@@ -1965,7 +1966,7 @@ class InstalledTab:
 
         # --- Left: item list ---
         from src.modules.tk_glass import GlassCard
-        left_card = GlassCard(pane, Theme, padding=3, expand=True, heading="Installed packages")
+        left_card = GlassCard(pane, Theme, padding=10, expand=True, heading="Installed packages")
         pane.add(left_card, minsize=200)
         left = left_card.body
 
@@ -1986,7 +1987,7 @@ class InstalledTab:
         self.listbox.bind("<<ListboxSelect>>", self._on_select)
 
         # --- Right: detail panel ---
-        detail_card = GlassCard(pane, Theme, padding=4, expand=True, heading="Installed details")
+        detail_card = GlassCard(pane, Theme, padding=14, expand=True)
         pane.add(detail_card, minsize=350)
         self.detail_frame = detail_card.body
         self.detail_frame.configure(bg=Theme.BG_DARKEST)
@@ -2000,7 +2001,7 @@ class InstalledTab:
 
         # Metadata and example controls remain reachable on short detail panes.
         from src.modules.tk_glass import ScrollBody
-        self._details_view = ScrollBody(self.detail_frame, Theme.BG_DARKEST)
+        self._details_view = ScrollBody(self.detail_frame, Theme.BG_DARKEST, material=True)
         self._detail_content = self._details_view.body
 
         def _reading_content_changed(_event):
@@ -2023,11 +2024,11 @@ class InstalledTab:
         self.detail_frame.bind("<Configure>", _on_detail_configure)
 
         # Top Metadata Section (fixed natural height)
-        self._top_info = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
+        self._top_info = GlassBody(self._detail_content, bg=Theme.BG_DARKEST)
         self._top_info.pack(fill="x", expand=False)
 
         # Labels inside detail content
-        self.lbl_name = SvgLabel(self._top_info, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        self.lbl_name = SvgLabel(self._top_info, text="", font=("Montserrat", 14, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
         self.lbl_name.pack(anchor="w", fill="x", pady=(0, 4))
         self._wrapping_labels.append(self.lbl_name)
 
@@ -2036,7 +2037,7 @@ class InstalledTab:
         self._wrapping_labels.append(self.lbl_type)
 
         # Version info frame
-        ver_frame = tk.Frame(self._top_info, bg=Theme.BG_DARKEST)
+        ver_frame = GlassBody(self._top_info, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
         self.lbl_installed_ver = SvgLabel(ver_frame, text="", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST, anchor="w")
@@ -2064,12 +2065,12 @@ class InstalledTab:
         sep2.pack(fill="x", pady=5)
 
         # Action Buttons frame
-        btn_frame = tk.Frame(self._top_info, bg=Theme.BG_DARKEST)
+        btn_frame = GlassBody(self._top_info, bg=Theme.BG_DARKEST)
         btn_frame.pack(anchor="w", fill="x", pady=2)
 
         self.open_btn = make_flat_button(
             btn_frame, "Open Folder", self._open_folder,
-            Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
         )
         self.open_btn.pack(side="left", padx=(0, 10))
 
@@ -2087,7 +2088,7 @@ class InstalledTab:
         self._set_update_btn_state(False)
 
         # --- Sample Codes (Examples) section --- (expands vertically to fill remaining space)
-        self._examples_section = tk.Frame(self._detail_content, bg=Theme.BG_DARKEST)
+        self._examples_section = GlassBody(self._detail_content, bg=Theme.BG_DARKEST)
         self._examples_section.pack(fill="both", expand=True, pady=(2, 0))
 
         sep3 = tk.Frame(self._examples_section, bg=Theme.BORDER, height=1)
@@ -2106,7 +2107,7 @@ class InstalledTab:
         self.lbl_examples_hint.pack(anchor="w", fill="x", pady=(0, 4))
 
         # Filter entry for examples / boards
-        examples_search_wrap = tk.Frame(self._examples_section, bg=Theme.BG_DARKEST)
+        examples_search_wrap = GlassBody(self._examples_section, bg=Theme.BG_DARKEST)
         examples_search_wrap.pack(anchor="w", fill="x", pady=(0, 4))
 
         SvgLabel(
@@ -2126,7 +2127,7 @@ class InstalledTab:
         )
         self.examples_search_entry.pack(side="left", fill="x", expand=True)
 
-        examples_wrap = tk.Frame(self._examples_section, bg=Theme.BG_DARKEST)
+        examples_wrap = GlassBody(self._examples_section, bg=Theme.BG_DARKEST)
         examples_wrap.pack(anchor="w", fill="both", expand=True, pady=(4, 0))
 
         self.examples_listbox = tk.Listbox(
@@ -2792,7 +2793,7 @@ class ArduinoBrowser:
         # Configure frames and general layouts
         style.configure("TFrame", background=Theme.WINDOW_BG)
         style.configure("TLabel", background=Theme.BG_DARKEST, foreground=Theme.TEXT)
-        style.configure("TNotebook", background=Theme.WINDOW_BG, borderwidth=0, tabmargins=(0, 0, 0, 8),
+        style.configure("TNotebook", background=Theme.WINDOW_BG, borderwidth=0, tabmargins=(0, 0, 0, 4),
                         lightcolor=Theme.WINDOW_BG, darkcolor=Theme.WINDOW_BG, bordercolor=Theme.WINDOW_BG)
         style.configure("TNotebook.Tab", font=("Montserrat", 10, "bold"), background=Theme.BG_MID,
                         foreground=Theme.TEXT_DIM, borderwidth=1, bordercolor=Theme.BORDER,
@@ -2811,6 +2812,8 @@ class ArduinoBrowser:
                          selectbackground=Theme.CYAN_DIM,
                          selectforeground="#ffffff",
                          bordercolor=Theme.BORDER,
+                         lightcolor=Theme.BG_LIGHT, darkcolor=Theme.BG_LIGHT,
+                         relief="flat", padding=3, font=("Montserrat", 10),
                          arrowcolor=Theme.TEXT_DIM)
         style.map("TCombobox",
                    fieldbackground=[("readonly", Theme.BG_LIGHT)],
@@ -2840,12 +2843,22 @@ class ArduinoBrowser:
         style.map("Vertical.TScrollbar",
                   background=[("active", Theme.BORDER_LIT)])
 
-        style.configure("Horizontal.TProgressbar",
-                        troughcolor=Theme.BG_MID,
+        # Clam's standard element ignores thickness. Keep this quiet track
+        # private so the folder/package controls retain their native theme.
+        for part in ("trough", "pbar"):
+            name = f"BrowserProgress.{part}"
+            if name not in style.element_names():
+                style.element_create(name, "from", "default", f"Horizontal.Progressbar.{part}")
+        style.layout("Browser.Horizontal.TProgressbar", [
+            ("BrowserProgress.trough", {"sticky": "nswe", "children": [
+                ("BrowserProgress.pbar", {"side": "left", "sticky": "ns"})]})])
+        from src.modules.tk_glass import ui_scale
+        style.configure("Browser.Horizontal.TProgressbar",
+                        troughcolor=Theme.BG_LIGHT,
                         background=Theme.CYAN,
-                        bordercolor=Theme.BORDER,
-                        lightcolor=Theme.CYAN,
-                        darkcolor=Theme.CYAN)
+                        bordercolor=Theme.BG_LIGHT, borderwidth=0, troughborderwidth=0,
+                        lightcolor=Theme.BG_LIGHT, darkcolor=Theme.BG_LIGHT,
+                        thickness=round(4 * ui_scale(self.root)))
 
 
     def _build_ui(self):
@@ -2858,45 +2871,48 @@ class ArduinoBrowser:
             self._inventory_request_id = 0
             self._catalog_revision = 0
         self._rendered_theme = Theme.active_theme
-        from src.modules.tk_glass import GlassCard, NativeResizeFocus, EntryWell
+        from src.modules.tk_glass import GlassCard, GlassScene, NativeResizeFocus, EntryWell
         if sys.platform.startswith("linux"):
             self._native_resize_focus = NativeResizeFocus(self.root)
         from src.modules.runtime_resources import performance_profile
         self._progress_interval = 120 if performance_profile().constrained else 80
         self.root.configure(bg=Theme.WINDOW_BG)
+        self._scene = GlassScene(self.root, Theme)
+        self._scene.pack(fill="both", expand=True)
+        host = self._scene.body
 
         self._configure_styles()
 
         # Paint title and circuit mark on the material itself; keep native actions.
         from src.modules.tk_glass import BrowserHeader
-        header = BrowserHeader(self.root, Theme)
-        header.pack(fill="x", padx=12, pady=(12, 8))
+        header = BrowserHeader(host, Theme, framed=True)
+        self._header = header
+        header.pack(fill="x", padx=16, pady=(12, 8))
         actions = header.actions
 
         self.quit_btn = make_flat_button(
             actions, "Quit", self._force_exit,
-            Theme.BTN_STOP, Theme.BTN_STOP_H
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
         )
         self.quit_btn.pack(side="right", padx=(6, 0))
 
         self.refresh_btn = make_flat_button(
             actions, "Refresh indexes", self._refresh_all,
-            Theme.BTN_MONITOR, Theme.BTN_MONITOR_H
+            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
         )
         self.refresh_btn.pack(side="right")
         self.sources_btn = make_flat_button(actions, "Board indexes", self._toggle_sources,
                                             Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         self.sources_btn.pack(side="right", padx=(6, 6))
         # Download folder bar
-        folder_card = GlassCard(self.root, Theme, padding=8)
-        folder_card.pack(fill="x", padx=12, pady=(0, 8))
-        folder_bar = folder_card.body
+        folder_bar = GlassBody(host, bg=Theme.WINDOW_BG)
+        folder_bar.pack(fill="x", padx=20, pady=(0, 10))
 
-        folder_label = SvgLabel(folder_bar, text="Download folder:",
-                                font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_MID)
+        folder_label = SvgLabel(folder_bar, text="Save to",
+                                font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG)
 
         self.folder_var = tk.StringVar(value=self._download_dir)
-        self._folder_well = EntryWell(folder_bar, Theme, textvariable=self.folder_var, font=("Consolas", 10))
+        self._folder_well = EntryWell(folder_bar, Theme, textvariable=self.folder_var, font=("Montserrat", 9))
         self.folder_entry = self._folder_well.entry
         self.folder_entry.bind("<Return>", lambda e: self._apply_folder_entry())
         self.folder_entry.bind("<FocusOut>", lambda e: self._apply_folder_entry())
@@ -2911,9 +2927,9 @@ class ArduinoBrowser:
         # Additional board manager indexes. The default Arduino index is
         # always loaded; this field lets users add vendor indexes such as the
         # ESP8266 package index without editing Arduino-CLI files manually.
-        self._sources_card = GlassCard(self.root, Theme, padding=10)
+        self._sources_card = GlassCard(host, Theme, padding=10)
         self._sources_open = False
-        board_url_bar = tk.Frame(self._sources_card.body, bg=Theme.BG_MID)
+        board_url_bar = GlassBody(self._sources_card.body, bg=Theme.BG_MID)
         board_url_bar.pack(fill="x")
 
         urls_label = SvgLabel(
@@ -2978,12 +2994,12 @@ class ArduinoBrowser:
         )
 
         # Notebook (tabs)
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True, padx=12, pady=(4, 8))
+        self.notebook = ttk.Notebook(host)
+        self.notebook.pack(fill="both", expand=True, padx=16, pady=(2, 10))
         self.notebook.enable_traversal()
 
         # --- Libraries tab ---
-        lib_frame = ttk.Frame(self.notebook, padding=4)
+        lib_frame = GlassBody(self.notebook, bg=Theme.WINDOW_BG)
         self.notebook.add(lib_frame, text="Libraries", underline=0)
         self.lib_tab = BrowseTab(
             lib_frame, self,
@@ -2992,7 +3008,7 @@ class ArduinoBrowser:
         )
 
         # --- Boards tab ---
-        board_frame = ttk.Frame(self.notebook, padding=4)
+        board_frame = GlassBody(self.notebook, bg=Theme.WINDOW_BG)
         self.notebook.add(board_frame, text="Boards", underline=0)
         self.board_tab = BrowseTab(
             board_frame, self,
@@ -3001,7 +3017,7 @@ class ArduinoBrowser:
         )
 
         # --- Installed tab ---
-        installed_frame = ttk.Frame(self.notebook, padding=4)
+        installed_frame = GlassBody(self.notebook, bg=Theme.WINDOW_BG)
         self.notebook.add(installed_frame, text="Installed", underline=0)
         self.installed_tab = InstalledTab(installed_frame, self)
 
@@ -3009,16 +3025,15 @@ class ArduinoBrowser:
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # Bottom bar: progress + status
-        bottom_card = GlassCard(self.root, Theme, padding=8)
-        bottom_card.pack(side="bottom", fill="x", padx=12, pady=(0, 12), before=self.notebook)
-        bottom = bottom_card.body
+        bottom = GlassBody(host, bg=Theme.WINDOW_BG)
+        bottom.pack(side="bottom", fill="x", padx=22, pady=(0, 14), before=self.notebook)
 
-        self.progress = ttk.Progressbar(bottom, style="Horizontal.TProgressbar", length=140)
+        self.progress = ttk.Progressbar(bottom, style="Browser.Horizontal.TProgressbar", length=90)
         self.progress.pack(side="left")
 
         self.status_var = tk.StringVar(value="Starting…")
         status = SvgLabel(bottom, textvariable=self.status_var, font=("Montserrat", 9),
-                          fg=Theme.TEXT_DIM, bg=Theme.BG_MID, justify="left", anchor="w")
+                          fg=Theme.TEXT_DIM, bg=Theme.WINDOW_BG, justify="left", anchor="w")
         status.pack(side="left", padx=10, fill="x", expand=True)
         bottom.bind("<Configure>", lambda event: status.configure(
             wraplength=max(100, event.width - self.progress.winfo_reqwidth() - 24)), add="+")
@@ -3173,12 +3188,13 @@ class ArduinoBrowser:
         dc = tab._detail_content
         dc.configure(bg=Theme.BG_DARKEST)
 
-        tab.lbl_name = SvgLabel(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_name = SvgLabel(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 2))
         tab._wrapping_labels.append(tab.lbl_name)
 
         tab.lbl_status_badge = SvgLabel(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
-        tab.lbl_status_badge.pack(anchor="w", fill="x", pady=(0, 4))
+        # The same availability message already appears beside the download
+        # controls. Keep one visible status instead of repeating a badge here.
         tab._wrapping_labels.append(tab.lbl_status_badge)
 
         tab.lbl_author = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
@@ -3204,7 +3220,8 @@ class ArduinoBrowser:
         tab.lbl_paragraph.pack(anchor="w", fill="x", pady=(2, 6))
         tab._wrapping_labels.append(tab.lbl_paragraph)
 
-        link_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
+        link_frame = GlassBody(dc, bg=Theme.BG_DARKEST)
+        tab._links_frame = link_frame
         link_frame.pack(anchor="w", pady=2)
 
         tab.link_website = SvgLabel(link_frame, icon_name="globe", text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
@@ -3217,10 +3234,11 @@ class ArduinoBrowser:
         tab.link_repo.bind("<Button-1>",
                            lambda e: self._open_link(tab, "repo"))
 
-        sep2 = tk.Frame(dc, bg=Theme.BORDER, height=1)
-        sep2.pack(fill="x", pady=8)
+        sep2 = GlassBody(dc, bg=Theme.BG_DARKEST, height=1)
+        sep2.pack(fill="x", pady=6)
+        tab._version_rule = sep2
 
-        ver_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
+        ver_frame = GlassBody(dc, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
         version_label = SvgLabel(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
@@ -3265,6 +3283,7 @@ class ArduinoBrowser:
         tab.link_repo.config(
             text=f"{tab._current_repo}" if tab._current_repo else ""
         )
+        self._fit_package_links(tab, (tab.link_website, tab.link_repo))
 
         ver_labels = [v["version"] for v in lib["versions"]]
         tab.version_combo.config(values=ver_labels)
@@ -3283,12 +3302,11 @@ class ArduinoBrowser:
         dc = tab._detail_content
         dc.configure(bg=Theme.BG_DARKEST)
 
-        tab.lbl_name = SvgLabel(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.CYAN, bg=Theme.BG_DARKEST, anchor="w")
+        tab.lbl_name = SvgLabel(dc, text="", font=("Montserrat", 14, "bold"), fg=Theme.TEXT_BRIGHT, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_name.pack(anchor="w", fill="x", pady=(0, 2))
         tab._wrapping_labels.append(tab.lbl_name)
 
         tab.lbl_status_badge = SvgLabel(dc, text="", font=("Montserrat", 9, "bold"), fg=Theme.GREEN, bg=Theme.BG_DARKEST, anchor="w")
-        tab.lbl_status_badge.pack(anchor="w", fill="x", pady=(0, 4))
         tab._wrapping_labels.append(tab.lbl_status_badge)
 
         tab.lbl_package = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
@@ -3317,7 +3335,8 @@ class ArduinoBrowser:
         tab.lbl_boards.pack(anchor="w", fill="x", pady=(2, 6))
         tab._wrapping_labels.append(tab.lbl_boards)
 
-        link_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
+        link_frame = GlassBody(dc, bg=Theme.BG_DARKEST)
+        tab._links_frame = link_frame
         link_frame.pack(anchor="w", pady=2)
 
         tab.link_website = SvgLabel(link_frame, icon_name="globe", text="", font=("Montserrat", 9, "underline"), fg=Theme.BLUE, bg=Theme.BG_DARKEST, cursor="hand2")
@@ -3330,10 +3349,11 @@ class ArduinoBrowser:
         tab.link_help.bind("<Button-1>",
                            lambda e: self._open_link(tab, "help"))
 
-        sep2 = tk.Frame(dc, bg=Theme.BORDER, height=1)
-        sep2.pack(fill="x", pady=8)
+        sep2 = GlassBody(dc, bg=Theme.BG_DARKEST, height=1)
+        sep2.pack(fill="x", pady=6)
+        tab._version_rule = sep2
 
-        ver_frame = tk.Frame(dc, bg=Theme.BG_DARKEST)
+        ver_frame = GlassBody(dc, bg=Theme.BG_DARKEST)
         ver_frame.pack(anchor="w", fill="x", pady=4)
 
         version_label = SvgLabel(ver_frame, text="Version:", font=("Montserrat", 9), fg=Theme.TEXT, bg=Theme.BG_DARKEST)
@@ -3355,17 +3375,17 @@ class ArduinoBrowser:
         tab.lbl_size = SvgLabel(dc, text="", font=("Montserrat", 9), fg=Theme.TEXT_DIM, bg=Theme.BG_DARKEST, anchor="w")
         tab.lbl_size.pack(anchor="w", pady=2)
 
-        prepare_row = tk.Frame(dc, bg=Theme.BG_DARKEST)
+        prepare_row = GlassBody(dc, bg=Theme.BG_DARKEST)
         prepare_row.pack(fill="x", pady=(8, 2))
         tab.prepare_btn = make_flat_button(prepare_row, "Prepare board support",
-            lambda: self._prepare_existing_board(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+            lambda: self._prepare_existing_board(tab), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         tab.prepare_btn.pack(anchor="w")
         tab.prepare_btn.configure(state="disabled")
         tab.mapping_btn = make_flat_button(prepare_row, "Custom platform…",
-            lambda: self._edit_board_platform(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+            lambda: self._edit_board_platform(tab), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         tab.mapping_btn.pack(anchor="w", pady=(5, 0))
         tab.arduino_cli_btn = make_flat_button(prepare_row, "Choose Arduino CLI boards…",
-            lambda: self._edit_arduino_cli_boards(tab), Theme.BTN_MONITOR, Theme.BTN_MONITOR_H)
+            lambda: self._edit_arduino_cli_boards(tab), Theme.BTN_CLEAR, Theme.BTN_CLEAR_H)
         tab.arduino_cli_btn.pack(anchor="w", pady=(5, 0))
         tab.arduino_cli_btn.configure(state="disabled")
         hint = SvgLabel(dc, text="Arduino CLI is available only for Arduino UNO Q and Raspberry Pi Pico 2 / RP2350. All other boards use PlatformIO.",
@@ -3391,6 +3411,7 @@ class ArduinoBrowser:
         tab.link_help.config(
             text=f"{tab._current_help}" if tab._current_help else ""
         )
+        self._fit_package_links(tab, (tab.link_website, tab.link_help))
 
         ver_labels = [v["version"] for v in board["versions"]]
         tab.version_combo.config(values=ver_labels)
@@ -3400,6 +3421,19 @@ class ArduinoBrowser:
         self._update_version_status(tab)
         tab.version_combo.bind("<<ComboboxSelected>>",
                                lambda e: self._update_version_status(tab))
+
+    @staticmethod
+    def _fit_package_links(tab, links):
+        """Empty metadata must not leave rows between details and Download."""
+        for link in links:
+            link.pack_forget()
+        for link in links:
+            if link.cget("text"):
+                link.pack(anchor="w")
+        if any(link.cget("text") for link in links):
+            tab._links_frame.pack(anchor="w", pady=(6, 2), before=tab._version_rule)
+        else:
+            tab._links_frame.pack_forget()
 
     @staticmethod
     def _board_association_key(metadata):
@@ -3479,7 +3513,7 @@ class ArduinoBrowser:
         footer.pack(side='bottom', fill='x', padx=pad, pady=(gap, pad))
         status = SvgLabel(footer.body, text='', fg=Theme.TEXT_DIM, bg=Theme.BG_MID, font=('Montserrat', 8),
                           anchor='w', justify='left')
-        buttons = tk.Frame(footer.body, bg=Theme.BG_MID)
+        buttons = GlassBody(footer.body, bg=Theme.BG_MID)
         buttons.pack(fill='x')
         def status_message(message):
             status.configure(text=message)
@@ -3509,7 +3543,7 @@ class ArduinoBrowser:
         mappings_help = SvgLabel(body, text='One mapping per line: Arduino declaration ID = PlatformIO board ID',
                                  font=('Montserrat', 8), fg=Theme.TEXT_DIM, bg=Theme.BG_MID, anchor='w', justify='left')
         mappings_help.pack(fill='x', pady=(2, 4))
-        editor = tk.Frame(body, bg=Theme.BG_MID)
+        editor = GlassBody(body, bg=Theme.BG_MID)
         editor.pack(fill='x')
         editor.rowconfigure(0, weight=1)
         editor.columnconfigure(0, weight=1)
@@ -4415,7 +4449,7 @@ class ArduinoBrowser:
         )
         lbl.pack(pady=15)
 
-        btn_frame = tk.Frame(dialog, bg=Theme.BG_DARKEST)
+        btn_frame = GlassBody(dialog, bg=Theme.BG_DARKEST)
         btn_frame.pack(fill="x", padx=20)
 
         def select_option(opt):
@@ -4465,7 +4499,7 @@ class ArduinoBrowser:
             btn_folder.focus_set()
             dialog.bind("<Return>", lambda e: select_option("folder"))
 
-        cancel_frame = tk.Frame(dialog, bg=Theme.BG_DARKEST)
+        cancel_frame = GlassBody(dialog, bg=Theme.BG_DARKEST)
         cancel_frame.pack(fill="x", pady=10)
         btn_cancel = make_flat_button(cancel_frame, "Cancel", dialog.destroy, Theme.BTN_STOP, Theme.BTN_STOP_H)
         btn_cancel.pack(pady=5)
@@ -4562,9 +4596,9 @@ class ArduinoBrowser:
 
         subfolder = "Boards" if is_board else "Libs"
         dest_dir = os.path.join(self._download_dir, subfolder)
-        download_option = self._prompt_download_option(archive)
-        if not download_option:
-            return
+        # Installed updates replace the usable package folder automatically.
+        # The worker still verifies and stages it before removing the old copy.
+        download_option = "folder"
 
         self._busy = True
         self._active_download_tab = tab

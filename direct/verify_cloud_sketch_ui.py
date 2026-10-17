@@ -21,7 +21,7 @@ from PySide6.QtCore import Qt, QEvent, QCoreApplication, QPoint, QRect, QTimer, 
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QDialog, QMessageBox, QLineEdit, QStyle, QStyleOptionFrame, QScrollArea
 from main.qt.cloud_sketch_panel import (
-    CloudSketchPanel, CloudSketchDialog, _CloudConnectionDialog, _CloudUploadDialog,
+    CloudSketchPanel, CloudSketchDialog, _CloudUploadDialog,
     _CloudSketchActionDialog, _CloudLocalReplaceDialog,
 )
 from main.core.cloud_sketch_service import CloudLocalConflict
@@ -169,7 +169,6 @@ class CloudUIChecks(unittest.TestCase):
             get_recent_projects=Mock(return_value=[]), get_default_project_parent=Mock(return_value=str(self.root)))
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.stack.enter_context(patch("main.qt.cloud_sketch_panel.save_cloud_configuration", return_value=True))
         self.stack.enter_context(patch("main.core.config.get_open_projects", return_value=[]))
         self.stack.enter_context(patch("main.core.config.find_project_window", return_value=None))
         self.stack.enter_context(patch("main.core.config.get_theme_mode", return_value="default"))
@@ -274,11 +273,6 @@ class CloudUIChecks(unittest.TestCase):
         self.assertIn("connectivity", [row[0] for row in self.service.calls])
         self.assertEqual(panel._sketches.count(), 1)
         self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
-        dialog = _CloudConnectionDialog(panel)
-        self.widgets.append(dialog)
-        for field in (dialog.api_key, dialog.database_url, dialog.project_id):
-            self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
-            self.assertEqual(field.text(), "")
         self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
         self.assertFalse(panel._pull_btn.isEnabled())
 
@@ -292,45 +286,14 @@ class CloudUIChecks(unittest.TestCase):
         self.assertEqual(panel._sketches.count(), 0)
         self.assertFalse(panel._open_btn.isEnabled())
 
-    def test_connection_dialog_routes_native_mouse_to_fields_and_cancel(self):
+    def test_provider_configuration_has_no_editing_controls(self):
         panel = self.panel()
-        for mode in ("default", "light", "solarized_dark"):
-            with self.subTest(theme=mode):
-                APP.setStyleSheet(build_stylesheet(mode))
-                panel.apply_theme(mode)
-                dialog = _CloudConnectionDialog(panel)
-                self.widgets.append(dialog)
-                dialog.show()
-                dialog.activateWindow()
-                # Window-level clicks require compositor activation, which can
-                # arrive after show on a native Wayland desktop.
-                self.assertTrue(QTest.qWaitForWindowActive(dialog, 3000))
-                self.settle_layout()
-                for field in (dialog.api_key, dialog.database_url, dialog.project_id):
-                    self.assertEqual(field.text(), "")
-                    self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
-                    dialog._body_scroll.ensureWidgetVisible(field)
-                    self.settle_layout()
-                    position = field.mapTo(dialog, field.rect().center())
-                    self.assertIs(dialog.childAt(position), field)
-                dialog.api_key.setFocus()
-                dialog._body_scroll.ensureWidgetVisible(dialog.database_url)
-                self.settle_layout()
-                position = dialog.database_url.mapTo(dialog, dialog.database_url.rect().center())
-                # A QWidget-targeted QTest click bypasses native child hit testing.
-                QTest.mouseClick(dialog.windowHandle(), Qt.MouseButton.LeftButton,
-                                 Qt.KeyboardModifier.NoModifier, position)
-                self.settle_layout()
-                self.assertTrue(dialog.database_url.hasFocus())
-                for button in (dialog.save_button, dialog.cancel_button):
-                    position = button.mapTo(dialog, button.rect().center())
-                    self.assertIs(dialog.childAt(position), button)
-                position = dialog.cancel_button.mapTo(dialog, dialog.cancel_button.rect().center())
-                QTest.mouseClick(dialog.windowHandle(), Qt.MouseButton.LeftButton,
-                                 Qt.KeyboardModifier.NoModifier, position)
-                self.settle_layout()
-                self.assertFalse(dialog.isVisible())
-                self.assertEqual(dialog.result(), QDialog.DialogCode.Rejected)
+        self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
+        self.assertFalse(hasattr(panel, "_edit_config_btn"))
+        self.assertFalse(hasattr(panel, "_save_configuration"))
+        self.assertFalse(hasattr(panel, "_edit_configuration"))
+        self.assertTrue(panel._check_connection_btn)
+
 
     def test_cloud_prompts_fit_changed_work_areas_and_keep_complete_field_lines(self):
         class Screen(QObject):
@@ -352,23 +315,20 @@ class CloudUIChecks(unittest.TestCase):
         for mode in ("default", "light", "solarized_dark"):
             APP.setStyleSheet(build_stylesheet(mode))
             panel.apply_theme(mode)
-            for kind in ("connection", "upload"):
+            for kind in ("upload",):
                 screen = Screen(QRect(native_area.x(), native_area.y(), 1280, 720))
                 with self.subTest(theme=mode, prompt=kind), \
                      patch("main.qt.responsive.active_screen", return_value=screen):
-                    dialog = (_CloudConnectionDialog(panel) if kind == "connection"
-                              else _CloudUploadDialog(str(self.local), panel))
+                    dialog = _CloudUploadDialog(str(self.local), panel)
                     self.widgets.append(dialog)
-                    fields = ((dialog.api_key, dialog.database_url, dialog.project_id)
-                              if kind == "connection" else (dialog.folder, dialog.name))
+                    fields = (dialog.folder, dialog.name)
                     for index, field in enumerate(fields):
                         field.setText(f"fixture literal {index} Ω " + "x" * 80)
                     texts = [field.text() for field in fields]
                     dialog.show()
                     self.settle_layout()
                     fonts = [field.font() for field in fields]
-                    actions = ((dialog.cancel_button, dialog.save_button) if kind == "connection"
-                               else (dialog.cancel_button, dialog.upload_button))
+                    actions = (dialog.cancel_button, dialog.upload_button)
                     # Frame decoration differs between offscreen and native
                     # platforms. Retain fixed work areas, then require scrolling
                     # with a body budget below its measured minimum content.
@@ -766,25 +726,13 @@ class CloudUIChecks(unittest.TestCase):
         pulls = [row for row in self.service.calls if row[0] == "pull"]
         self.assertEqual(pulls[-1][1][2], 2)
 
-    def test_configuration_saves_only_to_injected_secure_store_off_gui(self):
-        self.service.authenticated = False
+    def test_connection_retry_uses_existing_service_without_configuration_writes(self):
         panel = self.panel()
-        cfg = {"firebase_api_key": "fixture-api-key",
-               "firebase_database_url": "https://fixture-default-rtdb.firebaseio.com",
-               "firebase_project_id": "fixture"}
-        captured = []
-        with patch("main.qt.cloud_sketch_panel.save_cloud_configuration", side_effect=lambda *args:
-                   captured.append((args, threading.get_ident()))):
-            panel._save_configuration(cfg)
-            self.wait(lambda: not panel._busy)
-        self.assertEqual(captured[0][0][0]["firebase_project_id"], "fixture")
-        self.assertIs(captured[0][0][1], self.service._store)
-        self.assertNotEqual(captured[0][1], threading.get_ident())
-        self.assertIn("encrypted credential vault", panel._status.text())
-        visible_text = " ".join(field.text() for field in panel.findChildren(QLineEdit))
-        self.assertNotIn("fixture-api-key", visible_text)
-        self.assertNotIn("fixture-default-rtdb", visible_text)
-        self.assertNotIn("fixture-project", visible_text)
+        panel._check_connection()
+        self.wait(lambda: not panel._busy)
+        self.assertIn("connectivity", [call[0] for call in self.service.calls])
+        self.assertNotIn("configuration", [call[0] for call in self.service.calls])
+
 
     def test_account_delete_requires_confirmation_and_literal_password(self):
         panel = self.panel()
@@ -1108,11 +1056,6 @@ class CloudUIChecks(unittest.TestCase):
         for mode in ("default", "light", "solarized_dark"):
             APP.setStyleSheet(build_stylesheet(mode))
             panel.apply_theme(mode)
-            connection_dialog = _CloudConnectionDialog(panel)
-            self.widgets.append(connection_dialog)
-            for field in (connection_dialog.api_key, connection_dialog.database_url,
-                          connection_dialog.project_id):
-                self.assertEqual(field.echoMode(), QLineEdit.EchoMode.Password)
             for width, height in ((720, 650), (400, 360), (330, 270)):
                 panel.resize(width, height)
                 self.settle_layout()
@@ -1138,7 +1081,6 @@ class CloudUIChecks(unittest.TestCase):
                 self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
                 self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
                 self.assertTrue(panel.grab().save(str(self.output / f"{mode}-{width}-{height}.png")))
-            connection_dialog.deleteLater()
         panel._configure_toggle.setChecked(True)
         panel._scroll.verticalScrollBar().setValue(panel._scroll.verticalScrollBar().maximum())
         APP.processEvents()

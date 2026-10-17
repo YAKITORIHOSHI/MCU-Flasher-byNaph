@@ -64,6 +64,7 @@ class SyntaxPanel(QWidget):
         self._analysis_generation = 0
         self._analysis_finished.connect(self._finish_analysis, Qt.ConnectionType.QueuedConnection)
         sig_bus.project_updated.connect(self._on_project_updated)
+        sig_bus.project_files_updated.connect(self._on_project_updated)
 
         self._build_ui()
         self.set_responsive_width(320)

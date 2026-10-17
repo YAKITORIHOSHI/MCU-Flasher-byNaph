@@ -275,6 +275,46 @@ class EditorReviewChecks(unittest.TestCase):
           return true;
         """)
 
+    def test_editor_fills_viewport_through_lower_and_fractional_scaling(self):
+        self.view.setFocus()
+        self.js(r"""(() => {
+          const editor=window.editorInstance;
+          window.__layoutModel=editor.getModel();
+          editor.executeEdits('fixture',[{range:new monaco.Range(1,1,1,1),text:'// unsaved 😀\n'}]);
+          document.querySelector('#tab-bar .tab.active .dirty-dot').style.display='inline';
+          editor.setSelection(new monaco.Selection(2,1,2,7));editor.focus();return true;
+        })()""")
+        state = r"""(() => ({model:editorInstance.getModel()===window.__layoutModel,
+          text:editorInstance.getModel().getValue(),version:editorInstance.getModel().getAlternativeVersionId(),
+          selection:editorInstance.getSelection(),tabs:Array.from(document.querySelectorAll('#tab-bar .tab'))
+            .map(t=>({path:t._filePath,dirty:t.querySelector('.dirty-dot').style.display}))}))()"""
+        baseline = self.js(state)
+        for zoom, width, height in ((1.75,1000,620),(.75,1200,700),(1,640,360),
+                                    (1.25,850,480),(2,900,500),(1,1200,700)):
+            with self.subTest(zoom=zoom,width=width,height=height):
+                self.page.setZoomFactor(zoom)
+                self.view.resize(width,height)
+                until(lambda: abs(self.js('innerWidth') - self.view.contentsRect().width()/zoom) <= 1 and
+                      abs(self.js('innerHeight') - self.view.contentsRect().height()/zoom) <= 1)
+                self.async_js('await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));return true;')
+                geometry = self.js(r"""(() => {
+                  const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();
+                    return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.bottom};};
+                  return {width:innerWidth,height:innerHeight,app:rect('app-container'),
+                    host:rect('editor-container'),anchor:rect('monaco-anchor'),
+                    monaco:editorInstance.getLayoutInfo(),focus:editorInstance.hasTextFocus()};
+                })()""")
+                self.assertAlmostEqual(geometry['app']['width'],geometry['width'],delta=1)
+                self.assertAlmostEqual(geometry['app']['bottom'],geometry['height'],delta=1)
+                self.assertAlmostEqual(geometry['host']['bottom'],geometry['height'],delta=1)
+                for axis in ('width','height'):
+                    self.assertAlmostEqual(geometry['anchor'][axis],geometry['host'][axis],delta=1)
+                    self.assertAlmostEqual(geometry['monaco'][axis],geometry['host'][axis],delta=1)
+                self.assertTrue(geometry['focus'],'Resizing must preserve Monaco keyboard focus')
+                self.assertEqual(self.js(state),baseline,'Sizing must retain model, dirty state, tab order and selection')
+                if CAPTURES and zoom == .75:
+                    self.assertTrue(self.view.grab().save(str(CAPTURES / 'editor-lower-scale-filled.png')))
+
     def test_realtime_syntax_reply_uses_queued_diagnostic_contract(self):
         self.assertEqual(self.async_js(r"""
           const f = window.__reviewFixture;

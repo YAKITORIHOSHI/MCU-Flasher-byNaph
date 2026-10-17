@@ -55,8 +55,7 @@ class UbuntuCloudWorkflowChecks(unittest.TestCase):
         (self.library / "src/NimBLEDevice.h").write_bytes(b"// fixture NimBLE header\n")
         (self.library / "library.json").write_text(json.dumps({"name": "NimBLE-Arduino", "version": "2.5.1"}))
         self.http = MemoryHTTP()
-        self.service = cloud.CloudSketchService(config_provider=lambda: dict(CONFIG),
-            credential_store=MemoryStore(), transport=self.http, data_dir=self.root / "private-cloud",
+        self.service = cloud.CloudSketchService(credential_store=MemoryStore(), transport=self.http, data_dir=self.root / "private-cloud",
             source_root_provider=lambda: self.root / "generated")
         self.build.stack.enter_context(patch.object(cloud.urllib.request, "build_opener",
             side_effect=AssertionError("Real HTTP forbidden")))

@@ -9547,6 +9547,7 @@ def _startup_required_paths() -> list[Path]:
     ))
     paths.extend(SCRIPT_DIR / name for name in (
         "src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js",
+        "src/editor/project_files.js",
         "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css",
     ))
     if site is not None:

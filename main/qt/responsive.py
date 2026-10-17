@@ -4,6 +4,36 @@ from PySide6.QtGui import QGuiApplication, QCursor
 from src.modules.ui_metrics import WorkArea, fit_rect, preferred_size
 
 
+def native_client_size(widget, native_api):
+    """Read native child bounds in the same coordinates as SetWindowPos.
+
+    QWidget sizes are logical pixels; the Win32 parent client rectangle already
+    accounts for its current monitor DPI, fractional rounding and native frame.
+    Never apply a second DPR conversion to either rectangle.
+    """
+    left, top, right, bottom = native_api.GetClientRect(int(widget.winId()))
+    return max(1, right - left), max(1, bottom - top)
+
+
+class EmbeddedGeometryWatcher(QObject):
+    """Resize a native child after Qt has committed its host's geometry."""
+
+    def __init__(self, widget, callback):
+        super().__init__(widget)
+        self._callback = callback
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(callback)
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show,
+                            QEvent.Type.DevicePixelRatioChange,
+                            QEvent.Type.ScreenChangeInternal, QEvent.Type.WinIdChange):
+            self._timer.start(0)
+        return False
+
+
 def active_screen(widget=None):
     if widget is not None:
         handle = widget.window().windowHandle()
@@ -62,7 +92,9 @@ class ScreenWatcher(QObject):
         widget.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        if event.type() in (QEvent.Type.Show, QEvent.Type.FontChange):
+        if event.type() in (QEvent.Type.Show, QEvent.Type.FontChange,
+                            QEvent.Type.DevicePixelRatioChange,
+                            QEvent.Type.ScreenChangeInternal):
             self._schedule()
         return False
 
