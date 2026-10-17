@@ -68,6 +68,8 @@ class NativeWorkAreaChecks(unittest.TestCase):
 
     def test_resize_focus_restoration_refuses_another_client_and_cancels_on_close(self):
         root = Mock()
+        root._redraw_id = None
+        root.winfo_children.return_value = []
         focused = Mock()
         root.focus_get.return_value = None
         focused.winfo_exists.return_value = True
@@ -80,10 +82,46 @@ class NativeWorkAreaChecks(unittest.TestCase):
         with patch("src.modules.tk_glass._x11_focus_unset", return_value=True):
             keeper._restore()
         focused.focus_force.assert_called_once()
+        focused.focus_force.reset_mock()
+        focused.focus_set.reset_mock()
+        root.focus_get.side_effect = [None, focused]
+        keeper._restore()
+        focused.focus_set.assert_called_once()
+        focused.focus_force.assert_not_called()
+        root.focus_get.side_effect = None
+        late_material = Mock()
+        late_material._redraw_id = "after-material"
+        late_material.winfo_children.return_value = []
+        root.winfo_children.return_value = [late_material]
+        root.after.return_value = "after-focus-retry"
+        with patch("src.modules.tk_glass._x11_focus_unset", return_value=True):
+            keeper._restore()
+            focused.focus_force.assert_not_called()
+            root.after.assert_called_once_with(60, keeper._restore)
+            self.assertEqual(keeper._pending, "after-focus-retry")
+            late_material._redraw_id = None
+            keeper._restore()
+            focused.focus_force.assert_called_once()
+        keeper._remember(SimpleNamespace(widget=focused))
+        self.assertIs(keeper._focused, focused, "A stale FocusIn must not forget the last actual control")
+        root.after.reset_mock()
+        keeper._lost_focus(SimpleNamespace(widget=focused))
+        root.after.assert_called_once_with(60, keeper._restore)
+        self.assertEqual(keeper._pending, "after-focus-retry")
         keeper._pending = "fixture-callback"
         keeper._cancel(SimpleNamespace(widget=root))
         root.after_cancel.assert_called_once_with("fixture-callback")
         self.assertIsNone(keeper._pending)
+        # ttk's native popdown can own focus without a Python widget wrapper.
+        # Keep that focus occupied and avoid scheduling or forcing a repair.
+        root.focus_get.side_effect = KeyError("native-popdown")
+        root.after.reset_mock()
+        focused.focus_force.reset_mock()
+        keeper._remember(SimpleNamespace(widget=focused))
+        keeper._lost_focus(SimpleNamespace(widget=focused))
+        keeper._restore()
+        root.after.assert_not_called()
+        focused.focus_force.assert_not_called()
 
     def test_ubuntu_desktop_panels_and_negative_origins_use_native_units(self):
         area = WorkArea(-1920, 0, 1920, 1080)

@@ -172,6 +172,10 @@ same material without dark rectangular backgrounds. The native tab strip and
 unselected package rows also continue the glass, with no solid backing slabs.
 Tabs match the monitor controls: rounded borders remain visible when unselected,
 brighten on hover, and turn cyan with a bottom accent when selected.
+Hover and focus repaint only the tab strip using cached state images. Package
+scrolling shares one visible-row paint with the icon rail. During resizing,
+native panels reflow immediately and glass rendering waits for the resize burst
+to settle, avoiding repeated full-window image generation.
 Fields and selected rows retain readable fills; selection, scrolling and keyboard
 navigation remain native. Rounded control corners match the material behind
 them through resizing and theme changes. The direct-file downloader shares
@@ -1869,6 +1873,7 @@ node direct/verify_editor_layout_scheduling.js
 & src/_python/python.exe -B direct/verify_board_families.py
 & src/_python/python.exe -B direct/verify_browser_loading.py
 & src/_python/python.exe -B direct/verify_downloader_appearance.py --scale 1
+& src/_python/python.exe -B direct/verify_downloader_performance.py --scale 1
 & src/_python/python.exe -B direct/verify_package_jobs.py
 & src/_python/python.exe -B direct/verify_board_preparation.py
 & src/_python/python.exe -B direct/verify_board_index_targets.py

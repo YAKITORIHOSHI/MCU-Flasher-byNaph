@@ -23,7 +23,13 @@ class GlassNotebook(ttk.Notebook):
         self._geometry_key = None
         self._tab_boxes = []
         self._skin_photos = []
+        self._skin_cache = {}
+        self._font_key = None
+        self._paint_key = None
+        self._page_key = None
+        self._strip_geometry = None
         self._client_key = None
+        self._client_size = (1, 1)
         super().__init__(master, **options)
         self._style = ttk.Style(self)
         self._style_name = f"Material{id(self)}.TNotebook"
@@ -88,6 +94,17 @@ class GlassNotebook(ttk.Notebook):
     def _boxes(self, width, height):
         # Ask the native geometry engine once after a size/text/style change.
         # These hit boxes also account for compressed tabs at narrow widths.
+        # Each native tab occupies a contiguous interval: find its boundaries
+        # with binary searches rather than dispatching Tcl once per pixel.
+        def end(start, stop, matches):
+            while start+1 < stop:
+                middle = (start+stop)//2
+                if matches(middle):
+                    start = middle
+                else:
+                    stop = middle
+            return stop
+
         result = []
         y, x, gap = max(0, height // 2), 0, 0
         while x < width and (not result or gap < 16):
@@ -97,13 +114,11 @@ class GlassNotebook(ttk.Notebook):
                 x += 1
                 continue
             gap, left = 0, x
-            while x < width and self._index_at(x, y) == index:
-                x += 1
-            center, top, bottom = (left+x)//2, y, y+1
-            while top > 0 and self._index_at(center, top-1) == index:
-                top -= 1
-            while bottom < height and self._index_at(center, bottom) == index:
-                bottom += 1
+            x = end(x, width, lambda px: self._index_at(px, y) == index)
+            center = (left+x)//2
+            # Searching upward uses the distance from the known interior row.
+            top = y-end(0, y+1, lambda distance: self._index_at(center, y-distance) == index)+1
+            bottom = end(y, height, lambda py: self._index_at(center, py) == index)
             result.append((index, left, top, x, bottom))
         return result
 
@@ -122,46 +137,91 @@ class GlassNotebook(ttk.Notebook):
         selected = self.select()
         if width < 2 or full_height < 2 or not selected:
             self._strip.place_forget()
+            self._strip_geometry = None
             return
         page = self.nametowidget(selected)
         strip_height = min(full_height, max(1, page.winfo_y()))
         if strip_height < 2:
             return
-        self._strip.place(x=0, y=0, width=width, height=strip_height)
-        self.tk.call("raise", self._strip)
+        strip_geometry = (width, strip_height)
+        if strip_geometry != self._strip_geometry:
+            self._strip_geometry = strip_geometry
+            self._strip.place(x=0, y=0, width=width, height=strip_height)
+            self.tk.call("raise", self._strip)
         location = material_location(self)
-        self._strip.delete("all")
         self._material_photo = location[0] if location else None
+        material_key = None
         if location:
             source, x, y = location
-            self._strip.create_image(-x, -y, image=source, anchor="nw")
+            material_key = (str(source), x, y)
             # Only the current client crop is retained, and its image element
             # requests zero size so native page minima cannot grow with it.
             client_key = (str(source), x, y, width, full_height, strip_height, self.palette.WINDOW_BG)
             if client_key != self._client_key:
-                self._client_key = client_key
-                self._client_image.configure(width=width, height=max(1, full_height-strip_height))
-                self._client_image.put(self.palette.WINDOW_BG, to=(0, 0, width, max(1, full_height-strip_height)))
+                client_height = max(1, full_height-strip_height)
+                if self._client_size != (width, client_height):
+                    self._client_image.configure(width=width, height=client_height)
+                    self._client_size = (width, client_height)
                 left, top = max(0, x), max(0, y+strip_height)
                 right, bottom = min(source.width(), x+width), min(source.height(), y+full_height)
+                if (left, top, right, bottom) != (x, y+strip_height, x+width, y+full_height):
+                    self._client_image.put(self.palette.WINDOW_BG, to=(0, 0, width, client_height))
                 if left < right and top < bottom:
                     self.tk.call(self._client_image, "copy", source, "-from", left, top, right, bottom,
-                                 "-to", left-x, top-y-strip_height, "-compositingrule", "overlay")
+                                 "-to", left-x, top-y-strip_height, "-compositingrule", "set")
+                self._client_key = client_key
             if not self._style_ready:
                 self._style_ready = True
                 self.configure(style=self._style_name)
         tabs = tuple((tab, tuple(sorted(self.tab(tab).items()))) for tab in self.tabs())
         font = self._style.lookup("TNotebook.Tab", "font") or "TkDefaultFont"
-        key = (width, strip_height, tabs, selected, str(font))
+        # Named fonts can change without their name changing. Read their actual
+        # settings, but retain the one Font object instead of allocating one
+        # for every pointer/focus event.
+        font_key = tuple(self.tk.splitlist(self.tk.call("font", "actual", font)))
+        if font_key != self._font_key:
+            self.tk.call("font", "configure", str(self._font), *font_key)
+            self._font_key = font_key
+        key = (width, strip_height, tabs, selected, font_key)
         if key != self._geometry_key:
             self._geometry_key = key
             self._tab_boxes = self._boxes(width, strip_height)
-        self._font.configure(**tkfont.Font(root=self, font=font).actual())
-        self._skin_photos = []
-        from src.modules.tk_glass import glass_photo, material_ink, ui_scale
-        from src.modules.ui_palette import mix
+        from src.modules.tk_glass import ui_scale
         p = self.palette
         scale = ui_scale(self)
+        focused = self.focus_get() is self
+        palette_key = tuple(getattr(p, name) for name in
+                            ("BG_MID", "BG_DARK", "BG_HOVER", "CYAN", "BORDER", "BORDER_LIT",
+                             "WINDOW_BG", "TEXT_DIM", "TEXT_BRIGHT"))
+        paint_key = (key, material_key, self._hover, focused, palette_key, scale)
+        page_key = (selected, material_key, width, full_height, palette_key)
+        if paint_key == self._paint_key and page_key == self._page_key:
+            return
+        if paint_key != self._paint_key:
+            self._paint_key = paint_key
+            self._paint_tabs(location, scale, selected, focused)
+        # Hover/focus only affect the strip. Repainting all pages here made one
+        # pointer transition regenerate the entire downloader, including hidden
+        # Installed content. Refresh only the mapped page when its owner/offset
+        # or selection changes; its normal Configure/Map hooks handle its layout.
+        if page_key != self._page_key:
+            self._page_key = page_key
+            if page.winfo_viewable():
+                refresh = getattr(page, "refresh_material", None)
+                refresh() if refresh is not None else _refresh_children(page)
+
+    def _paint_tabs(self, location, scale, selected, focused):
+        from src.modules.tk_glass import glass_photo, material_ink
+        from src.modules.ui_palette import mix
+
+        p = self.palette
+        self._strip.delete("all")
+        if location:
+            source, x, y = location
+            self._strip.create_image(-x, -y, image=source, anchor="nw")
+        else:
+            self._strip.configure(background=p.WINDOW_BG)
+        self._skin_photos = []
         current = self.index(selected)
         for index, left, top, right, bottom in self._tab_boxes:
             values = self.tab(index)
@@ -175,8 +235,16 @@ class GlassNotebook(ttk.Notebook):
             rim = p.CYAN if chosen else p.BORDER_LIT if active else p.BORDER
             skin_right = max(left+1, right-round(4*scale))
             skin_bottom = max(top+1, bottom-round(4*scale))
-            image = glass_photo(self, skin_right-left, skin_bottom-top, upper, lower,
-                                rim, p.WINDOW_BG, round(9*scale), False, transparent=True)
+            skin_key = (skin_right-left, skin_bottom-top, upper, lower, rim,
+                        p.WINDOW_BG, round(9*scale))
+            image = self._skin_cache.get(skin_key)
+            if image is None:
+                # Three states per tab are normally sufficient. Cap retained
+                # variants across arbitrary resize/theme changes as well.
+                if len(self._skin_cache) >= 24:
+                    self._skin_cache.clear()
+                image = glass_photo(self, *skin_key, False, transparent=True)
+                self._skin_cache[skin_key] = image
             self._skin_photos.append(image)
             self._strip.create_image(left, top, image=image, anchor="nw", tags=("tab-skin", f"tab-{index}"))
             if chosen:
@@ -196,16 +264,12 @@ class GlassNotebook(ttk.Notebook):
                 line_y = (top+skin_bottom+self._font.metrics("ascent")-self._font.metrics("descent"))/2+1
                 self._strip.create_line(start, line_y, start+self._font.measure(label[underline]),
                                         line_y, fill=color)
-            if chosen and self.focus_get() is self:
+            if chosen and focused:
                 bounds = self._strip.bbox(text)
                 if bounds:
                     x1, y1, x2, y2 = bounds
                     self._strip.create_rectangle(x1-2, y1-2, x2+2, y2+2,
                                                  outline=p.CYAN, dash=(1, 2))
-        for child in self.winfo_children():
-            if child is not self._strip:
-                refresh = getattr(child, "refresh_material", None)
-                refresh() if refresh is not None else _refresh_children(child)
 
     def add(self, child, **options):
         result = super().add(child, **options)
@@ -245,5 +309,6 @@ class GlassNotebook(ttk.Notebook):
             self.deletecommand(command)
         self._paint_bindings.clear()
         self._skin_photos.clear()
+        self._skin_cache.clear()
         self._material_photo = None
         self._client_image = None

@@ -62,6 +62,9 @@ brighter hover rim and cyan selected rim/bottom accent consistent with the
 workspace's monitor tabs. Retain actual native Notebook/Listbox geometry,
 focus, pointer, scrolling and keyboard behavior beneath their static paint.
 Native fields and selected rows retain readable fills and original callbacks.
+Keep hover/focus updates confined to cached tab states; native rows and their
+icon rail share one bounded paint. Native panels follow live resizing immediately,
+while expensive static material rendering waits for the resize burst to finish.
 Do not fake glass by reducing the entire
 window's opacity. Setup keeps its existing material. On Ubuntu load bundled Montserrat
 through process-local Fontconfig application fonts, without installing fonts or

@@ -240,12 +240,28 @@ class NativeResizeFocus:
         self._focused = None
         self._pending = None
         root.bind("<FocusIn>", self._remember, add="+")
+        root.bind("<FocusOut>", self._lost_focus, add="+")
         root.bind("<Configure>", self._schedule, add="+")
         root.bind("<Destroy>", self._cancel, add="+")
 
     def _remember(self, event):
         if event.widget is not self.root:
-            self._focused = self.root.focus_get()
+            try:
+                focused = self.root.focus_get()
+            except (KeyError, tk.TclError):
+                return  # Native popups can have no Python widget wrapper.
+            if focused is not None:
+                self._focused = focused
+
+    def _lost_focus(self, _event):
+        # Native child reflow can clear focus without resizing the toplevel.
+        # Preserve the last actual control, and let _restore check that another
+        # application has not acquired focus before doing anything.
+        try:
+            if self._pending is None and self._focused is not None and self.root.focus_get() is None:
+                self._pending = self.root.after(60, self._restore)
+        except (KeyError, tk.TclError):
+            pass
 
     def _schedule(self, event):
         if event.widget is self.root and self._pending is None:
@@ -261,9 +277,24 @@ class NativeResizeFocus:
         focused = self._focused
         try:
             if (focused is not None and focused.winfo_exists() and focused.winfo_viewable()
-                    and self.root.focus_get() is None and _x11_focus_unset(self.root)):
+                    and self.root.focus_get() is None):
+                # Ordinary focus_set remembers the target if another app is
+                # active, without acquiring its native focus or polling it.
+                focused.focus_set()
+                if self.root.focus_get() is not None or not _x11_focus_unset(self.root):
+                    return
+                pending = [self.root]
+                while pending:
+                    widget = pending.pop()
+                    if getattr(widget, "_redraw_id", None) is not None:
+                        # Deferred materials can trigger a later native focus
+                        # reset. Restore after their final paint, keeping one
+                        # owned retry and rechecking the active X11 client.
+                        self._pending = self.root.after(60, self._restore)
+                        return
+                    pending.extend(widget.winfo_children())
                 focused.focus_force()
-        except tk.TclError:
+        except (KeyError, tk.TclError):
             pass
 
 
@@ -572,6 +603,28 @@ def glass_photo(master, width, height, base, lower, rim, surround, radius=12, re
         renderer(width, height, base, lower, rim, surround, radius, reflection, transparent)), format="png")
 
 
+@lru_cache(maxsize=1)
+def _resource_colors(stops):
+    """One compact palette table, shared across all current material sizes.
+
+    Interpolate the gradient and reflection colors once per palette instead of
+    millions of Python blends during a live resize. A 1/1024 gradient step and
+    1/255 reflection step retain the material within display color precision.
+    """
+    colors = tuple(map(_rgb, stops))
+    positions = (0., .22, .72, 1.)
+    gradient = []
+    for index in range(1025):
+        position = index / 1024
+        segment = 0 if position <= .22 else 1 if position <= .72 else 2
+        amount = (position-positions[segment]) / (positions[segment+1]-positions[segment])
+        gradient.append(_blend(colors[segment], colors[segment+1], amount))
+    levels = 128 if readable_foreground(stops[-1]) == "#000000" else 66
+    base = b"".join(bytes(color) for color in gradient)
+    return tuple(base.translate(bytes(round(value+(255-value)*level/255)
+                                      for value in range(256))) for level in range(levels))
+
+
 @lru_cache(maxsize=32)
 def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scene=False):
     """Bake the project selector's directional material into native row runs.
@@ -582,7 +635,7 @@ def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scen
     width, height = max(1, int(width)), max(1, int(height))
     if width > 8192 or height > 8192 or width * height > 16_000_000:
         raise ValueError("Glass surface exceeds the native image budget")
-    colors = tuple(map(_rgb, stops))
+    color_rows = _resource_colors(stops)
     edge, light_edge, outside = map(_rgb, (rim, lit, surround))
     white = (255, 255, 255)
     light = readable_foreground(stops[-1]) == "#000000"
@@ -590,7 +643,6 @@ def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scen
     radius = min(max(1, radius), width / 2, height / 2)
     direction = width * .25
     denominator = direction * direction + height * height
-    positions = (0., .22, .72, 1.)
     samples = min(64, max(1, width // 8))
     base_breaks = {round(width * step / samples) for step in range(samples + 1)}
     rows = bytearray()
@@ -615,27 +667,31 @@ def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scen
                 breaks.add(max(0, min(width, round(boundary) + offset)))
         breaks = sorted(breaks)
         rows.append(0)
+        if not scene:
+            # The rim is constant across this scanline. Computing it for each
+            # gradient segment used to dominate full-card resizing.
+            boundary_color = _blend(edge, light_edge, max(0., 1-vertical*3) * .55)
+            if y < 2:
+                boundary_color = _blend(boundary_color, white, .26 if light else .18)
         for x0, x1 in zip(breaks, breaks[1:]):
             if x1 <= x0:
                 continue
             x = (x0 + x1) / 2
             position = min(1., (x * direction + center * height) / denominator)
-            segment = next((i for i in range(3) if position <= positions[i+1]), 2)
-            amount = (position - positions[segment]) / (positions[segment+1] - positions[segment])
-            fill = _blend(colors[segment], colors[segment+1], amount)
+            opacity = 0
             if vertical < .8:
                 band = max(0., min(1., x-band_left+.5, band_right-x+.5))
                 streak = max(0., min(1., x-streak_left+.5, streak_right-x+.5))
-                fill = _blend(fill, white, reflection * band)
-                fill = _blend(fill, white, (55 if light else 23) / 255 * (1-fade) * streak)
+                first = reflection * band
+                second = (55 if light else 23) / 255 * (1-fade) * streak
+                opacity = min(len(color_rows)-1, round(255 * (first+second-first*second)))
+            offset = round(position*1024)*3
+            fill = color_rows[opacity][offset:offset+3]
             if scene:
-                rows.extend(bytes((*fill, 255)) * (x1-x0))
+                rows.extend((fill+b'\xff') * (x1-x0))
                 continue
             # Keep native compositing opaque, with a lit upper edge and one
             # antialiased rim matching the selector rather than a thick slab.
-            boundary_color = _blend(edge, light_edge, max(0., 1-vertical*3) * .55)
-            if y < 2:
-                boundary_color = _blend(boundary_color, white, .26 if light else .18)
             if x0 >= inner_inset+1 and x1 <= width-inner_inset-1 and 1 <= y < height-1:
                 rows.extend(bytes((*fill, 255)) * (x1-x0))
                 continue
@@ -661,13 +717,33 @@ def resource_photo(master, width, height, palette, surround, radius=12, *, scene
 def _material_underlay(widget):
     """Let rounded corners reveal the owning scene instead of a dark square."""
     from src.modules.tk_material import _owner
-    widget.delete("material-underlay")
     owner = _owner(widget)
+    key = (str(owner._material_image), owner.winfo_rootx()-widget.winfo_rootx(),
+           owner.winfo_rooty()-widget.winfo_rooty()) if owner is not None else None
+    if key == getattr(widget, "_underlay_key", None):
+        return
+    widget._underlay_key = key
+    widget.delete("material-underlay")
     if owner is not None:
         widget._underlay_image = owner._material_image
-        widget.create_image(owner.winfo_rootx()-widget.winfo_rootx(), owner.winfo_rooty()-widget.winfo_rooty(),
+        widget.create_image(key[1], key[2],
                             image=widget._underlay_image, anchor="nw", tags="material-underlay")
         widget.tag_lower("material-underlay")
+
+
+def _queue_glass_draw(widget, event=None):
+    """Reflow natively during a resize burst; bake glass after it settles."""
+    resizing = (event is not None and event.widget is widget
+                and event.type == tk.EventType.Configure)
+    if resizing:
+        layout = getattr(widget, "_layout", None)
+        if layout is not None and widget.winfo_viewable():
+            layout()
+    if resizing and widget._redraw_id is not None:
+        widget.after_cancel(widget._redraw_id)
+        widget._redraw_id = None
+    if widget._redraw_id is None:
+        widget._redraw_id = widget.after(160 if resizing else 40, widget._draw)
 
 
 class GlassScene(tk.Canvas):
@@ -685,8 +761,7 @@ class GlassScene(tk.Canvas):
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
-        if self._redraw_id is None:
-            self._redraw_id = self.after(40, self._draw)
+        _queue_glass_draw(self, _event)
 
     def _cancel(self, event):
         if event.widget is self and self._redraw_id is not None:
@@ -695,22 +770,28 @@ class GlassScene(tk.Canvas):
 
     def _draw(self):
         self._redraw_id = None
-        width, height = self.winfo_width(), self.winfo_height()
-        if width < 2 or height < 2:
-            return
-        self.itemconfigure(self._body_window, width=width, height=height)
-        if not self.winfo_viewable():
+        width, height = self._layout()
+        if width < 2 or height < 2 or not self.winfo_viewable():
             return
         p = self.palette
         key = (width, height, p.BG_LIGHT, p.BG_MID, p.BG_DARK, p.BG_DARKEST, p.BORDER, p.BORDER_LIT)
-        if key != getattr(self, "_surface_key", None):
-            self._surface_key = key
-            self._material_image = resource_photo(self, width, height, p, p.WINDOW_BG, 0, scene=True)
-            self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if readable_foreground(p.BG_DARKEST) == "#000000" else .18))
+        if key == getattr(self, "_surface_key", None):
+            self.body.refresh_material()
+            return
+        self._surface_key = key
+        self._material_image = resource_photo(self, width, height, p, p.WINDOW_BG, 0, scene=True)
+        self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if readable_foreground(p.BG_DARKEST) == "#000000" else .18))
         self.delete("material")
         self.create_image(0, 0, image=self._material_image, anchor="nw", tags="material")
         self.tag_lower("material")
         self.body.refresh_material()
+
+    def _layout(self):
+        width, height = self.winfo_width(), self.winfo_height()
+        if (width, height) != getattr(self, "_body_size", None):
+            self._body_size = (width, height)
+            self.itemconfigure(self._body_window, width=width, height=height)
+        return width, height
 
 
 from src.modules.tk_svg import SvgButton, photo as svg_photo
@@ -828,6 +909,7 @@ class GlassButton(SvgButton):
             tk.Button.configure(self, background=outside, activebackground=outside)
 
 
+@lru_cache(maxsize=256)
 def material_ink(color, upper, lower, minimum=4.5):
     """Retain a semantic ink, adjusting it only for the reflective bounds."""
     from src.modules.ui_palette import contrast_ratio
@@ -916,8 +998,7 @@ class BrowserHeader(tk.Canvas):
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
-        if self._redraw_id is None:
-            self._redraw_id = self.after(40, self._draw)
+        _queue_glass_draw(self, _event)
 
     def _cancel(self, event):
         if event.widget is self and self._redraw_id is not None:
@@ -927,9 +1008,8 @@ class BrowserHeader(tk.Canvas):
     def refresh_material(self):
         self._schedule()
 
-    def _draw(self):
-        self._redraw_id = None
-        p, scale = self.palette, ui_scale(self)
+    def _layout(self):
+        scale = ui_scale(self)
         width, pad = self.winfo_width(), round((10 if self.framed else 6) * scale)
         mark_size, gap = round(32 * scale), round(10 * scale)
         title_height = self._title_font.metrics("linespace") + self._subtitle_font.metrics("linespace") + round(4 * scale)
@@ -945,6 +1025,14 @@ class BrowserHeader(tk.Canvas):
             height = 2 * pad + max(mark_size, title_height) + action_height + round(6 * scale)
         if self.winfo_pixels(self.cget("height")) != height:
             self.configure(height=height)
+        action_y = height - pad - action_height if stacked else (height - action_height) / 2
+        self.coords(self._actions_window, width - pad, action_y)
+        return width, height, pad, mark_size, title_height, action_width, action_height, stacked, action_y
+
+    def _draw(self):
+        self._redraw_id = None
+        p, scale = self.palette, ui_scale(self)
+        width, height, pad, mark_size, title_height, action_width, action_height, stacked, action_y = self._layout()
         if width < 2 or not self.winfo_viewable():
             return
         self.delete("material")
@@ -969,15 +1057,13 @@ class BrowserHeader(tk.Canvas):
         self._brand = svg_photo(self, "brand", material_ink(p.CYAN, top, bottom, 3), mark_size)
         self.create_image(pad, pad + max(mark_size, title_height) / 2, image=self._brand,
                           anchor="w", tags="material")
-        title_x = pad + mark_size + gap
+        title_x = pad + mark_size + round(10 * scale)
         self.create_text(title_x, pad, text=self.title, anchor="nw",
                          font=self._title_font, fill=p.TEXT_BRIGHT, tags="material")
         if not stacked:
             self.create_text(title_x, pad + self._title_font.metrics("linespace") + round(4 * scale),
                              text=self.subtitle, anchor="nw",
                              font=self._subtitle_font, fill=material_ink(p.TEXT_DIM, top, bottom), tags=("material", "subtitle"))
-        action_y = height - pad - action_height if stacked else (height - action_height) / 2
-        self.coords(self._actions_window, width - pad, action_y)
         self.tag_lower("material", self._actions_window)
         # Native button focus and commands stay native. Blend their surrounding
         # pixels with the material immediately behind the action row.
@@ -1031,8 +1117,7 @@ class GlassEmptyState(tk.Canvas):
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
-        if self._redraw_id is None:
-            self._redraw_id = self.after(40, self._draw)
+        _queue_glass_draw(self, _event)
 
     def refresh_material(self):
         self._schedule()
@@ -1049,22 +1134,25 @@ class GlassEmptyState(tk.Canvas):
             return
         p, scale = self.palette, ui_scale(self)
         top = mix(p.BG_MID, "#ffffff", .045)
-        key = (width, height, top, p.BG_DARK, top, p.BG_DARKEST, 0)
-        if key != getattr(self, "_surface_key", None):
-            self._surface_key = key
-            self._surface = glass_photo(self, *key)
-        self.delete("all")
+        owner = None
         if getattr(p, "RESOURCE_GLASS", False):
             from src.modules.tk_material import _owner
             owner = _owner(self)
-            if owner is not None:
-                self._surface = owner._material_image
-                self.create_image(owner.winfo_rootx()-self.winfo_rootx(), owner.winfo_rooty()-self.winfo_rooty(),
-                                  image=self._surface, anchor="nw")
-            else:
-                self.create_image(0, 0, image=self._surface, anchor="nw")
+        if owner is not None:
+            self._surface = owner._material_image
+            x, y = owner.winfo_rootx()-self.winfo_rootx(), owner.winfo_rooty()-self.winfo_rooty()
+            key = (width, height, str(self._surface), x, y, p.TEXT_BRIGHT, p.TEXT_DIM, scale)
         else:
-            self.create_image(0, 0, image=self._surface, anchor="nw")
+            surface_key = (width, height, top, p.BG_DARK, top, p.BG_DARKEST, 0)
+            key = (*surface_key, p.TEXT_BRIGHT, p.TEXT_DIM, scale)
+            if key != getattr(self, "_surface_key", None):
+                self._surface = glass_photo(self, *surface_key)
+            x = y = 0
+        if key == getattr(self, "_surface_key", None):
+            return
+        self._surface_key = key
+        self.delete("all")
+        self.create_image(x, y, image=self._surface, anchor="nw")
         center = height // 2
         compact = height < round(145 * scale)
         if not compact:
@@ -1105,8 +1193,7 @@ class GlassCard(tk.Canvas):
         self.bind("<Destroy>", self._cancel, add="+")
 
     def _schedule(self, _event=None):
-        if self._redraw_id is None:
-            self._redraw_id = self.after(40, self._draw)
+        _queue_glass_draw(self, _event)
 
     def refresh_material(self):
         self._schedule()
@@ -1153,9 +1240,7 @@ class GlassCard(tk.Canvas):
             required = max(required, line_height)
         return required
 
-    def _draw(self):
-        self._redraw_id = None
-        p = self.palette
+    def _layout(self):
         requested = self.body.winfo_reqheight() + 2 * self.padding
         height = self.winfo_height() if self.expand else max(requested, self.winfo_height())
         width = self.winfo_width()
@@ -1172,7 +1257,12 @@ class GlassCard(tk.Canvas):
             vertical_padding = min(self.padding, max(0, (height - reading_height - heading_height) // 2))
             self.coords(self._body_window, self.padding, vertical_padding + heading_height)
             self.itemconfigure(self._body_window, height=max(1, height - 2 * vertical_padding - heading_height))
-        self.delete("glass")
+        return width, height, heading_height
+
+    def _draw(self):
+        self._redraw_id = None
+        width, height, heading_height = self._layout()
+        p = self.palette
         if width < 4 or height < 4 or not self.winfo_viewable():
             return
         if getattr(p, "RESOURCE_GLASS", False):
@@ -1183,13 +1273,22 @@ class GlassCard(tk.Canvas):
         top = mix(p.BG_MID, "#ffffff", .28 if light else .012)
         bottom = p.BG_MID
         rim = p.BORDER if light else mix(p.BORDER, "#ffffff", .10)
-        key = (width, height, top, bottom, rim, self.cget("background"), round(14 * ui_scale(self)))
+        args = (width, height, top, bottom, rim, self.cget("background"), round(14 * ui_scale(self)))
+        key = (*args, p.BG_LIGHT, p.BG_DARK, p.BG_DARKEST, p.BORDER_LIT,
+               bool(getattr(p, "RESOURCE_GLASS", False)))
         if key != getattr(self, "_surface_key", None):
             self._surface_key = key
             self._surface = (resource_photo(self, width, height, p, self.cget("background"), round(12 * ui_scale(self)))
-                             if getattr(p, "RESOURCE_GLASS", False) else glass_photo(self, *key))
+                             if getattr(p, "RESOURCE_GLASS", False) else glass_photo(self, *args))
         self._material_image = self._surface
         self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if light else .18))
+        paint_key = (key, heading_height, self.heading, p.TEXT_BRIGHT, getattr(self, "_underlay_key", None))
+        if paint_key == getattr(self, "_paint_key", None):
+            if hasattr(self.body, "refresh_material"):
+                self.body.refresh_material()
+            return
+        self._paint_key = paint_key
+        self.delete("glass")
         self.create_image(0, 0, image=self._surface, anchor="nw", tags="glass")
         if heading_height:
             self.create_text(self.padding + 2, self.padding + heading_height // 2,

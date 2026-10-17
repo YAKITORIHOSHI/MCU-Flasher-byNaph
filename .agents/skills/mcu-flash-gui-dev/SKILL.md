@@ -42,6 +42,15 @@ viewport. Tabs retain rounded unselected borders, brighter hover rims and cyan
 selected rims/bottom accents like the monitor tabs. Activate the notebook's
 image client only after a full-sized crop is ready; never tile a 1px placeholder
 across its client. Settle geometry while hidden and paint material on Map.
+Cache tab state images and separate hover/focus painting from page material
+refresh. Propagate material only when its source/offset/viewport changes and
+only through mapped descendants. Share one bounded row snapshot/paint between
+the list and icon rail, retaining the native font. Never rasterize an empty
+pane's unused background when its owner already supplies glass. Reflow native
+Scene/Card/Header geometry immediately during resize, but retire older raster
+callbacks and paint the latest viewport after the burst. Keep palette lookup
+tables and state-image caches bounded. Verify these work/resource limits with
+`direct/verify_downloader_performance.py`, plus the native appearance matrix.
 Native fields and selected rows retain readable fills and existing
 callbacks, including one double-click action and modifier/drag selection.
 Rounded controls composite their corners over the current owner image; refresh

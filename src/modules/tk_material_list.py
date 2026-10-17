@@ -7,7 +7,6 @@ while keyboard input, focus, selection and scrolling stay on the Listbox.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import font as tkfont
 
 from src.modules.tk_material import _owner
 from src.modules.tk_svg import SvgListbox, photo
@@ -28,8 +27,9 @@ class GlassListbox(SvgListbox):
         self._rail_photo = None
         self._listvariable_trace = None
         self._last_pointer_press = None
+        self._row_ink_cache = {}
+        self._color_cache = {}
         super().__init__(master, **options)
-        self._glass_font = tkfont.Font(root=self, font=self.cget("font"))
         self._surface = tk.Canvas(self, takefocus=0, borderwidth=0,
                                   highlightthickness=0, background=self.cget("background"))
         self._surface.place(x=0, y=0, relwidth=1, relheight=1, bordermode="ignore")
@@ -59,7 +59,8 @@ class GlassListbox(SvgListbox):
     def _schedule_rail(self, _event=None):
         if self._material_closed:
             return
-        super()._schedule_rail(_event)
+        # The surface and SVG rail use the same native viewport. One idle
+        # snapshot avoids querying and recoloring every row twice per scroll.
         if hasattr(self, "_surface") and self._material_after is None:
             self._material_after = self.after_idle(self._draw_surface)
 
@@ -119,7 +120,8 @@ class GlassListbox(SvgListbox):
             self._dispatch_double_press(details)
         else:
             self.event_generate(sequence, **details)
-        self._schedule_rail()
+        if sequence not in ("<Enter>", "<Leave>"):
+            self._schedule_rail()
         return "break"
 
     def _dispatch_double_press(self, details):
@@ -164,74 +166,100 @@ class GlassListbox(SvgListbox):
         return owner
 
     def _hex(self, color):
-        return "#" + "".join(f"{part // 257:02x}" for part in self.winfo_rgb(color))
+        color = str(color)
+        value = self._color_cache.get(color)
+        if value is None:
+            value = "#" + "".join(f"{part // 257:02x}" for part in self.winfo_rgb(color))
+            if len(self._color_cache) >= 64:
+                self._color_cache.clear()
+            self._color_cache[color] = value
+        return value
 
-    def _row_colors(self, row, owner):
+    def _row_colors(self, row, owner, selected, defaults):
         from src.modules.tk_glass import material_ink
 
-        selected = bool(self.selection_includes(row))
         foreground = self.itemcget(row, "selectforeground" if selected else "foreground")
-        foreground = foreground or self.cget("selectforeground" if selected else "foreground")
-        if str(self.cget("state")) == "disabled":
-            foreground = self.cget("disabledforeground")
+        foreground = foreground or defaults["selectforeground" if selected else "foreground"]
+        if defaults["state"] == "disabled":
+            foreground = defaults["disabledforeground"]
         foreground = self._hex(foreground)
         configured_background = self.itemcget(row, "selectbackground" if selected else "background")
-        background = configured_background or self.cget("selectbackground" if selected else "background")
+        background = configured_background or defaults["selectbackground" if selected else "background"]
         background = self._hex(background)
         paint_background = selected or bool(configured_background)
         bounds = ((background, background) if paint_background
                   else getattr(owner, "_material_bounds", (background, background)))
-        return paint_background, background, material_ink(foreground, *bounds)
+        key = (foreground, *bounds)
+        ink = self._row_ink_cache.get(key)
+        if ink is None:
+            ink = material_ink(foreground, *bounds)
+            if len(self._row_ink_cache) >= 128:
+                self._row_ink_cache.clear()
+            self._row_ink_cache[key] = ink
+        return paint_background, background, ink
 
     def _visible_rows(self):
-        if not self.size():
+        count = self.size()
+        if not count:
             return
         start = self.nearest(0)
-        for row in range(start, min(self.size(), start + 128)):
+        height = self.winfo_height()
+        for row in range(start, min(count, start + 128)):
             box = self.bbox(row)
             if box is None:
                 break
-            if box[1] > self.winfo_height():
+            if box[1] > height:
                 break
             yield row, box
 
     def _draw_surface(self):
         self._material_after = None
-        if self._material_closed or not self.winfo_exists():
+        if self._material_closed or not self.winfo_exists() or not self.winfo_ismapped():
             return
         # Continue the material through the native border as well. Paint the
         # original focus highlight only while this Listbox owns keyboard focus.
-        self._surface.place_configure(x=0, y=0, width=0, height=0,
-                                      relwidth=1, relheight=1)
         self._surface.delete("all")
         owner = self._paint_background(self._surface)
-        actual = self.tk.splitlist(self.tk.call("font", "actual", self.cget("font")))
-        self._glass_font.configure(**{key.lstrip("-"): value for key, value in zip(actual[::2], actual[1::2])})
-        for row, (x, y, _width, height) in self._visible_rows():
-            paint_background, background, foreground = self._row_colors(row, owner)
+        # Use the native font directly. Reconfiguring a separate named font on
+        # every scroll invalidates Tk's text caches even when nothing changed.
+        native_font = self.cget("font")
+        selected = set(self.curselection())
+        defaults = {key: str(self.cget(key)) for key in
+                    ("foreground", "background", "selectforeground", "selectbackground",
+                     "state", "disabledforeground")}
+        rows = [(row, box, self._row_colors(row, owner, row in selected, defaults))
+                for row, box in self._visible_rows()]
+        width = self.winfo_width()
+        for row, (x, y, _width, height), colors in rows:
+            paint_background, background, foreground = colors
             if paint_background:
-                self._surface.create_rectangle(0, y, self.winfo_width(), y + height,
+                self._surface.create_rectangle(0, y, width, y + height,
                                                fill=background, outline="", tags="selection")
             self._surface.create_text(x, y + height / 2, text=self.get(row),
-                                      font=self._glass_font, fill=foreground, anchor="w")
+                                      font=native_font, fill=foreground, anchor="w")
         highlight = self.winfo_pixels(self.cget("highlightthickness"))
         if highlight > 0 and str(self.tk.call("focus")) == str(self):
             half = highlight / 2
             self._surface.create_rectangle(half, half, self.winfo_width() - half,
                                            self.winfo_height() - half, width=highlight,
                                            outline=self.cget("highlightcolor"), tags="focus-ring")
+        self._draw_rail(rows, native_font)
 
-    def _draw_rail(self):
+    def _draw_rail(self, rows=None, native_font=None):
         self._rail_after = None
-        if self._material_closed or not self.winfo_exists():
+        if self._material_closed or not self.winfo_exists() or not self.winfo_ismapped():
+            return
+        if rows is None:
+            self._schedule_rail()
             return
         self._rail.delete("all")
         self._rail_images.clear()
-        size = max(12, min(32, int(self.tk.call("font", "metrics", self.cget("font"), "-linespace"))))
-        self._rail.configure(width=size + 8)
-        owner = self._paint_background(self._rail)
-        for row, (_x, y, _width, height) in self._visible_rows():
-            paint_background, background, foreground = self._row_colors(row, owner)
+        size = max(12, min(32, int(self.tk.call("font", "metrics", native_font, "-linespace"))))
+        if int(self._rail.cget("width")) != size + 8:
+            self._rail.configure(width=size + 8)
+        self._paint_background(self._rail)
+        for row, (_x, y, _width, height), colors in rows:
+            paint_background, background, foreground = colors
             if paint_background:
                 self._rail.create_rectangle(0, y, size + 8, y + height, fill=background, outline="")
             name = self._icon_for(row) if self._icon_for else "package"

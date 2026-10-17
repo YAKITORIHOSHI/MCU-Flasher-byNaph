@@ -52,6 +52,8 @@ def material_patch(widget, width, height, location=None):
 
 def _refresh_children(widget):
     for child in widget.winfo_children():
+        if not child.winfo_viewable():
+            continue
         refresh = getattr(child, "refresh_material", None)
         if refresh is not None:
             refresh()
@@ -73,6 +75,7 @@ class _MaterialCanvas(tk.Canvas):
         self._redraw_id = None
         self._material_photo = None
         self._material_item = None
+        self._material_key = None
         self._material_closed = False
         super().__init__(master, **options)
         # Application callers may replace normal widget bindings. Keep our
@@ -107,21 +110,27 @@ class _MaterialCanvas(tk.Canvas):
 
     def _paint_material(self):
         owner = _owner(self)
-        self._material_photo = getattr(owner, "_material_image", None)
+        image = getattr(owner, "_material_image", None)
+        x = self.canvasx(0) + owner.winfo_rootx() - self.winfo_rootx() if image is not None else 0
+        y = self.canvasy(0) + owner.winfo_rooty() - self.winfo_rooty() if image is not None else 0
+        key = (str(image), x, y, self.winfo_width(), self.winfo_height(),
+               getattr(owner, "_material_bounds", None), self.cget("background"))
+        if key == self._material_key:
+            return False
+        self._material_key = key
+        self._material_photo = image
         if self._material_photo is None:
             if self._material_item is not None:
                 self.delete(self._material_item)
                 self._material_item = None
-            return owner
-        x = self.canvasx(0) + owner.winfo_rootx() - self.winfo_rootx()
-        y = self.canvasy(0) + owner.winfo_rooty() - self.winfo_rooty()
+            return True
         if self._material_item is None:
             self._material_item = self.create_image(x, y, anchor="nw", image=self._material_photo)
         else:
             self.coords(self._material_item, x, y)
             self.itemconfigure(self._material_item, image=self._material_photo)
         self.tag_lower(self._material_item)
-        return owner
+        return True
 
     def refresh_material(self):
         if self._material_closed:
@@ -129,9 +138,9 @@ class _MaterialCanvas(tk.Canvas):
         if self._redraw_id is not None:
             self.after_cancel(self._redraw_id)
             self._redraw_id = None
-        if self.winfo_exists():
-            self._paint_material()
-            _refresh_children(self)
+        if self.winfo_exists() and self.winfo_viewable():
+            if self._paint_material():
+                _refresh_children(self)
 
 
 class GlassBody(_MaterialCanvas):
@@ -187,6 +196,7 @@ class GlassLabel(_MaterialCanvas):
         self._text_item = self._icon_item = None
         self._svg_image = None
         self._request_size = None
+        self._label_paint_key = None
         for key in tuple(options):
             canonical = self._aliases.get(key, key)
             if canonical in self._label_options:
@@ -254,6 +264,9 @@ class GlassLabel(_MaterialCanvas):
                 self._label_options[canonical] = value
                 if canonical == "font":
                     self._font.configure(**tkfont.Font(root=self, font=value).actual())
+                    # A named font can change while its option string stays
+                    # the same. Its new metrics must invalidate label layout.
+                    self._label_paint_key = None
         result = super().configure(**options) if options else None
         self._queue_material()
         return result
@@ -279,6 +292,12 @@ class GlassLabel(_MaterialCanvas):
         if not self.winfo_exists():
             return
         options, text = self._label_options, self._text()
+        key = (tuple((name, str(value)) for name, value in options.items()), text,
+               self._svg_name, self._svg_icon_only, self.winfo_width(), self.winfo_height(),
+               self._material_key)
+        if key == self._label_paint_key:
+            return
+        self._label_paint_key = key
         color = options["foreground"]
         color = "#" + "".join(f"{part // 257:02x}" for part in self.winfo_rgb(color))
         owner = _owner(self)
