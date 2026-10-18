@@ -12,13 +12,13 @@ class Model implements TextModel {
   onDidChangeContent(callback: () => void) { this.listeners.add(callback); return { dispose: () => { this.listeners.delete(callback); } }; }
   dispose() { this.disposed = true; this.listeners.clear(); }
 }
-function fixture() {
+function fixture(content = 'old', createModel: (snapshot: DocumentSnapshot) => TextModel = snapshot => new Model(snapshot.content)) {
   const source = { documentId: 'main', name: 'Sketch.ino', extension: '.ino', isMain: true, sizeBytes: 3, revision: 1, contentDigest: 'old' };
   const manifest: SourceManifest = { protocolVersion: 1, workspaceId: 'workspace', revision: 1, files: [source] };
   const registration: WorkspaceRegistration = { protocolVersion: 1, workspaceId: 'workspace', root: '/fixture', name: 'Sketch', manifest };
-  const store = new DocumentStore(snapshot => new Model(snapshot.content));
+  const store = new DocumentStore(createModel);
   store.reset(registration);
-  const record = store.add({ workspaceId: 'workspace', document: source, content: 'old' });
+  const record = store.add({ workspaceId: 'workspace', document: source, content });
   return { store, record, source, manifest, registration };
 }
 
@@ -135,4 +135,88 @@ test('restoring disk to the known saved content resolves stale conflict without 
   assert.equal(record.conflict, false); assert.equal(record.dirty, true);
   assert.equal(record.model.getValue(), 'local edit');
   assert.equal(store.saveRequest('main').expectedRevision, 3);
+});
+
+/** Models Monaco's separate BOM and canonical line-ending representation. */
+class CanonicalModel extends Model {
+  private bom = '';
+  private readonly eol: string;
+  constructor(content: string) {
+    super(''); this.eol = content.includes('\r\n') ? '\r\n' : '\n';
+    this.setValue(content);
+  }
+  getValue(_eol?: number, preserveBOM = false) { return (preserveBOM ? this.bom : '') + this.value; }
+  setValue(content: string) {
+    this.bom = content.startsWith('\uFEFF') ? '\uFEFF' : '';
+    const text = this.bom ? content.slice(1) : content;
+    super.setValue(text.replace(/\r\n|\r|\n/g, this.eol));
+  }
+}
+
+for (const [name, content] of [
+  ['BOM', '\uFEFF// café 日本語\nvoid setup() {}\n'],
+  ['CRLF', '// café 日本語\r\nvoid setup() {}\r\n'],
+  ['mixed EOL and BOM', '\uFEFF// café 日本語\r\nvoid setup() {}\nvoid loop() {}\r'],
+]) {
+  test(`${name}: no-op save and edit undo retain the exact acknowledged source bytes`, () => {
+    const { store, record } = fixture(content, snapshot => new CanonicalModel(snapshot.content));
+    const canonical = record.model.getValue(undefined, true);
+    assert.equal(record.dirty, false);
+    const request = store.saveRequest('main');
+    assert.equal(request.content, content);
+    assert.equal(store.acknowledge(request, { workspaceId: 'workspace', documentId: 'main',
+      editRevision: request.editRevision, revision: 1, contentDigest: 'old', bytesWritten: 0, unchanged: true }), true);
+    assert.equal(record.dirty, false);
+    record.model.setValue(canonical + '// edit\n');
+    assert.equal(record.dirty, true);
+    record.model.setValue(canonical);
+    assert.equal(record.dirty, false);
+    assert.equal(store.saveRequest('main').content, content);
+  });
+}
+
+test('edited BOM model saves one BOM and retains newer edits through acknowledgement', () => {
+  const original = '\uFEFF// one\r\n// two\n';
+  const { store, record } = fixture(original, snapshot => new CanonicalModel(snapshot.content));
+  record.model.setValue(record.model.getValue(undefined, true) + '// saved\r\n');
+  const request = store.saveRequest('main');
+  assert.equal(request.content, '\uFEFF// one\r\n// two\r\n// saved\r\n');
+  assert.equal(record.normalizesLineEndings, true);
+  record.model.setValue(request.content + '// newer\r\n');
+  assert.equal(store.acknowledge(request, { workspaceId: 'workspace', documentId: 'main',
+    editRevision: request.editRevision, revision: 2, contentDigest: 'saved',
+    bytesWritten: new TextEncoder().encode(request.content).length, unchanged: false }), true);
+  assert.equal(record.dirty, true);
+  assert.equal(record.normalizesLineEndings, false);
+  record.model.setValue(request.content);
+  assert.equal(record.dirty, false);
+  assert.equal(store.saveRequest('main').content, request.content);
+});
+
+test('clean external refresh rebases original and canonical BOM/newline content together', async () => {
+  const { store, record, source, manifest } = fixture('old', snapshot => new CanonicalModel(snapshot.content));
+  const content = '\uFEFF// external\r\n// mixed\n';
+  const updated = { ...source, revision: 2, contentDigest: 'external' };
+  await store.reconcile({ ...manifest, revision: 2, files: [updated] },
+    async () => ({ workspaceId: 'workspace', document: updated, content }));
+  assert.equal(record.dirty, false);
+  assert.equal(record.normalizesLineEndings, true);
+  assert.equal(store.saveRequest('main').content, content);
+  record.model.setValue(record.model.getValue(undefined, true));
+  assert.equal(record.dirty, false);
+});
+
+test('late acknowledgement from an earlier registration cannot rebase a reopened document', () => {
+  const { store, record, source, registration } = fixture();
+  record.model.setValue('pending save');
+  const request = store.saveRequest('main');
+  store.reset(registration);
+  const reopened = store.add({ workspaceId: 'workspace', document: source, content: 'reopened' });
+  reopened.model.setValue('new local edits');
+  assert.equal(store.acknowledge(request, { workspaceId: 'workspace', documentId: 'main',
+    editRevision: request.editRevision, revision: 2, contentDigest: 'old request', bytesWritten: 12, unchanged: false }), false);
+  assert.equal(reopened.dirty, true);
+  assert.equal(reopened.savedContent, 'reopened');
+  assert.equal(reopened.source.contentDigest, 'old');
+  assert.equal(store.saveRequest('main').content, 'new local edits');
 });

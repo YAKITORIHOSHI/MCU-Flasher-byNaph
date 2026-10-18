@@ -8,6 +8,7 @@ fn main() {
             "save_document",
             "create_project",
             "stream_fixture",
+            "acknowledge_fixture",
             "report_probe",
             "verify_webview_transfer",
         ]),

@@ -111,9 +111,13 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertEqual(native.SetWindowPos.call_args.args[0:6], (55, 0, 0, 0, width, height))
 
     def test_embedded_geometry_changes_coalesce_after_native_dispatch(self):
-        host = self.own(QWidget())
+        # Match the real embedded host: desktop window-manager limits belong to
+        # its owning top-level, not this child's controlled geometry burst.
+        window = self.own(QWidget())
+        host = self.own(QWidget(window))
         changes = []
         watcher = EmbeddedGeometryWatcher(host, lambda: changes.append(host.size()))
+        window.show()
         host.show()
         pump()
         changes.clear()

@@ -16,6 +16,7 @@ use mcu_contracts::{
 pub mod preferences;
 pub mod resource_budget;
 pub mod serial_text;
+pub mod target_transport;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, Metadata, OpenOptions};

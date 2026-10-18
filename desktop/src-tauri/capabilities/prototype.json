@@ -6,6 +6,6 @@
   "permissions": [
     "allow-prototype-info", "allow-open-project", "allow-project-manifest",
     "allow-read-document", "allow-save-document", "allow-create-project", "allow-stream-fixture",
-    "allow-report-probe", "allow-verify-webview-transfer"
+    "allow-report-probe", "allow-verify-webview-transfer", "allow-acknowledge-fixture"
   ]
 }

@@ -34,6 +34,81 @@ def capture(widget, filename):
 
 
 class NativeWorkAreaChecks(unittest.TestCase):
+    def dialog_fitter(self, width=600, height=450):
+        minimum = [320, 240]
+        def minsize(*values):
+            if values:
+                minimum[:] = values
+            return tuple(minimum)
+        dialog = SimpleNamespace(winfo_exists=lambda: True, winfo_width=lambda: width,
+                                 winfo_height=lambda: height, minsize=Mock(side_effect=minsize),
+                                 geometry=Mock(), update_idletasks=Mock())
+        fitter = DialogFit.__new__(DialogFit)
+        fitter.dialog, fitter._pending, fitter._scale = dialog, None, 1
+        fitter._minimum, fitter._fitting, fitter._fit_key = (320, 240), False, None
+        return fitter, dialog
+
+    def test_dialog_fit_does_not_repeat_windows_writes_for_unchanged_native_inputs(self):
+        fitter, dialog = self.dialog_fitter()
+        area = WorkArea(-1920, 40, 960, 540)
+        observed = [WorkArea(-2200, -100, 616, 488)]
+        position = Mock(return_value=1)
+        native = SimpleNamespace(user32=SimpleNamespace(SetWindowPos=position))
+        with patch("src.modules.tk_glass._native_frame", side_effect=lambda _dialog: (observed[0], 123)), \
+             patch("ctypes.windll", native, create=True):
+            fitter._fit(area)
+            position.assert_called_once_with(123, None, -1912, 48, 0, 0, 0x0001 | 0x0004 | 0x0010)
+            dialog.geometry.assert_not_called()
+            dialog.minsize.assert_called_once_with()
+            fitter._fit(area)
+            self.assertEqual(position.call_count, 1)
+            self.assertEqual(dialog.minsize.call_count, 1)
+            observed[0] = WorkArea(-2100, -100, 616, 488)
+            fitter._fit(area)
+            self.assertEqual(position.call_count, 2, "A changed native frame must refit")
+            fitter._fit(WorkArea(-1280, 0, 1280, 720))
+            self.assertEqual(position.call_count, 3, "A changed monitor work area must refit")
+            observed[0] = WorkArea(-1100, 100, 616, 488)
+            fitter._fit(WorkArea(-1280, 0, 1280, 720))
+            self.assertEqual(position.call_count, 3, "An already fitting Windows frame needs no position write")
+        self.assertFalse(fitter._fitting)
+
+    def test_dialog_fit_quiesces_when_x11_declines_a_repeated_geometry_request(self):
+        fitter, dialog = self.dialog_fitter(620, 475)
+        area = WorkArea(40, 35, 760, 620)
+        observed = [WorkArea(110, 169, 620, 475)]
+        with patch("src.modules.tk_glass._native_frame", side_effect=lambda _dialog: (observed[0], None)):
+            fitter._fit(area)
+            dialog.geometry.assert_called_once_with("620x475+110+132")
+            fitter._fit(area)
+            self.assertEqual(dialog.geometry.call_count, 1)
+            self.assertEqual(dialog.minsize.call_count, 1)
+            observed[0] = WorkArea(110, 170, 620, 475)
+            fitter._fit(area)
+            self.assertEqual(dialog.geometry.call_count, 2)
+            fitter._scale = 2
+            fitter._fit(area)
+            self.assertIn((640, 480), [call.args for call in dialog.minsize.call_args_list])
+            self.assertIn(("640x480",), [call.args for call in dialog.geometry.call_args_list])
+        self.assertFalse(fitter._fitting)
+
+    def test_dialog_fit_retries_failed_native_requests_without_caching_errors(self):
+        fitter, _dialog = self.dialog_fitter()
+        area = WorkArea(-1920, 40, 960, 540)
+        position = Mock(side_effect=[0, OSError("fixture native failure"), 1])
+        native = SimpleNamespace(user32=SimpleNamespace(SetWindowPos=position))
+        with patch("src.modules.tk_glass._native_frame", return_value=(WorkArea(-2200, -100, 616, 488), 123)), \
+             patch("ctypes.windll", native, create=True):
+            fitter._fit(area)
+            self.assertIsNone(fitter._fit_key)
+            with self.assertRaisesRegex(OSError, "fixture native failure"):
+                fitter._fit(area)
+            self.assertFalse(fitter._fitting)
+            self.assertIsNone(fitter._fit_key)
+            fitter._fit(area)
+            fitter._fit(area)
+            self.assertEqual(position.call_count, 3)
+
     def test_x11_reads_are_bounded_and_release_properties_and_display(self):
         import ctypes
         area = WorkArea(0, 0, 1366, 768)
@@ -160,7 +235,7 @@ class AppearanceChecks(TkDownloaderFixture):
         # at large scales. Await actual idleness with a deadline, preserving the
         # assertions that static glass must settle without an animation timer.
         def painting(widget):
-            return (getattr(widget, "_redraw_id", None) is not None
+            return (any(getattr(widget, name, None) is not None for name in ("_redraw_id", "_paint_id"))
                     or any(painting(child) for child in widget.winfo_children()))
         deadline = time.monotonic() + 10
         earliest = time.monotonic() + .25
@@ -281,7 +356,13 @@ class AppearanceChecks(TkDownloaderFixture):
             scrolls.append((float(first), float(last)))
             tab._on_scroll(first, last)
         listing.configure(yscrollcommand=scrolled)
-        _x, y, _width, height = listing.bbox(2)
+        # Stacked panes at 200% can show fewer than three native-font rows.
+        # Make the exact row under test visible before forwarding its click.
+        listing.see(2)
+        self.pump()
+        box = listing.bbox(2)
+        self.assertIsNotNone(box, "The requested row must be visible after native see()")
+        _x, y, _width, height = box
         y += height // 2 - listing._surface.winfo_y()
         listing._surface.event_generate("<ButtonPress-1>", x=8, y=y, time=1000)
         listing._surface.event_generate("<ButtonRelease-1>", x=8, y=y, time=1001)
@@ -347,6 +428,16 @@ class AppearanceChecks(TkDownloaderFixture):
         self.assertEqual(notebook._strip.coords(material), [-x, -y])
         self.assertEqual(notebook._client_image.get(0, 0),
                          owner._material_image.get(x, y+notebook._strip.winfo_height()))
+        # The runner's native pointer can already rest over a tab when the
+        # strip maps at 200%. Own the quiet state before comparing its rim;
+        # BORDER_LIT intentionally shares the selected accent in these themes.
+        notebook.select(0)
+        self.pump()
+        notebook._strip.event_generate("<Leave>")
+        self.pump()
+        self.assertEqual(notebook.index(notebook.select()), 0)
+        self.assertIsNone(notebook._hover)
+        self.assertIsNone(notebook._paint_id, "The native tab paint must have settled")
         def assert_tab_rims(selected, hovered=None):
             self.assertEqual(len(notebook._skin_photos), len(notebook._tab_boxes),
                              "Unselected tabs need their own visible rounded border")
@@ -354,12 +445,16 @@ class AppearanceChecks(TkDownloaderFixture):
                 rim = (self.module.Theme.CYAN if index == selected else
                        self.module.Theme.BORDER_LIT if index == hovered else self.module.Theme.BORDER)
                 expected = tuple(part//257 for part in notebook.winfo_rgb(rim))
-                self.assertEqual(image.get(image.width()//2, 0), expected)
+                self.assertEqual(image.get(image.width()//2, 0), expected,
+                                 f"Tab {index}: expected selected={selected}, hovered={hovered}; "
+                                 f"native selected={notebook.index(notebook.select())}, "
+                                 f"hover={notebook._hover}, geometry={notebook.winfo_geometry()}")
                 self.assertTrue(image.transparency_get(0, 0), "Tab corners reveal the shared scene")
         assert_tab_rims(0)
         _index, left, top, right, bottom = next(box for box in notebook._tab_boxes if box[0] == 1)
         notebook._strip.event_generate("<Motion>", x=(left+right)//2, y=(top+bottom)//2)
         self.pump()
+        self.assertEqual(notebook._hover, 1)
         assert_tab_rims(0, 1)
         changes = []
         notebook.bind("<<NotebookTabChanged>>", lambda _event: changes.append(notebook.index(notebook.select())), add="+")
@@ -376,6 +471,7 @@ class AppearanceChecks(TkDownloaderFixture):
         self.assertIn(1, changes)
         notebook._strip.event_generate("<Leave>")
         self.pump()
+        self.assertIsNone(notebook._hover)
         assert_tab_rims(1)
         notebook.tab(2, state="disabled")
         self.pump()

@@ -3,14 +3,15 @@ import type { DocumentSnapshot, SaveAcknowledgement, SaveDocumentRequest,
   SourceFile, SourceManifest, WorkspaceRegistration } from './contracts.ts';
 
 export interface TextModel {
-  getValue(): string;
+  getValue(eol?: number, preserveBOM?: boolean): string;
   setValue(value: string): void;
   onDidChangeContent(callback: () => void): { dispose(): void };
   dispose(): void;
 }
 export interface DocumentRecord {
   source: SourceFile; model: TextModel; dirty: boolean; editRevision: number;
-  savedContent: string; conflict: boolean; missing: boolean; viewState: unknown;
+  savedContent: string; savedModelContent: string; normalizesLineEndings: boolean;
+  conflict: boolean; missing: boolean; viewState: unknown;
   listener: { dispose(): void }; suppressChanges: boolean;
 }
 /** One model per document, retained through tab/theme/geometry/manifest changes. */
@@ -19,6 +20,7 @@ export class DocumentStore {
   private workspace: WorkspaceRegistration | null = null;
   private generation = 0;
   private refreshGeneration = 0;
+  private readonly saveBaselines = new WeakMap<SaveDocumentRequest, { record: DocumentRecord; content: string }>();
   private readonly createModel: (snapshot: DocumentSnapshot) => TextModel;
   private readonly changed: () => void;
   constructor(createModel: (snapshot: DocumentSnapshot) => TextModel, changed: () => void = () => {}) {
@@ -64,12 +66,14 @@ export class DocumentStore {
     if (existing) return existing;
     const model = this.createModel(snapshot);
     const record: DocumentRecord = { source: { ...snapshot.document }, model, dirty: false,
-      editRevision: 0, savedContent: snapshot.content, conflict: false, missing: false,
+      editRevision: 0, savedContent: snapshot.content, savedModelContent: model.getValue(undefined, true),
+      normalizesLineEndings: false, conflict: false, missing: false,
       viewState: null, listener: { dispose() {} }, suppressChanges: false };
+    record.normalizesLineEndings = record.savedModelContent !== record.savedContent;
     record.listener = model.onDidChangeContent(() => {
       if (record.suppressChanges) return;
       record.editRevision += 1;
-      record.dirty = model.getValue() !== record.savedContent;
+      record.dirty = model.getValue(undefined, true) !== record.savedModelContent;
       this.changed();
     });
     this.records.set(snapshot.document.documentId, record); this.changed(); return record;
@@ -78,20 +82,31 @@ export class DocumentStore {
     const record = this.records.get(documentId);
     if (!record || !this.workspaceId) throw new AdapterError('not_found', 'Open a source file first.');
     if (record.missing || record.conflict) throw new AdapterError('external_change', 'Disk source changed. Keep the buffer and resolve the conflict before saving.');
-    return { workspaceId: this.workspaceId, documentId, expectedRevision: record.source.revision,
+    const modelContent = record.model.getValue(undefined, true);
+    const request = { workspaceId: this.workspaceId, documentId, expectedRevision: record.source.revision,
       expectedDigest: record.source.contentDigest, editRevision: record.editRevision,
-      content: record.model.getValue() };
+      // Monaco normalizes mixed newlines. Retain the original bytes whenever
+      // the visible model still matches its acknowledged canonical baseline,
+      // including after undo; editing intentionally saves the model's EOL.
+      content: modelContent === record.savedModelContent ? record.savedContent : modelContent };
+    this.saveBaselines.set(request, { record, content: modelContent });
+    return request;
   }
   acknowledge(request: SaveDocumentRequest, ack: SaveAcknowledgement): boolean {
     if (request.workspaceId !== this.workspaceId || ack.workspaceId !== this.workspaceId) return false;
     const record = this.records.get(request.documentId);
     if (!record || ack.documentId !== request.documentId || ack.editRevision !== request.editRevision) return false;
+    const baseline = this.saveBaselines.get(request);
+    if (!baseline || baseline.record !== record) return false;
     // An older transport reply must never overwrite a newer accepted disk version.
     if (ack.revision < record.source.revision) return false;
     record.source = { ...record.source, revision: ack.revision, contentDigest: ack.contentDigest,
       sizeBytes: new TextEncoder().encode(request.content).length };
     record.savedContent = request.content;
-    record.dirty = record.model.getValue() !== request.content;
+    record.savedModelContent = baseline.content;
+    record.normalizesLineEndings = baseline.content !== request.content;
+    record.dirty = record.model.getValue(undefined, true) !== baseline.content;
+    this.saveBaselines.delete(request);
     this.changed(); return true;
   }
   async reconcile(manifest: SourceManifest,
@@ -122,6 +137,8 @@ export class DocumentStore {
       record.suppressChanges = true;
       try { record.model.setValue(snapshot.content); } finally { record.suppressChanges = false; }
       record.source = { ...snapshot.document }; record.savedContent = snapshot.content;
+      record.savedModelContent = record.model.getValue(undefined, true);
+      record.normalizesLineEndings = record.savedModelContent !== snapshot.content;
       record.conflict = false;
     }
     if (generation !== this.generation || refreshGeneration !== this.refreshGeneration) return;

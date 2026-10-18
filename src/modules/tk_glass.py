@@ -146,6 +146,7 @@ class DialogFit:
         self.dialog = dialog
         self._pending = None
         self._fitting = False
+        self._fit_key = None
         self._minimum = minimum
         self._scale = ui_scale(dialog)
         area = native_work_area(reference or dialog)
@@ -178,8 +179,17 @@ class DialogFit:
             dialog = self.dialog
             area = area or native_work_area(dialog)
             frame, handle = _native_frame(dialog)
-            extra_width = max(0, frame.width - dialog.winfo_width())
-            extra_height = max(0, frame.height - dialog.winfo_height())
+            client = (dialog.winfo_width(), dialog.winfo_height())
+            key = (area, frame, handle, client, tuple(self._minimum), self._scale)
+            if key == getattr(self, "_fit_key", None):
+                return
+            # A window manager can decline a position request, or emit another
+            # Configure for an unchanged minsize/position. Remember only a
+            # completed input, so those events cannot renew a 60ms write loop.
+            # Changed monitor, frame, client or minimum metrics still refit.
+            self._fit_key = None
+            extra_width = max(0, frame.width - client[0])
+            extra_height = max(0, frame.height - client[1])
             # X11 fallback reserves conventional native frame clearance.
             if handle is None:
                 extra_height = max(extra_height, 40)
@@ -187,14 +197,15 @@ class DialogFit:
             maximum_height = max(1, area.height - extra_height - 16)
             minimum_width = min(round(self._minimum[0] * self._scale), maximum_width)
             minimum_height = min(round(self._minimum[1] * self._scale), maximum_height)
-            dialog.minsize(minimum_width, minimum_height)
-            width = max(minimum_width, min(dialog.winfo_width(), maximum_width))
-            height = max(minimum_height, min(dialog.winfo_height(), maximum_height))
+            if dialog.minsize() != (minimum_width, minimum_height):
+                dialog.minsize(minimum_width, minimum_height)
+            width = max(minimum_width, min(client[0], maximum_width))
+            height = max(minimum_height, min(client[1], maximum_height))
             x, y, _, _ = fit_rect(frame.x, frame.y, width + extra_width, height + extra_height, area, 8)
-            if (width, height) != (dialog.winfo_width(), dialog.winfo_height()):
+            if (width, height) != client:
                 dialog.geometry(f"{width}x{height}")
                 dialog.update_idletasks()
-            if handle is not None:
+            if handle is not None and (x, y) != (frame.x, frame.y):
                 import ctypes
                 from ctypes import wintypes
                 user32 = ctypes.windll.user32
@@ -202,9 +213,11 @@ class DialogFit:
                                                ctypes.c_int, ctypes.c_int, wintypes.UINT]
                 # Native positioning handles negative monitor coordinates as
                 # absolute coordinates, unlike Tk's screen-edge offsets.
-                user32.SetWindowPos(handle, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
-            elif (x, y) != (frame.x, frame.y):
+                if not user32.SetWindowPos(handle, None, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010):
+                    return  # A failed native request must remain retryable.
+            elif handle is None and (x, y) != (frame.x, frame.y):
                 dialog.geometry(f"{width}x{height}{x:+d}{y:+d}")
+            self._fit_key = key
         finally:
             self._fitting = False
 

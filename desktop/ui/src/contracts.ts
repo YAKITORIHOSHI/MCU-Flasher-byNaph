@@ -30,6 +30,7 @@ export interface PrototypeInfo {
 }
 export interface StreamEvent {
   type: 'started' | 'output' | 'finished'; sequence: number;
+  streamId?: string;
   data?: string; bytes?: number; exitCode?: number;
 }
 export interface DesktopAdapter {

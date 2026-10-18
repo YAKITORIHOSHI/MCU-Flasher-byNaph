@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-acknowledge-fixture"
+description = "Enables the acknowledge_fixture command without any pre-configured scope."
+commands.allow = ["acknowledge_fixture"]
+
+[[permission]]
+identifier = "deny-acknowledge-fixture"
+description = "Denies the acknowledge_fixture command without any pre-configured scope."
+commands.deny = ["acknowledge_fixture"]

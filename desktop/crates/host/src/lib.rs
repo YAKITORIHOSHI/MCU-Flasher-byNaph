@@ -1,4 +1,6 @@
 //! Native compatibility probes. No serial or arbitrary process command is exposed.
+pub mod fixture_lock;
+pub mod stream_ack;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use std::io::{Read, Write};

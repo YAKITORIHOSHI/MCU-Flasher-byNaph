@@ -302,7 +302,12 @@ class BoardPickerChecks(unittest.TestCase):
                     generation = dialog._generation
                     release.set()
                     wait_for(finished.is_set)
-                    QTest.qWait(50)
+                    if not close_dialog:
+                        # Discovery's Event precedes its return and queued Qt
+                        # delivery. Await the GUI completion, not a fixed delay.
+                        wait_for(lambda: not dialog._local_refresh_running)
+                    else:
+                        QTest.qWait(50)
                     self.assertEqual(dialog._generation, generation)
                     self.assertEqual(dict(published), self.boards if close_dialog else newer)
                     if not close_dialog:

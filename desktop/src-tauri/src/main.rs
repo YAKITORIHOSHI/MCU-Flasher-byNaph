@@ -14,7 +14,7 @@ struct PrototypeState {
     projects: Arc<Mutex<ProjectService>>,
     fixture_parent: PathBuf,
     fixture_project: PathBuf,
-    streaming: Arc<AtomicBool>,
+    stream_acks: mcu_host::stream_ack::FixtureAcks,
     verification: bool,
     probe_done: Arc<AtomicBool>,
     report_path: PathBuf,
@@ -41,6 +41,7 @@ struct HostInfo {
 #[serde(rename_all = "camelCase")]
 struct FixtureEvent {
     r#type: &'static str,
+    stream_id: String,
     sequence: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<String>,
@@ -168,26 +169,18 @@ async fn create_project(
 
 #[tauri::command]
 async fn stream_fixture(
+    window: WebviewWindow,
     state: State<'_, PrototypeState>,
     on_event: Channel<FixtureEvent>,
 ) -> Result<mcu_host::StreamSummary, String> {
-    if state.streaming.swap(true, Ordering::AcqRel) {
-        return Err("A controlled PTY probe is already running".into());
-    }
-    let active = Arc::clone(&state.streaming);
+    let session = state.stream_acks.begin(window.label())?;
     tauri::async_runtime::spawn_blocking(move || {
-        struct Reset(Arc<AtomicBool>);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                self.0.store(false, Ordering::Release);
-            }
-        }
-        let _reset = Reset(active);
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let mut sequence = 0;
         on_event
             .send(FixtureEvent {
                 r#type: "started",
+                stream_id: session.id().into(),
                 sequence,
                 data: None,
                 bytes: None,
@@ -196,20 +189,24 @@ async fn stream_fixture(
             .map_err(|error| error.to_string())?;
         let result = mcu_host::stream_fixture(&executable, |data, bytes| {
             sequence += 1;
+            session.prepare(sequence, bytes)?;
             on_event
                 .send(FixtureEvent {
                     r#type: "output",
+                    stream_id: session.id().into(),
                     sequence,
                     data: Some(data),
                     bytes: Some(bytes),
                     exit_code: None,
                 })
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            session.wait_consumed(std::time::Duration::from_secs(2))
         })?;
         sequence += 1;
         on_event
             .send(FixtureEvent {
                 r#type: "finished",
+                stream_id: session.id().into(),
                 sequence,
                 data: None,
                 bytes: Some(result.bytes),
@@ -220,6 +217,19 @@ async fn stream_fixture(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn acknowledge_fixture(
+    window: WebviewWindow,
+    state: State<'_, PrototypeState>,
+    stream_id: String,
+    sequence: u32,
+    bytes: usize,
+) -> Result<(), String> {
+    state
+        .stream_acks
+        .acknowledge(window.label(), &stream_id, sequence, bytes)
 }
 
 /// Bounded test evidence endpoint. It is inactive during ordinary preview use
@@ -442,7 +452,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     tauri::Builder::default()
         .manage(PrototypeState { projects: Arc::new(Mutex::new(projects)), fixture_parent, fixture_project,
-            streaming: Arc::new(AtomicBool::new(false)), verification, probe_done, report_path })
+            stream_acks: mcu_host::stream_ack::FixtureAcks::default(), verification, probe_done, report_path })
         .setup(move |app| {
             if let Some(window) = app.get_window("main") {
                 fit_main_window(&window)?;
@@ -487,7 +497,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .invoke_handler(tauri::generate_handler![prototype_info, open_project, project_manifest,
-            read_document, save_document, create_project, stream_fixture, report_probe, verify_webview_transfer])
+            read_document, save_document, create_project, stream_fixture, acknowledge_fixture, report_probe, verify_webview_transfer])
         .run(context)?;
     Ok(())
 }

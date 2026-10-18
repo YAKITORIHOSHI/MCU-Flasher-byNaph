@@ -92,7 +92,8 @@ function renderSources(): void {
   for (const button of existingTabs.values()) button.remove();
   const active = activeId ? store.records.get(activeId) : undefined;
   element('document-status').textContent = active ?
-    active.missing ? 'Source removed from disk; unsaved buffer retained' : active.conflict ? 'External change; buffer retained' : active.dirty ? 'Unsaved changes' : 'Saved source' : 'No source open';
+    active.missing ? 'Source removed from disk; unsaved buffer retained' : active.conflict ? 'External change; buffer retained' :
+      active.dirty ? active.normalizesLineEndings ? 'Unsaved changes · saving uses consistent line endings' : 'Unsaved changes' : 'Saved source' : 'No source open';
   element('editor-empty').hidden = Boolean(active);
   updateControls();
 }

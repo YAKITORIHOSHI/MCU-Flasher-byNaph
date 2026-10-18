@@ -9,7 +9,7 @@
     "assets": "node ../scripts/stage-assets.mjs",
     "dev": "pnpm assets && vite --host 127.0.0.1 --port 1420 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/document-store.test.ts src/adapter.test.ts",
+    "test": "node --experimental-strip-types --test src/document-store.test.ts src/adapter.test.ts src/fixture-stream.test.ts",
     "build": "pnpm assets && pnpm typecheck && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 1420 --strictPort"
   },

@@ -6,6 +6,7 @@ import type { DocumentStore, TextModel } from './document-store.ts';
 import type { Editor, Monaco } from './vendor-types.ts';
 
 interface ProbeModel extends TextModel {
+  getEOL(): string;
   getFullModelRange(): { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
   undo(): Promise<void> | void;
   redo(): Promise<void> | void;
@@ -85,7 +86,11 @@ async function run(context: ProbeContext): Promise<ProbeResult> {
       check('native_editor_worker_executed_and_replied', workerEvidence.created > 0 && workerEvidence.messages > 0 && workerEvidence.errors === 0);
       check('reused_diff_worker_computes_changes', Boolean(diff.getLineChanges()?.length));
     } finally { diff.dispose(); original.dispose(); modified.dispose(); diffHost.remove(); }
-    const changed = snapshot.content + '\n// Migration probe: café 日本語 λ\n';
+    // Monaco preserves the model's native EOL when applying edits. Appending
+    // literal LF to a Windows CRLF scaffold would make the expected string a
+    // mixed-EOL input that Monaco correctly normalizes before we compare it.
+    const eol = model.getEOL();
+    const changed = snapshot.content + `${eol}// Migration probe: café 日本語 λ${eol}`;
     editor.pushUndoStop();
     editor.executeEdits('migration-probe', [{ range: model.getFullModelRange(), text: changed }]);
     editor.pushUndoStop();
@@ -136,12 +141,65 @@ async function run(context: ProbeContext): Promise<ProbeResult> {
       includes = includes && generated.content.includes(`#include "${header!.name}"`);
     }
     check('native_scaffold_includes_header_in_sketch_and_cpp', includes);
+    // Seed only a disposable native fixture, then exercise the real Monaco
+    // model/store/save path. Core-only byte tests cannot detect editor BOM or
+    // mixed-EOL normalization before a save request reaches the host.
+    const byteProject = await adapter.createProject(info.fixtureParent, { name: `Bytes_${Date.now()}`,
+      includeH: false, includeCpp: false, template: 'bare' });
+    const byteSource = byteProject.manifest.files.find(file => file.isMain)!;
+    for (const [name, content] of [
+      ['bom', '\uFEFF// café 日本語\nvoid setup() {}\n'],
+      ['crlf', '// café 日本語\r\nvoid setup() {}\r\n'],
+      ['mixed_bom', '\uFEFF// café 日本語\r\nvoid setup() {}\nvoid loop() {}\r'],
+    ]) {
+      const before = await adapter.readDocument({ workspaceId: byteProject.workspaceId, documentId: byteSource.documentId });
+      await adapter.saveDocument({ workspaceId: byteProject.workspaceId, documentId: byteSource.documentId,
+        expectedRevision: before.document.revision, expectedDigest: before.document.contentDigest,
+        editRevision: 0, content });
+      await context.adopt({ ...byteProject, manifest: await adapter.manifest(byteProject.workspaceId) });
+      const bytesRecord = store.records.get(byteSource.documentId)!;
+      const bytesModel = bytesRecord.model as ProbeModel;
+      const noop = store.saveRequest(byteSource.documentId);
+      const noopAck = await adapter.saveDocument(noop);
+      check(`native_${name}_unchanged_bytes`, noop.content === content && noopAck.unchanged &&
+        store.acknowledge(noop, noopAck) && !bytesRecord.dirty &&
+        (await adapter.readDocument({ workspaceId: byteProject.workspaceId, documentId: byteSource.documentId })).content === content);
+      const range = bytesModel.getFullModelRange();
+      editor.pushUndoStop();
+      editor.executeEdits('migration-byte-probe', [{ range: { startLineNumber: range.endLineNumber,
+        startColumn: range.endColumn, endLineNumber: range.endLineNumber, endColumn: range.endColumn },
+      text: `${bytesModel.getEOL()}// Edited byte fixture${bytesModel.getEOL()}` }]);
+      editor.pushUndoStop();
+      const edited = bytesModel.getValue(undefined, true);
+      check(`native_${name}_edited_model_preserves_bom`, bytesRecord.dirty &&
+        edited.startsWith('\uFEFF') === content.startsWith('\uFEFF') && !edited.startsWith('\uFEFF\uFEFF') &&
+        store.saveRequest(byteSource.documentId).content === edited);
+      check(`native_${name}_line_endings_disclosed`, bytesRecord.normalizesLineEndings === (name === 'mixed_bom') &&
+        (!bytesRecord.normalizesLineEndings || document.getElementById('document-status')!.textContent!.includes('consistent line endings')));
+      await bytesModel.undo();
+      check(`native_${name}_undo_retains_original_bytes`, !bytesRecord.dirty && store.saveRequest(byteSource.documentId).content === content);
+      await bytesModel.redo();
+      await context.save();
+      const after = await adapter.readDocument({ workspaceId: byteProject.workspaceId, documentId: byteSource.documentId });
+      check(`native_${name}_edited_save_bytes`, after.content === edited && !bytesRecord.dirty);
+    }
     let previous = -1; let output = ''; let finished = false; let exitCode: number | undefined;
+    let checkedAcknowledgements = false;
     await adapter.streamFixture(async event => {
       check('ordered_channel', event.sequence > previous); previous = event.sequence;
       if (event.data) output += event.data;
       check('bounded_fixture_stream', output.length <= 65536);
       if (event.type === 'finished') { finished = true; exitCode = event.exitCode; }
+      if (event.type === 'output' && !checkedAcknowledgements) {
+        let foreignRejected = false; let mismatchedRejected = false;
+        try { await invoke('acknowledge_fixture', { streamId: 'fixture-ffffffffffffffff', sequence: event.sequence, bytes: event.bytes }); }
+        catch { foreignRejected = true; }
+        try { await invoke('acknowledge_fixture', { streamId: event.streamId, sequence: event.sequence, bytes: (event.bytes ?? 0) + 1 }); }
+        catch { mismatchedRejected = true; }
+        check('native_stream_rejects_foreign_acknowledgement', foreignRejected);
+        check('native_stream_rejects_wrong_byte_acknowledgement', mismatchedRejected);
+        checkedAcknowledgements = true;
+      }
       await context.streamEvent(event);
     });
     check('native_stream_finished', finished && exitCode === 0);

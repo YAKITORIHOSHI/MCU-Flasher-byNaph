@@ -81,6 +81,8 @@ jobs:
           python -B -W error desktop/scripts/verify-preferences-merge.py
           python -B -W error desktop/scripts/verify-scaffold.py
           python -B -W error desktop/scripts/verify-resource-budget.py
+          python -B -W error desktop/scripts/verify-lock-interop.py
+          python -B -W error desktop/scripts/verify-target-transport.py
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
         timeout-minutes: 2

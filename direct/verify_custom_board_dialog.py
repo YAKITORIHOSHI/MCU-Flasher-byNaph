@@ -53,9 +53,33 @@ class CustomBoardDialogChecks(unittest.TestCase):
         self.key = self.app._board_association_key(self.item)
 
     def pump(self):
-        for _ in range(8):
+        # Configure bursts debounce glass drawing for 160 ms. Await actual
+        # paint/layout idleness, keeping the mapping and containment assertions.
+        def pending(widget):
+            busy = any(getattr(widget, name, None) is not None
+                       for name in ('_redraw_id', '_fit_after', '_reveal_after'))
+            fitter = getattr(widget, '_dialog_fit', None)
+            busy = busy or (fitter is not None and fitter._pending is not None)
+            return busy or any(pending(child) for child in widget.winfo_children())
+        def geometry(widget):
+            return ((str(widget), widget.winfo_geometry(), widget.winfo_ismapped()),
+                    tuple(geometry(child) for child in widget.winfo_children()))
+        deadline = time.monotonic() + 10
+        earliest = time.monotonic() + .25
+        quiet_since = None
+        previous_geometry = None
+        while time.monotonic() < deadline:
             self.root.update()
+            current_geometry = geometry(self.root)
+            if pending(self.root) or current_geometry != previous_geometry:
+                quiet_since = None
+            else:
+                quiet_since = quiet_since or time.monotonic()
+                if time.monotonic() >= earliest and time.monotonic() - quiet_since >= .18:
+                    return
+            previous_geometry = current_geometry
             time.sleep(.02)
+        self.fail('Custom board dialog paint/layout did not become idle')
 
     def open_dialog(self):
         self.app._edit_board_platform(self.tab)
@@ -83,7 +107,11 @@ class CustomBoardDialogChecks(unittest.TestCase):
                 with patch.object(tk_glass, 'native_work_area', return_value=area):
                     dialog = self.open_dialog()
                     if size == 'compact':
-                        dialog.geometry(f'{max(1, width - 60)}x{max(1, height - 64)}')
+                        # Exercise scrolling at the dialog's bounded minimum;
+                        # multiplying the available monitor height by 200% can
+                        # otherwise leave enough room for the entire form.
+                        minimum_height = dialog.minsize()[1]
+                        dialog.geometry(f'{max(1, width - 60)}x{max(1, min(height - 64, minimum_height))}')
                         self.pump()
                     frame, _handle = tk_glass._native_frame(dialog)
                     self.assertGreaterEqual(frame.x, area.x)

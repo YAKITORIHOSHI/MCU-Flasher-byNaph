@@ -1,5 +1,6 @@
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { AdapterError, PROTOCOL_VERSION, serviceError } from './contracts.ts';
+import { createFixtureStreamConsumer } from './fixture-stream.ts';
 import type { DesktopAdapter, DocumentRequest, DocumentSnapshot, PrototypeInfo,
   SaveAcknowledgement, SaveDocumentRequest, ScaffoldOptions, SourceFile,
   SourceManifest, StreamEvent, WorkspaceRegistration } from './contracts.ts';
@@ -19,10 +20,12 @@ export class NativeAdapter implements DesktopAdapter {
   }
   async streamFixture(onEvent: (event: StreamEvent) => Promise<void>): Promise<void> {
     const onOutput = new Channel<StreamEvent>();
-    let pending = Promise.resolve();
-    onOutput.onmessage = event => { pending = pending.then(() => onEvent(event)); };
-    await native<void>('stream_fixture', { onEvent: onOutput });
-    await pending;
+    const consumer = createFixtureStreamConsumer(onEvent, acknowledgement =>
+      native<void>('acknowledge_fixture', { ...acknowledgement }));
+    onOutput.onmessage = event => { consumer.receive(event); };
+    try { await native<void>('stream_fixture', { onEvent: onOutput }); }
+    catch (error) { consumer.abort(error); }
+    await consumer.finished();
   }
 }
 const encoder = new TextEncoder();

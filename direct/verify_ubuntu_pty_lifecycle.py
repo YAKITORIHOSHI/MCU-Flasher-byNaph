@@ -28,6 +28,81 @@ APP = QApplication.instance() or QApplication([])
 COLLECTOR = install_gui_garbage_collector(APP)
 
 
+def _fixture_process_stopped(process):
+    """Observe an owned fixture handle without racing successful teardown."""
+    import psutil
+    try:
+        # Keep is_running's captured-identity check before status: never treat
+        # a reused numeric PID as the original fixture process.
+        return not process.is_running() or process.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+def _cleanup_fixture_processes(processes):
+    """Kill only still-live captured fixture handles; disappearance is success."""
+    import psutil
+    for process in processes:
+        try:
+            if not _fixture_process_stopped(process):
+                process.kill()  # psutil rechecks its captured process identity.
+        except psutil.NoSuchProcess:
+            pass  # It can also exit between the status observation and kill.
+
+
+class FixtureProcessChecks(unittest.TestCase):
+    def test_stopped_observation_handles_exit_races_without_accepting_live_processes(self):
+        import psutil
+        for name, running, status, stopped in (
+            ("absent or reused", False, AssertionError("Unrelated PID status read"), True),
+            ("exits during status", True, psutil.NoSuchProcess(12345), True),
+            ("zombie", True, psutil.STATUS_ZOMBIE, True),
+            ("live", True, psutil.STATUS_SLEEPING, False),
+        ):
+            with self.subTest(name=name):
+                process = Mock()
+                process.is_running.return_value = running
+                if isinstance(status, BaseException):
+                    process.status.side_effect = status
+                else:
+                    process.status.return_value = status
+                self.assertIs(_fixture_process_stopped(process), stopped)
+                process.kill.assert_not_called()
+
+    def test_cleanup_preserves_identity_and_handles_exit_before_status_or_kill(self):
+        import psutil
+        absent = Mock(is_running=Mock(return_value=False),
+                      status=Mock(side_effect=AssertionError("Unrelated PID status read")))
+        vanished = Mock(is_running=Mock(return_value=True),
+                        status=Mock(side_effect=psutil.NoSuchProcess(12345)))
+        zombie = Mock(is_running=Mock(return_value=True),
+                      status=Mock(return_value=psutil.STATUS_ZOMBIE))
+        live = Mock(is_running=Mock(return_value=True),
+                    status=Mock(return_value=psutil.STATUS_SLEEPING))
+        exits_before_kill = Mock(is_running=Mock(return_value=True),
+                                 status=Mock(return_value=psutil.STATUS_SLEEPING),
+                                 kill=Mock(side_effect=psutil.NoSuchProcess(12345)))
+        _cleanup_fixture_processes([absent, vanished, zombie, live, exits_before_kill])
+        for process in (absent, vanished, zombie):
+            process.kill.assert_not_called()
+        live.kill.assert_called_once_with()
+        exits_before_kill.kill.assert_called_once_with()
+
+    def test_permission_failures_are_not_mistaken_for_successful_teardown(self):
+        import psutil
+        denied_status = Mock(is_running=Mock(return_value=True),
+                             status=Mock(side_effect=psutil.AccessDenied(12345)))
+        with self.assertRaises(psutil.AccessDenied):
+            _fixture_process_stopped(denied_status)
+        with self.assertRaises(psutil.AccessDenied):
+            _cleanup_fixture_processes([denied_status])
+        denied_kill = Mock(is_running=Mock(return_value=True),
+                           status=Mock(return_value=psutil.STATUS_SLEEPING),
+                           kill=Mock(side_effect=psutil.AccessDenied(12345)))
+        with self.assertRaises(psutil.AccessDenied):
+            _cleanup_fixture_processes([denied_kill])
+
+
 class UbuntuPtyLifecycleChecks(unittest.TestCase):
     def setUp(self):
         audit = ROOT / "temp/audit/ubuntu-parity/pty"
@@ -233,12 +308,12 @@ class UbuntuPtyLifecycleChecks(unittest.TestCase):
         self.wait_for(lambda: "CHILDREN:" in "".join(output))
         pids = json.loads("".join(output).split("CHILDREN:", 1)[1].splitlines()[0])
         handles = [psutil.Process(pid) for pid in pids]
-        self.addCleanup(lambda: [process.kill() for process in handles if process.is_running() and process.status() != psutil.STATUS_ZOMBIE])
+        self.addCleanup(_cleanup_fixture_processes, handles)
         start = time.monotonic()
         session.close()
         self.assertLess(time.monotonic() - start, .1, "Shutdown may not wait for tool processes on Qt")
         self.assertIsNone(session.process)
-        self.wait_for(lambda: all(not process.is_running() or process.status() == psutil.STATUS_ZOMBIE for process in handles))
+        self.wait_for(lambda: all(_fixture_process_stopped(process) for process in handles))
 
     def test_cli_exit_reaps_its_detached_tools_before_the_pty_ends(self):
         import psutil
@@ -260,7 +335,7 @@ class UbuntuPtyLifecycleChecks(unittest.TestCase):
         supervisor = session.process
         self.wait_for(lambda: "CHILDREN:" in "".join(output))
         handles = [psutil.Process(pid) for pid in json.loads("".join(output).split("CHILDREN:", 1)[1].splitlines()[0])]
-        self.addCleanup(lambda: [process.kill() for process in handles if process.is_running() and process.status() != psutil.STATUS_ZOMBIE])
+        self.addCleanup(_cleanup_fixture_processes, handles)
         session.write("exit now\r")
         self.wait_for(lambda: bool(ended))
         self.assertTrue(all(not process.is_running() for process in handles), "Detached tools must be reaped before a new CLI session starts")
@@ -336,7 +411,7 @@ class UbuntuPtyLifecycleChecks(unittest.TestCase):
                         if child.name() == "sleep"]
             return bool(tools)
         self.wait_for(foreground_started)
-        self.addCleanup(lambda: [process.kill() for process in tools if process.is_running() and process.status() != psutil.STATUS_ZOMBIE])
+        self.addCleanup(_cleanup_fixture_processes, tools)
         session.write("\x03")
         self.wait_for(lambda: all(not process.is_running() for process in tools))
         self.assertIsNotNone(session.process)

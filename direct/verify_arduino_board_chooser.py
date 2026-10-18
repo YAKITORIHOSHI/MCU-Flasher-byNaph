@@ -79,13 +79,31 @@ class BoardChooserChecks(unittest.TestCase):
         self.addCleanup(self.preferences.stop)
 
     def pump(self, predicate=lambda: True):
-        deadline = time.monotonic() + 3
+        def pending(widget):
+            busy = any(getattr(widget, name, None) is not None
+                       for name in ('_redraw_id', '_fit_after', '_reveal_after'))
+            fitter = getattr(widget, '_dialog_fit', None)
+            busy = busy or (fitter is not None and fitter._pending is not None)
+            return busy or any(pending(child) for child in widget.winfo_children())
+        def geometry(widget):
+            return ((str(widget), widget.winfo_geometry(), widget.winfo_ismapped()),
+                    tuple(geometry(child) for child in widget.winfo_children()))
+        deadline = time.monotonic() + 10
+        earliest = time.monotonic() + .25
+        quiet_since = None
+        previous_geometry = None
         while time.monotonic() < deadline:
             self.root.update()
-            if predicate():
-                return
+            current_geometry = geometry(self.root)
+            if predicate() and not pending(self.root) and current_geometry == previous_geometry:
+                quiet_since = quiet_since or time.monotonic()
+                if time.monotonic() >= earliest and time.monotonic() - quiet_since >= .18:
+                    return
+            else:
+                quiet_since = None
+            previous_geometry = current_geometry
             time.sleep(.02)
-        self.fail('Dialog worker did not finish')
+        self.fail('Dialog worker or paint/layout did not become idle')
 
     def open(self):
         dialog = chooser.open_board_chooser(self.app, self.tab, self.metadata, self.folder,
@@ -212,9 +230,6 @@ class BoardChooserChecks(unittest.TestCase):
                 area = WorkArea(40, 35, min(round(width * self.scale), 1840), min(round(height * self.scale), 920))
                 with patch.object(tk_glass, 'native_work_area', return_value=area):
                     dialog = self.open()
-                    for _ in range(5):
-                        self.root.update()
-                        time.sleep(.03)
                     frame, _handle = tk_glass._native_frame(dialog)
                     self.assertGreaterEqual(frame.x, area.x)
                     self.assertGreaterEqual(frame.y, area.y)
