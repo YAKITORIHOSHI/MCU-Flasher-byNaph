@@ -551,6 +551,20 @@ fn checked_directory(path: &Path) -> ServiceResult<PathBuf> {
             "An explicit absolute directory is required.",
         ));
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        // A canonical Windows path has a verbatim prefix. Its components do
+        // not recognize '/' as a separator, so reject mixed-separator parent
+        // syntax lexically before any metadata call rather than allowing a
+        // malformed path to reach the filesystem or normalizing it elsewhere.
+        if windows_has_parent_segment(path.as_os_str().encode_wide()) {
+            return Err(error(
+                ErrorCode::InvalidPath,
+                "Parent traversal is not allowed.",
+            ));
+        }
+    }
     let mut prefix = PathBuf::new();
     for component in path.components() {
         if matches!(component, Component::ParentDir) {
@@ -585,6 +599,26 @@ fn checked_directory(path: &Path) -> ServiceResult<PathBuf> {
         ));
     }
     Ok(canonical)
+}
+
+#[cfg(any(windows, test))]
+fn windows_has_parent_segment(units: impl Iterator<Item = u16>) -> bool {
+    let mut dots = 0u8;
+    let mut only_dots = true;
+    for unit in units {
+        if unit == u16::from(b'/') || unit == u16::from(b'\\') {
+            if only_dots && dots == 2 {
+                return true;
+            }
+            dots = 0;
+            only_dots = true;
+        } else if unit == u16::from(b'.') {
+            dots = dots.saturating_add(1);
+        } else {
+            only_dots = false;
+        }
+    }
+    only_dots && dots == 2
 }
 
 fn is_application_root(root: &Path) -> bool {
@@ -932,4 +966,53 @@ fn replace_source(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod directory_path_tests {
+    use super::*;
+
+    #[test]
+    fn windows_parent_syntax_is_rejected_with_native_and_mixed_separators() {
+        for path in [
+            r"C:\fixture\..\other",
+            r"C:/fixture/../other",
+            r"\\?\C:\fixture/../../../../",
+            r"\\?\C:\fixture\..\..\",
+            r"\\?\UNC\server\share\fixture/..\other",
+            r"\\server\share\fixture\..",
+            r"\\?\C:\café 日本語\../other",
+            "..",
+            "/../",
+            "\\..\\",
+        ] {
+            assert!(windows_has_parent_segment(path.encode_utf16()), "{path}");
+        }
+        for path in [
+            r"C:\fixture\file.ino",
+            r"\\?\C:\fixture\file..ino",
+            r"\\?\UNC\server\share\fixture\.hidden",
+            r"\\server\share\café 日本語\dots...",
+            r"C:\fixture\.",
+            r"C:\fixture\..suffix",
+            r"C:\fixture\prefix..",
+            "",
+            ".",
+            "...",
+        ] {
+            assert!(!windows_has_parent_segment(path.encode_utf16()), "{path}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_parent_rejection_precedes_metadata_for_missing_directories() {
+        for path in [
+            r"\\?\C:\mcu-missing-path-that-must-not-be-opened\../other",
+            r"\\?\C:\mcu-missing-path-that-must-not-be-opened\..\other",
+        ] {
+            let error = checked_directory(Path::new(path)).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidPath, "{path}");
+        }
+    }
 }

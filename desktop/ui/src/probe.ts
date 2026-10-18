@@ -126,6 +126,11 @@ async function run(context: ProbeContext): Promise<ProbeResult> {
     try { await adapter.openProject(info.fixtureParent + '/../../../../'); }
     catch (error) { escapedRootRejected = ['invalid_path', 'forbidden_root'].includes(serviceError(error).code); }
     check('native_ipc_rejects_escaping_root', escapedRootRejected);
+    let nativeTraversalRejected = false;
+    const separator = info.host.os === 'windows' ? '\\' : '/';
+    try { await adapter.openProject(info.fixtureParent + separator + ['..', '..', '..', '..', ''].join(separator)); }
+    catch (error) { nativeTraversalRejected = ['invalid_path', 'forbidden_root'].includes(serviceError(error).code); }
+    check('native_ipc_rejects_native_separator_traversal', nativeTraversalRejected);
     const manifest = await adapter.manifest(project.workspaceId);
     const identity = record.model;
     await store.reconcile(manifest, documentId => adapter.readDocument({ workspaceId: project.workspaceId, documentId }));
