@@ -328,6 +328,61 @@ fn main() {
     }
 }
 
+fn fit_main_window(window: &tauri::Window) -> tauri::Result<()> {
+    let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) else {
+        return Ok(());
+    };
+    let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let logical = area.size.to_logical::<f64>(scale);
+    // Monitor values are physical; convert once before passing logical sizes.
+    window.set_min_size(Some(tauri::LogicalSize::new(
+        logical.width / 2.0,
+        logical.height.min(440.0),
+    )))?;
+    if window.is_maximized()? {
+        return Ok(());
+    }
+    let outer = window.outer_size()?;
+    let inner = window.inner_size()?;
+    let maximum = tauri::PhysicalSize::new(
+        area.size
+            .width
+            .saturating_sub(outer.width.saturating_sub(inner.width))
+            .max(1),
+        area.size
+            .height
+            .saturating_sub(outer.height.saturating_sub(inner.height))
+            .max(1),
+    );
+    if inner.width > maximum.width || inner.height > maximum.height {
+        window.set_size(tauri::PhysicalSize::new(
+            inner.width.min(maximum.width),
+            inner.height.min(maximum.height),
+        ))?;
+    }
+    // Some Wayland compositors deliberately do not expose window positions.
+    // Size fitting still works; do not reject a usable host on that basis.
+    if let Ok(position) = window.outer_position() {
+        let x = position.x.clamp(
+            area.position.x,
+            area.position
+                .x
+                .saturating_add(area.size.width.saturating_sub(outer.width) as i32),
+        );
+        let y = position.y.clamp(
+            area.position.y,
+            area.position
+                .y
+                .saturating_add(area.size.height.saturating_sub(outer.height) as i32),
+        );
+        if position.x != x || position.y != y {
+            window.set_position(tauri::PhysicalPosition::new(x, y))?;
+        }
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let verification = std::env::args().any(|arg| arg == "--verify-prototype");
     let executable = std::env::current_exe()?.canonicalize()?;
@@ -389,6 +444,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .manage(PrototypeState { projects: Arc::new(Mutex::new(projects)), fixture_parent, fixture_project,
             streaming: Arc::new(AtomicBool::new(false)), verification, probe_done, report_path })
         .setup(move |app| {
+            if let Some(window) = app.get_window("main") {
+                fit_main_window(&window)?;
+                let fitted = window.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, tauri::WindowEvent::Moved(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                        if let Err(error) = fit_main_window(&fitted) { eprintln!("Cannot fit prototype to its monitor: {error}"); }
+                    }
+                });
+            }
             if verification {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
