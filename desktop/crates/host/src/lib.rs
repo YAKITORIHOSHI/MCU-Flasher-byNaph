@@ -1,5 +1,7 @@
 //! Native compatibility probes. No serial or arbitrary process command is exposed.
 pub mod fixture_lock;
+pub mod fixture_registry;
+pub mod process_identity;
 pub mod stream_ack;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;

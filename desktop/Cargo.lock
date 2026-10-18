@@ -1799,11 +1799,13 @@ dependencies = [
 name = "mcu-host"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mcu-contracts",
  "mcu-core",
  "portable-pty",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

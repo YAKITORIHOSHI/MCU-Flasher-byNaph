@@ -35,6 +35,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Native process reference dependency
+        run: python -m pip install 'psutil>=5.9,<8'
       - name: Prepare pinned Rust and frontend tools
         shell: bash
         run: |
@@ -83,6 +85,9 @@ jobs:
           python -B -W error desktop/scripts/verify-resource-budget.py
           python -B -W error desktop/scripts/verify-lock-interop.py
           python -B -W error desktop/scripts/verify-target-transport.py
+          python -B -W error desktop/scripts/verify-ownership.py
+          python -B -W error desktop/scripts/verify-process-identity.py
+          python -B -W error desktop/scripts/verify-registry.py
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
         timeout-minutes: 2
