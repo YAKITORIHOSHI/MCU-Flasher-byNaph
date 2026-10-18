@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/contracts", "crates/core", "crates/host", "src-tauri"]
+default-members = ["crates/contracts", "crates/core", "crates/host"]
+resolver = "2"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true

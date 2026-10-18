@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCU Flasher — Compatibility Preview</title>
+  <link rel="stylesheet" href="/vendor/assets/xterm/xterm.css">
+  <script>window.MonacoEnvironment = {globalAPI:true};</script>
+</head>
+<body data-theme="default">
+  <div id="workspace">
+    <header class="glass topbar">
+      <span class="brand-icon" aria-hidden="true"></span>
+      <div class="brand-copy"><h1>MCU Flasher by Naph</h1><span>Rust + Tauri compatibility preview</span></div>
+      <label class="theme-choice">Theme <select id="theme"><option value="default">Glass</option><option value="light">Frosted Light</option><option value="solarized">Solarized</option></select></label>
+    </header>
+    <aside id="mode-notice" class="preview-notice" role="status">Starting compatibility preview…</aside>
+    <form id="open-form" class="project-toolbar" aria-label="Open fixture project">
+      <label for="project-path">Project folder</label>
+      <input id="project-path" name="path" type="text" spellcheck="false" autocomplete="off" required>
+      <button id="open-project" type="submit"><i class="icon project" aria-hidden="true"></i>Open</button>
+      <button id="new-project" type="button"><i class="icon add" aria-hidden="true"></i>New fixture</button>
+    </form>
+    <main class="content">
+      <aside class="glass project-panel" aria-labelledby="project-heading">
+        <div class="panel-heading"><h2 id="project-heading">Sources</h2><button id="refresh" class="icon-button" type="button" title="Refresh source manifest" aria-label="Refresh source manifest"><i class="icon reload" aria-hidden="true"></i></button></div>
+        <p id="project-name" class="project-name">Open a fixture project</p>
+        <nav id="file-list" aria-label="Project source files"></nav>
+        <div class="project-note">Root source files only. Protected caches and live sketches stay outside this preview.</div>
+      </aside>
+      <section class="editor-panel" aria-label="Editor workspace">
+        <div class="editor-actions"><button id="save" type="button"><i class="icon save" aria-hidden="true"></i>Save</button><span id="document-status">No source open</span><button type="button" disabled title="Pending native editor ownership proof: dirty buffers, undo/redo and live model identity must survive."><i class="icon detach" aria-hidden="true"></i>Detach pending</button></div>
+        <div id="source-tabs" role="tablist" aria-label="Open source tabs"></div>
+        <!-- The unchanged existing bundle creates its editor using these anchors.
+             No Python/Qt bridge is exposed; the new adapter owns all file IO. -->
+        <div id="tab-bar" hidden></div>
+        <div id="monaco-anchor" role="tabpanel" aria-label="Source editor"></div>
+        <div id="editor-empty">Open a fixture to examine the reused Monaco editor.</div>
+      </section>
+    </main>
+    <section class="glass tools" aria-label="Compatibility tools">
+      <div class="tools-toolbar"><div role="tablist" aria-label="Tools"><button id="terminal-tab" role="tab" aria-selected="true" aria-controls="terminal-pane">Terminal</button><button id="gates-tab" role="tab" aria-selected="false" aria-controls="gates-pane" tabindex="-1">Compatibility gates</button></div><button id="run-stream" type="button">Run fixture stream</button><button id="clear-terminal" type="button"><i class="icon clear" aria-hidden="true"></i>Clear</button></div>
+      <div id="terminal-pane" role="tabpanel" aria-labelledby="terminal-tab"><div id="terminal" aria-label="Controlled fixture output"></div></div>
+      <div id="gates-pane" role="tabpanel" aria-labelledby="gates-tab" hidden><p>This preview proves a narrow migration boundary. The current Python application remains the production application.</p><ul id="gate-list"><li>Native editor detach/reattach and undo history: pending.</li><li>Hardware, PlatformIO, cloud and setup workflows: pending.</li><li>Windows, Ubuntu ARM64 and release packages: pending native qualification.</li></ul></div>
+    </section>
+    <footer><span id="status" role="status" aria-live="polite">Loading existing editor and terminal resources…</span><span id="host-status">Host unverified</span></footer>
+    <div id="error" role="alert" hidden></div>
+  </div>
+  <dialog id="create-dialog" aria-labelledby="create-title"><form id="create-form"><h2 id="create-title">New fixture project</h2><p>Creates sources inside the isolated preview area.</p><label>Parent folder<input id="create-parent" type="text" required spellcheck="false"></label><label>Project name<input id="create-name" type="text" required pattern="[A-Za-z_][A-Za-z0-9_-]{0,63}" maxlength="64" value="PreviewSketch"></label><label>Template<select id="create-template"><option value="standard">Standard</option><option value="bare">Bare</option><option value="blink">Blink</option></select></label><label class="check"><input id="include-header" type="checkbox" checked>Add .h and include it in sketch sources</label><label class="check"><input id="include-cpp" type="checkbox" checked>Add .cpp implementation</label><div class="dialog-actions"><button id="cancel-create" type="button">Cancel</button><button id="submit-create" type="submit">Create fixture</button></div></form></dialog>
+  <script src="/vendor/editor/bundle.js"></script>
+  <script src="/vendor/assets/xterm/xterm.js"></script>
+  <script src="/vendor/assets/xterm/xterm-addon-fit.js"></script>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-manifest"
+description = "Enables the project_manifest command without any pre-configured scope."
+commands.allow = ["project_manifest"]
+
+[[permission]]
+identifier = "deny-project-manifest"
+description = "Denies the project_manifest command without any pre-configured scope."
+commands.deny = ["project_manifest"]

@@ -167,6 +167,18 @@ tests/src/
 temp/
 old-*
 
+# Rust/Tauri migration build tools and disposable validation fixtures
+/.migration-tools/
+/desktop/target/
+!/desktop/Cargo.lock
+!/desktop/crates/core/tests/
+/desktop/ui/dist/
+/desktop/ui/public/vendor/
+/desktop/src-tauri/gen/
+/audit/migration/scratch/
+/audit/migration/captures/
+/audit/migration/logs/
+
 # === Root tool state and lock files (stored in index_json/) ===
 /skills-lock.json
 /.mcu_flasher_project_hardware.json

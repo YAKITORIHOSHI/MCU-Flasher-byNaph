@@ -1,0 +1,85 @@
+name: Rust migration compatibility prototype
+
+on:
+  push:
+    paths: ['desktop/**', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
+  pull_request:
+    paths: ['desktop/**', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-prototype:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '4'
+      RUSTUP_TOOLCHAIN: '1.99.1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prepare pinned Rust and frontend tools
+        shell: bash
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          npm install --global pnpm@11.25.0
+      - name: Ubuntu webview development prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev xvfb dbus-x11 fonts-dejavu-core
+      - name: Reuse assets and validate frontend
+        shell: bash
+        run: |
+          pnpm --dir desktop/ui install --frozen-lockfile
+          pnpm --dir desktop/ui test
+          pnpm --dir desktop/ui build
+      - name: Rust contracts, project services and native PTY
+        shell: bash
+        run: |
+          cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
+          cargo test --manifest-path desktop/Cargo.toml --locked
+          cargo clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked -- -D warnings
+          cargo run --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin pty_probe
+          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-host --bins
+          python -B -W error desktop/scripts/verify-serial-codec.py
+          python -B -W error desktop/scripts/verify-preferences-merge.py
+          python -B -W error desktop/scripts/verify-scaffold.py
+          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-desktop-prototype
+      - name: Native Ubuntu webview/editor/PTY verification
+        if: runner.os == 'Linux'
+        env:
+          GDK_BACKEND: x11
+        run: |
+          xvfb-run -a dbus-run-session -- desktop/target/debug/mcu-desktop-prototype --verify-prototype
+      - name: Native Windows webview/editor/PTY verification
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & desktop/target/debug/mcu-desktop-prototype.exe --verify-prototype
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Collect native fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: migration-prototype-${{ matrix.os }}
+          path: |
+            audit/migration/native-webview.json
+            desktop/ui/public/vendor/manifest.json
+          if-no-files-found: warn
+
+# These jobs prove only the fixture prototype on their exact runners. Windows
+# Server is not Windows 10/11 desktop qualification; no job opens serial ports,
+# uploads firmware, mutates cloud records, or replaces the Python release.

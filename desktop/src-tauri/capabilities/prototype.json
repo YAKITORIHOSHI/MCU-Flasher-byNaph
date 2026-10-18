@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "prototype",
+  "description": "Local bundled prototype UI with fixture-only Rust project commands.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-prototype-info", "allow-open-project", "allow-project-manifest",
+    "allow-read-document", "allow-save-document", "allow-create-project", "allow-stream-fixture",
+    "allow-report-probe", "allow-verify-webview-transfer"
+  ]
+}

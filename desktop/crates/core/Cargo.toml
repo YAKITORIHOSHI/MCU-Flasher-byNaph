@@ -1,0 +1,10 @@
+[package]
+name = "mcu-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+mcu-contracts = { path = "../contracts" }
+sha2 = "0.10"
+serde_json = "1"

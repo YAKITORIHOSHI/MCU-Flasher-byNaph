@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prototype-info"
+description = "Enables the prototype_info command without any pre-configured scope."
+commands.allow = ["prototype_info"]
+
+[[permission]]
+identifier = "deny-prototype-info"
+description = "Denies the prototype_info command without any pre-configured scope."
+commands.deny = ["prototype_info"]

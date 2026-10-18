@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stream-fixture"
+description = "Enables the stream_fixture command without any pre-configured scope."
+commands.allow = ["stream_fixture"]
+
+[[permission]]
+identifier = "deny-stream-fixture"
+description = "Denies the stream_fixture command without any pre-configured scope."
+commands.deny = ["stream_fixture"]

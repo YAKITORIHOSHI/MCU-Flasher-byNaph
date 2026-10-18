@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-verify-webview-transfer"
+description = "Enables the verify_webview_transfer command without any pre-configured scope."
+commands.allow = ["verify_webview_transfer"]
+
+[[permission]]
+identifier = "deny-verify-webview-transfer"
+description = "Denies the verify_webview_transfer command without any pre-configured scope."
+commands.deny = ["verify_webview_transfer"]
