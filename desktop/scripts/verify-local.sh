@@ -18,5 +18,6 @@ cargo run --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin pty_prob
 python3 -B -W error desktop/scripts/verify-serial-codec.py
 python3 -B -W error desktop/scripts/verify-preferences-merge.py
 python3 -B -W error desktop/scripts/verify-scaffold.py
+python3 -B -W error desktop/scripts/verify-resource-budget.py
 cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-desktop-prototype
 desktop/target/debug/mcu-desktop-prototype --verify-prototype

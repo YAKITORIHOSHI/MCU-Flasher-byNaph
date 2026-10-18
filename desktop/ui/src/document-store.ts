@@ -35,10 +35,24 @@ export class DocumentStore {
     const ids = new Set(manifest.files.map(file => file.documentId));
     if (ids.size !== manifest.files.length) throw new AdapterError('protocol', 'Manifest contains duplicate document identities.');
   }
-  reset(registration: WorkspaceRegistration): void {
+  validateRegistration(registration: WorkspaceRegistration): void {
     if (registration.protocolVersion !== PROTOCOL_VERSION) throw new AdapterError('protocol', 'Unsupported desktop service protocol.');
-    // A failed/malformed reply must never dispose the currently edited buffers.
     this.validate(registration.manifest, registration.workspaceId);
+  }
+  async prepareRegistration(registration: WorkspaceRegistration,
+    read: (documentId: string) => Promise<DocumentSnapshot>): Promise<DocumentSnapshot | null> {
+    this.validateRegistration(registration);
+    const first = registration.manifest.files[0];
+    if (!first) return null;
+    const snapshot = await read(first.documentId);
+    if (snapshot.workspaceId !== registration.workspaceId || snapshot.document.documentId !== first.documentId) {
+      throw new AdapterError('wrong_owner', 'Initial source reply belongs to another workspace or document.');
+    }
+    return snapshot;
+  }
+  reset(registration: WorkspaceRegistration): void {
+    // A failed/malformed reply must never dispose the currently edited buffers.
+    this.validateRegistration(registration);
     this.generation += 1;
     for (const record of this.records.values()) { record.listener.dispose(); record.model.dispose(); }
     this.records.clear(); this.workspace = registration;
@@ -95,7 +109,7 @@ export class DocumentStore {
       }
       record.missing = false;
       if (file.contentDigest === record.source.contentDigest) {
-        record.source = { ...file }; continue;
+        record.source = { ...file }; record.conflict = false; continue;
       }
       if (record.dirty) { record.conflict = true; continue; }
       const editRevision = record.editRevision;

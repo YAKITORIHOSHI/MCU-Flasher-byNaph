@@ -25,6 +25,7 @@ let term: Terminal | null = null;
 let fit: TerminalFit | null = null;
 let activeId: string | null = null;
 let operationGeneration = 0;
+let selectionGeneration = 0;
 let busy = false;
 let saving = false;
 let streaming = false;
@@ -47,7 +48,7 @@ function clearError(): void { errorBox.hidden = true; errorBox.textContent = '';
 function updateControls(): void {
   element<HTMLButtonElement>('open-project').disabled = busy || saving;
   element<HTMLButtonElement>('new-project').disabled = busy || saving;
-  element<HTMLButtonElement>('refresh').disabled = busy || !store.workspaceId;
+  element<HTMLButtonElement>('refresh').disabled = busy || saving || !store.workspaceId;
   const record = activeId ? store.records.get(activeId) : undefined;
   element<HTMLButtonElement>('save').disabled = busy || saving || !record || !record.dirty || record.conflict || record.missing;
   element<HTMLButtonElement>('run-stream').disabled = streaming;
@@ -109,6 +110,7 @@ function navigateSourceTabs(event: KeyboardEvent, id: string): void {
 function activate(id: string, focus = true): void {
   const record = store.records.get(id);
   if (!record) return;
+  selectionGeneration += 1;
   const prior = activeId ? store.records.get(activeId) : undefined;
   if (prior) prior.viewState = editor.saveViewState();
   activeId = id; editor.setModel(record.model);
@@ -118,26 +120,32 @@ function activate(id: string, focus = true): void {
 async function openDocument(id: string): Promise<void> {
   if (store.records.has(id)) { activate(id); return; }
   const workspaceId = store.workspaceId; const generation = operationGeneration;
+  const selection = ++selectionGeneration;
   if (!workspaceId) return;
   const snapshot = await adapter.readDocument({ workspaceId, documentId: id });
   if (generation !== operationGeneration || workspaceId !== store.workspaceId) return;
-  store.add(snapshot); activate(id);
+  if (snapshot.document.documentId !== id) throw new AdapterError('wrong_owner', 'Source reply belongs to another document.');
+  store.add(snapshot);
+  if (selection === selectionGeneration) activate(id);
 }
 async function adopt(registration: WorkspaceRegistration): Promise<void> {
-  operationGeneration += 1; activeId = null; editor.setModel(null);
+  // Validate and load the first source before releasing the current live editor.
+  // Failed registration/read replies leave its dirty buffers and active model intact.
+  const snapshot = await store.prepareRegistration(registration, documentId =>
+    adapter.readDocument({ workspaceId: registration.workspaceId, documentId }));
   store.reset(registration);
+  operationGeneration += 1; selectionGeneration += 1; activeId = null; editor.setModel(null);
   element('project-name').textContent = registration.name;
   element('project-name').title = registration.root;
   element<HTMLInputElement>('project-path').value = registration.root;
-  const first = registration.manifest.files[0];
-  if (first) await openDocument(first.documentId);
+  if (snapshot) { store.add(snapshot); activate(snapshot.document.documentId); }
   status.textContent = `Opened ${registration.name}: ${registration.manifest.files.length} root sources.`;
 }
 function mayReplace(): boolean {
   return !store.dirty || window.confirm('This preview has unsaved buffers. Discard them and switch fixture project?');
 }
 async function openProject(path: string): Promise<void> {
-  if (busy || !mayReplace()) return;
+  if (busy || saving || !mayReplace()) return;
   clearError(); busy = true; updateControls();
   try { const registration = await adapter.openProject(path); await adopt(registration); }
   finally { busy = false; updateControls(); }
@@ -156,7 +164,7 @@ async function save(): Promise<void> {
   } finally { saving = false; updateControls(); }
 }
 async function refresh(): Promise<void> {
-  const workspaceId = store.workspaceId; if (!workspaceId || busy) return;
+  const workspaceId = store.workspaceId; if (!workspaceId || busy || saving) return;
   clearError(); busy = true; updateControls();
   try {
     const manifest = await adapter.manifest(workspaceId);
@@ -207,7 +215,7 @@ async function runStream(): Promise<void> {
   finally { streaming = false; updateControls(); }
 }
 async function createProject(event: SubmitEvent): Promise<void> {
-  event.preventDefault(); if (busy || !mayReplace()) return;
+  event.preventDefault(); if (busy || saving || !mayReplace()) return;
   clearError(); const button = element<HTMLButtonElement>('submit-create'); button.disabled = true; busy = true; updateControls();
   const options: ScaffoldOptions = { name: element<HTMLInputElement>('create-name').value,
     includeH: element<HTMLInputElement>('include-header').checked,

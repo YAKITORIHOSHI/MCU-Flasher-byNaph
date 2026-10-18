@@ -14,6 +14,7 @@ use mcu_contracts::{
     SourceFile, SourceManifest, WorkspaceId, WorkspaceRegistration, PROTOCOL_VERSION,
 };
 pub mod preferences;
+pub mod resource_budget;
 pub mod serial_text;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};

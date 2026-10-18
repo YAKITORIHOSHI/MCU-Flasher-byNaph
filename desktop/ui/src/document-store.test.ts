@@ -100,3 +100,39 @@ test('newer refresh invalidates an older pending read without losing model ident
   assert.equal(store.records.get('main')?.model, record.model); assert.equal(record.model.getValue(), 'newest');
   assert.equal(store.registration?.manifest.revision, 3);
 });
+
+test('failed successor source read preserves current active buffers before adoption', async () => {
+  const { store, record, registration, manifest } = fixture();
+  record.model.setValue('keep edits');
+  const successor = { ...registration, workspaceId: 'next', manifest: { ...manifest, workspaceId: 'next' } };
+  await assert.rejects(store.prepareRegistration(successor, async () => { throw new Error('read denied'); }), /read denied/);
+  assert.equal(store.workspaceId, 'workspace');
+  assert.equal(store.records.get('main')?.model, record.model);
+  assert.equal(record.model.getValue(), 'keep edits');
+  assert.equal((record.model as Model).disposed, false);
+});
+
+test('successor preparation validates registration and source identities before adoption', async () => {
+  const { store, record, registration, manifest, source } = fixture();
+  await assert.rejects(store.prepareRegistration({ ...registration, manifest: { ...manifest, workspaceId: 'wrong' } },
+    async () => { throw new Error('invalid registration must not read'); }), /another workspace/);
+  await assert.rejects(store.prepareRegistration(registration, async () => ({ workspaceId: 'wrong', document: source, content: 'foreign' })), /another workspace or document/);
+  await assert.rejects(store.prepareRegistration(registration, async () => ({ workspaceId: 'workspace', document: { ...source, documentId: 'foreign' }, content: 'foreign' })), /another workspace or document/);
+  const prepared = await store.prepareRegistration(registration, async () => ({ workspaceId: 'workspace', document: source, content: 'prepared' }));
+  assert.equal(prepared?.content, 'prepared');
+  assert.equal(store.records.get('main')?.model, record.model);
+  assert.equal(record.model.getValue(), 'old');
+});
+
+test('restoring disk to the known saved content resolves stale conflict without losing local edits', async () => {
+  const { store, record, source, manifest } = fixture();
+  record.model.setValue('local edit');
+  await store.reconcile({ ...manifest, revision: 2, files: [{ ...source, revision: 2, contentDigest: 'external' }] },
+    async () => { throw new Error('dirty sources are never replaced'); });
+  assert.equal(record.conflict, true);
+  await store.reconcile({ ...manifest, revision: 3, files: [{ ...source, revision: 3 }] },
+    async () => { throw new Error('matching digest requires no read'); });
+  assert.equal(record.conflict, false); assert.equal(record.dirty, true);
+  assert.equal(record.model.getValue(), 'local edit');
+  assert.equal(store.saveRequest('main').expectedRevision, 3);
+});

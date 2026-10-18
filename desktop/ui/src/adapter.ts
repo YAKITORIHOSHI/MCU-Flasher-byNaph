@@ -108,12 +108,19 @@ export class BrowserFixtureAdapter implements DesktopAdapter {
     if (parentPath !== 'memory://fixtures' || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(options.name)) {
       throw new AdapterError('invalid_path', 'Use the memory fixture parent and a simple project name.');
     }
-    const header = options.includeH ? `#include "${options.name}.h"\n\n` : '';
+    const header = options.includeH ? `#include "${options.name}.h"\n` : '';
+    // Match the Rust scaffold bytes, themselves retained from the legacy templates.
+    const templates = {
+      standard: 'void setup() {\n\n}\n\nvoid loop() {\n\n}\n',
+      bare: 'void setup() {\n  \n}\n\nvoid loop() {\n  \n}\n',
+      blink: 'void setup() {\n  pinMode(LED_BUILTIN, OUTPUT);\n}\n\nvoid loop() {\n  digitalWrite(LED_BUILTIN, HIGH);\n  delay(1000);\n  digitalWrite(LED_BUILTIN, LOW);\n  delay(1000);\n}\n',
+    };
+    if (!Object.hasOwn(templates, options.template)) throw new AdapterError('invalid_path', 'Unknown fixture project template.');
     const sources: Record<string, string> = {
-      [`${options.name}.ino`]: `${header}void setup() {\n}\n\nvoid loop() {\n}\n`,
+      [`${options.name}.ino`]: (header ? `${header}\n` : '') + templates[options.template],
     };
     if (options.includeH) sources[`${options.name}.h`] = '#pragma once\n';
-    if (options.includeCpp) sources[`${options.name}.cpp`] = `${header}// Project implementation.\n`;
+    if (options.includeCpp) sources[`${options.name}.cpp`] = header;
     return this.seed(options.name, sources);
   }
   async streamFixture(onEvent: (event: StreamEvent) => Promise<void>): Promise<void> {

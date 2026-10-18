@@ -2,9 +2,9 @@ name: Rust migration compatibility prototype
 
 on:
   push:
-    paths: ['desktop/**', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
+    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
   pull_request:
-    paths: ['desktop/**', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
+    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '4'
       RUSTUP_TOOLCHAIN: '1.99.1'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/desktop/target
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -44,32 +45,52 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev xvfb dbus-x11 fonts-dejavu-core
+      - name: Parse Windows launcher and verification scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($path in @('desktop/scripts/run-prototype.ps1', 'desktop/scripts/verify-local.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path), [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+          }
       - name: Reuse assets and validate frontend
         shell: bash
         run: |
           pnpm --dir desktop/ui install --frozen-lockfile
           pnpm --dir desktop/ui test
           pnpm --dir desktop/ui build
-      - name: Rust contracts, project services and native PTY
+      - name: Rust contracts, project services and native build
         shell: bash
         run: |
           cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
           cargo test --manifest-path desktop/Cargo.toml --locked
           cargo clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked -- -D warnings
-          cargo run --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin pty_probe
           cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-host --bins
+          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-desktop-prototype
+      - name: Native PTY lifecycle probe
+        timeout-minutes: 2
+        shell: bash
+        run: cargo run --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin pty_probe
+      - name: Differential legacy behavior fixtures
+        timeout-minutes: 2
+        shell: bash
+        run: |
           python -B -W error desktop/scripts/verify-serial-codec.py
           python -B -W error desktop/scripts/verify-preferences-merge.py
           python -B -W error desktop/scripts/verify-scaffold.py
-          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-desktop-prototype
+          python -B -W error desktop/scripts/verify-resource-budget.py
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
+        timeout-minutes: 2
         env:
           GDK_BACKEND: x11
         run: |
           xvfb-run -a dbus-run-session -- desktop/target/debug/mcu-desktop-prototype --verify-prototype
       - name: Native Windows webview/editor/PTY verification
         if: runner.os == 'Windows'
+        timeout-minutes: 2
         shell: pwsh
         run: |
           & desktop/target/debug/mcu-desktop-prototype.exe --verify-prototype

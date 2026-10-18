@@ -3,6 +3,9 @@
 # or modify the user's shell profiles or Python installation.
 MCU_MIGRATION_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 export RUSTUP_TOOLCHAIN="1.99.1"
+# All probes execute this owned target directory. Ignore an inherited target-dir
+# override so validation cannot accidentally run stale binaries from elsewhere.
+export CARGO_TARGET_DIR="$MCU_MIGRATION_ROOT/desktop/target"
 if [[ -x "$MCU_MIGRATION_ROOT/.migration-tools/node/bin/node" ]]; then
   export PATH="$MCU_MIGRATION_ROOT/.migration-tools/node/bin:$PATH"
 fi
