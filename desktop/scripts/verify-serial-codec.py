@@ -22,7 +22,7 @@ for chunks in cases:
     output = "".join(decoder.feed(bytes(chunk)) for chunk in chunks) + decoder.feed(b"", final=True)
     expected.append(dict(output=output, invalidBytes=decoder.invalid_bytes, bufferedBytes=0))
 exe = ROOT / "desktop/target/debug" / ("codec_probe.exe" if sys.platform == "win32" else "codec_probe")
-completed = subprocess.run([str(exe)], input=json.dumps(cases), text=True, capture_output=True, check=True)
+completed = subprocess.run([str(exe)], input=json.dumps(cases), text=True, encoding="utf-8", capture_output=True, check=True)
 actual = json.loads(completed.stdout)
 for index, (before, after) in enumerate(zip(expected, actual)):
     assert before == after, f"Serial codec parity case {index}: {before!r} != {after!r}"

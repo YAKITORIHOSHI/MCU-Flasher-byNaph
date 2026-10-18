@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix="scaffold-parity-",dir=scratch) as direc
                  include_cpp=options["includeCpp"],template_type=options["template"])
         expected.append({p.name:p.read_bytes().decode("utf-8") for p in project.iterdir()})
     executable=ROOT/"desktop/target/debug"/("scaffold_probe.exe" if sys.platform=="win32" else "scaffold_probe")
-    result=subprocess.run([str(executable),str(ROOT),str(fixture)],input=json.dumps(cases),text=True,capture_output=True,check=True)
+    result=subprocess.run([str(executable),str(ROOT),str(fixture)],input=json.dumps(cases),text=True,encoding="utf-8",capture_output=True,check=True)
     actual=json.loads(result.stdout)
     assert len(expected)==len(actual)
     for index,(before,after) in enumerate(zip(expected,actual)):

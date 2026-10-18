@@ -21,7 +21,7 @@ for current, original, edited in cases:
     except (TypeError, AttributeError):
         expected.append(dict(success=False))
 exe = ROOT / "desktop/target/debug" / ("preferences_probe.exe" if sys.platform == "win32" else "preferences_probe")
-result = subprocess.run([str(exe)],input=json.dumps(cases),text=True,capture_output=True,check=True)
+result = subprocess.run([str(exe)],input=json.dumps(cases),text=True,encoding="utf-8",capture_output=True,check=True)
 actual=json.loads(result.stdout)
 assert len(actual)==len(expected)
 for index,(before,after) in enumerate(zip(expected,actual)):
