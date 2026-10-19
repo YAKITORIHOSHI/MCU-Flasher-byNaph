@@ -1,8 +1,16 @@
 # Migration parity ledger
 
+Latest continuation code: `1131c7e`. Local 117 Rust / 40 frontend / 46 native checks,
+31 Linux metadata-identity checks and 401 Send traces/7,411 action comparisons
+plus 27 typed refusals pass. The ledger now has 14 partial fixture subsets and 53
+pending capabilities; no retirement approval. xterm 5.3.0/fit 0.8.0 exact JS matches
+and3 recovered notices are verified;28 staged files retain the original 25 copies.
+Final native CI and limitations belong to STATUS.md/ci-results.json. These new
+proofs do not grant production source writes, serial integration or public release.
+
 19 October 2026 · Asia/Manila · Legacy `1d00ff0` · Prototype checkpoint `4cf730b`
 
-**The baseline behavior and performance audit remains incomplete.** This ledger records 67 capabilities: 13 have a partial fixture implementation and 54 remain pending. None is approved for legacy replacement.
+**The baseline behavior and performance audit remains incomplete.** This ledger records 67 capabilities: 14 have a partial fixture implementation and 53 remain pending. None is approved for legacy replacement.
 
 [Detailed contracts and gates](parity.json) · [Original source/API/event/resource inventory](source-inventory.json) · [Reference amendments](reference-amendments.json) · [Reuse decisions](reuse.md)
 
@@ -24,7 +32,7 @@ The preserved structural baseline covers 300 source/launcher/verifier files, 280
 
 ## Reference changes during the prototype
 
-The baseline inventory remains unchanged. [Reference amendments](reference-amendments.json) records **10 unique amended paths: two production sources, seven legacy verifiers and one legacy CI file**, plus separately added migration workflows. Of the baseline rows, **291 of 300 source entries and 131 of 133 resource entries** remain byte-identical. The changed resource rows include the original editor HTML and compatibility CI; the **22 original runtime assets staged to 25 destinations remain byte-identical**.
+The baseline inventory remains unchanged. [Reference amendments](reference-amendments.json) records **13 unique amended paths: two production sources, nine legacy verifiers and two legacy CI files**, plus separately added migration workflows. Of the baseline rows, **289 of 300 source entries and 130 of 133 resource entries** remain byte-identical. The changed resource rows include the original editor HTML and compatibility CI; the **22 original runtime assets staged to 25 destinations remain byte-identical**.
 
 These baseline hashes describe exact original **checkout bytes**, not an assertion that every inventory row equals its Git blob. Sixteen duplicated inventory rows have checkout line-ending variants, including mixed and doubled CRLF. Their current bytes still match the preserved original baseline hashes, and their content matches Git after removing CR. The original inventory is retained rather than regenerated to conceal these differences.
 
@@ -114,7 +122,7 @@ Every entry remains pending for **full** parity. Partial means only the subset d
 | --- | --- | --- |
 | SER-01 Port discovery and explicit cross-window selection | pending<br>behavior-preserving-port | `main/web_bridge.py:2966` `refresh_ports`<br>`main/web_bridge.py:3129` `select_port`<br>`main/platforms/ubuntu_ports.py:1`<br>`verify_serial_reader.py`, `verify_ubuntu_ports.py`, `verify_controls.py` |
 | SER-02 Incremental decoder and generation-scoped reader | partial-fixture-only<br>behavior-preserving-port | `main/core/serial_stream.py:7` `SerialTextDecoder`<br>`main/web_bridge.py:3270` `_start_serial_monitor`<br>`main/qt/signals.py:1`<br>`verify_serial_reader.py`, `verify_serial_delivery.py`, `verify_serial_view.py` |
-| SER-03 Bounded one-attempt Send and input retention | pending<br>behavior-preserving-port | `main/core/serial_send.py:8` `SerialSendQueue`<br>`main/web_bridge.py:3772` `serial_send`<br>`verify_serial_send.py`, `verify_serial_delivery.py` |
+| SER-03 Bounded one-attempt Send and input retention | partial-fixture-only<br>behavior-preserving-port | `main/core/serial_send.py:8` `SerialSendQueue`<br>`main/web_bridge.py:3772` `serial_send`<br>`verify_serial_send.py`, `verify_serial_delivery.py` |
 | SER-04 Display, ANSI clear, pause, wrap and upload coexistence | pending<br>behavior-preserving-port | `main/qt/serial_panel.py:1`<br>`main/web_bridge.py:3638` `_stop_serial_monitor`<br>`main/web_bridge.py:374` `set_baud_rate`<br>`verify_serial_view.py`, `verify_serial_wrap.py`, `verify_serial_delivery.py`, `verify_connection_loss.py` |
 
 ### Terminal
@@ -181,3 +189,8 @@ Every entry remains pending for **full** parity. Partial means only the subset d
 A feature can replace its original only after matching success/refusal/cancellation/contention/stale-reply fixtures, required native host/transport behavior, and safe coexistence/rollback. Keep the legacy application available until all required entries pass. Approved PlatformIO-integrated Python stays in the private firmware-tool runtime; temporary application adapters need an explicit removal gate.
 
 The inventory includes public backend/editor APIs, event names, renderer interface candidates and discovered verifier case names. Static AST/regex cannot prove dynamic routes or complete behavioral equivalence. The four initial physical boards and absence of a confirmed external programmer do not reduce supported-board/framework/programmer parity.
+
+Reference-verifier follow-up `f952325` handles declared native ESP32 legacy and
+unified compiler layouts after the Espressif32 8 package rename;9 synthetic and
+16 target-resolution checks pass. Actual fresh native setup/ESP32 Compile/runtime passes on both ARM64 LTS hosts;
+all 14 compatibility jobs pass. Exact source receipts remain in ci-results.json. Rust/Tauri source remains 1131c7e.

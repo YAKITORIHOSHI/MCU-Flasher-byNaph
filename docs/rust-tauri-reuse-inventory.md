@@ -22,7 +22,7 @@ baselines remain incomplete. New fixture and native prototype results are listed
 separately in the durable audit; existing legacy results do not count as Tauri
 results. The private Python runtime is available again and supplies isolated
 reference checks; it does not become a Python application backend in the new
-host. Native process/registration verification requires `psutil>=5.9,<8` in that
+host. Native process/registration verification requires `psutil >=5.9,<8` in that
 reference environment. Migration build tools use an ignored checkout-local directory.
 
 The current local code checkpoint passes 90 Rust tests, 40 frontend tests,
@@ -117,3 +117,19 @@ Seven legacy verifiers and CI dependencies have corresponding amendments recorde
 separately with hashes in `reference-amendments.json`; baseline hashes are not
 replaced. All 22 staged asset sources, reset templates, live settings, credentials,
 tool stores and protected caches remain unchanged by this work.
+
+The 19 October continuation adds metadata-only native identity evidence, a pure
+serial Send policy (401 original-Python traces /7,411 action comparisons plus 27
+typed refusals), and recovered matching npm xterm 5.3.0/fit 0.8.0 notices. At
+`1131c7e`, local verification passes 117 Rust / 40 frontend / 46 native checks, 31
+identity checks and 7 provenance checks. Original22 asset sources still produce 25
+identical copies; 3 notices bring total staged output to 28. Final exact-source CI,
+historical results and remaining release gates are in audit/migration/STATUS.md
+and ci-results.json. Production writes/serial integration and full parity remain
+unfinished; no Python service is retired.
+
+A subsequent reference-verifier correction at `f952325` recognizes the declared
+unified ESP32 toolchain from Espressif32 8 while preserving native ELF CPU and
+actual Compile/firmware assertions. Local synthetic 9 and target-resolution 16
+checks pass; both native ARM64 setup/ESP32 Compile/runtime jobs and all 14 compatibility jobs
+pass at that correction, recorded separately in ci-results.json.

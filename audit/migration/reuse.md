@@ -1,5 +1,13 @@
 # Code and resource reuse ledger
 
+Latest continuation code: `1131c7e`. Local 117 Rust / 40 frontend / 46 native checks,
+31 Linux metadata-identity checks and 401 Send traces/7,411 action comparisons
+plus 27 typed refusals pass. The ledger now has 14 partial fixture subsets and 53
+pending capabilities; no retirement approval. xterm 5.3.0/fit 0.8.0 exact JS matches
+and3 recovered notices are verified;28 staged files retain the original 25 copies.
+Final native CI and limitations belong to STATUS.md/ci-results.json. These new
+proofs do not grant production source writes, serial integration or public release.
+
 19 October 2026 · Asia/Manila · Legacy reference `1d00ff0` · Prototype checkpoint `4cf730b`
 
 The current code remains the behavioral source of truth. **Reuse assets and proven contracts first; port only application ownership and toolkit-dependent surfaces.** This audit records decisions, not full replacement approval. [Feature acceptance gates](parity.json) and [original source hashes/APIs](source-inventory.json) and [reference amendments](reference-amendments.json) are the detailed references.
@@ -45,7 +53,7 @@ The current code remains the behavioral source of truth. **Reuse assets and prov
 
 ## Resource evidence and limits
 
-The preserved structural report records **133 resource hashes**, separately from 300 source entries and 123 Python verifier entries; these are overlapping inventory sections, not a count of unique executed assets. The current reference amendments cover **10 unique paths: two production sources, seven legacy verifiers and one legacy CI file**. The source rows retain 291/300 original hashes and the resource rows retain 131/133; the changed resource rows include the original editor HTML and compatibility CI. The original inventory is not regenerated. The prototype stager copies **22 existing source files to 25 destinations**, including three duplicate original webpack URLs, with no byte changes. Existing byte preservation does not establish artifact version or license provenance.
+The preserved structural report records **133 resource hashes**, separately from 300 source entries and 123 Python verifier entries; these are overlapping inventory sections, not a count of unique executed assets. The current reference amendments cover **13 unique paths: two production sources, nine legacy verifiers and two legacy CI files**. The source rows retain 289/300 original hashes and the resource rows retain 130/133; the changed resource rows include the original editor HTML and compatibility CI. The original inventory is not regenerated. The prototype stager copies **22 existing source files to 25 destinations**, including three duplicate original webpack URLs, with no byte changes. Existing byte preservation does not establish artifact version or license provenance.
 
 Inventory hashes are the original checkout-byte hashes. Sixteen duplicated inventory rows differ from corresponding Git blobs in line-ending bytes, including mixed and doubled CRLF; all retain the recorded baseline bytes, and normalized content matches after removing CR. This is recorded explicitly rather than described as universal Git-blob identity or silently normalized.
 
@@ -65,4 +73,9 @@ At `4cf730b`, all five migration jobs passed: Ubuntu 24.04 AMD64/ARM64 and Windo
 
 The original-page focus fix and contained Qt child-viewport suite passed 10/10 tests at native XCB 100% and 10/10 at 200% with verified Mesa OpenGL llvmpipe software rendering. Qt also initialized NVIDIA Vulkan; native NVIDIA 200% attempts were incomplete. See [editor evidence](editor-review.json). At `4cf730b`, the two added capture-path containment tests plus those ten UI cases passed **12/12 at each scale** on checkout-local Xvfb. The successful 200% run emitted Chromium shared-image-mailbox startup/teardown diagnostics, with no JavaScript/Python warning, deprecation or test failure. DOM/programmatic focus and software-renderer evidence do not establish physical GPU performance or full keyboard/IME/clipboard qualification.
 
-Native filesystem identity, final TOCTOU/external-writer races, ACL/xattr preservation, crash durability and live source-write authority remain unresolved. The legacy schema supports one workspace per process; production activation and save-time revalidation need an explicit interoperable strategy. Package lease/event namespaces still require coordination across checkouts sharing one tool store. Hosted ARM64 cannot certify a physical Raspberry Pi/USB session, and Windows Server cannot certify Windows 10/11 desktops. The ledger records **13 partial fixture capabilities and 54 pending capabilities**, with no retirement approval.
+Native filesystem identity, final TOCTOU/external-writer races, ACL/xattr preservation, crash durability and live source-write authority remain unresolved. The legacy schema supports one workspace per process; production activation and save-time revalidation need an explicit interoperable strategy. Package lease/event namespaces still require coordination across checkouts sharing one tool store. Hosted ARM64 cannot certify a physical Raspberry Pi/USB session, and Windows Server cannot certify Windows 10/11 desktops. The ledger records **14 partial fixture capabilities and 53 pending capabilities**, with no retirement approval.
+
+Reference-verifier follow-up `f952325` handles declared native ESP32 legacy and
+unified compiler layouts after the Espressif32 8 package rename;9 synthetic and
+16 target-resolution checks pass. Actual fresh native setup/ESP32 Compile/runtime passes on both ARM64 LTS hosts;
+all 14 compatibility jobs pass. Exact source receipts remain in ci-results.json. Rust/Tauri source remains 1131c7e.

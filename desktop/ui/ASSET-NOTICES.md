@@ -22,8 +22,8 @@ current checkout bytes; a checkout's text line endings can change text hashes.
 The tracked code audit, `audit/migration/source-inventory.json`, separately
 preserves the original 300 source-file entries, 133 reusable-resource entries and
 123 legacy verifier entries. Intentional amendments cover two production
-surfaces (Tk dialog fitting and legacy editor focus), seven legacy verifiers and
-CI dependencies; their changed hashes are recorded separately in
+surfaces (Tk dialog fitting and legacy editor focus), nine legacy verifiers and
+two legacy CI files; their changed hashes are recorded separately in
 `audit/migration/reference-amendments.json`. All 22 staged asset sources remain
 unchanged by these amendments. The edited legacy `src/editor/index.html` is a
 behavior/theme reference, rather than one of the copied web-resource inputs.

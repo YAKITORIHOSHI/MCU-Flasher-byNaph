@@ -2,7 +2,7 @@
   "schema_version": 1,
   "date": "2026-10-19",
   "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
-  "prototype_checkpoint_commit": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+  "prototype_checkpoint_commit": "1131c7e250b0688b75f86675943601c8b6c93d07",
   "scope": "Initial traced parity/reuse ledger. No legacy component is approved for replacement.",
   "baseline_behavior_audit": "incomplete",
   "performance_baseline": "pending",
@@ -17,8 +17,8 @@
   },
   "summary": {
     "features": 67,
-    "partial_fixture_only": 13,
-    "pending": 54,
+    "partial_fixture_only": 14,
+    "pending": 53,
     "mapped_legacy_verifiers": 128,
     "groups": {
       "workspace": 9,
@@ -46,21 +46,24 @@
     "Sixteen duplicated inventory rows differ from the legacy Git blobs only by checkout line-ending variants, including mixed and doubled CRLF. Their current bytes still match the preserved original baseline hashes; content matches Git after removing CR. No baseline hash or source byte is rewritten to hide these differences."
   ],
   "prototype_evidence": {
-    "source_checkpoint": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+    "source_checkpoint": "1131c7e250b0688b75f86675943601c8b6c93d07",
     "local_native": "audit/migration/native-webview.json",
     "local_host": "Ubuntu 26.04 x86_64",
     "local_checks": {
-      "rust": 90,
+      "rust": 117,
       "frontend": 40,
       "native_webview": 46,
       "native_process_identity": 6,
       "fixture_registration_interop": 9,
       "fixture_lock_interop": 8,
-      "fixture_registry_rust": 21
+      "fixture_registry_rust": 21,
+      "native_file_identity": 31,
+      "serial_send_policy_rust": 12,
+      "asset_provenance": 7
     },
     "local_verification": "audit/migration/verification.json",
     "meaning": "Fixture prototype, native read-only PID evidence and named pure-helper comparisons only. No full application, user-project mutation, live registration, installation, cloud, driver or physical USB qualification.",
-    "current_checkpoint_ci": "All five migration jobs passed at 4cf730b: three native prototype hosts (Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022) each passed 46 webview checks; both Windows original-editor binding jobs passed 12 tests at 100% and 200%. All 14 compatibility jobs, four native-layout jobs and the separate native ARM64 workflow also passed at this exact revision. See ci-results.json for exact job links. Hosted runners do not establish Windows 10/11 desktops or physical Pi/USB compatibility.",
+    "current_checkpoint_ci": "All five migration/editor jobs pass at1131c7e. All14 compatibility and both fresh setup/real ESP32 compile ARM64 jobs pass atf952325 after the reference-verifier correction. All four layout jobs pass at ece6339. Runtime/UI source equivalence and exact job commits are recorded in ci-results.json; no Windows10/11 desktop or physical USB qualification.",
     "historical_ci": {
       "checkpoint": "44c43cf",
       "linux_amd64": "audit/migration/hosts/ubuntu-24.04-amd64-44c43cf.json",
@@ -189,7 +192,36 @@
       },
       "physical_gpu_qualified": false
     },
-    "current_checkpoint": "A fresh full local 90-Rust/40-frontend/46-native run passed at 4cf730b, alongside strict Clippy/Python checks and all reference probes."
+    "current_checkpoint": "Latest local1131c7e suite passes117 Rust/40 frontend/46 native,31 file-identity checks,401 Send traces/7411 comparisons plus27 typed refusals and7 provenance checks; no production or hardware qualification.",
+    "serial_send_policy": {
+      "trace_inputs": 401,
+      "action_comparisons": 7411,
+      "structured_refusals": 27,
+      "evidence": "audit/migration/serial-send-parity.json",
+      "scope": "Pure policy only; no driver/hardware or serial UI qualification. Counts are not added to the older 23,909 independent input cases."
+    },
+    "native_file_identity": {
+      "local_checks": 31,
+      "prior_windows_checks": 30,
+      "prior_windows_checkpoint": "2e09d07da307e0e8e26320888fd146ead9d86e0d",
+      "evidence": "audit/migration/file-identity.json",
+      "scope": "Metadata-only point-in-time observations; production write authority, ancestor/final replace races, ACL/xattrs and durable recovery remain gated."
+    },
+    "asset_provenance": {
+      "evidence": "audit/migration/xterm-provenance.json",
+      "offline_checks": 7,
+      "matching_notices": 3,
+      "staged_files": 28,
+      "scope": "Two exact JavaScript package matches; complete release provenance pending."
+    },
+    "historical_full_matrix_4cf730b": "All five migration jobs passed at 4cf730b: three native prototype hosts (Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022) each passed 46 webview checks; both Windows original-editor binding jobs passed 12 tests at 100% and 200%. All 14 compatibility jobs, four native-layout jobs and the separate native ARM64 workflow also passed at this exact revision. See ci-results.json for exact job links. Hosted runners do not establish Windows 10/11 desktops or physical Pi/USB compatibility.",
+    "reference_verifier_followup": {
+      "checkpoint": "f952325ca4acfdf044c17c7813bc36609821381c",
+      "report": "audit/migration/native-compiler-layout.json",
+      "local_synthetic_checks": 9,
+      "local_target_resolution_checks": 16,
+      "meaning": "Only native legacy verification helpers/check wiring changed after1131c7e; real fresh native setup/ESP32 compilation and all14 compatibility jobs pass atf952325. Rust/Tauri source remains1131c7e."
+    }
   },
   "contracts": {
     "api_inventory": "source-inventory.json files/classes/methods includes all discovered public MCUWebBackendAPI and EditorBridgeAPI methods/signatures/decorators. These are not a direct Tauri capability allowlist.",
@@ -821,11 +853,14 @@
         "sources": [
           "desktop/crates/core/src/lib.rs#ProjectService",
           "desktop/crates/core/tests/project_service.rs",
-          "desktop/src-tauri/src/main.rs"
+          "desktop/src-tauri/src/main.rs",
+          "desktop/crates/core/src/source_names.rs",
+          "desktop/crates/host/src/file_identity.rs"
         ],
-        "implemented_subset": "Fixture-owned scoped manifests/read/save/conflicts/acknowledgement. Preserves original BOM and mixed-newline bytes for unchanged/undo-restored models; actual edited saves retain the Monaco model BOM and disclosed model EOL. In-process project ownership only; the separate fixture OS lock is not integrated into source writes. Root identity, external-writer races, ACL/xattr preservation and legacy project/port/package/reset protocols remain unresolved.",
+        "implemented_subset": "Fixture-owned scoped manifests/read/save/conflicts/acknowledgement. Preserves original BOM and mixed-newline bytes for unchanged/undo-restored models; actual edited saves retain the Monaco model BOM and disclosed model EOL. In-process project ownership only; the separate fixture OS lock is not integrated into source writes. Root identity, external-writer races, ACL/xattr preservation and legacy project/port/package/reset protocols remain unresolved. Native metadata-only root/source identities and shared reserved-device name validation are now fixture-verified; they do not grant content or replacement capabilities.",
         "evidence": [
-          "audit/migration/native-webview.json"
+          "audit/migration/native-webview.json",
+          "audit/migration/file-identity.json"
         ],
         "full_feature_parity": "pending"
       },
@@ -1633,7 +1668,7 @@
       ],
       "disposition": "behavior-preserving-port",
       "owner": "build Rust service/shared UI",
-      "acceptance": "Preserve source/config/library/firmware hashes, prebuild signatures and A→B→A/restart reuse.",
+      "acceptance": "Preserve source/config/library/firmware hashes, prebuild signatures and A\u2192B\u2192A/restart reuse.",
       "failure_race_contract": "Dirty/failed/interrupted/changed image refuses reuse even on coarse timestamps; no SCons DB deserialization.",
       "status": "pending",
       "prototype_scope": null,
@@ -1676,7 +1711,7 @@
       ],
       "disposition": "behavior-preserving-port",
       "owner": "build Rust service/shared UI",
-      "acceptance": "Keep 4–6core headroom, physical/logical/RAM limits and HDD/removable/network I/O policy.",
+      "acceptance": "Keep 4\u20136core headroom, physical/logical/RAM limits and HDD/removable/network I/O policy.",
       "failure_race_contract": "Host discovery/admission remains separate from pure calculations; all probes off GUI.",
       "status": "partial-fixture-only",
       "prototype_scope": {
@@ -2146,7 +2181,7 @@
           "desktop/crates/core/src/serial_text.rs",
           "desktop/scripts/verify-serial-codec.py"
         ],
-        "implemented_subset": "Incremental text codec only:325 differential cases, retained incomplete UTF8≤3bytes. No port access, serial driver/reader/send/session implementation.",
+        "implemented_subset": "Incremental text codec only:325 differential cases, retained incomplete UTF8\u22643bytes. No port access, serial driver/reader/send/session implementation.",
         "evidence": [
           "audit/migration/serial-codec.json"
         ],
@@ -2186,8 +2221,19 @@
       "owner": "serial Rust service/shared UI",
       "acceptance": "Retain64KiB/message,256KiB active+pending,16messages,1s driver timeout and none/LF/CR/CRLF.",
       "failure_race_contract": "Queue/lock rejection retains input; discard stale commands; never retry partial writes or unbounded flush.",
-      "status": "pending",
-      "prototype_scope": null,
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/serial_send.rs",
+          "desktop/crates/host/src/bin/serial_send_probe.rs",
+          "desktop/scripts/verify-serial-send.py"
+        ],
+        "implemented_subset": "Deterministic bounded admission/one-attempt completion/stop/discard policy matches401 original Python traces and7411 actions;27 typed protocol refusals are separate. Native connection/generation/port/baud snapshots and effect identities remain fixture inputs; no driver, worker, serial UI or hardware integration. Probe response serialization enforces its byte budget incrementally.",
+        "evidence": [
+          "audit/migration/serial-send-parity.json"
+        ],
+        "full_feature_parity": "pending"
+      },
       "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
       "native_required": [
         "Ubuntu24.04AMD64",
@@ -2758,7 +2804,7 @@
       ],
       "disposition": "behavior-preserving-port",
       "owner": "developer-portal Rust service/shared UI",
-      "acceptance": "Retain exactly5completed clicks/pause, local saltedPBKDF2≥12char key and existing Firebase sign-in/reset.",
+      "acceptance": "Retain exactly5completed clicks/pause, local saltedPBKDF2\u226512char key and existing Firebase sign-in/reset.",
       "failure_race_contract": "No default universal key; changing key requires auth; local access cannot inherit cloud UID/cache; repair only known runtime defects.",
       "status": "pending",
       "prototype_scope": null,
@@ -3422,5 +3468,6 @@
     "staged_asset_copies": 25,
     "staged_asset_byte_changes": 0,
     "hash_boundary": "Original checkout-byte hashes, including line-ending variants; not a claim that all baseline rows equal Git blob bytes. Sixteen duplicated rows retain original baseline bytes and differ from Git only in CR line-ending characters."
-  }
+  },
+  "latest_repository_checkpoint": "f952325ca4acfdf044c17c7813bc36609821381c"
 }

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "f952325ca4acfdf044c17c7813bc36609821381c",
+  "recordedAtUtc": "2026-10-19T12:49:04.555397+00:00",
+  "scope": "Read-only native ESP32 verifier layout correction; no Rust build service or physical USB qualification",
+  "diagnosis": "ECE ARM64 first-run reached real cold/warm GUI and readiness, then the verifier checked the absent pre8 compiler path. Logs and upstream8.0.0 declarations show unified toolchain14.2.0+20260121. The initial diagnostic did not establish a foreign CPU payload.",
+  "failedRun": 39251970986,
+  "upstreamManifest": "https://raw.githubusercontent.com/platformio/platform-espressif32/v8.0.0/platform.json",
+  "upstreamPlatform": "https://raw.githubusercontent.com/platformio/platform-espressif32/v8.0.0/platform.py",
+  "localSyntheticChecks": 9,
+  "localTargetResolutionChecks": 16,
+  "pythonWarningsAsErrors": true,
+  "packageInstallationDuringLocalChecks": false,
+  "liveSettingsAccess": false,
+  "hardwareWrites": false,
+  "nativeRequalification": "Passed Ubuntu24.04/26.04 ARM64 native workflows and all14 compatibility jobs atf952325; see exact source receipts.",
+  "nativeWorkflowRun": 39254786572,
+  "compatibilityWorkflowRun": 39254790860,
+  "nativeFirmwareBytesEach": 291424,
+  "nativeReports": [
+    "hosts/native-ubuntu-24.04-arm-first-run-f952325.json",
+    "hosts/native-ubuntu-26.04-arm-first-run-f952325.json"
+  ]
+}

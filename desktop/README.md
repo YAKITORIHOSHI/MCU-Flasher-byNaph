@@ -56,13 +56,19 @@ its typed domain; these are counted separately from equivalent trace inputs.
 ## Build and run
 
 Use Rust **1.99.1** with rustfmt/Clippy, Node **24**, pnpm **11.25.0**, and Python
-3.10+ with `psutil>=5.9,<8` for reference verification. Prepare that dependency in
+3.10+ with `psutil >=5.9,<8` for reference verification. Prepare that dependency in
 the selected development/reference environment before running verification;
 the scripts do not install it automatically. Activate that environment first:
 the Ubuntu script invokes `python3`, and the Windows script invokes `python`.
 Python is a development/reference dependency here; the eventual application
 retains private Python only for approved firmware tools. Dependencies are locked
 in Cargo.lock and pnpm-lock.yaml.
+
+The original application's native first-run verifier supports the older ESP32
+compiler layout and the unified toolchain declared by Espressif32 8. It checks
+installed package identity and native ELF CPU before actual Compile-button
+execution; an absent old filename is reported separately from a foreign binary.
+This is reference qualification and does not implement the Rust build service.
 
 Ubuntu needs a native C/C++ toolchain, GTK3 and WebKitGTK 4.1 development packages
 (plus the usual Tauri 2 Linux prerequisites). Windows needs the MSVC C++ build
@@ -159,3 +165,13 @@ activation, package event-root agreement, editor-only detach/input behavior,
 full UI/services/tool workflows, licensing and release packaging remain gates.
 Windows 10/11 desktop sessions, physical Pi 5 sessions and USB hardware tests
 have not been performed for the replacement.
+
+The 19 October continuation adds metadata-only native identity evidence, a pure
+serial Send policy (401 original-Python traces /7,411 action comparisons plus 27
+typed refusals), and recovered matching npm xterm 5.3.0/fit 0.8.0 notices. At
+`1131c7e`, local verification passes 117 Rust / 40 frontend / 46 native checks, 31
+identity checks and 7 provenance checks. Original22 asset sources still produce 25
+identical copies; 3 notices bring total staged output to 28. Final exact-source CI,
+historical results and remaining release gates are in audit/migration/STATUS.md
+and ci-results.json. Production writes/serial integration and full parity remain
+unfinished; no Python service is retired.

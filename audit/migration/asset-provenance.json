@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "checks": [
+    "xterm-matching-archive-license",
+    "src/assets/xterm/xterm.js-matches-pinned-archive",
+    "existing-css-and-recovered-original-copyright-block",
+    "xterm-addon-fit-matching-archive-license",
+    "src/assets/xterm/xterm-addon-fit.js-matches-pinned-archive",
+    "all-three-matching-notices-present-in-staged-web-assets",
+    "every-staged-artifact-matches-source-size-and-sha256"
+  ],
+  "checksPassed": 7,
+  "stagedArtifacts": 28,
+  "matchingNotices": 3,
+  "networkAccess": false,
+  "fullReleaseProvenanceQualified": false,
+  "sourceCommit": "1131c7e250b0688b75f86675943601c8b6c93d07",
+  "recordedAtUtc": "2026-10-19T12:37:55.508421+00:00",
+  "localHost": "Ubuntu 26.04 AMD64"
+}

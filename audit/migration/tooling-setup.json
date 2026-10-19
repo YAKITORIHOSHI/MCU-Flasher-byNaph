@@ -392,5 +392,12 @@
     "pushedAuditCheckpoint": "3c1cdc2",
     "lastFullyVerifiedCodeCheckpoint": "4cf730baf4db3399e16017bbb17abbb2419b126b",
     "pending": "Native file-identity adapter/probe/verifier and CI wiring remain uncommitted. Adapter has 10 local unit passes and Windows target compilation; full integrated/native checks and Windows reserved-name refinement are still pending. No production save authority is enabled."
+  },
+  "migrationContinuation": {
+    "codeCheckpoint": "f952325ca4acfdf044c17c7813bc36609821381c",
+    "evidence": "STATUS.md / HANDOFF.md",
+    "toolRegistrationsLoaded": true,
+    "trustedWorkspaceLspSymbolsPassed": true,
+    "installReceiptIsHistorical": true
   }
 }

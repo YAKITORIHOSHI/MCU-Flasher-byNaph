@@ -2,18 +2,19 @@
   "schema_version": 1,
   "date": "2026-10-19",
   "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
-  "current_checkpoint_commit": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+  "current_checkpoint_commit": "f952325ca4acfdf044c17c7813bc36609821381c",
   "baseline_inventory": "source-inventory.json",
   "method": "Inventory SHA-256 values capture the original checkout bytes; committed Git blob hashes are separate. Checkout line-ending variants include LF, CRLF, mixed and doubled CRLF. Baseline hashes are preserved, not regenerated. Current hashes explain only intentional migration-owned amendments; unrelated installer/catalog/bootstrap changes are excluded.",
   "scope": "Reference amendments, not proof of full feature parity or production migration approval.",
   "summary": {
-    "amended_baseline_entries": 10,
+    "amended_baseline_entries": 13,
     "production_source_files": 2,
-    "legacy_verifier_files": 7,
-    "legacy_ci_files": 1,
+    "legacy_verifier_files": 9,
+    "legacy_ci_files": 2,
     "additional_ci_files": 1,
-    "unchanged_source_inventory_entries": 291,
-    "unchanged_resource_inventory_entries": 131
+    "unchanged_source_inventory_entries": 289,
+    "unchanged_resource_inventory_entries": 130,
+    "supplemental_verification_files": 2
   },
   "amendments": [
     {
@@ -163,6 +164,50 @@
       "original_git_bytes": 49130,
       "current_bytes": 58477,
       "reason": "Use a contained child viewport with actual Qt/CSS/zoom geometry and breakpoint coverage; verify focus fallbacks and actual undo/redo; allow only checkout temp or durable audit capture output, rejecting resolved symlink escapes."
+    },
+    {
+      "path": "direct/verify_ubuntu_first_run.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "f8959efebabf3aeef15a2b9f7b698a8f369964b76090a5e2115cd27b45558975",
+      "original_git_sha256": "f8959efebabf3aeef15a2b9f7b698a8f369964b76090a5e2115cd27b45558975",
+      "current_sha256": "d62a3987c3720093e91f1f3c2e1de242fa65e677c1970f4e97ce8a1d3f25abda",
+      "original_bytes": 23186,
+      "original_git_bytes": 23186,
+      "current_bytes": 23222,
+      "reason": "Replace the stale ESP32 compiler filename precheck with declared installed legacy/unified toolchain checks. Preserve native ELF64 CPU refusal and the required real Compile-button/firmware/runtime proof; record compiler paths. Espressif32 8.0 renamed its compiler package, so absent old files must not be mislabeled foreign CPU."
+    },
+    {
+      "path": "direct/verify_target_resolution.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "1b9fb17de07a910a0af7764a0fbcf3f88d509273c99b82695fdb88aac53c205c",
+      "original_git_sha256": "1b9fb17de07a910a0af7764a0fbcf3f88d509273c99b82695fdb88aac53c205c",
+      "current_sha256": "0bb9eb73fbfd32ffe18edadebc9b2fb162967233eb93c119d65adfd5061564f7",
+      "original_bytes": 44819,
+      "original_git_bytes": 44819,
+      "current_bytes": 44468,
+      "reason": "Use the same read-only declared native compiler fixture validation for the optional Ubuntu ESP32 compile. Remove stale legacy tool-esptoolpy/compiler-name assumptions; actual installed-only Compile-button and firmware receipt assertions remain mandatory."
+    },
+    {
+      "path": ".github/workflows/ubuntu-arm64.yml",
+      "kind": "legacy-ci",
+      "inventory_sections": [
+        "resources"
+      ],
+      "original_sha256": "0e9c0796979d1372af8a0c8377b8d7ee1e871851f3bea9a74702169798bb8437",
+      "original_git_sha256": "0e9c0796979d1372af8a0c8377b8d7ee1e871851f3bea9a74702169798bb8437",
+      "current_sha256": "05c2b8473a115673bc62d138ae5458025cffc923920974a42bb013632d9d22b1",
+      "original_bytes": 4618,
+      "original_git_bytes": 4618,
+      "current_bytes": 4639,
+      "reason": "Run isolated native ESP32 compiler-layout checks before native setup. Synthetic cases do not replace real fresh Bootstrap, GUI, native compiler, firmware, and runtime execution on both LTS ARM64 runners."
     }
   ],
   "additions": [
@@ -170,13 +215,29 @@
       "path": ".github/workflows/migration-prototype.yml",
       "kind": "migration-ci",
       "original_sha256": null,
-      "current_sha256": "c74f256d5b75c651faca72a79e3de008650e83a7fda8bca6907bba335c3a8911",
-      "current_bytes": 6775,
+      "current_sha256": "37f253ddf17868e2b8aa810cee06179a23e09816b7e22fec0272d3c305f4c171",
+      "current_bytes": 7215,
       "reason": "Separate fixture-only native prototype matrix on Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022, plus both Windows legacy-editor binding ranges at 100%/200%; not Windows 10/11 desktop or USB qualification."
+    },
+    {
+      "path": "direct/native_esp32_fixture.py",
+      "kind": "verification-helper",
+      "original_sha256": null,
+      "current_sha256": "4fe5d44b089fbb8545aa33fbedf05499ef3351e674f8832b956ac8b293763e8d",
+      "current_bytes": 3873,
+      "reason": "Owned synthetic/native first-run verifier support only; no application install, hardware, settings, metadata generation or production selection."
+    },
+    {
+      "path": "direct/verify_native_esp32_fixture.py",
+      "kind": "verification-helper",
+      "original_sha256": null,
+      "current_sha256": "459f819d4f6c831f2c481330d064e64641e6337f35a1a4e7a3b685f57826839e",
+      "current_bytes": 5200,
+      "reason": "Owned synthetic/native first-run verifier support only; no application install, hardware, settings, metadata generation or production selection."
     }
   ],
   "limitations": [
-    "Six verifier amendments must be evaluated separately from the single production behavior change; passing amended tests alone is not an unchanged-reference equivalence claim.",
+    "Nine legacy verifier amendments and two production source amendments require separate review; passing amended tests alone does not establish unchanged-reference equivalence.",
     "The 133 resource rows include CI. One CI resource hash changed; this does not change the 22 original assets staged byte-identically to 25 prototype destinations.",
     "No user sketches, live settings, credentials, deployed Firebase rules, protected caches/journals or hardware were read or changed for this amendment report."
   ],

@@ -58,3 +58,8 @@ Ten adapter unit checks and Windows target compilation passed; its final
 reserved-name refinement and full integrated/native verification remain pending.
 Resume that code stage using [HANDOFF.md](HANDOFF.md), without treating these
 tool-install checks as application parity or enabling live source writes.
+
+The pending migration note above is historical to the tool-install checkpoint.
+The continuation completed native metadata identity, pure Send and matching xterm
+notices; consult STATUS.md/HANDOFF.md for current code and exact qualification.
+The installed tools were reused without rerunning their installers.

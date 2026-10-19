@@ -2,191 +2,187 @@
 
 Updated: 19 October 2026, Asia/Manila.
 
-## Latest steering: development tools
+## Objective and checkpoint
 
-The user requested reading Rust Plugins Comparison and installing its necessary
-skills/plugins before proceeding. [Tooling setup](tooling-setup.md) is complete:
-18 Rust skills, Superpowers 6.4.2, official Context7 1.0.2, pinned Rust Analyzer/
-rust-src and Rust LSP. Both MCP smoke checks pass. New registrations need a
-subsequent turn/session to load. Do not rerun the LSP skill's unpinned installer
-merely because this current turn predates registration; the pinned setup is
-already verified. Existing user/project instructions take precedence over
-generic upstream workflow examples.
+Continue the full, reuse-first Rust/Tauri 2 migration with actual code and bounded
+subagent ownership. The user reiterated “Continue all and everything according to
+plan.” Full current feature/board/framework/programmer parity is required before
+Python is replaced; private Python ultimately remains only for approved firmware
+tools. Support Ubuntu 24.04+ AMD64/ARM64 and Windows 10/11 AMD64. Preserve current
+compact workflow/static glass, offline Monaco/xterm, fixed Firebase deployment,
+prepared offline tools, independent projects and editor/terminal/AI state.
 
-Native file-identity work was paused for setup and remains uncommitted in
-`desktop/crates/host/src/file_identity.rs`, its `file_identity_probe` binary,
-`desktop/scripts/verify-file-identity.py`, host Cargo/lib and verification/CI wiring.
-Ten Linux adapter checks and Windows target test compilation passed. Before its
-commit, finish Windows COM/LPT superscript-digit and spaced reserved-stem refusal,
-review alias/junction coverage, build/run the 13-check cross-language fixture,
-run strict integrated checks and capture exact-source CI. It is metadata evidence
-only; content changes, final replacement races, metadata preservation and durable
-recovery still block production writes. Full local/hosted results below remain
-qualified to the committed `4cf730b`, not this working code.
+Latest code checkpoint is `f952325ca4acfdf044c17c7813bc36609821381c`, safely pushed on
+`codex/rust-tauri-migration`. Documentation receipts may advance HEAD without
+changing tested source. Original reference is
+`1d00ff0bfdac7d158dde3df84b07741c5b1df6d4`. Python remains production; no service
+is retired. **This is still an incomplete fixture prototype, not a public release.**
 
-## Objective and current checkpoint
+Read STATUS.md, parity.json/parity.md, verification.json, ci-results.json,
+reference-amendments.json, reuse.md, xterm-provenance.json and desktop/README.md.
+The 67-capability ledger now has 14 partial fixture subsets and 53 pending. There
+is no retirement approval. Do not restart, reduce scope to implemented probes or
+physical boards, regenerate baseline hashes, or publish an incomplete replacement.
 
-Continue the authorized reuse-first Rust + Tauri 2 migration. Full current
-feature, board, framework and programmer parity is required before replacing
-Python. Python remains only for approved firmware tools at the endpoint.
-Support Ubuntu 24.04+ AMD64/ARM64 and Windows 10/11 AMD64. Preserve the current
-workflow/glass style, existing offline Monaco/xterm/assets, fixed Firebase
-accounts/schema and prepared offline tools. Prioritize Windows installer and
-Ubuntu DEB. Do not narrow support to the initial physical boards.
+## Code stages completed in this continuation
 
-Current code is `4cf730baf4db3399e16017bbb17abbb2419b126b` on `codex/rust-tauri-migration`.
-Original application reference is `1d00ff0bfdac7d158dde3df84b07741c5b1df6d4`.
-Read STATUS.md, parity.json/parity.md, verification.json, ci-results.json and
-reference-amendments.json. No Python service has been retired; this is an
-incomplete fixture prototype, not the finished replacement. No live project or
-settings writes are enabled.
+- `9b5d640`: metadata-only retained native root/source identity handles, full
+  Windows FILE_ID_INFO, portable shared reserved-device stem policy, strict
+  root/source kind/alias checks and bounded cross-language fixture protocol.
+- `2e09d07`: pure bounded serial Send policy and original-Python deterministic
+  trace harness; corrected native Windows junction separators and open-descendant
+  directory rename fixture. Windows Server native job passes at this exact source.
+- `0374725`: deadline fixture timing no longer assumes prompt ready delivery;
+  documents that input timeouts alone cannot interrupt blocked stdout.
+- `ece6339`: exact npm xterm 5.3.0 / fit 0.8.0 JavaScript matches, matching archive
+  licenses and upstream CSS copyright block recovered; stager includes 3 notices
+  and offline provenance verification. Original resources remain unchanged.
+- `1131c7e`: Send probe serializes one event at a time into a capped 16 MiB
+  response; an amplified-state negative check is refused without partial output.
+  This developer-only follow-up is covered by an explicitly dispatched native
+  migration matrix; all five jobs pass.
+- `f952325`: corrected native ESP32 fixture checks for Espressif32 8 unified
+  toolchains. Two original verifier files and the ARM64 test loop are amended;
+  9 synthetic and 16 target-resolution checks pass. Native setup/compile reruns
+  and compatibility all pass at that exact source. Rust/Tauri code remains 1131c7e.
 
-The user requests actual code work first, subagents with separate ownership,
-and durable evidence under audit/, outside temp/. Update Audit/Skills at the
-end of each actual code/check stage unless needed earlier.
+The adapter has no public content/native-handle/write capability. Identity
+observations do not close ancestor/final-replacement races, preserve ACL/xattrs,
+provide crash recovery or authorize source writes. Windows may refuse directory
+rename with open descendants: fixtures move the retained source out first. Do
+not add delete/content capability just to force a test scenario.
 
-## Implemented code to preserve
+Send is an I/O-free policy: 64KiB/message, 256KiB active-plus-pending, 16 messages;
+nonblocking admission, captured native generation/token/port/baud, compile
+allowance, startup rollback, discard, Stop, exact completion and no retry after
+partial/error. A future native worker must own observations and finite driver
+timeouts. No driver, hardware, serial UI or actual worker is integrated. Explicit
+integer/UTF8 domain refusals are separate from equivalent comparisons.
 
-- Owner-scoped contracts and disposable project manifests/read/save/scaffolds;
-  SHA/revision checks, unchanged-write avoidance, root sources, original checked
-  header includes and BOM/original unchanged or undone mixed-EOL bytes.
-- Retained Monaco models and record-bound save baselines; stale saves/reads and
-  failed preflights do not replace unrelated buffers/history. Editor-only detach,
-  full project/Modify/search/AI/syntax/recovery services remain incomplete.
-- Pure serial text, preference merge, resource budgets and four transport helper
-  ports compared with the original Python functions, retaining dynamic targets.
-- Fixed child PTY with ConPTY cursor replies, bounded drain/cleanup/lease,
-  native owner/sequence/raw-byte consumption acknowledgements and bounded queues.
-  These are not general interactive shell/device sessions.
-- Whole-webview transfer feasibility, three cycles retaining model/view/history;
-  unstable Tauri API, not finished editor-only detach or native input proof.
-- Native work-area fitting uses logical sizing once. Bundled local resources,
-  CSP and explicit narrow IPC keep prototype writes in disposable audit scratch.
-- Pure legacy PID/create_time ownership policy plus explicit native process
-  evidence on Linux/Windows; unknown/denied/zombie/raced identities reserve claims.
-  Only confirmed Exited frees a peer. Legacy identity tolerance is strictly <2s.
-- Fixed fixture settings transactions acquire interoperable OS locks, freshly
-  read and gather evidence under lock, preserve peers, refuse collisions, skip
-  equal writes, stage/flush/sync and byte-check before replacement. Only one
-  independent workspace per process is represented by the legacy PID schema.
-- Registry unknown values use private validated JSON fragments and composition;
-  huge integers, timestamp decimals and nested private-looking marker objects
-  remain intact. Known identity parsing uses float_roundtrip. The host adds no
-  raw_value feature, but Tauri enables it transitively: do not pass unknown
-  settings through generic serde_json::Value. No global arbitrary_precision.
-- Real legacy fixes: DialogFit stops unchanged Configure geometry/minimum writes;
-  hiding a focused AI bar tries Monaco, then visible Review toggle, then blur,
-  before hidden state. Unrelated focus and buffers remain intact.
-- Native editor verifier uses a fully contained child pane and actual Qt/CSS/zoom
-  geometry with both breakpoint regimes and hit tests. Capture paths allow only
-  checkout temp/ or audit/migration/captures/, with resolved escape rejection.
+All previously implemented project/scaffold/editor/registry/PTY/transfer behavior
+remains. Registry unknown JSON stays opaque; never pass private fragments through
+Value. Known timestamps use float_roundtrip. Only confirmed Exited frees a claim;
+Unknown, including zombie/dead uncertainty, reserves it. One workspace per PID
+is still the initial coexistence strategy. The whole-webview transfer remains
+feasibility only; editor-only detach and full native input remain unfinished.
 
-## Verification and toolchains
+## Verification
+
+Latest full local `1131c7e`: 117 Rust tests, 40 frontend, 46 native webview;
+strict Clippy/Python warnings, typecheck/build, fixed native PTY; 23,909 existing
+pure inputs; 8 lock, 6 process, 9 registry interop; 31 Linux file-identity checks;
+401 Send traces/7,411 action comparisons plus 27 typed/protocol refusals; 7 asset
+provenance checks over 28 staged files (22 original sources / 25 copies  + 3 notices).
+A missing staged license was separately refused then restored byte-for-byte.
+Windows MSVC-target strict Clippy/check compilation passed on Linux.
+
+Fresh unchanged legacy runtime 46 and real Qt/Monaco tabs/navigation,3 detach/
+recovery cycles and complete cloud-buffer Pull smoke pass. Other legacy suites
+remain historical at their recorded source/scales, including editor 12 per scale,
+downloader appearance 17/performance 7 and the original 4cf matrix. NVIDIA 200%
+rendering is still incomplete. Native virtual-display runs emit portal/gvfs/
+closed-bus diagnostics; assertions pass. Do not call this GPU/performance/input
+qualification or imply every old legacy suite was freshly rerun.
 
 ```sh
+source desktop/dev-env.sh
 bash desktop/scripts/verify-local.sh > audit/migration/logs/verification-latest.log 2>&1
-bash desktop/scripts/run-prototype.sh
 ```
 
-On Windows use desktop/scripts/verify-local.ps1 and run-prototype.ps1.
-Pinned Rust 1.99.1, Node 24, pnpm 11.25.0; Python 3.10+ and psutil for reference
-probes. Source desktop/dev-env.sh for individual commands. It selects ignored
-checkout-local tools and the owned desktop/target, preventing stale inherited
-binaries. No system profile changes or root package installation occurred.
+Use an actual available display or an owned private Xvfb on Ubuntu. This
+continuation's ignored helper is
+`audit/migration/scratch/continuation-20261019/run-native-checks.py`; it allocates
+-displayfd, uses process-local Mesa, bounds process lifetime and stops its own
+server. Its `serial` mode runs the entire suite. Do not reuse stale PID JSON:
+the old Xvfb PID 20458 was already an unrelated kernel worker and was not touched.
+The helper itself is audit scratch, not a shipped runtime or global setup.
 
-Local latest counts: 90 Rust tests, 40 frontend tests, 46 native webview checks,
-23,909 pure reference inputs (serial 325 / preferences 1,335 / scaffold 16 / budget 8,960 /
-transport 13,039 / ownership 234), 8 lock, 6 process and 9 registration checks. The
-ownership inputs include seven deliberate refusals; transport separately counts
-51,993 equivalent comparisons and 163 explicit structural refusals. Strict
-Clippy and Python warnings-as-errors pass. The registry has 21 Rust regressions.
+On Windows use verify-local.ps1. Reference Python 3.10+ requires psutil >=5.9,<8;
+local .venv-linux is available. Pinned Rust 1.99.1, Node 24, pnpm 11.25.0 and owned
+desktop/target remain selected by dev-env.sh. No system install/profile change.
 
-The private .venv-linux runtime is available (Python 3.14.4 / PySide6 6.12.0).
-Fresh legacy runtime 46 plus real Monaco tab/detach/recovery/cloud-Pull smoke pass.
-Offscreen Qt emits unsupported-platform/Vulkan diagnostics, not deprecation
-failures. Downloader appearance 17 / performance 7 at 100% / 200%, custom/chooser 18 passes +
-1 Windows-only skip per scale, board search 25, PTY lifecycle 19 and targeted geometry
-checks also passed earlier; they are bounded-work fixtures, not FPS benchmarks.
+## CI and native scope
 
-Editor DOM tests 10/10 passed on the native display at 100%, and at 200% with
-verified Mesa OpenGL llvmpipe. Qt still initialized NVIDIA Vulkan; do not claim
-GPU-free execution. NVIDIA 200% attempts stalled/timed out and remain incomplete.
-After the capture guard addition, all 12 tests pass at 100% / 200% on private Xvfb.
-The 200% Xvfb run emitted Chromium shared-image diagnostics after successful
-checks; no JS/Python warning or test failure was suppressed.
+All these matrices are complete and successful, with each actual source retained:
 
-Xvfb and xserver-common were extracted from official Ubuntu packages under
-.migration-tools/, not installed system-wide. The latest Tauri check uses its
-private display and process-local Mesa environment. The owned server was tracked
-in audit/migration/scratch/xvfb-state.json; inspect running status before reuse.
-This is native layout/IPC fixture evidence, not physical GPU/performance proof.
+- Rust/Tauri `1131c7e`: migration/editor 39253280765, all 5 jobs.
+- Reference-verifier correction `f952325`: compatibility 39254790860, all 14 jobs.
+- Reference-verifier correction `f952325`: native ARM64 39254786572, both LTS jobs.
+- Unchanged production UI at `ece6339`: native layouts 39251970888, all 4 jobs.
 
-## CI and exact source evidence
+ci-results.json records checked source equivalence and preserves prior failures:
+9b5d640 Windows fixture separator/open-descendant assumptions; ece6339 obsolete
+compiler names. Source 1131c7e host artifacts are retained under hosts/ with 46
+webview checks each, 31 Linux/30 Windows identity checks and 401 Send traces/7,411
+comparisons plus 27 refusals. Both f952325 native ARM64 first-run receipts retain
+cold/warm GUI, actual ESP32 Arduino Compile, 291424 firmware bytes and runtime.
+This is native hosted fixture evidence; Windows Server is not Windows 10/11
+physical desktop qualification, and hosted ARM64 is not a physical Pi/USB session.
 
-At `4cf730b`, all five migration jobs passed: Ubuntu 24.04 AMD64/ARM64 and
-Windows Server 2022 native prototypes each passed 46 webview checks, and both
-Windows editor binding ranges passed the 12-test suite at 100% and 200%.
-The separate 14-job compatibility, four-job native-layout and native ARM64
-workflows also passed at this exact revision. See the audit's `ci-results.json`
-for job links and source-qualified results. Hosted runners do not qualify
-Windows 10/11 desktops, physical Pi/USB, or the completed replacement.
+## Current qualification follow-up
 
-```sh
-gh run view 39179835907 --json status,conclusion,jobs
-```
+The broader ece6339 ARM64 workflow failed only at its obsolete compiler path
+check after successful cold/warm GUI launch. Both native LTS jobs now pass the
+f952325 fresh setup/real compile/runtime rerun; all 14 compatibility jobs pass.
+`direct/native_esp32_fixture.py` checks declared installed known legacy/unified
+packages without execution or installation, package name/type/path containment
+and native ELF64 CPU. An old native package cannot mask a foreign new package.
+Unknown layouts fail closed. Real compile/firmware/runtime checks remain mandatory.
+Do not mistake the old “different CPU” diagnostic for actual foreign binary
+evidence; the file was absent after Espressif32 8 renamed its package.
 
-Historical failures and fixes remain in ci-results.json. d68 Windows native
-passed, but its new editor jobs rejected the audit output path before tests.
-4cf730b corrects that confined capture allowlist; all five current jobs pass.
+## Next required implementation gates
 
-## Next technical gates
+1. Native handle-relative directory/content authority and safe final replacement:
+   Windows semantics, external writers, ACL/xattrs, durable staging/crash recovery.
+   The completed metadata adapter is evidence only; keep live writes gated.
+2. Coordinated legacy/new activation, source-save leases and rollback, initially
+   one independent workspace per PID; shared package-store/event/lease namespaces.
+3. Settings import/rollback, service/event/cancellation contracts; full selector/
+   Modify/editor-only detach/recovery/AI/search/syntax and native input/monitor.
+4. Interactive PTY input/paste/capabilities/backpressure; all dynamic exact targets,
+   frameworks/programmers, installed-only tools, exact-byte build/cache receipts,
+   serial worker/UI, compile/upload/reset and failure handling.
+5. Downloader/package jobs, setup/repair/maintenance and auxiliary screens;
+   fixed-provider Firebase/vault/account/schema/conflicts/Pull rollback. No
+   editable provider settings, plaintext fallback or invented deployed-rule proof.
+6. Monaco/transitive bundle and codicon artifact provenance/notices, dependency/
+   tool/package notices, installers/signing/upgrade/rollback and native sessions.
 
-1. Native directory/file handles and final replacement: root alias/final-rename
-   races, Windows save semantics, ACL/xattr preservation and interrupted staging/
-   durable crash recovery. Keep live writes disabled until qualified.
-2. Agree shared package-event/store roots across copies. Integrate legacy/new
-   registration/activation with one process per workspace initially; no shared-PID
-   multiwindow schema is assumed solved by a separate lock. Port/job leases and
-   application lifecycle still require coordinated ownership.
-3. Complete behavior/failure/process-tree performance baselines across all 67
-   capability entries (13 partial, 54 pending), then incremental services/screens.
-   Preserve all dynamic boards/frameworks/programmers; exact toolchain/firmware
-   logic and private Python hooks are behavioral references, not redesign targets.
-4. Finish settings import/validation/rollback, host operation identities and
-   cancellation, full interactive terminal input/paste/capability handling,
-   editor-only detach/recovery and native input/monitor qualification.
-5. Finish all project/Modify/AI/search/syntax, downloader/packages/setup/repair/
-   maintenance, serial/compile/upload/reset and offline workflow parity.
-6. Fixed-provider Firebase/cloud/vault/conflict/Pull rollback: no editable provider
-   settings or plaintext credential fallback. Client config encryption does not
-   authorize a database; qualify deployed rules/API restrictions separately.
-7. Resolve exact original asset/package provenance and missing notices, produce
-   installers, then complete required native desktop and hardware sessions.
+Initial physical inventory remains ESP32-WROOM-32 38-pin, Uno R3, Nano revision
+unconfirmed and ESP8266 model unconfirmed; no external programmer confirmed.
+Pi 5 Ubuntu 24.04 ARM64 USB exists but replacement hardware testing is unverified.
+Confirm exact Windows version/USB, Ubuntu AMD64 hardware and board identities when
+those sessions become necessary; never infer current board/port from inventory.
 
-Available initial boards: ESP32-WROOM-32 38-pin, Uno R3, Nano revision pending,
-ESP8266 model pending; no external programmer confirmed. User has Pi 5 Ubuntu 24.04
-ARM64 USB ports, but no replacement hardware session has run. Windows version/USB
-and Ubuntu AMD64 test hardware require confirmation before physical sessions.
-Never infer the currently selected/connected board from this inventory.
+## Work boundaries, tools and Git
 
-## Boundaries and Git
+No live .mcu_flasher_build_cache/.pio/.vscode/.clangd/.opencode or AI journal
+mutations. No live settings/cloud/accounts/devices/tool stores from fixtures.
+Use audit/migration/{scratch,logs,captures} for large ignored evidence. Compact
+reports/skills are updated after actual code/check work. Keep user sketches and
+restored root mcu_flash_gui.py unchanged. Unrelated dirty catalog/bootstrap JSON
+and installer EXE/MSI materializations must remain unstaged and untouched.
 
-Never mutate live .mcu_flasher_build_cache/, .pio/, .vscode/, .clangd/, .opencode/,
-AI edit journals, live settings/accounts/tool stores/devices from fixtures.
-Audit logs/captures/scratch are ignored; compact reports and handoff are tracked.
-Baseline source-inventory.json stays unchanged. Reference amendments explain2
-production sources, 7 verifiers, 1 legacy CI and the added migration workflow; some
-baseline checkout line endings differ from Git (including mixed/doubled CRLF).
-All 22 staged resource sources / 25 copies remain unchanged.
+Baseline source-inventory.json SHA256 is still
+70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52.
+The preserved before/after hashes for launcher, inventory and unrelated dirty
+inputs are in ignored continuation scratch. Existing reference amendments are
+separate; no baseline hash was rewritten to conceal changes.
 
-Pre-existing installer LFS materializations, index_json/package_index.json and
-src/dbs/bootstrap_config.json are unrelated; do not stage, restore or clean them.
-The root launcher disappeared externally; user explicitly authorized restoration
-of the committed file. It is restored byte-for-byte, with no pending deletion.
+Rust tools are already installed: 18 selected Rust skills, Superpowers 6.4.2,
+official Context7 plugin 1.0.2, RustAnalyzer/rust-src 1.99.1 and pinned experimental
+LSP 21a1f9b. LSP tools are loaded and workspace-symbol queries succeeded against
+trusted desktop code. Read-only queries can run trusted build scripts/proc macros;
+no upstream path fence exists. Do not rerun unpinned installers. Context7 queried
+Serde's official enum/container documentation during strict protocol review.
+Subagents helped implement/review isolated slices; two later turns hit an account
+usage limit, so the parent finished probe/integration/provenance work directly.
+Do not treat a failed subagent turn as proof its remaining work was completed.
 
-Remove .git/index.lock only if >60s old, empty, unchanged and fuser confirms no
-owner. Hooks post-commit/pre-push are non-executable: temporarily add owner execute
-around commit/push, restore modes in finally, use .migration-tools/bin/git-lfs.
-Push this branch safely; do not force-update main or retire Python for fixtures.
-
-Record exact source/check results and safe next steps before ending continuation.
+Safe feature-branch pushes remain authorized; never force-push main. Remove
+index.lock only when empty, unchanged, ownerless via fuser and older than 60s.
+The recurring empty stale lock was removed only under those conditions. Hooks
+post-commit/pre-push normally lack owner execute: restore that bit temporarily
+around commit/push and restore original modes in finally. Add .migration-tools/bin
+to PATH for git-lfs. Preserve unrelated work; do not reset/clean the checkout.

@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "f952325ca4acfdf044c17c7813bc36609821381c",
+  "recordedAtUtc": "2026-10-19T13:03:02.760488+00:00",
+  "runId": 39254786572,
+  "runUrl": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39254786572",
+  "artifactId": 12187468141,
+  "artifactDigest": "sha256:7854f7e4a3e2ad6b619345f7b7f4e9e505a37cd771ebb495a2071789c2436cf4",
+  "digestVerified": true,
+  "platform": "native-ubuntu-24.04-arm",
+  "result": {
+    "success": true,
+    "fixture": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328",
+    "host_machine": "aarch64",
+    "architecture": "arm64",
+    "launcher": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/app/MCU_Flasher-arm64",
+    "initial_private_runtime_present": false,
+    "initial_native_store_present": false,
+    "default_plan": {
+      "schema": 1,
+      "platforms": [
+        "atmelavr",
+        "espressif32",
+        "espressif8266"
+      ],
+      "frameworks": [
+        "arduino"
+      ],
+      "libraries": [
+        "arduino-libraries/Servo",
+        "madhephaestus/ESP32Servo",
+        "bblanchon/ArduinoJson"
+      ]
+    },
+    "upload": false,
+    "live_settings_modified": false,
+    "system_packages_installed": false,
+    "fixture_instrumentation": {
+      "src/__init__.py": "Redirect Path.home and tilde expansion inside fixture application processes",
+      "main/mcu_flash_gui.py": "Empty serial discovery, prohibit serial opens, observe Monaco/services and close within 61 seconds",
+      "direct/verify_runtime.py": "Import fixture home redirection before application imports",
+      "direct/verify_target_resolution.py": "Import fixture home redirection before application imports"
+    },
+    "installers_mocked": false,
+    "home_environment_changed": false,
+    "fixture_cpu_admission_override": true,
+    "first_launch_exit_code": 0,
+    "first_launch_log": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/first-launch.log",
+    "actual_gui": {
+      "success": true,
+      "detail": "Fixture sketch loaded in the active Monaco source tab and background services started",
+      "workspace_visible": true,
+      "services_started": true,
+      "serial_running": false,
+      "saved_offline_enabled": false,
+      "active_package_offline_enabled": false,
+      "network_access_disabled": false,
+      "source_loaded": true,
+      "active_file": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/sketch/probe.ino",
+      "editor_active_file": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/sketch/probe.ino",
+      "source_tab_count": 1,
+      "project": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/sketch",
+      "private_prefix": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/app/.venv-linux",
+      "upload": false,
+      "screenshot": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/cold-workspace.png",
+      "capture_saved": true
+    },
+    "native_compilers": [
+      "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/data/mcu-flasher/platformio/aarch64/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp-elf-g++"
+    ],
+    "core": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/data/mcu-flasher/platformio/aarch64",
+    "certified_platforms": {
+      "atmelavr": "atmelavr",
+      "espressif32": "espressif32",
+      "espressif8266": "espressif8266"
+    },
+    "certificate": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/data/mcu-flasher/platformio/aarch64/.mcu-offline-ready.json",
+    "readiness_exit_code": 0,
+    "readiness_log": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/readiness-check.log",
+    "warm_launch_exit_code": 0,
+    "warm_launch_log": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/warm-launch.log",
+    "warm_gui": {
+      "success": true,
+      "detail": "Fixture sketch loaded in the active Monaco source tab and background services started",
+      "workspace_visible": true,
+      "services_started": true,
+      "serial_running": false,
+      "saved_offline_enabled": false,
+      "active_package_offline_enabled": false,
+      "network_access_disabled": false,
+      "source_loaded": true,
+      "active_file": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/sketch/probe.ino",
+      "editor_active_file": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/sketch/probe.ino",
+      "source_tab_count": 1,
+      "project": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/sketch",
+      "private_prefix": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/app/.venv-linux",
+      "upload": false,
+      "screenshot": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/workspace.png",
+      "capture_saved": true
+    },
+    "compile_exit_code": 0,
+    "compile_log": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/compile-verifier.log",
+    "compile": {
+      "success": true,
+      "target": "espressif32:esp32dev",
+      "framework": "arduino",
+      "source": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/app/temp/audit/first-compile/project-sketch/probe.ino",
+      "firmware": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/app/temp/audit/first-compile/project/boards/ubuntu-arm64/espressif32_esp32dev_fb63e80e33/.pio/build/mcu_env/firmware.bin",
+      "log": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/app/temp/audit/first-compile/application-compile.log",
+      "live_persistence": false,
+      "upload": false
+    },
+    "firmware_bytes": 291424,
+    "runtime_exit_code": 0,
+    "runtime_log": "/home/runner/work/MCU-Flasher-byNaph/MCU-Flasher-byNaph/temp/audit/ubuntu-first-run/20261019-125004-9328/runtime-verifier.log"
+  },
+  "scope": "Hosted native reference setup, GUI and ESP32 Arduino compile only; not Rust build-service completion, physical Pi/USB or full target/programmer qualification"
+}

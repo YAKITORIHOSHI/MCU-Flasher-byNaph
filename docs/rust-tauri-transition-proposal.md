@@ -247,7 +247,7 @@ Implementation is underway on `codex/rust-tauri-migration`; production entry
 points remain unchanged. At code checkpoint `4cf730b`, the local suite passes
 90 Rust tests, 40 frontend tests, 46 native webview checks and 23,909 differential
 cases, plus eight OS-lock, six native process and nine registration checks.
-Reference verification needs Python 3.10+ with `psutil>=5.9,<8`; that dependency
+Reference verification needs Python 3.10+ with `psutil >=5.9,<8`; that dependency
 belongs to the development/reference environment. No Python application service
 has been retired.
 
@@ -259,3 +259,19 @@ packaging remain unfinished. See
 [status](../audit/migration/STATUS.md) for exact tested revisions and outstanding
 gates. No live projects, credentials, cloud records or protected caches were
 changed by the migration prototype.
+
+The 19 October continuation adds metadata-only native identity evidence, a pure
+serial Send policy (401 original-Python traces /7,411 action comparisons plus 27
+typed refusals), and recovered matching npm xterm 5.3.0/fit 0.8.0 notices. At
+`1131c7e`, local verification passes 117 Rust / 40 frontend / 46 native checks, 31
+identity checks and 7 provenance checks. Original22 asset sources still produce 25
+identical copies; 3 notices bring total staged output to 28. Final exact-source CI,
+historical results and remaining release gates are in audit/migration/STATUS.md
+and ci-results.json. Production writes/serial integration and full parity remain
+unfinished; no Python service is retired.
+
+A subsequent reference-verifier correction at `f952325` recognizes the declared
+unified ESP32 toolchain from Espressif32 8 while preserving native ELF CPU and
+actual Compile/firmware assertions. Local synthetic 9 and target-resolution 16
+checks pass; both native ARM64 setup/ESP32 Compile/runtime jobs and all 14 compatibility jobs
+pass at that correction, recorded separately in ci-results.json.
