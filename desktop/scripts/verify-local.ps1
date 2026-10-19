@@ -23,7 +23,7 @@ try {
     Invoke-Checked cargo @('clippy', '--manifest-path', 'desktop/Cargo.toml', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
     Invoke-Checked cargo @('build', '--manifest-path', 'desktop/Cargo.toml', '--locked', '-p', 'mcu-host', '--bins')
     Invoke-Checked cargo @('run', '--manifest-path', 'desktop/Cargo.toml', '--locked', '-p', 'mcu-host', '--bin', 'pty_probe')
-    foreach ($probe in @('verify-serial-codec.py', 'verify-preferences-merge.py', 'verify-scaffold.py', 'verify-resource-budget.py', 'verify-lock-interop.py', 'verify-target-transport.py', 'verify-ownership.py', 'verify-process-identity.py', 'verify-registry.py')) {
+    foreach ($probe in @('verify-serial-codec.py', 'verify-preferences-merge.py', 'verify-scaffold.py', 'verify-resource-budget.py', 'verify-lock-interop.py', 'verify-target-transport.py', 'verify-ownership.py', 'verify-process-identity.py', 'verify-file-identity.py', 'verify-registry.py')) {
         Invoke-Checked python @('-B', '-W', 'error', "desktop/scripts/$probe")
     }
     Invoke-Checked cargo @('build', '--manifest-path', 'desktop/Cargo.toml', '--locked', '-p', 'mcu-desktop-prototype')

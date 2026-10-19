@@ -32,6 +32,16 @@ Live ownership remains gated:
 native file identity, coordinated activation/release and package-store ownership
 are unfinished, and the legacy schema permits one workspace per process.
 
+The native identity fixture now retains metadata-only directory/source handles
+(`O_PATH` on Linux; `FILE_READ_ATTRIBUTES` and 128-bit file IDs on Windows).
+It detects observed path replacements even when bytes and timestamps match,
+refuses links/reparse aliases, and shares portable reserved-device name rules
+with project creation/scanning. The cross-language probe also demonstrates that
+an in-place content edit keeps its identity. These observations neither close
+ancestor/final-replacement races nor establish ACL/xattr preservation, durable
+recovery or production save authority. Windows junction execution is qualified
+by its exact native CI run separately from Linux-target compilation.
+
 ## Build and run
 
 Use Rust **1.99.1** with rustfmt/Clippy, Node **24**, pnpm **11.25.0**, and Python

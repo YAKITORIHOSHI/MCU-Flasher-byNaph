@@ -23,6 +23,7 @@ python3 -B -W error desktop/scripts/verify-lock-interop.py
 python3 -B -W error desktop/scripts/verify-target-transport.py
 python3 -B -W error desktop/scripts/verify-ownership.py
 python3 -B -W error desktop/scripts/verify-process-identity.py
+python3 -B -W error desktop/scripts/verify-file-identity.py
 python3 -B -W error desktop/scripts/verify-registry.py
 cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-desktop-prototype
 desktop/target/debug/mcu-desktop-prototype --verify-prototype

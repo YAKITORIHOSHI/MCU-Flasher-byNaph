@@ -17,6 +17,7 @@ pub mod ownership;
 pub mod preferences;
 pub mod resource_budget;
 pub mod serial_text;
+pub mod source_names;
 pub mod target_transport;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
@@ -646,16 +647,7 @@ fn source_extension(name: &str) -> ServiceResult<String> {
             "Use one visible root source filename.",
         ));
     }
-    let stem = name
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
-    {
+    if source_names::is_windows_reserved_device_name(name) {
         return Err(error(
             ErrorCode::InvalidPath,
             "Windows reserved device filenames are not allowed.",
@@ -972,6 +964,28 @@ fn replace_source(
 #[cfg(test)]
 mod directory_path_tests {
     use super::*;
+
+    #[test]
+    fn root_source_validation_refuses_windows_device_aliases_on_every_host() {
+        for name in [
+            "COM¹.ino",
+            "lpt².cpp",
+            "COM³.hpp",
+            "COM1 .h",
+            "LPT9   .txt",
+            "CON .ino",
+            "aux .cpp",
+        ] {
+            assert_eq!(
+                source_extension(name).unwrap_err().code,
+                ErrorCode::InvalidPath,
+                "{name}"
+            );
+        }
+        for name in ["Sketch.ino", "COM10.cpp", "COM１.hpp", "café 日本語.h"] {
+            assert!(source_extension(name).is_ok(), "{name}");
+        }
+    }
 
     #[test]
     fn windows_parent_syntax_is_rejected_with_native_and_mixed_separators() {

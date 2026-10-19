@@ -1,4 +1,5 @@
 //! Native compatibility probes. No serial or arbitrary process command is exposed.
+pub mod file_identity;
 pub mod fixture_lock;
 pub mod fixture_registry;
 pub mod process_identity;

@@ -79,6 +79,7 @@ jobs:
         timeout-minutes: 2
         shell: bash
         run: |
+          mkdir -p audit/migration/logs
           python -B -W error desktop/scripts/verify-serial-codec.py
           python -B -W error desktop/scripts/verify-preferences-merge.py
           python -B -W error desktop/scripts/verify-scaffold.py
@@ -87,6 +88,7 @@ jobs:
           python -B -W error desktop/scripts/verify-target-transport.py
           python -B -W error desktop/scripts/verify-ownership.py
           python -B -W error desktop/scripts/verify-process-identity.py
+          python -B -W error desktop/scripts/verify-file-identity.py | tee audit/migration/logs/file-identity.json
           python -B -W error desktop/scripts/verify-registry.py
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
@@ -109,6 +111,7 @@ jobs:
           name: migration-prototype-${{ matrix.os }}
           path: |
             audit/migration/native-webview.json
+            audit/migration/logs/file-identity.json
             desktop/ui/public/vendor/manifest.json
           if-no-files-found: warn
 

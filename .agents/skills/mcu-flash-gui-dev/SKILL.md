@@ -59,6 +59,17 @@ identity before promoting writes. Preserve original bytes for unchanged/undone
 source models; retain BOM during edits and disclose edited mixed-line-ending
 normalization.
 
+Native identity fixtures use metadata-only retained root/source handles and
+decimal strings for 64-bit identity fields. Keep `FILE_ID_INFO` failures explicit;
+never infer identity from paths, timestamps, truncated indexes or file size.
+Share Windows device-stem refusal (including COM/LPT superscript ¹²³ and spaces
+before extensions) across core sources and native metadata paths. Exercise
+junction roots/ancestors on Windows and symlink/FIFO refusal on Linux. Identity
+equality survives in-place content edits and is not a content digest or source
+write lease. Keep final replacement races, metadata preservation and durable
+recovery gated independently. The fixture controller bounds process/pipe
+cleanup; the native input deadline alone cannot bound a blocked output consumer.
+
 Preserve untouched native metadata as validated opaque JSON fragments; do not
 round large Python integers or reinterpret private-marker-shaped objects through
 `Value`. The registry uses private `IgnoredAny` boundaries and manual composition
