@@ -42,6 +42,17 @@ ancestor/final-replacement races nor establish ACL/xattr preservation, durable
 recovery or production save authority. Windows junction execution is qualified
 by its exact native CI run separately from Linux-target compilation.
 
+The I/O-free Send policy is compared with the AST-isolated original Python queue
+using deterministic traces. It retains 64 KiB/message, 256 KiB active-plus-pending
+bytes, 16 messages, native connection/generation/port/baud matching, compile-time
+Send allowance, startup rollback, discard and permanent Stop. Partial/error
+completion produces one captured-connection close effect and never a retry;
+stale failures cannot disconnect a replacement connection. The native adapter
+must supply these observations and enforce a finite driver timeout on a worker.
+No serial driver, port, UI Send action or hardware is integrated by this policy.
+Rust's bounded integer/UTF-8 protocol has explicit refusals for inputs outside
+its typed domain; these are counted separately from equivalent trace inputs.
+
 ## Build and run
 
 Use Rust **1.99.1** with rustfmt/Clippy, Node **24**, pnpm **11.25.0**, and Python

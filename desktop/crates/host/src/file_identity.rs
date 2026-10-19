@@ -466,6 +466,14 @@ mod tests {
         let scope = fixture.scope();
         let source = scope.open_source("Sketch.ino").unwrap();
         let identity = source.identity().unwrap();
+        // Windows may refuse a directory move while a descendant remains
+        // open, even with delete sharing. Move the retained file out first;
+        // missing-root classification must still fail before a missing leaf.
+        fs::rename(
+            fixture.root.join("Sketch.ino"),
+            fixture.parent.join("retained.ino"),
+        )
+        .unwrap();
         fs::rename(&fixture.root, fixture.parent.join("moved")).unwrap();
         assert_eq!(
             scope.source_still_matches(&source).unwrap_err().kind(),
@@ -732,7 +740,11 @@ mod tests {
         let alias = fixture.parent.join("junction alias");
         let create_junction = |link: &Path, target: &Path| {
             use std::os::windows::ffi::OsStrExt;
-            for path in [link, target] {
+            // PathBuf joins may retain forward slashes in a component string;
+            // cmd/mklink interprets those as switches. Rebuild native segments.
+            let link: PathBuf = link.components().collect();
+            let target: PathBuf = target.components().collect();
+            for path in [&link, &target] {
                 // cmd expands percent variables even in quoted arguments.
                 // Refuse shell-sensitive checkout names before invoking it.
                 assert!(

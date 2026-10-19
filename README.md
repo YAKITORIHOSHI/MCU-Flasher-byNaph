@@ -13,16 +13,14 @@
 The Rust/Tauri 2 migration is being developed alongside this Python release in
 [`desktop/`](desktop/). It currently provides a fixture-only Monaco/xterm native
 prototype and several tested Rust services. It does not yet replace the application.
-The latest code checkpoint, `4cf730b`, preserves untouched registry JSON fragments,
-including Python-sized integers and unknown nested objects, while comparing
-project/port ownership under the Python application's OS lock. Known process
-timestamps round-trip exactly. Local checks pass 90 Rust tests, 40 frontend tests,
-46 native webview checks and 23,909 pure comparison cases; separate lock, process
-and competing-registration fixtures pass 8, 6 and 9 checks. These proofs use
-disposable settings; live workspace registration and writes remain gated.
-At this revision, all three native prototype hosts pass 46 webview checks, and
-both Windows editor binding jobs pass 12 tests at 100% and 200%. The separate
-14-job compatibility, four-job layout and native ARM64 workflows also pass.
+Native metadata fixtures retain original root/source identities and refuse
+Windows device-name and junction aliases. The pure serial-send queue now preserves
+active-plus-pending limits, captured connection identity, one-attempt writes and
+stale-result handling against the original Python implementation. Registry
+fixtures preserve opaque unknown JSON and round-trip process timestamps while
+sharing the Python application's OS lock. These remain isolated proofs; live
+workspace registration, source writes and serial integration remain gated.
+Exact-source local and native CI results are recorded in the audit below.
 Hosted runners do not qualify Windows 10/11 desktops or physical USB hardware.
 See the durable [migration status](audit/migration/STATUS.md),
 [feature ledger](audit/migration/parity.md), and

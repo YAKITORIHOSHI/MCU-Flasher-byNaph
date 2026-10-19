@@ -16,6 +16,7 @@ use mcu_contracts::{
 pub mod ownership;
 pub mod preferences;
 pub mod resource_budget;
+pub mod serial_send;
 pub mod serial_text;
 pub mod source_names;
 pub mod target_transport;

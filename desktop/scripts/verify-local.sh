@@ -16,6 +16,7 @@ cargo clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --lock
 cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-host --bins
 cargo run --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin pty_probe
 python3 -B -W error desktop/scripts/verify-serial-codec.py
+python3 -B -W error desktop/scripts/verify-serial-send.py
 python3 -B -W error desktop/scripts/verify-preferences-merge.py
 python3 -B -W error desktop/scripts/verify-scaffold.py
 python3 -B -W error desktop/scripts/verify-resource-budget.py

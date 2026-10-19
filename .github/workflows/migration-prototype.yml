@@ -81,6 +81,7 @@ jobs:
         run: |
           mkdir -p audit/migration/logs
           python -B -W error desktop/scripts/verify-serial-codec.py
+          python -B -W error desktop/scripts/verify-serial-send.py | tee audit/migration/logs/serial-send.json
           python -B -W error desktop/scripts/verify-preferences-merge.py
           python -B -W error desktop/scripts/verify-scaffold.py
           python -B -W error desktop/scripts/verify-resource-budget.py
@@ -112,6 +113,7 @@ jobs:
           path: |
             audit/migration/native-webview.json
             audit/migration/logs/file-identity.json
+            audit/migration/logs/serial-send.json
             desktop/ui/public/vendor/manifest.json
           if-no-files-found: warn
 

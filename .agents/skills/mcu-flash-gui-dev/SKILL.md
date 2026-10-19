@@ -70,6 +70,16 @@ write lease. Keep final replacement races, metadata preservation and durable
 recovery gated independently. The fixture controller bounds process/pipe
 cleanup; the native input deadline alone cannot bound a blocked output consumer.
 
+The pure Rust Send queue retains active-plus-pending accounting and captured
+native generation/connection/port/baud state. A future native worker performs
+only one finite-timeout write per begun request; never flush, retry a remainder
+or accept renderer-supplied connection evidence. Apply failure effects only to
+the captured connection; stale failures cannot disconnect its replacement.
+Recheck compile/busy/open state before the attempt and before successful echo.
+Compare deterministic stepped traces with the original Python class and count
+typed protocol refusals separately. The pure queue does not qualify a driver,
+serial UI, unplug handling or actual hardware delivery.
+
 Preserve untouched native metadata as validated opaque JSON fragments; do not
 round large Python integers or reinterpret private-marker-shaped objects through
 `Value`. The registry uses private `IgnoredAny` boundaries and manual composition

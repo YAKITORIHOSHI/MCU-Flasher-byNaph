@@ -372,6 +372,14 @@ def main():
                     remove_directory_alias(source)
             os.link(retained, source)
 
+            # Windows may refuse renaming a directory with an open descendant.
+            # Relocate the retained source before moving its original root;
+            # handle identities remain independent observations, not a promise
+            # of portable rename permission for open directory subtrees.
+            source.unlink()
+            outside_source = base / "retained-source.ino"
+            retained.rename(outside_source)
+            source.write_bytes(original)
             moved = base / "retained-sketch"
             fixture.rename(moved)
             fixture.mkdir()
@@ -383,7 +391,7 @@ def main():
             refusal(moved_frame["currentIdentity"])
             checks.append("renamed-and-replaced-root-refuses-new-path-observations")
             assert moved_frame["rootIdentity"] == reference_identity(moved) == root_id, moved_frame
-            assert moved_frame["sourceIdentity"] == reference_identity(moved / "Main.ino") == source_id
+            assert moved_frame["sourceIdentity"] == reference_identity(outside_source) == source_id
             checks.append("retained-root-and-source-handle-identities-stay-stable")
 
             source.unlink()
