@@ -650,14 +650,9 @@ def compile_native_esp32(core):
     manifest = core / "platforms/espressif32/boards/esp32dev.json"
     if not manifest.is_file():
         raise RuntimeError(f"Native ESP32 board definition is absent: {manifest}. The probe will not install it.")
-    needed = ["framework-arduinoespressif32", "toolchain-xtensa-esp32", "tool-esptoolpy", "tool-scons"]
-    for name in needed:
-        if not (core / "packages" / name / "package.json").is_file():
-            raise RuntimeError(f"Native ESP32 package {name} is absent. The probe will not install it.")
-    compiler = core / "packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++"
-    with compiler.open("rb") as stream:
-        if stream.read(4) != b"\x7fELF":
-            raise RuntimeError("The fixture requires a native ELF compiler; Windows packages cannot be used on Ubuntu.")
+    from direct.native_esp32_fixture import native_esp32_compilers
+    compilers = native_esp32_compilers(core)
+    print("Validated native ESP32 fixture compiler identities: " + ", ".join(str(path) for path in compilers), flush=True)
     verify_built_pipeline(core.parent)
 
 

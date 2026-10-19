@@ -333,9 +333,10 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     compile_fixture = app / "temp/audit/first-compile"
     compile_fixture.mkdir(parents=True)
     (compile_fixture / "core").symlink_to(core, target_is_directory=True)
-    compiler = core / "packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++"
-    if not elf_matches_host(compiler):
-        raise RuntimeError("Bootstrap prepared an ESP32 compiler for a different host CPU architecture")
+    from direct.native_esp32_fixture import native_esp32_compilers
+    compilers = native_esp32_compilers(core)
+    report["native_compilers"] = [str(path) for path in compilers]
+    result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     compile_log = fixture / "compile-verifier.log"
     compiled = _run([str(python), "-B", str(app / "direct/verify_target_resolution.py"),
                      "--compile-button-only", str(compile_fixture)],

@@ -80,6 +80,17 @@ Compare deterministic stepped traces with the original Python class and count
 typed protocol refusals separately. The pure queue does not qualify a driver,
 serial UI, unplug handling or actual hardware delivery.
 
+Native first-run/ESP32 fixture checks support both the older
+`toolchain-xtensa-esp32` and Espressif32 8's unified `toolchain-xtensa-esp-elf`
+layout through `direct/native_esp32_fixture.py`. Require declared toolchain
+metadata, matching installed package identity, contained paths and native ELF64
+CPU before the real Compile-button probe. A missing legacy filename is not proof
+of a foreign compiler. Check all installed declared known generations, so a
+native old package cannot mask a foreign new one. Unknown layouts fail closed;
+these checks neither install packages nor replace real firmware compilation.
+Run `direct/verify_native_esp32_fixture.py` with the private runtime and retain
+fresh Ubuntu AMD64/ARM64 setup/compile evidence separately from USB qualification.
+
 Existing xterm JavaScript matches integrity-checked npm `xterm@5.3.0` and
 `xterm-addon-fit@0.8.0` artifacts; retain their matching notices and the complete
 original CSS copyright block from `desktop/ui/notices/`. The original 22 resource
