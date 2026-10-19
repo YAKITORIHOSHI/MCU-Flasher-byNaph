@@ -117,3 +117,15 @@ unrelated installer, catalog and bootstrap-settings changes were preserved.
 - Baseline checkout inventory is preserved. Ten intentional baseline amendments
   cover two production sources, seven verifiers and one legacy CI resource.
   No component is approved for Python retirement or live settings/project writes.
+
+## 19 October 2026 — Requested Rust tools setup
+
+- Read the shared Rust Plugins Comparison conversation and inspected its sources
+  with two subagents before installation.
+- Installed 18 selected Rust skills, Superpowers 6.4.2, official Context7 1.0.2,
+  Rust Analyzer/rust-src 1.99.1 and the pinned experimental Rust LSP server.
+- Verified an isolated native analyzer/symbol session and both Context7
+  documentation operations. Enabled only six read-only LSP tools and retained
+  all pre-existing Codex settings and project instructions.
+- Preserved the interrupted file-identity changes without committing or promoting
+  their incomplete integration checks. See tooling-setup.md and HANDOFF.md.

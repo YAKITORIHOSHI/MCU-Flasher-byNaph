@@ -2,6 +2,28 @@
 
 Updated: 19 October 2026, Asia/Manila.
 
+## Latest steering: development tools
+
+The user requested reading Rust Plugins Comparison and installing its necessary
+skills/plugins before proceeding. [Tooling setup](tooling-setup.md) is complete:
+18 Rust skills, Superpowers 6.4.2, official Context7 1.0.2, pinned Rust Analyzer/
+rust-src and Rust LSP. Both MCP smoke checks pass. New registrations need a
+subsequent turn/session to load. Do not rerun the LSP skill's unpinned installer
+merely because this current turn predates registration; the pinned setup is
+already verified. Existing user/project instructions take precedence over
+generic upstream workflow examples.
+
+Native file-identity work was paused for setup and remains uncommitted in
+`desktop/crates/host/src/file_identity.rs`, its `file_identity_probe` binary,
+`desktop/scripts/verify-file-identity.py`, host Cargo/lib and verification/CI wiring.
+Ten Linux adapter checks and Windows target test compilation passed. Before its
+commit, finish Windows COM/LPT superscript-digit and spaced reserved-stem refusal,
+review alias/junction coverage, build/run the 13-check cross-language fixture,
+run strict integrated checks and capture exact-source CI. It is metadata evidence
+only; content changes, final replacement races, metadata preservation and durable
+recovery still block production writes. Full local/hosted results below remain
+qualified to the committed `4cf730b`, not this working code.
+
 ## Objective and current checkpoint
 
 Continue the authorized reuse-first Rust + Tauri 2 migration. Full current

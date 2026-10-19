@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-10-19T11:52:57.054546+00:00",
+  "requestedConversation": "https://chatgpt.com/share/6ad601e1-f514-83ec-86dc-e88f93d6ea22",
+  "conversationTitle": "Rust Plugins Comparison",
+  "scope": "Local Codex development environment; not application dependencies, runtime packaging or production migration qualification",
+  "host": "Ubuntu 26.04 AMD64",
+  "installedSkills": [
+    {
+      "name": "m01-ownership",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m01-ownership",
+      "files": {
+        "SKILL.md": "cb4ebbeefbbace5f163cc51a0f693b7ee46980c0a1303c12525ee596d854c3b4",
+        "comparison.md": "b11dc96c728a91beaeac0bbe0c6e69ef1bdcea1572328506918767ccb9aad70d",
+        "examples/best-practices.md": "16c1844064e0744b18d5a979027413e3f39fd3dfb4bc78d30032f2819e58a0c0",
+        "patterns/common-errors.md": "5f83d2e8ce5f7ec5dfeaa68d62ce4a0abf8c8a2a477bd58b75c0b8bb47e46636",
+        "patterns/lifetime-patterns.md": "cd506a53693f4015286814b1310f44c1e2ead604ce1187e9700a4d1914583079"
+      }
+    },
+    {
+      "name": "m02-resource",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m02-resource",
+      "files": {
+        "SKILL.md": "00e54bc7e81d13cbaf15b66949065d675f0ab2950110eef40ff5ecfe8928ba03"
+      }
+    },
+    {
+      "name": "m03-mutability",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m03-mutability",
+      "files": {
+        "SKILL.md": "1e2d270dbfd2841238783bcfed109fbf6b67e4132d698a4a015232a217078c23"
+      }
+    },
+    {
+      "name": "m04-zero-cost",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m04-zero-cost",
+      "files": {
+        "SKILL.md": "3a2eed8faf0a0087aa5c823d66341123cc6f43ef36d1767c3fdbcc86cf8b4b54"
+      }
+    },
+    {
+      "name": "m05-type-driven",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m05-type-driven",
+      "files": {
+        "SKILL.md": "56895dac5c47ad3fb22e90167eff5a6c501a2b9c088a8b8a6ceb323438c6babd"
+      }
+    },
+    {
+      "name": "m06-error-handling",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m06-error-handling",
+      "files": {
+        "SKILL.md": "9760e9433bfaacdecf320ed128bd32e72296386d757abeeaa1d53387da073185",
+        "examples/library-vs-app.md": "b773546de5241a2d6faede6c8b1453df7914bb0868b994afdb5c068903631bf8",
+        "patterns/error-patterns.md": "866e00604c140afda07f20e11a333e963123dee123d4b04432aded45425728e8"
+      }
+    },
+    {
+      "name": "m07-concurrency",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m07-concurrency",
+      "files": {
+        "SKILL.md": "c2a3e990e34c45aad75a8acbc1c98658fe1021f0674b9662112060e388b56c5e",
+        "comparison.md": "572fb83cf66e07387ec69bc655a583d1127d555fc128a034693cf4a740d950af",
+        "examples/thread-patterns.md": "551bed70300c1dc59c17efc52bb7b2a3166254903bfcb42e968faf2947f27b6b",
+        "patterns/async-patterns.md": "e17b9f528da7efff9c37cb293092301dd38a4739da722f15efaea94c5f087835",
+        "patterns/common-errors.md": "4bbbc11524ecef78ceb09c85bdbe445ffb65b7e692ea3788e5723bcb079aeea7"
+      }
+    },
+    {
+      "name": "m09-domain",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m09-domain",
+      "files": {
+        "SKILL.md": "a05f32b475b01d630d54a38a4b9942499b8ea873bc6d2627144fcd8b85b8b53a"
+      }
+    },
+    {
+      "name": "m10-performance",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m10-performance",
+      "files": {
+        "SKILL.md": "6661cd16c27d031746985f8053c5515d50820d665957bde8a0660f4e36eb9bc7",
+        "patterns/optimization-guide.md": "85fdacd7f49929806f8609974ede112e8c6b95d3701fc7cdb6e5db98826fb63f"
+      }
+    },
+    {
+      "name": "m11-ecosystem",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m11-ecosystem",
+      "files": {
+        "SKILL.md": "49ebf716fbff900e52f114bef4ee090932118037cd560b3cbc8949e71424e070"
+      }
+    },
+    {
+      "name": "m12-lifecycle",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m12-lifecycle",
+      "files": {
+        "SKILL.md": "db6f0af49dcf61dae73e343b2051dbf087a58b6621db0591612208967a1078bd"
+      }
+    },
+    {
+      "name": "m13-domain-error",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m13-domain-error",
+      "files": {
+        "SKILL.md": "8b20e875534e615d7a98875f804a4d5e26504029c12e656a342efef4433c8dc9"
+      }
+    },
+    {
+      "name": "m15-anti-pattern",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/m15-anti-pattern",
+      "files": {
+        "SKILL.md": "bcbb49e47b76620b6303f508c323bd12897a730b80a29f7a760bbaed9a6002f2",
+        "patterns/common-mistakes.md": "a1f3c68622feb7608265896de80ad3e8c35a6b3561e5e1780c7375526db98c36"
+      }
+    },
+    {
+      "name": "unsafe-checker",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/unsafe-checker",
+      "files": {
+        "AGENTS.md": "48d5c627aba4ececbe1b78da5afdb87905df8329bcb88bf611433669e7aec35d",
+        "SKILL.md": "61dc44bbbe4df93391119d1a4daeb4b331eb5711821a5db7ab7e16bd0f4e048b",
+        "checklists/before-unsafe.md": "9041f042ff6be0abf4e6f08733d9ad17441f513fe13242de0bebd6205b4200ae",
+        "checklists/common-pitfalls.md": "740bb3f8ccc64db7f5fbe6f67159d88186cf7e6e863a6c36ad1174c1d1207bd6",
+        "checklists/review-unsafe.md": "18cba2bc461d8a98e83a45e341aad940774649c747cb86b5315b159950481d94",
+        "examples/ffi-patterns.md": "751ae9a8ba54d16c299e308ffc16916608c48fdaf08a8a0e038b0b7609074c03",
+        "examples/safe-abstraction.md": "42e2037d18ab7793a1a27b18d8a02dc213237f2f1fee436d3493fab8826bee00",
+        "metadata.json": "9758fb50457b61ea7e4a5d6e30862869261569724e3b7d76c10cb72bc680c1a1",
+        "rules/_sections.md": "c4d99be7d67d57a542c299f033cd15448a4cb55473c87dddcb4e50f63d66c8ce",
+        "rules/_template.md": "28a9f91d17fb05ce91436f52664886138933c6c319949179378a917d9057e45e",
+        "rules/ffi-01-no-string-direct.md": "9e94c85e5837e6fa50c2093565b7bd33ac0f3226a24b1a4c45e1f2a721af9024",
+        "rules/ffi-02-read-ffi-docs.md": "79a3ef186739aadae46778009e2a415f636b914bd98135ea0ed0af0fe730e727",
+        "rules/ffi-03-drop-for-c-ptr.md": "71c5d0e6db6024116079facf2deb41b22f4878d5a49578cb6c153c8c2648a583",
+        "rules/ffi-04-panic-boundary.md": "8c245a9d9b3332af898961077e755c6e4d29449a8497e44cd7ea66b0059a6975",
+        "rules/ffi-05-portable-types.md": "4839402042d63ae59e058e14e068aa84f18c0bd690b6215ec0913f4115e3128d",
+        "rules/ffi-06-string-abi.md": "a1b0b4742a92ff13ed6a8619bfb640d942082cbbf5f2d31e33740c211b042376",
+        "rules/ffi-07-no-drop-external.md": "f6bc12eb7a0e96d279964c9ae83e0d05a6751d655cf3bf2eeb6f01556c053364",
+        "rules/ffi-08-error-handling.md": "583b5c9ef63b58a55f84dc74bbfe6489e7499ce34cce9765a99b1ae50b479fe0",
+        "rules/ffi-09-ref-not-ptr.md": "d9c44273876306d3b8a4c5b5e795289449d5558283234574ee3f5c1b66c7f467",
+        "rules/ffi-10-thread-safety.md": "f6cae69d9e98895c002207f4d17e10e5e82062705adcdb1dac2643bfe5e4c0ab",
+        "rules/ffi-11-packed-ub.md": "e3b266bf318809c2c8b3a5bb7552a91d1ce29c54e656f74bd9dc9363c048277a",
+        "rules/ffi-12-invariant-doc.md": "90c0ccfc1c7934056ad6de93eebdb38835522efa176f76048ca9ca5e43d5fa26",
+        "rules/ffi-13-data-layout.md": "e9503c659b7f0db2b4b7ad1a5cfa890d8f0419f8695d324bccf8febe422ad853",
+        "rules/ffi-14-stable-layout.md": "3e1c02ede6f997eeacff13f2ec5e3d4fd1ce8801bcd5ff8668735fc562abb94b",
+        "rules/ffi-15-validate-external.md": "530034297acf7bf337df8b7113f87627b78ec200e6182369937b4b863f36c223",
+        "rules/ffi-16-closure-to-c.md": "3fa17b8853a242332b213782fbaed3df5e25ef5c22ac3d7723c0d5d93964b5a6",
+        "rules/ffi-17-opaque-types.md": "5cdb6248fa09401b7d5b3b30a2ad382e2aca06888b3b7b72894d88c06424ad83",
+        "rules/ffi-18-no-trait-objects.md": "887c0f94f811fbc6b4e8dd21c0bf22eda77274f930d12f79d4fef157b3801ed4",
+        "rules/general-01-no-abuse.md": "de6560773eeffde4158cfba9fb4a5a3c5565d6cc084c09c59b99f094e1406594",
+        "rules/general-02-not-for-perf.md": "ff22bb472f6ddcdafcea97470a5a04bc62ae318a0c3c25eac3051fba457d00c3",
+        "rules/general-03-no-alias.md": "d080f181e8c8a547b0f08575198af8464a8d2e74ab745e85c9538a6192103ac0",
+        "rules/io-01-raw-handle.md": "00026a87c05b50ee39b3c6f1433d796b951a30a505daed9e0d2471097d5a5307",
+        "rules/mem-01-repr-layout.md": "4e2877b8a4eb30250c809af6dc5c1c4e1b0ccba5be9780008862dde38f859218",
+        "rules/mem-02-no-other-process.md": "97c6b3c5cac19f2f1df04a04f06d336270fc92257f283960b2024b0a1b5120e6",
+        "rules/mem-03-no-auto-drop-foreign.md": "2d5eb08a8a45e8ae59164b4117830dc7aa5aa831fd90e449ae14fb18e923e5da",
+        "rules/mem-04-reentrant.md": "a734851f76850b910652b3f2d9a254d8066c9dc64c4c2f63ffd363ebcfa69637",
+        "rules/mem-05-bitfield-crates.md": "0d20ec5f2ccf8fb8cfad3c7adc7f5a447f8470930233918b9541496e11bb9c8c",
+        "rules/mem-06-maybeuninit.md": "335a192e2bfcd430dcd4097f78f25c11cdf60bc364fe0d386dd2f29041bc6896",
+        "rules/ptr-01-no-thread-share.md": "c0677260b1e3b2ed89161aeb3f4c7ddbc6ed7a5974482e031f4a9ea7f45b9fbd",
+        "rules/ptr-02-prefer-nonnull.md": "0a99e4cd2d6c4367862c8753480c118be8ba5e592e2515302c9f8248182ea217",
+        "rules/ptr-03-phantomdata.md": "64b6034c6ce5ee16ebcb063c1c53ad471cc6bd7663eca47d1038ad7791e314a8",
+        "rules/ptr-04-alignment.md": "23e731b46c4df823f98e26d08bf7b5eca2dde9b4f1c9a0c6ee95c536b1c63789",
+        "rules/ptr-05-no-const-to-mut.md": "3600f800965ddff4a95daf5e5716bdbc36d0843ba837886fc42ae093c1adb638",
+        "rules/ptr-06-prefer-cast.md": "cd0e63bae741595ea40794788e287185de5e4e29267b06f7d79972266fc88e18",
+        "rules/safety-01-panic-safety.md": "bb3b816e11d6b65ee31c34bfc3f20305864f7bfe294d43cd4c82699b311b5c8f",
+        "rules/safety-02-verify-invariants.md": "a36d494430b65f1337506b6357c5a0fb9d419fe69907dbd1ecccb2b07c2cea60",
+        "rules/safety-03-no-uninit-api.md": "85b0527a5b78d14ec8c750c6217fc3c804e731a554bcb7c0c80c6913d00e4aa6",
+        "rules/safety-04-double-free.md": "2be56be53458c6ccaca5db55972f60b0104d21667412a466ceafaf8426ef6701",
+        "rules/safety-05-send-sync.md": "7a930dcb97a2adaebd34a852bbadcea2345e0c8886ce1d9d64e9c115d4405224",
+        "rules/safety-06-no-raw-ptr-api.md": "aea8a5371bacda5e4f1f45bfc38c483e33bef0cff515de7817adfba61c29aa4c",
+        "rules/safety-07-unsafe-pair.md": "07bb1a6c69055cc19f1ca2f58824bbeb0657b27adfe7f2e1dafc5e9c8d19e18d",
+        "rules/safety-08-no-mut-from-immut.md": "f3fc72092987f043ff62a37b3a45850d3e8a0ea45279d2ad322b5ba161f9eb2f",
+        "rules/safety-09-safety-comment.md": "5a6d7f5a272dd47ee7ca29cf895bd05f891a2ca3c5788822227903d5583323b1",
+        "rules/safety-10-safety-doc.md": "097804c1dd5747f22decbc290ce24a3089e420e5ea491d34b7d75779e0de297d",
+        "rules/safety-11-assert-not-debug.md": "3b38bf56038da27868e6ab9d73732d1cdea339b56031f12ad74727eab6171fd0",
+        "rules/union-01-avoid-except-ffi.md": "6e504742a4b3f974e45fa215bae2f47fbe9ad8af873030fbe516f6aca17b351f",
+        "rules/union-02-no-cross-lifetime.md": "f47c620ea52607cc5c3f11efda6e0ffd25f0feb1f9186c63f39cd3b492539d18"
+      }
+    },
+    {
+      "name": "domain-cli",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/domain-cli",
+      "files": {
+        "SKILL.md": "82faba357adb435db2e738635097cd5f514c09e2e272b963ed5d89617dda75d7"
+      }
+    },
+    {
+      "name": "rust-deps-visualizer",
+      "repository": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourcePath": "skills/rust-deps-visualizer",
+      "files": {
+        "SKILL.md": "960d1c9741f8bb075cfe58afbf07f37e4c83ac0872c864ceff9736f2f6cfb9c7"
+      }
+    },
+    {
+      "name": "rust-testing",
+      "repository": "affaan-m/ECC",
+      "commit": "76aaa77df6adc5b889e689007bf99b9a4f74af34",
+      "sourcePath": "skills/rust-testing",
+      "files": {
+        "LICENSE": "326146379f01bb137c0a5d3c54770c1aa31076705c8b88a7f6b26a460f6221b2",
+        "SKILL.md": "02a9a40dcc42dd21d14730d29b13ee0a8b274694360585dc0fadb2602eb56ddf"
+      }
+    },
+    {
+      "name": "rust-lsp",
+      "repository": "fedemagnani/rust-lsp-plugin",
+      "commit": "21a1f9b14b2614d7cb9a41c9db6081d279c906bd",
+      "sourcePath": "plugins/rust-lsp/skills/rust-lsp",
+      "files": {
+        "SKILL.md": "81c1757104e7404b4d7a49d72e855322de4b7548bf9d202179489774573b03b5",
+        "scripts/install.sh": "afa3a0856383615facfb90840a3e8ae390910e28977dc0bab441751a21a7e687"
+      }
+    }
+  ],
+  "installedRustSkillCount": 18,
+  "plugins": [
+    {
+      "name": "superpowers@openai-curated-remote",
+      "version": "6.4.2",
+      "installed": true,
+      "enabled": true,
+      "bundledSkills": 15,
+      "hooks": false
+    },
+    {
+      "name": "context7@context7-marketplace",
+      "version": "1.0.2",
+      "installed": true,
+      "enabled": true,
+      "repository": "upstash/context7",
+      "commit": "ae4871e9a8cbed00bc0f4a40b0b5b61e2d37378c",
+      "bundledSkills": 1,
+      "endpoint": "https://mcp.context7.com/mcp"
+    }
+  ],
+  "rustTools": {
+    "toolchain": "1.99.1",
+    "rustAnalyzer": "1.99.1 (58cf8f9 2026-10-13)",
+    "rustSrcInstalled": true,
+    "lspRepository": "fedemagnani/rust-lsp-plugin",
+    "lspCommit": "21a1f9b14b2614d7cb9a41c9db6081d279c906bd",
+    "lspCargoVersion": "0.0.0",
+    "lspPluginManifestVersion": "0.1.0",
+    "enabledTools": [
+      "hover",
+      "definitions",
+      "references",
+      "workspace_symbols",
+      "analyzer_status",
+      "view_syntax_tree"
+    ],
+    "startupTimeoutSeconds": 20,
+    "toolTimeoutSeconds": 45,
+    "systemProfileModified": false,
+    "sourceModified": false
+  },
+  "smokeChecks": {
+    "rustLsp": {
+      "schemaVersion": 1,
+      "sourceCommit": "21a1f9b14b2614d7cb9a41c9db6081d279c906bd",
+      "fixtureOnly": true,
+      "applicationWorkspaceAnalyzed": false,
+      "publicToolCount": 13,
+      "enabledTools": [
+        "hover",
+        "definitions",
+        "references",
+        "workspace_symbols",
+        "analyzer_status",
+        "view_syntax_tree"
+      ],
+      "protocolVersion": "2024-11-05",
+      "serverInfo": {
+        "name": "rmcp",
+        "version": "0.7.0"
+      },
+      "tools": [
+        "analyzer_status",
+        "change_document",
+        "close_document",
+        "definitions",
+        "hover",
+        "open_document",
+        "rebuild_proc_macros",
+        "references",
+        "reload_workspace",
+        "rename_symbol",
+        "replace_document",
+        "view_syntax_tree",
+        "workspace_symbols"
+      ],
+      "analyzerStatusPassed": true,
+      "workspaceSymbolFound": true,
+      "serverExitCode": 0,
+      "ownedDescendantsRetired": true,
+      "passed": true
+    },
+    "context7": {
+      "schemaVersion": 1,
+      "endpoint": "https://mcp.context7.com/mcp",
+      "authentication": "anonymous; no account credential accessed",
+      "fixtureOnly": true,
+      "queriesContainProjectSource": false,
+      "serverInfo": {
+        "name": "Context7",
+        "title": "Context7",
+        "version": "4.4.3",
+        "websiteUrl": "https://context7.com",
+        "description": "Context7 provides up-to-date documentation and code examples for libraries and frameworks.",
+        "icons": [
+          {
+            "src": "https://context7.com/context7-icon-green.svg",
+            "mimeType": "image/svg+xml",
+            "sizes": [
+              "any"
+            ]
+          },
+          {
+            "src": "https://context7.com/context7-icon-green.png",
+            "mimeType": "image/png",
+            "sizes": [
+              "512x512"
+            ]
+          }
+        ]
+      },
+      "protocolVersion": "2024-11-05",
+      "tools": [
+        "resolve-library-id",
+        "query-docs"
+      ],
+      "libraryResolutionPassed": true,
+      "passed": true,
+      "documentationQueryPassed": true,
+      "documentationLibraryId": "/websites/tauri_app"
+    },
+    "originalCodexConfigurationValuesPreserved": true,
+    "selectedSkillAndHelperHashesValidated": true
+  },
+  "decisions": {
+    "rustSkillsSelection": "16 relevant static Rust design/ownership/resource/FFI/CLI/dependency skills; whole directories preserved",
+    "excluded": "Automatic router, inaccurate deprecated-primitives coding table, dynamic skill/browser infrastructure and unrelated domains omitted",
+    "projectInstructions": "Existing AGENTS.md retained; no upstream project instructions, submodule, setup hooks or browser infrastructure imported",
+    "testingGuidance": "Testing examples inform meaningful checks; no new blanket TDD/coverage gate, compiler edition, dependency replacement or CI requirement was imposed",
+    "missingLicenseText": [
+      "actionbook/rust-skills pinned tree claims MIT in README but has no LICENSE/COPYING/NOTICE",
+      "fedemagnani/rust-lsp-plugin pinned tree has no license file"
+    ],
+    "retainedLicense": "ECC MIT license retained beside its installed skill"
+  },
+  "limitations": [
+    "New skill/tool registrations must be loaded by a subsequent Codex turn/session; current turn is not proof they have entered the active model tool list",
+    "Rust LSP is experimental; requests select a workspace and have no server-side path fence",
+    "Read-only semantic queries can run trusted Cargo build scripts and proc macros; upstream hard-codes those analyzer options",
+    "The configured client timeout does not fix upstream unbounded internal analyzer requests",
+    "Rust LSP native Windows PATH lookup bug remains; this is an Ubuntu development-tool installation, not application Windows qualification",
+    "Context7 smoke used anonymous access; no account OAuth credential was created or read",
+    "Pinned tools and configuration use this machine local paths; relocation requires updating their configuration"
+  ],
+  "installWarnings": [
+    "Cargo reported environment-selected pinned toolchain; the explicit configured RUSTUP_TOOLCHAIN is 1.99.1",
+    "Cargo suggested adding installed binary to PATH; MCP uses its absolute path and supplied pinned Rust PATH instead"
+  ],
+  "migrationWorkPreserved": {
+    "pushedAuditCheckpoint": "3c1cdc2",
+    "lastFullyVerifiedCodeCheckpoint": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+    "pending": "Native file-identity adapter/probe/verifier and CI wiring remain uncommitted. Adapter has 10 local unit passes and Windows target compilation; full integrated/native checks and Windows reserved-name refinement are still pending. No production save authority is enabled."
+  }
+}

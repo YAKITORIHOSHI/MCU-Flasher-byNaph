@@ -9,6 +9,11 @@ unfinished. The Python application remains the release and behavioral reference.
 No Python application service has been retired and no live project/settings
 writes have been enabled.
 
+[Rust tooling setup](tooling-setup.md) is complete following the user's latest
+request: 18 Rust skills, Superpowers, Context7 and pinned Rust Analyzer/LSP were
+installed and verified. The interrupted native file-identity stage remains
+uncommitted and awaits final checks; the results below apply to `4cf730b`.
+
 ## Implemented scope
 
 | Area | Working subset | Remaining boundary |
