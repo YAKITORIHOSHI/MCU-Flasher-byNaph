@@ -195,5 +195,13 @@
     },
     "evidence": "ci-results.json",
     "physicalUsbQualified": false
+  },
+  "productionUbuntuIconAmendment": {
+    "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+    "report": "ubuntu-launcher-icons.json",
+    "scope": "Separate production launcher metadata/icon change; historical prototype suite/CI receipts above retain their actual source revisions",
+    "launcherChecks": 46,
+    "runtimeChecks": 46,
+    "nativeIconAndIdentityPassed": true
   }
 }

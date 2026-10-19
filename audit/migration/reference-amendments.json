@@ -2,19 +2,20 @@
   "schema_version": 1,
   "date": "2026-10-19",
   "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
-  "current_checkpoint_commit": "f952325ca4acfdf044c17c7813bc36609821381c",
+  "current_checkpoint_commit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
   "baseline_inventory": "source-inventory.json",
   "method": "Inventory SHA-256 values capture the original checkout bytes; committed Git blob hashes are separate. Checkout line-ending variants include LF, CRLF, mixed and doubled CRLF. Baseline hashes are preserved, not regenerated. Current hashes explain only intentional migration-owned amendments; unrelated installer/catalog/bootstrap changes are excluded.",
   "scope": "Reference amendments, not proof of full feature parity or production migration approval.",
   "summary": {
-    "amended_baseline_entries": 13,
-    "production_source_files": 2,
-    "legacy_verifier_files": 9,
+    "amended_baseline_entries": 16,
+    "production_source_files": 4,
+    "legacy_verifier_files": 10,
     "legacy_ci_files": 2,
     "additional_ci_files": 1,
-    "unchanged_source_inventory_entries": 289,
+    "unchanged_source_inventory_entries": 286,
     "unchanged_resource_inventory_entries": 130,
-    "supplemental_verification_files": 2
+    "supplemental_verification_files": 2,
+    "production_asset_additions": 1
   },
   "amendments": [
     {
@@ -208,6 +209,49 @@
       "original_git_bytes": 4618,
       "current_bytes": 4639,
       "reason": "Run isolated native ESP32 compiler-layout checks before native setup. Synthetic cases do not replace real fresh Bootstrap, GUI, native compiler, firmware, and runtime execution on both LTS ARM64 runners."
+    },
+    {
+      "path": "direct/ubuntu/install_desktop.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "049b47cc7870d824b499c6301368596b92225d6144a0bf4a8d5b93b9c244fdd3",
+      "original_git_sha256": "049b47cc7870d824b499c6301368596b92225d6144a0bf4a8d5b93b9c244fdd3",
+      "current_sha256": "f236f1caa505d2a0013b40cb42858e762cb97256c9f671b6c888e93f7dc6c628",
+      "original_bytes": 4806,
+      "original_git_bytes": 4806,
+      "current_bytes": 5831,
+      "reason": "Explicit shortcut generation registers the existing PNG artwork in the user XDG hicolor theme; both shortcuts use a stable theme name and measured X11 class. Validate XDG/source before writes, preserve portable dispatch, skip unchanged writes and surface registration failures."
+    },
+    {
+      "path": "main/mcu_flash_gui.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "d08f221d6f03ea74f5b1d2e6a9db70e09587cc88dbf3c1138df181428c8104c2",
+      "original_git_sha256": "d08f221d6f03ea74f5b1d2e6a9db70e09587cc88dbf3c1138df181428c8104c2",
+      "current_sha256": "4a215327cf0d6f0c93fd04ac739c8c405cc6a25edf152b959dee63517ba40b53",
+      "original_bytes": 18149,
+      "original_git_bytes": 18149,
+      "current_bytes": 18322,
+      "reason": "Linux-only Qt desktopFileName matches mcu-flasher.desktop before windows for Wayland/dock association. Windows startup, services and window layout are unchanged."
+    },
+    {
+      "path": "direct/verify_ubuntu_launcher.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "a01321ba601790d1c91d2cc8093a7a5cd9972eedc4fe6983b8077be83cdd846a",
+      "original_git_sha256": "a01321ba601790d1c91d2cc8093a7a5cd9972eedc4fe6983b8077be83cdd846a",
+      "current_sha256": "df4335f35c00bb97329b9e46d8ad7de863f6c191bf188fd68c2905df8910c189",
+      "original_bytes": 44545,
+      "original_git_bytes": 44545,
+      "current_bytes": 51839,
+      "reason": "Add exact embedded PNG reuse, per-account theme registration, relocation/unchanged-write checks, refused invalid XDG/missing asset, surfaced write failure and isolated native Qt theme/pixel/desktop identity checks. Existing CPU/ELF/GLib/literal-argument cases are retained."
     }
   ],
   "additions": [
@@ -234,11 +278,19 @@
       "current_sha256": "459f819d4f6c831f2c481330d064e64641e6337f35a1a4e7a3b685f57826839e",
       "current_bytes": 5200,
       "reason": "Owned synthetic/native first-run verifier support only; no application install, hardware, settings, metadata generation or production selection."
+    },
+    {
+      "path": "src/assets/mcu_icon.png",
+      "kind": "production-asset",
+      "original_sha256": null,
+      "current_sha256": "ef860c5f733443e5d39619e15fb1349ec753527633b409a4a03df7ade5e3878b",
+      "current_bytes": 7342,
+      "reason": "Exact existing 256x256 PNG bytes extracted from src/assets/mcu_icon.ico; no changed pixels or dependency on the migration prototype."
     }
   ],
   "limitations": [
-    "Nine legacy verifier amendments and two production source amendments require separate review; passing amended tests alone does not establish unchanged-reference equivalence.",
-    "The 133 resource rows include CI. One CI resource hash changed; this does not change the 22 original assets staged byte-identically to 25 prototype destinations.",
+    "Ten legacy verifier amendments and four production source amendments require separate review; passing amended checks alone does not establish unchanged-reference equivalence.",
+    "The 133 resource rows include CI. Two CI resource hashes and the original editor HTML changed; this does not change the 22 original assets staged byte-identically to 25 prototype destinations. The added production PNG duplicates existing ICO artwork.",
     "No user sketches, live settings, credentials, deployed Firebase rules, protected caches/journals or hardware were read or changed for this amendment report."
   ],
   "checkout_line_ending_differences": [

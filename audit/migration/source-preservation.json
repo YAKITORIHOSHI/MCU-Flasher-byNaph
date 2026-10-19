@@ -1,14 +1,15 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "f952325ca4acfdf044c17c7813bc36609821381c",
-  "recordedAtUtc": "2026-10-19T12:54:35.416231+00:00",
+  "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+  "recordedAtUtc": "2026-10-19T13:35:32.410601+00:00",
   "inventorySha256": "70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52",
   "baselineRegenerated": false,
   "sections": {
     "files": {
       "baselineEntries": 300,
-      "unchanged": 289,
+      "unchanged": 286,
       "intentionalAmendments": [
+        "direct/ubuntu/install_desktop.py",
         "direct/verify_arduino_board_chooser.py",
         "direct/verify_board_search.py",
         "direct/verify_custom_board_dialog.py",
@@ -17,7 +18,9 @@
         "direct/verify_responsive.py",
         "direct/verify_target_resolution.py",
         "direct/verify_ubuntu_first_run.py",
+        "direct/verify_ubuntu_launcher.py",
         "direct/verify_ubuntu_pty_lifecycle.py",
+        "main/mcu_flash_gui.py",
         "src/editor/index.html",
         "src/modules/tk_glass.py"
       ]
@@ -26,14 +29,14 @@
       "baselineEntries": 133,
       "unchanged": 130,
       "intentionalAmendments": [
-        "src/editor/index.html",
         ".github/workflows/compatibility.yml",
-        ".github/workflows/ubuntu-arm64.yml"
+        ".github/workflows/ubuntu-arm64.yml",
+        "src/editor/index.html"
       ]
     },
     "legacy_verifiers": {
       "baselineEntries": 123,
-      "unchanged": 114,
+      "unchanged": 113,
       "intentionalAmendments": [
         "direct/verify_arduino_board_chooser.py",
         "direct/verify_board_search.py",
@@ -43,6 +46,7 @@
         "direct/verify_responsive.py",
         "direct/verify_target_resolution.py",
         "direct/verify_ubuntu_first_run.py",
+        "direct/verify_ubuntu_launcher.py",
         "direct/verify_ubuntu_pty_lifecycle.py"
       ]
     }

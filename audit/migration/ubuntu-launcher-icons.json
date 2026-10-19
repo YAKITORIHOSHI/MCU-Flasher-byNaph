@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+  "recordedAtUtc": "2026-10-19T13:35:32.410601+00:00",
+  "scope": "Production Ubuntu launcher/icon amendment only; no Rust/Tauri release promotion",
+  "icon": {
+    "source": "src/assets/mcu_icon.ico",
+    "sourceSha256": "83ff0de254bdeb9445d3a52a0cffa45f3c5bef10cb9c870763614356925247c3",
+    "destination": "src/assets/mcu_icon.png",
+    "sha256": "ef860c5f733443e5d39619e15fb1349ec753527633b409a4a03df7ade5e3878b",
+    "method": "Exact embedded 256x256 PNG extraction; unchanged bytes/pixels",
+    "installedPath": "$XDG_DATA_HOME/icons/hicolor/256x256/apps/mcu-flasher.png",
+    "themeName": "mcu-flasher"
+  },
+  "checks": {
+    "launcherChecks": 46,
+    "launcherPassed": true,
+    "runtimeChecks": 46,
+    "runtimePassed": true,
+    "qtEditorSmoke": "Passed native offscreen tabs/keyboard, three detach/reattach and dirty recovery cycles, cloud-buffer replacement; hardware/persistence mocked",
+    "platformChecks": {
+      "total": 23,
+      "passed": 21,
+      "skipped": 2,
+      "reason": "Windows Script Host checks require Windows"
+    },
+    "nativeXcb": {
+      "desktopFileName": "mcu-flasher",
+      "windowClass": "MCU Flasher by Naph",
+      "nativeProperties": [
+        "WM_CLASS(STRING) = \"mcu_flash_gui.py\", \"MCU Flasher by Naph\"",
+        "_GTK_APPLICATION_ID(UTF8_STRING) = \"mcu-flasher\""
+      ],
+      "iconName": "mcu-flasher",
+      "themeSearchPaths": [
+        "$XDG_DATA_HOME/icons",
+        "/usr/share/icons",
+        ":/icons"
+      ],
+      "iconSizes": [
+        [
+          256,
+          256
+        ]
+      ],
+      "desktopEntriesValidated": 2,
+      "liveAccountInstallation": false,
+      "nativeWindowManager": "owned Xvfb/xcb; no GNOME shell",
+      "iconSha256": "ef860c5f733443e5d39619e15fb1349ec753527633b409a4a03df7ade5e3878b"
+    },
+    "strictNativeLauncherCompilation": true,
+    "preExistingInputsPreserved": 11
+  },
+  "unchangedExecutablesAndSource": [
+    {
+      "path": "MCU_Flasher.exe",
+      "sha256": "f17d4be8437c28a6c3bcad1bae443d10185ba74eafbd9c408eca2d154b928df3",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    },
+    {
+      "path": "MCU_Flasher",
+      "sha256": "2f7018af66df3f50defb7709200e91b88663a9b293418ca51f997160b8b9c4b8",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    },
+    {
+      "path": "MCU_Flasher-arm64",
+      "sha256": "0a8b8d1eb2c6a6c49319d7d64814d41a73aa5b698d5aa55ed4f209b2ea48f3da",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    },
+    {
+      "path": "src/launcher_ubuntu.c",
+      "sha256": "fa79b0af8551747cbde3684a729f3a7a61790d5d2daa3534b7d4501e2a1cf6de",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    }
+  ],
+  "registration": "Prepared and exercised only in isolated fixtures. Run bash direct/ubuntu/run.sh --install-shortcut as the desktop account to refresh the actual menu/shortcut.",
+  "limitations": [
+    "Raw ELF files can retain Ubuntu Files generic executable icons. The branded desktop entries provide the application icon.",
+    "GNOME Shell/Nautilus visual rendering and Allow Launching trust were not automated; native Qt X11 properties and theme loading were verified under owned Xvfb.",
+    "Local execution is Ubuntu 26.04 AMD64; Windows/ARM64 native tests were not rerun for this amendment. Previous CI receipts retain their tested revisions.",
+    "Original production Windows/AMD64/ARM64 executables are byte-identical; no reset, runtime repair or native rebuild is required for Python/icon changes.",
+    "Rust/Tauri remains a partial prototype and does not replace production entry points."
+  ],
+  "sources": [
+    "https://specifications.freedesktop.org/desktop-entry/latest-single/",
+    "https://specifications.freedesktop.org/icon-theme/latest/",
+    "https://doc.qt.io/qt-6/qguiapplication.html#desktopFileName-prop"
+  ],
+  "ciAtSave": {
+    "recordedAtUtc": "2026-10-19T13:36:38.028159+00:00",
+    "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+    "status": "Pending; no completion claimed",
+    "runs": [
+      {
+        "name": "Desktop compatibility",
+        "runId": 39261359647,
+        "status": "queued"
+      },
+      {
+        "name": "Native Ubuntu ARM64",
+        "runId": 39261359788,
+        "status": "in_progress"
+      },
+      {
+        "name": "Rust migration compatibility prototype",
+        "runId": 39261359735,
+        "status": "in_progress"
+      },
+      {
+        "name": "Native UI layouts",
+        "runId": 39261359712,
+        "status": "in_progress"
+      }
+    ]
+  }
+}

@@ -1,14 +1,32 @@
 # Migration status
 
 Updated: 19 October 2026, Asia/Manila. Latest code checkpoint:
-`f952325ca4acfdf044c17c7813bc36609821381c` on `codex/rust-tauri-migration`.
-[Rust/Tauri checkpoint CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39253280765).
+`0cc3ec56d0fbacbda8182c87f045e01b4b511a12` on `codex/rust-tauri-migration`.
+[Prior Rust/Tauri checkpoint CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39253280765).
 
 **The full Rust/Tauri replacement remains unfinished. The Python application
 remains the production release and behavioral reference.** No Python application
 service has been retired; no live project/settings/cloud/hardware writes have
 been enabled. The 67-capability ledger now contains **14 partial fixture subsets
 and 53 pending capabilities**, with no retirement approval.
+
+## Production Ubuntu icon follow-up
+
+`0cc3ec5` registers the existing app artwork in the desktop account's XDG icon
+theme when shortcuts are explicitly generated, uses that icon for both desktop
+entries, and gives Qt the matching desktop identity and measured X11 class.
+All three shipped executable launchers and native C source remain byte-identical.
+No runtime reset or native rebuild is needed for this icon/Python update.
+
+Local Ubuntu 26.04 AMD64 verification passes 46 launcher checks, 46 runtime checks
+and 21 platform checks (two Windows-only checks skipped). Two desktop entries
+validate; an isolated native Xvfb/xcb window resolves the installed icon and
+exposes the expected WM_CLASS and application ID. These fixtures never install
+into the live account or qualify actual GNOME shortcut trust/rendering. Historical
+CI below retains its exact prior revisions. See [icon receipt](ubuntu-launcher-icons.json).
+New-source CI was queued/running when saved: compatibility `39261359647`, native
+ARM64 `39261359788`, migration `39261359735`, layout `39261359712`. Completion is
+not claimed for those runs.
 
 ## Implemented in this continuation
 
@@ -151,8 +169,9 @@ The initial boards never narrow final supported feature/target coverage. Consult
 
 Inventory SHA-256 remains
 `70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52`.
-Baseline hashes were not regenerated. Reference amendments explain two
-production sources, nine verifiers and two legacy CI files separately. All 22 reused
+Baseline hashes were not regenerated. Reference amendments explain four
+production sources, ten verifiers and two legacy CI files separately. The added
+production PNG reuses exact existing ICO bytes. All 22 reused
 asset sources, restored root launcher and unrelated catalog/bootstrap/installer
 inputs retain their continuation-start hashes. No live sketches, protected
 caches/journals, settings, credentials, cloud or hardware were used by fixtures.

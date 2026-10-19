@@ -12,7 +12,7 @@ tools. Support Ubuntu 24.04+ AMD64/ARM64 and Windows 10/11 AMD64. Preserve curre
 compact workflow/static glass, offline Monaco/xterm, fixed Firebase deployment,
 prepared offline tools, independent projects and editor/terminal/AI state.
 
-Latest code checkpoint is `f952325ca4acfdf044c17c7813bc36609821381c`, safely pushed on
+Latest code checkpoint is `0cc3ec56d0fbacbda8182c87f045e01b4b511a12`, safely pushed on
 `codex/rust-tauri-migration`. Documentation receipts may advance HEAD without
 changing tested source. Original reference is
 `1d00ff0bfdac7d158dde3df84b07741c5b1df6d4`. Python remains production; no service
@@ -45,6 +45,15 @@ physical boards, regenerate baseline hashes, or publish an incomplete replacemen
   toolchains. Two original verifier files and the ARM64 test loop are amended;
   9 synthetic and 16 target-resolution checks pass. Native setup/compile reruns
   and compatibility all pass at that exact source. Rust/Tauri code remains 1131c7e.
+- `0cc3ec5`: production Ubuntu shortcut icon/identity follow-up. Exact existing
+  256px ICO artwork is registered under the desktop account's XDG hicolor theme;
+  both shortcuts use the stable icon name, Qt declares the matching desktop ID
+  and the measured X11 class is recorded. All three native launchers and C source
+  are unchanged. Local checks pass: launcher 46, runtime 46, platform 21 with two
+  Windows-only skips, desktop validation and native Xvfb theme/identity fixture.
+  Actual GNOME rendering/trust and native Windows/ARM64 reruns are not claimed.
+  Refresh actual shortcuts with `bash direct/ubuntu/run.sh --install-shortcut`;
+  verification installed only into disposable fixtures. See ubuntu-launcher-icons.json.
 
 The adapter has no public content/native-handle/write capability. Identity
 observations do not close ancestor/final-replacement races, preserve ACL/xattrs,
