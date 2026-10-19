@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 import unittest
 
@@ -30,6 +31,57 @@ APP = QApplication.instance() or QApplication([])
 COLLECTOR = install_gui_garbage_collector(APP)
 APP.setQuitOnLastWindowClosed(False)
 CAPTURES = None
+
+
+def capture_directory(path: Path, checkout: Path = ROOT) -> Path:
+    """Confine optional PNG output to the checkout's two capture locations."""
+    checkout = checkout.resolve()
+    candidate = path.resolve()
+    # Keep these roots lexical after resolving the checkout. Resolving an
+    # approved root itself would let a symlink redefine it outside the checkout.
+    allowed = (checkout / 'temp', checkout / 'audit' / 'migration' / 'captures')
+    if not any(candidate == root or root in candidate.parents for root in allowed):
+        raise ValueError('Captures must remain inside this checkout\'s temp or audit/migration/captures directory')
+    return candidate
+
+
+class CaptureDirectoryTests(unittest.TestCase):
+    def test_capture_paths_are_limited_to_approved_checkout_locations(self):
+        for relative in ('temp', 'temp/review', 'audit/migration/captures',
+                         'audit/migration/captures/editor-review-2'):
+            with self.subTest(allowed=relative):
+                candidate = ROOT / relative
+                self.assertEqual(capture_directory(candidate), candidate.resolve())
+        for relative in ('.', 'direct', 'audit', 'audit/migration/scratch',
+                         'temp/../direct', 'audit/migration/captures/../../../direct'):
+            with self.subTest(rejected=relative), self.assertRaises(ValueError):
+                capture_directory(ROOT / relative)
+
+    def test_capture_paths_cannot_escape_through_symlinks(self):
+        fixtures = ROOT / 'audit' / 'migration' / 'scratch'
+        fixtures.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='editor-capture-path-', dir=fixtures) as directory:
+            fixture = Path(directory)
+            checkout = fixture / 'checkout'
+            outside = fixture / 'outside'
+            checkout.mkdir()
+            outside.mkdir()
+            try:
+                (checkout / 'temp').symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f'Directory symlinks unavailable: {error}')
+            with self.assertRaises(ValueError):
+                capture_directory(checkout / 'temp' / 'review', checkout)
+            (checkout / 'temp').unlink()
+            (checkout / 'temp').mkdir()
+            (checkout / 'temp' / 'escape').symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                capture_directory(checkout / 'temp' / 'escape' / 'review', checkout)
+            captures = checkout / 'audit' / 'migration' / 'captures'
+            captures.parent.mkdir(parents=True)
+            captures.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                capture_directory(captures / 'review', checkout)
 
 
 def until(predicate, seconds=12):
@@ -888,10 +940,10 @@ if __name__ == '__main__':
     parser.add_argument('--render-dir', type=Path)
     options, args = parser.parse_known_args()
     if options.render_dir:
-        CAPTURES = options.render_dir.resolve()
-        audit = (ROOT / 'temp').resolve()
-        if CAPTURES != audit and audit not in CAPTURES.parents:
-            parser.error('Captures must remain inside this checkout\'s temp directory')
+        try:
+            CAPTURES = capture_directory(options.render_dir)
+        except ValueError as error:
+            parser.error(str(error))
         CAPTURES.mkdir(parents=True, exist_ok=True)
     run = unittest.main(argv=[sys.argv[0], *args], verbosity=2, exit=False)
     QTimer.singleShot(150, APP.quit)
