@@ -1,0 +1,31 @@
+{
+  "reference": "main/core/target_profile.py",
+  "functions": [
+    "requires_upload_port",
+    "serial_upload_speed",
+    "upload_configuration",
+    "upload_target_ready"
+  ],
+  "cases": 13039,
+  "equivalentComparisons": 51993,
+  "structuredRefusalComparisons": 163,
+  "validationDifferences": [
+    {
+      "field": "info",
+      "comparisons": 64,
+      "reason": "Target must be an object"
+    },
+    {
+      "field": "upload_protocol",
+      "comparisons": 99,
+      "reason": "Truthy non-string protocols are refused instead of formatting Python representations into INI"
+    }
+  ],
+  "maximumEspBaud": 921600,
+  "platform": "linux",
+  "architecture": "x86_64",
+  "passed": true,
+  "hardwareAccess": false,
+  "productionImports": false,
+  "fullTargetValidationQualified": false
+}

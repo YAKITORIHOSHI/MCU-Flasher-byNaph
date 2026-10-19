@@ -1,0 +1,19 @@
+{
+  "reference": "main/core/config_store.py:config_lock",
+  "platform": "linux",
+  "architecture": "x86_64",
+  "passed": true,
+  "checks": [
+    "independent-native-handles-contend",
+    "empty-lock-byte-initialized",
+    "python-held-blocks-rust",
+    "rust-held-blocks-python",
+    "release-allows-both-languages",
+    "crashed-owner-releases-native-lock",
+    "release-preserves-lock-identity-and-bytes",
+    "parent-alias-rejected"
+  ],
+  "checksPassed": 8,
+  "liveSettingsAccess": false,
+  "productionCoexistenceQualified": false
+}

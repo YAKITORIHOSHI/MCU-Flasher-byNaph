@@ -1,0 +1,345 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-19",
+  "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
+  "current_checkpoint_commit": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+  "baseline_inventory": "source-inventory.json",
+  "method": "Inventory SHA-256 values capture the original checkout bytes; committed Git blob hashes are separate. Checkout line-ending variants include LF, CRLF, mixed and doubled CRLF. Baseline hashes are preserved, not regenerated. Current hashes explain only intentional migration-owned amendments; unrelated installer/catalog/bootstrap changes are excluded.",
+  "scope": "Reference amendments, not proof of full feature parity or production migration approval.",
+  "summary": {
+    "amended_baseline_entries": 10,
+    "production_source_files": 2,
+    "legacy_verifier_files": 7,
+    "legacy_ci_files": 1,
+    "additional_ci_files": 1,
+    "unchanged_source_inventory_entries": 291,
+    "unchanged_resource_inventory_entries": 131
+  },
+  "amendments": [
+    {
+      "path": "src/modules/tk_glass.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "039c4f918e2c29c32cc65b1083c720f92cde43c8d5951346d28dce16e382f4ed",
+      "original_git_sha256": "039c4f918e2c29c32cc65b1083c720f92cde43c8d5951346d28dce16e382f4ed",
+      "current_sha256": "fc598fa7059a759c626f5e7e9d69ea44b8f699352937c471b600b67412289748",
+      "original_bytes": 64966,
+      "original_git_bytes": 64966,
+      "current_bytes": 65722,
+      "reason": "DialogFit._fit deduplicates unchanged monitor/frame/client/minimum/scale inputs and unchanged minsize/position writes. Failed native requests remain retryable. This stops a repeated Configure/fit write loop while retaining complete monitor work-area constraints."
+    },
+    {
+      "path": "direct/verify_arduino_board_chooser.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "b8fb140ddc51786d4fc089a51bce321d199ce732b9fadea3d22e0f3192aad604",
+      "original_git_sha256": "b8fb140ddc51786d4fc089a51bce321d199ce732b9fadea3d22e0f3192aad604",
+      "current_sha256": "f842dbe72fedeb06696fd6f537b6086ef03a4d4587b429e0cda213a64f265976",
+      "original_bytes": 17330,
+      "original_git_bytes": 17330,
+      "current_bytes": 18303,
+      "reason": "Await actual pending paint/layout and stable geometry instead of a short fixed delay; keep frame containment assertions across the complete existing work-area matrix."
+    },
+    {
+      "path": "direct/verify_board_search.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "6adccd7269c89d2f2d705cdf101af4333eeb871f1955c09369334b58ddcecd9d",
+      "original_git_sha256": "6adccd7269c89d2f2d705cdf101af4333eeb871f1955c09369334b58ddcecd9d",
+      "current_sha256": "cf0989331e74906ead3c99d14aa41b0b206801d7c116d26f846e35a3c5278f75",
+      "original_bytes": 27967,
+      "original_git_bytes": 27967,
+      "current_bytes": 28273,
+      "reason": "Await the queued local refresh completion after the worker event, retaining stale-generation/publication assertions."
+    },
+    {
+      "path": "direct/verify_custom_board_dialog.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "6ca02102375749385f2d65caf6f7969d7c1e7f1cb16f34329d5128a0d05914f6",
+      "original_git_sha256": "6ca02102375749385f2d65caf6f7969d7c1e7f1cb16f34329d5128a0d05914f6",
+      "current_sha256": "ee4d18c938f7c3fbf364d8950e1978ce4cf2eb2fb765a784813c3612d29838ba",
+      "original_bytes": 10462,
+      "original_git_bytes": 10462,
+      "current_bytes": 12166,
+      "reason": "Await pending paint/layout and stable geometry; exercise scrolling at the bounded minimum height without removing compact/standard/native frame containment cases."
+    },
+    {
+      "path": "direct/verify_downloader_appearance.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "dde31ef48650383d4657c813204797ff22fede1b1ecd2b1fb65008b7edc9330d",
+      "original_git_sha256": "dde31ef48650383d4657c813204797ff22fede1b1ecd2b1fb65008b7edc9330d",
+      "current_sha256": "867484dbdf8ad9dd71014daa6026bd0565b8b86ed98cf39d87af84bfa8feb79b",
+      "original_bytes": 38331,
+      "original_git_bytes": 38331,
+      "current_bytes": 43700,
+      "reason": "Add mocked Windows/X11 fit deduplication and failed-native-request regressions. Await native painting, make the requested row visible at 200%, and explicitly establish unselected/hover tab state before asserting border pixels."
+    },
+    {
+      "path": "direct/verify_responsive.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "7c691ad1bb6b3dd104dd354526a36549d44fafe3ee9fb768ee2d20f433802a27",
+      "original_git_sha256": "7c691ad1bb6b3dd104dd354526a36549d44fafe3ee9fb768ee2d20f433802a27",
+      "current_sha256": "0648523a88398d6ffbfaaf72cea0d96b37e50e1c716573c7a4c433672338c834",
+      "original_bytes": 78537,
+      "original_git_bytes": 78537,
+      "current_bytes": 78758,
+      "reason": "Use an embedded QWidget under a shown owning window, matching the production geometry watcher so the desktop window manager does not clamp the test burst."
+    },
+    {
+      "path": "direct/verify_ubuntu_pty_lifecycle.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "2a9968af1ae854a6035d20396f84a92db2afc176c9420369fd6812718ce60d12",
+      "original_git_sha256": "2a9968af1ae854a6035d20396f84a92db2afc176c9420369fd6812718ce60d12",
+      "current_sha256": "7ee4add6edc79ef1473b5368c9ea705bdea6d460f2bb682434e8347139fa6412",
+      "original_bytes": 19453,
+      "original_git_bytes": 19453,
+      "current_bytes": 22958,
+      "reason": "Retain captured psutil process identity during exit/cleanup races, treat disappearance or zombie as stopped, and propagate permission failures. Add explicit mocked lifecycle regressions without changing the production PTY implementation."
+    },
+    {
+      "path": ".github/workflows/compatibility.yml",
+      "kind": "legacy-ci",
+      "inventory_sections": [
+        "resources"
+      ],
+      "original_sha256": "3d3a50a5f64cd632d6ff7acbe8a2ea9d85e0b72a778235b8e8b5d7ef06a25030",
+      "original_git_sha256": "3d3a50a5f64cd632d6ff7acbe8a2ea9d85e0b72a778235b8e8b5d7ef06a25030",
+      "current_sha256": "4ddae74298d965f7fbe461566520bc366f207e5e3b593091d4e33d39e1e56129",
+      "original_bytes": 27349,
+      "original_git_bytes": 27349,
+      "current_bytes": 27377,
+      "reason": "Install gnome-keyring alongside existing libsecret-tools for the native Ubuntu credential-store verification environment."
+    },
+    {
+      "path": "src/editor/index.html",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files",
+        "resources"
+      ],
+      "original_sha256": "4aa0d6d1aafd2310c14d8dfa41c4b9cf59ed1ba21c01ff4765363c8f2344eeed",
+      "original_git_sha256": "4aa0d6d1aafd2310c14d8dfa41c4b9cf59ed1ba21c01ff4765363c8f2344eeed",
+      "current_sha256": "1d42d14e292ebd50d06e13262da8209c349d47c8c080befa5becc1512d96c86e",
+      "original_bytes": 200586,
+      "original_git_bytes": 200586,
+      "current_bytes": 200929,
+      "reason": "Move focus out of the AI review/history bar before hidden state, preferring Monaco, then the visible external toggle, then blur. Preserve unrelated focus and model/undo state."
+    },
+    {
+      "path": "direct/verify_editor_review_ui.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "64161a10b9fa97e9d3e55640babd2da97781eb9fc870e4f8190fd07359c35745",
+      "original_git_sha256": "64161a10b9fa97e9d3e55640babd2da97781eb9fc870e4f8190fd07359c35745",
+      "current_sha256": "50ed95492261daf44303438f73e277be18178ab4f8d5fdaa6424b5d90cb83ee3",
+      "original_bytes": 49130,
+      "original_git_bytes": 49130,
+      "current_bytes": 58477,
+      "reason": "Use a contained child viewport with actual Qt/CSS/zoom geometry and breakpoint coverage; verify focus fallbacks and actual undo/redo; allow only checkout temp or durable audit capture output, rejecting resolved symlink escapes."
+    }
+  ],
+  "additions": [
+    {
+      "path": ".github/workflows/migration-prototype.yml",
+      "kind": "migration-ci",
+      "original_sha256": null,
+      "current_sha256": "c74f256d5b75c651faca72a79e3de008650e83a7fda8bca6907bba335c3a8911",
+      "current_bytes": 6775,
+      "reason": "Separate fixture-only native prototype matrix on Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022, plus both Windows legacy-editor binding ranges at 100%/200%; not Windows 10/11 desktop or USB qualification."
+    }
+  ],
+  "limitations": [
+    "Six verifier amendments must be evaluated separately from the single production behavior change; passing amended tests alone is not an unchanged-reference equivalence claim.",
+    "The 133 resource rows include CI. One CI resource hash changed; this does not change the 22 original assets staged byte-identically to 25 prototype destinations.",
+    "No user sketches, live settings, credentials, deployed Firebase rules, protected caches/journals or hardware were read or changed for this amendment report."
+  ],
+  "checkout_line_ending_differences": [
+    {
+      "section": "files",
+      "path": "direct/runThisOnWindows.vbs",
+      "git_sha256": "6c6381206096e3657072f95928f00544d24e8e4115da062f5153bdef990a96d8",
+      "checkout_sha256": "b3b336fcd2dd28cb1099506b6083d22c38e230f4a930e45a7964f27bcd2ccdc1",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 11,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "direct/verify_arduino_board_selection.py",
+      "git_sha256": "7021f5b97f3e605d884a5b09de7a6e06bc22ee3f6ecdaef2073b024cb7a09e5f",
+      "checkout_sha256": "7233e81ddfd1711e712a97ccd6a0b55aca5614f8995e6396444439ae518376ae",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 211,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "direct/verify_build_console.py",
+      "git_sha256": "b52c8e5a08df9e0fc11fa3a5571e29667b7ba0def6a9c8bf4e73bb28495257fa",
+      "checkout_sha256": "48b969801bc5d3ea5c5d7bff3d9d2f610788559dde224b08ba611ac67af25d80",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 474,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "direct/windows/run.vbs",
+      "git_sha256": "f96de19e81fb79d35a09a87d157b61ea9bb85ca82d8e63139547954b59b954e0",
+      "checkout_sha256": "4ac7e97aa40f2e0b478929bed744c5f5498d52abd5a9151d272195bd84c1a2b2",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 609,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "main/core/theme.py",
+      "git_sha256": "30d5f302592c6b0ed954068ef74c4c28636d5b96e709a33f1aa9ec1d50778678",
+      "checkout_sha256": "e640880b514d916a7e8575d49a0ff7e5fec868059650de812a66286a27e72bcc",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 221,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "main/platforms/ubuntu_logs.py",
+      "git_sha256": "cf9934598882d1c29277161ae7814ef956d8c1b04a8b6049c4338376660c17e3",
+      "checkout_sha256": "d616ff817b569967c407040a61c2e1ce768ef84fc185341300d378d9c6f8cdb5",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 119,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "main/platforms/windows.py",
+      "git_sha256": "d6955e7031c30870cd8f12eca750c8ffe0b1dfce1ad8337398a8cf62eb05fd02",
+      "checkout_sha256": "d4b2093785ce6b4130c039cf347e504b992071e60bb993b4e49f1f7c773e59fe",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 887,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "src/modules/detector.py",
+      "git_sha256": "bb4c7dbf057008c6a2b1ab436df9c48cd2c4e50b2e6eeeeb6d84252f49b550e2",
+      "checkout_sha256": "067f093364dafecea6ba940e25b24fa161773c7281dce2647e98f3a0c459b490",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 50,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "src/modules/get-platformio.py",
+      "git_sha256": "c723e672893b4f551cb715e023910c594c66ee475f2810fa7beb76d41b331d25",
+      "checkout_sha256": "6274b69117a1c7d83adac02333619f95b7fee862cb3c0719e8317b6eb6b393c9",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 70,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "src/modules/setup_ide_paths.py",
+      "git_sha256": "f5a0ae5bfa158496324929e402fe6cf2204988b8224415a86974f8e9ff43dafd",
+      "checkout_sha256": "93d135110d21535299b40340a175a02d1f5c6627720f65b0d5ef8b8bf118f875",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 118,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "src/modules/win_subprocess_hide.py",
+      "git_sha256": "4643ec2365c3d6eb3066c328a8e3ec96718bd35cd394dc6b6847d6d9c39bbbe0",
+      "checkout_sha256": "a5695f6dfaaa66d6c89f032c519756cb9810dfca8d128644750220a61bb0f781",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 386,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "files",
+      "path": "src/syntax_checker.py",
+      "git_sha256": "556931b500fd9775e6115a6f6c26f28979602363aa0b8f350218bd268ab488e7",
+      "checkout_sha256": "4fd01c48f97a74fdc6a900aeae6612e0137c6a234b95e3f1d3e14a31b2281b60",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 1091,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "resources",
+      "path": "src/editor/qwebchannel.js",
+      "git_sha256": "0b03bff1a45322862a5fd1567a4b3a73f832b41213cdecdb123c618cca76b0e1",
+      "checkout_sha256": "d9f1cd083680fe93bc3f7013c145300184acbf2b31e41d874c6c6c6970622df5",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 456,
+      "checkout_crlf": 456,
+      "checkout_doubled_crlf": 456
+    },
+    {
+      "section": "resources",
+      "path": "src/assets/icons/app_chip.svg",
+      "git_sha256": "79bb27a428e382124256b921014706bcd8493d0089303d5d518ec93f42e226c0",
+      "checkout_sha256": "6bae1edd048b730f75ec87d0073ca15f826f6a156ce1bd80d1b40462fe547013",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 1,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "legacy_verifiers",
+      "path": "direct/verify_arduino_board_selection.py",
+      "git_sha256": "7021f5b97f3e605d884a5b09de7a6e06bc22ee3f6ecdaef2073b024cb7a09e5f",
+      "checkout_sha256": "7233e81ddfd1711e712a97ccd6a0b55aca5614f8995e6396444439ae518376ae",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 211,
+      "checkout_doubled_crlf": 0
+    },
+    {
+      "section": "legacy_verifiers",
+      "path": "direct/verify_build_console.py",
+      "git_sha256": "b52c8e5a08df9e0fc11fa3a5571e29667b7ba0def6a9c8bf4e73bb28495257fa",
+      "checkout_sha256": "48b969801bc5d3ea5c5d7bff3d9d2f610788559dde224b08ba611ac67af25d80",
+      "difference": "Line-ending variants only; identical after CR normalization",
+      "git_crlf": 0,
+      "checkout_crlf": 474,
+      "checkout_doubled_crlf": 0
+    }
+  ]
+}

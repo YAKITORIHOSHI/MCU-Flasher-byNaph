@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-10-19T11:34:57.488215+00:00",
+  "sourceCommit": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+  "scope": "Fixture-only prototype and pure reference comparisons; not full application or hardware qualification",
+  "host": {
+    "os": "Ubuntu",
+    "version": "26.04",
+    "architecture": "x86_64",
+    "display": "Checkout-local Xvfb; process-local Mesa settings for native Tauri check",
+    "packageInstallation": "Official Ubuntu xvfb/xserver-common packages extracted locally; no system install"
+  },
+  "command": "bash desktop/scripts/verify-local.sh",
+  "passed": true,
+  "checks": {
+    "frontendTests": 40,
+    "rustTests": 90,
+    "nativeWebviewChecks": 46,
+    "differentialCases": {
+      "serial": 325,
+      "preferences": 1335,
+      "scaffold": 16,
+      "resourceBudget": 8960,
+      "targetTransport": 13039,
+      "ownership": 234
+    },
+    "nativePty": true,
+    "clippyWarningsAsErrors": true,
+    "pythonWarningsAsErrors": true,
+    "fixtureLockInteropChecks": 8,
+    "ownershipPolicyCases": 234,
+    "nativeProcessIdentityChecks": 6,
+    "registrationInteropChecks": 9,
+    "registryRustTests": 21
+  },
+  "sourcePreservation": {
+    "baselineSourceFiles": 300,
+    "baselineResources": 133,
+    "baselinePythonVerifiers": 123,
+    "intentionalReferenceChanges": "reference-amendments.json",
+    "reusedAssetSources": 22,
+    "reusedAssetCopies": 25,
+    "reusedAssetByteChanges": 0
+  },
+  "qualificationsPending": [
+    "Windows 10/11 desktops",
+    "Physical Raspberry Pi 5",
+    "Native keyboard/IME/focus/clipboard/dialogs",
+    "Editor-only detach",
+    "Mixed monitor/fractional scaling manual checks",
+    "Toolchain/build/upload/serial integration",
+    "Live filesystem ownership and legacy coexistence",
+    "Cloud/security/vault integration",
+    "Package licenses and release installers",
+    "Native file identity and durable replacement recovery; coordinated live ownership and shared store roots"
+  ],
+  "targetTransportEquivalentComparisons": 51993,
+  "targetTransportStructuredRefusals": 163,
+  "legacyReferenceChecks": {
+    "runtimeTests": 46,
+    "qtMonacoRecoverySmoke": true,
+    "ptyLifecycle": 19,
+    "boardSearch": 25,
+    "customChooserEachScale": {
+      "tests": 19,
+      "passed": 18,
+      "windowsOnlySkip": 1,
+      "scales": [
+        1,
+        2
+      ]
+    },
+    "geometryEachScale": {
+      "tests": 2,
+      "scales": [
+        1,
+        1.75,
+        2
+      ]
+    },
+    "downloaderAppearanceEachScale": {
+      "tests": 17,
+      "scales": [
+        1,
+        2
+      ],
+      "warningsAsErrors": true
+    },
+    "downloaderPerformanceEachScale": {
+      "tests": 7,
+      "scales": [
+        1,
+        2
+      ],
+      "warningsAsErrors": true,
+      "scope": "Bounded work/caches/quiet idle, not an FPS or complete application performance benchmark"
+    },
+    "editorReviewEachScale": {
+      "tests": 12,
+      "passed": 12,
+      "scales": [
+        1,
+        2
+      ],
+      "secondScaleRenderer": "Verified Mesa OpenGL llvmpipe; Qt also initialized NVIDIA Vulkan",
+      "nativeNvidiaSecondScale": "Incomplete/timeouts; not qualified",
+      "gpuPerformanceQualified": false,
+      "evidence": "editor-review.json",
+      "display": "Checkout-local Xvfb for latest capture-guard suite; earlier 10-case physical-display evidence retained in editor-review.json"
+    }
+  },
+  "warnings": {
+    "latestPrototypeRun": "No observed warning/deprecation lines; Clippy/Python warnings denied",
+    "nativeDownloaderRuns": "No observed warning/deprecation lines",
+    "legacyQtRuntime": "Offscreen Qt emitted unsupported-platform-feature/Vulkan diagnostics; tests and native WebEngine smoke passed; no deprecation failures"
+  },
+  "windowsTargetCompilation": {
+    "host": "Linux x86_64",
+    "target": "x86_64-pc-windows-msvc",
+    "allHostTargets": true,
+    "clippyWarningsAsErrors": true,
+    "nativeExecution": false
+  },
+  "registryJsonIntegrity": {
+    "unknownValues": "Private validated JSON fragments retain original number/marker-object spelling",
+    "ownershipTimestamps": "Correctly rounded f64 parsing; original unchanged fields retained",
+    "genericSerdeRawValueFeatureAdded": false,
+    "remaining": "Tauri upstream enables raw_value globally; generic untrusted metadata must not go through Value"
+  }
+}

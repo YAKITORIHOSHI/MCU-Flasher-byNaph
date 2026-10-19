@@ -1,0 +1,8 @@
+{
+  "reference": "main/core/build_resources.py",
+  "cases": 8960,
+  "passed": true,
+  "hostProbes": false,
+  "settingsAccess": false,
+  "environmentWrites": false
+}

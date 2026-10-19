@@ -1,0 +1,8 @@
+{
+  "source": "src/assets/mcu_icon.ico",
+  "sourceSha256": "83ff0de254bdeb9445d3a52a0cffa45f3c5bef10cb9c870763614356925247c3",
+  "destination": "desktop/src-tauri/icons/icon.png",
+  "method": "Extract existing largest embedded PNG without changing pixels",
+  "pixels": 65536,
+  "destinationSha256": "ef860c5f733443e5d39619e15fb1349ec753527633b409a4a03df7ade5e3878b"
+}

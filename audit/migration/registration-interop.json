@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "reference": "main/core/config.py ownership schema and config_store.config_lock",
+  "platform": "linux",
+  "architecture": "x86_64",
+  "passed": true,
+  "checks": [
+    "python-transaction-lock-blocks-native-registration",
+    "simultaneous-claims-have-one-live-winner",
+    "registration-preserves-unrelated-python-records-and-fields",
+    "live-native-registration-blocks-peer-without-writing",
+    "native-query-reserves-live-python-port-owner",
+    "native-query-reserves-live-python-project-owner",
+    "release-rereads-and-preserves-concurrent-python-updates",
+    "confirmed-exited-owner-allows-reclaim-without-pruning-record",
+    "successful-and-released-transactions-leave-no-owned-staging"
+  ],
+  "checksPassed": 9,
+  "liveSettingsAccess": false,
+  "hardwareAccess": false,
+  "productionOwnershipQualified": false
+}

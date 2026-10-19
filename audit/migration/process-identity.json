@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "reference": "main/core/config.py:_own_create_time; psutil.Process.create_time",
+  "platform": "linux",
+  "architecture": "x86_64",
+  "passed": true,
+  "checks": [
+    "childIdentityMatches",
+    "reapedChildIsExited",
+    "selfIdentityAvailable",
+    "explicit-pid-matches-psutil",
+    "creation-epoch-matches-psutil",
+    "fixed-hold-release-exits-cleanly"
+  ],
+  "checksPassed": 6,
+  "psutilVersion": "7.1.0",
+  "createTimeDifferenceSeconds": 0.0,
+  "toleranceSeconds": 0.02,
+  "inventoryScans": false,
+  "liveSettingsAccess": false,
+  "hardwareAccess": false,
+  "productionOwnershipQualified": false
+}

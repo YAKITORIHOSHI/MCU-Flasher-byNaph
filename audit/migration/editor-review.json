@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "d68b50a46d995919a2bc8c6396f1ad8222971948",
+  "host": "Ubuntu 26.04 AMD64",
+  "passed": true,
+  "checks": [
+    {
+      "scale": 1,
+      "tests": 10,
+      "passed": 10,
+      "platform": "native XCB",
+      "renderer": "Default native environment",
+      "log": "logs/editor-review-viewport-native-100-final.log"
+    },
+    {
+      "scale": 2,
+      "tests": 10,
+      "passed": 10,
+      "platform": "native XCB",
+      "renderer": {
+        "renderer": "llvmpipe (LLVM 21.1.8, 256 bits)",
+        "vendor": "Mesa",
+        "version": "4.5 (Compatibility Profile) Mesa 26.0.8-1ubuntu0.3",
+        "softwareVerified": true,
+        "platform": "xcb",
+        "qtScale": 2,
+        "scope": "Temporary read-only offscreen GL diagnostic in the exact fixture environment; no GPU performance qualification"
+      },
+      "log": "logs/editor-review-viewport-native-200-mesa.log"
+    }
+  ],
+  "scope": "Contained Qt child viewport/DOM control and real model/focus/undo fixtures; no hardware GPU or full native input qualification",
+  "warnings": "No JS/Python warning in passing runs; GPUInfo startup diagnostics and NVIDIA Vulkan initialization remain; prior NVIDIA 200% attempts incomplete",
+  "captureGuardFollowup": {
+    "sourceCommit": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+    "testsPerScale": 12,
+    "scales": [
+      1,
+      2
+    ],
+    "passedPerScale": 12,
+    "display": "Checkout-local Xvfb with XCB",
+    "warnings": "Chromium shared-image-mailbox diagnostics in scale2 run; all assertions and console checks passed; no Python warning/deprecation failure",
+    "logs": [
+      "logs/editor-review-pathguard-native-1.log",
+      "logs/editor-review-pathguard-native-2.log"
+    ],
+    "windowsCi": {
+      "runId": 39179835907,
+      "bindings": [
+        "Python3.11/Qt6.7-6.11",
+        "Python3.14/Qt6.12+"
+      ],
+      "bothScales": true,
+      "conclusion": "success"
+    }
+  }
+}

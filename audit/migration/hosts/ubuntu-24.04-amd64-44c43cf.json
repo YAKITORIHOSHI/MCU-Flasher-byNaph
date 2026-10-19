@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "44c43cf4fe02fc7b1b2c17d89ca7b30fbecdbd0f",
+  "runner": "ubuntu-24.04",
+  "architecture": "x86_64",
+  "runId": 39122179721,
+  "jobId": 117659828385,
+  "jobConclusion": "success",
+  "evidenceUrl": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39122179721/job/117659828385",
+  "qualification": "Hosted native fixture prototype only; no physical USB/toolchain/desktop release qualification",
+  "report": {
+    "frontend": {
+      "checks": {
+        "bounded_fixture_stream": true,
+        "dirty_model_identity_survives_native_transfer": true,
+        "local_monaco_and_xterm": true,
+        "local_worker_asset_available": true,
+        "manifest_refresh_retains_model": true,
+        "model_edits_are_dirty": true,
+        "model_identity_survives_theme_layout_tabs": true,
+        "native_editor_worker_executed_and_replied": true,
+        "native_fixture_protocol": true,
+        "native_ipc_rejects_escaping_root": true,
+        "native_ipc_rejects_stale_save": true,
+        "native_read_matches_editor": true,
+        "native_save_ack_and_unicode_readback": true,
+        "native_scaffold_header": true,
+        "native_scaffold_includes_header_in_sketch_and_cpp": true,
+        "native_stream_ansi": true,
+        "native_stream_finished": true,
+        "native_stream_unicode": true,
+        "native_webview_transfer_three_cycles": true,
+        "ordered_channel": true,
+        "redo_history_available_after_native_transfer": true,
+        "redo_survives_theme_layout_tabs": true,
+        "reused_cpp_language_chunk_loaded": true,
+        "reused_diff_worker_computes_changes": true,
+        "root_source_manifest": true,
+        "undo_history_available_after_native_transfer": true,
+        "undo_survives_theme_layout_tabs": true,
+        "view_state_survives_native_transfer": true
+      },
+      "errors": [],
+      "nativeAdapter": true,
+      "protocolVersion": 1,
+      "schemaVersion": 1
+    },
+    "host": {
+      "architecture": "x86_64",
+      "os": "linux"
+    },
+    "native": true,
+    "passed": true,
+    "schemaVersion": 1
+  }
+}

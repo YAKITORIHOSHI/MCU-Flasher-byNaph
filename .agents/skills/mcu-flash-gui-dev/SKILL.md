@@ -10,6 +10,74 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 For explicitly requested assistant delegation, use the local
 [`agy-delegation`](../agy-delegation/SKILL.md) workflow for bounded investigation.
 
+## Rust/Tauri migration
+
+The parallel prototype lives in `desktop/`; the Python application remains the
+behavior reference and release entry point. Read `audit/migration/STATUS.md`,
+`audit/migration/parity.md` and `audit/migration/HANDOFF.md` before continuing.
+Preserve existing Monaco/xterm,
+fonts, icons, templates, target definitions and tool-runtime hooks. Full feature
+parity is required on Windows 10/11 AMD64 and Ubuntu 24.04+ AMD64/ARM64 before
+replacement. CI build/fixture results do not qualify desktop hardware support.
+
+Keep prototype filesystem writes inside its explicit `audit/migration/scratch/`
+sandbox; do not enable live workspace/settings/cloud/device operations until the
+ownership, filesystem-race, coexistence and native qualification gates pass.
+Core service ownership comes from the native window, never a renderer-supplied
+owner. The current whole-webview transfer probe is feasibility evidence only;
+editor-only detach, native keyboard/IME/focus and mixed-monitor behavior remain
+separate gates. Preserve fixed Firebase deployment and OS-vault account policy;
+embedded client configuration encryption does not replace server authorization.
+
+Use `bash desktop/scripts/verify-local.sh` on Ubuntu or
+`powershell -File desktop/scripts/verify-local.ps1` on Windows with the pinned
+toolchains and native prerequisites. Reference Python needs `psutil>=5.9,<8`
+for the native process and registration proofs. The fixtures compare serial
+decoding, settings merges, scaffold bytes, resource/transport decisions and
+ownership policy with the original Python functions without opening live
+settings, caches or hardware. Keep Rust Clippy warnings and Python warnings as
+errors. Reuse the owned Cargo target
+directory so probes cannot run stale binaries from an inherited target override.
+
+Migration audit material belongs in `audit/`, overriding the older `temp/audit/`
+convention for this work. Commit compact reports and handoffs; keep large logs,
+captures and scratch projects in its ignored subdirectories. Update audit and
+skills at the end of actual code/check work unless an earlier update is needed.
+
+The prototype also verifies BOM/mixed-newline source handling, fixed-child PTY
+renderer-to-host consumed-byte acknowledgements, four pure transport helpers,
+and isolated Rust/Python OS-lock interoperability. Pure ownership plans and
+locked registration fixtures now preserve legacy claims and concurrent updates.
+Gather native process/path evidence inside the same locked transaction on a
+worker. Only native `Exited` evidence frees a claim; all `Unknown` reasons,
+including `ZombieOrDead`, reserve it. Never equate that reason with the core's
+confirmed `NotRunning` evidence. These proofs do not enable live workspaces:
+the legacy PID-keyed schema represents one workspace per process, and
+checkout-local package event roots can point at one user-wide store. Resolve
+live activation/release, source-save leases, shared event roots and native file
+identity before promoting writes. Preserve original bytes for unchanged/undone
+source models; retain BOM during edits and disclose edited mixed-line-ending
+normalization.
+
+Preserve untouched native metadata as validated opaque JSON fragments; do not
+round large Python integers or reinterpret private-marker-shaped objects through
+`Value`. The registry uses private `IgnoredAny` boundaries and manual composition
+without requiring a direct `raw_value` feature declaration; known creation
+timestamps use `float_roundtrip`. Tauri transitively enables
+serde_json `raw_value`, so removing a direct feature declaration is insufficient.
+Keep caller-field validation, unknown-peer retention and reused-PID clearing.
+
+When hiding the legacy AI bar, move focus to Monaco or a visible toggle before
+setting `aria-hidden`; blur only if focus still remains inside the hidden bar.
+Native editor fixtures must size the child viewport, wait for bounded layout and
+preserve models/dirty buffers/focus. Record the actual OpenGL and Vulkan renderers:
+Mesa llvmpipe functional results do not qualify hardware GPU performance or
+prove that no GPU backend initialized. Keep native 100%/200% evidence separate
+from Tauri input and Windows/Pi desktop qualification.
+The editor-review capture guard accepts only resolved checkout `temp/` or
+`audit/migration/captures/` descendants; preserve root and nested-symlink escape
+refusals when adding CI capture paths.
+
 ## Native browser glass
 
 Native SVG action request heights include artwork and hit-area padding. Reserve
@@ -53,6 +121,14 @@ tables and state-image caches bounded. Verify these work/resource limits with
 `direct/verify_downloader_performance.py`, plus the native appearance matrix.
 Native fields and selected rows retain readable fills and existing
 callbacks, including one double-click action and modifier/drag selection.
+`DialogFit` must stop geometry/minimum writes for unchanged observed inputs,
+including when a window manager declines a correction. Keep a completed-input
+key covering work area, native frame/handle, client size, minimum and scale;
+changed inputs refit and failed native requests remain retryable. Never turn
+Configure feedback into a 60 ms idle loop. Native appearance checks verify
+unchanged writes, changed monitors and failed-request retries. Own selection,
+hover and visible rows before pixel/input fixture assertions; wait for bounded
+actual paint/layout completion instead of a delay shorter than the glass debounce.
 Rounded controls composite their corners over the current owner image; refresh
 their owner offsets on resizing, scrolling and theme changes. Keep quiet utility
 actions and one accented Download action;

@@ -1,0 +1,7 @@
+{
+  "reference": "main/core/serial_stream.py",
+  "cases": 325,
+  "passed": true,
+  "deviceAccess": false,
+  "retainedDecoderBytesMaximum": 3
+}

@@ -1,0 +1,12 @@
+{
+  "reference": "main/core/config.py::_instance_is_alive and port_occupied_owner token policy",
+  "cases": 234,
+  "livenessCases": 210,
+  "portCases": 17,
+  "structuredRefusals": 7,
+  "passed": true,
+  "settingsAccess": false,
+  "processDiscovery": false,
+  "deviceAccess": false,
+  "productionRegistrationQualified": false
+}

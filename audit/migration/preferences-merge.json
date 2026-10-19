@@ -1,0 +1,6 @@
+{
+  "reference": "main/core/config_store.py::merge_changes",
+  "cases": 1335,
+  "passed": true,
+  "settingsAccess": false
+}

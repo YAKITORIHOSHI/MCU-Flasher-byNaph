@@ -10,6 +10,39 @@
 
 [v10 release notes and verification limits](RELEASE_NOTES.md)
 
+The Rust/Tauri 2 migration is being developed alongside this Python release in
+[`desktop/`](desktop/). It currently provides a fixture-only Monaco/xterm native
+prototype and several tested Rust services. It does not yet replace the application.
+The latest code checkpoint, `4cf730b`, preserves untouched registry JSON fragments,
+including Python-sized integers and unknown nested objects, while comparing
+project/port ownership under the Python application's OS lock. Known process
+timestamps round-trip exactly. Local checks pass 90 Rust tests, 40 frontend tests,
+46 native webview checks and 23,909 pure comparison cases; separate lock, process
+and competing-registration fixtures pass 8, 6 and 9 checks. These proofs use
+disposable settings; live workspace registration and writes remain gated.
+At this revision, all three native prototype hosts pass 46 webview checks, and
+both Windows editor binding jobs pass 12 tests at 100% and 200%. The separate
+14-job compatibility, four-job layout and native ARM64 workflows also pass.
+Hosted runners do not qualify Windows 10/11 desktops or physical USB hardware.
+See the durable [migration status](audit/migration/STATUS.md),
+[feature ledger](audit/migration/parity.md), and
+[restart handoff](audit/migration/HANDOFF.md) for implemented work, evidence and
+remaining gates. Migration logs and disposable projects stay under `audit/`,
+outside `temp/`. Full feature and native-host parity is required before replacement.
+
+Downloader dialog fitting now avoids repeated geometry/minimum writes when the
+observed window and work area have not changed. This stops a Configure feedback
+loop when the window manager declines a correction, while retaining fitting after
+resizes and monitor changes. Native 100%/200% appearance and bounded-work checks
+pass; Windows revalidation remains recorded in the migration audit.
+
+Hiding the legacy editor's AI bar now transfers focus before hiding its focused
+controls. Native editor review and viewport fixtures pass 10/10 at 100% and 200%,
+retaining Monaco models, dirty buffers and focus through child-viewport changes.
+The 200% run verified Mesa OpenGL llvmpipe; NVIDIA hardware rendering at that
+scale remains incomplete and Vulkan startup was still observed. These are
+functional checks, without a GPU-free or performance qualification.
+
 First-run reliability: Bootstrap clears pre-install Python discovery caches before
 validating newly installed dependencies, including the Ubuntu launcher's post-setup
 check. This avoids false missing-package errors on coarse-timestamp storage while

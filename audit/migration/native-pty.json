@@ -1,0 +1,11 @@
+{
+  "ansi": true,
+  "architecture": "x86_64",
+  "host": "linux",
+  "nativePty": true,
+  "summary": {
+    "bytes": 639,
+    "exitCode": 0
+  },
+  "unicode": true
+}

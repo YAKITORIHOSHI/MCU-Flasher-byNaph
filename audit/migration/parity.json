@@ -1,0 +1,3426 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-19",
+  "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
+  "prototype_checkpoint_commit": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+  "scope": "Initial traced parity/reuse ledger. No legacy component is approved for replacement.",
+  "baseline_behavior_audit": "incomplete",
+  "performance_baseline": "pending",
+  "inventory": {
+    "files": 300,
+    "python_files": 280,
+    "lines": 141796,
+    "parse_errors": 0,
+    "legacy_verifiers": 123,
+    "resource_files": 133,
+    "resource_bytes": 4383952
+  },
+  "summary": {
+    "features": 67,
+    "partial_fixture_only": 13,
+    "pending": 54,
+    "mapped_legacy_verifiers": 128,
+    "groups": {
+      "workspace": 9,
+      "project": 6,
+      "editor": 6,
+      "analysis": 2,
+      "target": 5,
+      "build": 7,
+      "hardware": 4,
+      "serial": 4,
+      "terminal": 3,
+      "assistant": 3,
+      "cloud": 4,
+      "developer-portal": 3,
+      "resources": 5,
+      "packages": 1,
+      "setup": 5
+    }
+  },
+  "method": [
+    "AST structural inventory plus focused static call-path reads; no application imports/live settings/credentials/caches/hardware/cloud access for this audit.",
+    "Original paths/symbol lines and exact checkout-byte hashes are checked against source-inventory.json at legacy reference 1d00ff0. The original inventory remains intact; reference-amendments.json separately records production/verifier/CI changes through the current checkpoint. Inventory hashes are checkout bytes, not a claim that every row equals the corresponding Git blob.",
+    "Existing verifiers are behavioral references, not new proof of feature completion.",
+    "Recorded prototype evidence is limited to its explicit fixtures and exact host/checkpoint.",
+    "Sixteen duplicated inventory rows differ from the legacy Git blobs only by checkout line-ending variants, including mixed and doubled CRLF. Their current bytes still match the preserved original baseline hashes; content matches Git after removing CR. No baseline hash or source byte is rewritten to hide these differences."
+  ],
+  "prototype_evidence": {
+    "source_checkpoint": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+    "local_native": "audit/migration/native-webview.json",
+    "local_host": "Ubuntu 26.04 x86_64",
+    "local_checks": {
+      "rust": 90,
+      "frontend": 40,
+      "native_webview": 46,
+      "native_process_identity": 6,
+      "fixture_registration_interop": 9,
+      "fixture_lock_interop": 8,
+      "fixture_registry_rust": 21
+    },
+    "local_verification": "audit/migration/verification.json",
+    "meaning": "Fixture prototype, native read-only PID evidence and named pure-helper comparisons only. No full application, user-project mutation, live registration, installation, cloud, driver or physical USB qualification.",
+    "current_checkpoint_ci": "All five migration jobs passed at 4cf730b: three native prototype hosts (Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022) each passed 46 webview checks; both Windows original-editor binding jobs passed 12 tests at 100% and 200%. All 14 compatibility jobs, four native-layout jobs and the separate native ARM64 workflow also passed at this exact revision. See ci-results.json for exact job links. Hosted runners do not establish Windows 10/11 desktops or physical Pi/USB compatibility.",
+    "historical_ci": {
+      "checkpoint": "44c43cf",
+      "linux_amd64": "audit/migration/hosts/ubuntu-24.04-amd64-44c43cf.json",
+      "linux_arm64": "audit/migration/hosts/ubuntu-24.04-arm64-44c43cf.json",
+      "checks_per_report": 28
+    },
+    "pure_reference_cases": {
+      "serial": 325,
+      "preferences": 1335,
+      "scaffold": 16,
+      "resource_budget": 8960,
+      "target_transport": 13039,
+      "ownership": 234,
+      "total": 23909,
+      "ownership_breakdown": {
+        "liveness": 210,
+        "port_normalization": 17,
+        "structured_refusals": 7
+      },
+      "counting_note": "Case inputs, including seven explicit ownership refusals; target-transport comparison counts are separately reported and must not be summed as input cases."
+    },
+    "target_transport": {
+      "cases": 13039,
+      "equivalent_comparisons": 51993,
+      "structured_refusal_comparisons": 163,
+      "functions": [
+        "requires_upload_port",
+        "serial_upload_speed",
+        "upload_configuration",
+        "upload_target_ready"
+      ],
+      "validation_differences": [
+        {
+          "field": "info",
+          "comparisons": 64,
+          "reason": "Non-object target structures are explicitly refused."
+        },
+        {
+          "field": "upload_protocol",
+          "comparisons": 99,
+          "reason": "Truthy non-string protocols are refused rather than formatted as Python container/float representations in INI."
+        }
+      ],
+      "full_target_validation": "pending; target_problem, installed source/toolchain preparation, Arduino CLI proof and INI safety are not implemented by these four helpers"
+    },
+    "native_lock": {
+      "checks": 8,
+      "verified_host": "Current local Ubuntu 26.04 x86_64 and 4cf730b hosted Ubuntu 24.04 AMD64/ARM64 / Windows Server 2022 AMD64",
+      "evidence": "audit/migration/lock-interop.json",
+      "scope": "Eight explicit fixture OS file-lock checks interoperate with Python config_store.config_lock, including contention, release and process exit. No live settings/project/package/reset ownership or source-write authority is established."
+    },
+    "resource_budget": "audit/migration/resource-budget.json; 8960 pure differential cases. Host admission/discovery and runtime/storage integration remain pending.",
+    "qualified_prior_checkpoint": {
+      "checkpoint": "7dbefb58109f4f02e26a452f43d5c5fc4e40db6d",
+      "legacy_compatibility": {
+        "jobs": 14,
+        "result": "all passed"
+      },
+      "legacy_layout": {
+        "jobs": 4,
+        "result": "all passed"
+      },
+      "legacy_native_arm64": "passed",
+      "meaning": "Earlier exact-source regression evidence. It does not qualify new d68b50a JSON-fragment/float fixes or the original-page focus change."
+    },
+    "ownership_policy": {
+      "cases": 234,
+      "evidence": "audit/migration/ownership-parity.json",
+      "scope": "Pure PID/create_time liveness and port-token comparisons preserve valid legacy behavior, with seven deliberate malformed/ambiguous-input refusals. Claim planning preserves unrelated records, reserves uncertain peers, refuses unverifiable current ownership and enforces one workspace per process; no live registration."
+    },
+    "native_process_identity": {
+      "checks": 6,
+      "verified_host": "Current local Ubuntu 26.04 x86_64 and 4cf730b hosted Ubuntu 24.04 AMD64/ARM64 / Windows Server 2022 AMD64",
+      "evidence": "audit/migration/process-identity.json",
+      "scope": "Six read-only own/fixed-child PID/create_time checks against psutil. All three 4cf730b native jobs passed native execution. Inaccessible, zombie and changed identities remain uncertain; point-in-time evidence is not a lease."
+    },
+    "fixture_registration": {
+      "checks": 9,
+      "verified_host": "Current local Ubuntu 26.04 x86_64 and 4cf730b hosted Ubuntu 24.04 AMD64/ARM64 / Windows Server 2022 AMD64",
+      "evidence": "audit/migration/registration-interop.json",
+      "scope": "Nine checks for fixed settings.json under explicit audit scratch scope: fresh evidence gathering while holding the interoperable OS lock, contention, collision, unrelated-field preservation, no-op bytes/mtime, safe refusal and release. Twenty-one Rust registry tests cover the controlled implementation. Private validated JSON fragments preserve huge integer spelling, floating values and nested serde marker-shaped objects without passing opaque data through Value. No live settings import, GUI activation or source-write authority."
+    },
+    "local_display": "Checkout-local Xvfb with process-local Mesa settings for the native Tauri fixture. This is a virtual X server, not physical GPU or native keyboard/IME qualification.",
+    "fixture_registry_json_integrity": {
+      "rust_tests": 21,
+      "unknown_values": "Private validated JSON fragments are composed with serialized keys and fixed delimiters; untouched numbers and nested private-marker-shaped objects retain their spelling without conversion through serde_json::Value.",
+      "ownership_timestamps": "serde_json float_roundtrip parsing preserves Python f64 creation-time comparisons; unchanged ownership fields retain their original spelling.",
+      "feature_boundary": "This does not enable generic raw_value serialization for untrusted metadata; Tauri already enables raw_value upstream, so opaque values must avoid Value.",
+      "ci_scope": "The d68b50a native Windows Server and Ubuntu ARM64 jobs passed; exact source/run results belong in ci-results.json."
+    },
+    "legacy_original_editor": {
+      "evidence": "audit/migration/editor-review.json",
+      "source_checkpoint": "d68b50a46d995919a2bc8c6396f1ad8222971948",
+      "scope": "Production original-page AI-bar focus fallback plus contained Qt child-viewport, DOM controls, real Monaco model/focus/undo fixtures. Full input/physical-GPU behavior remains unqualified.",
+      "passing_at_checkpoint": [
+        {
+          "scale": 1,
+          "tests": 10,
+          "passed": 10,
+          "platform": "native XCB",
+          "renderer": "Default native environment"
+        },
+        {
+          "scale": 2,
+          "tests": 10,
+          "passed": 10,
+          "platform": "native XCB",
+          "renderer": "Verified Mesa OpenGL llvmpipe software rendering; Qt also initialized NVIDIA Vulkan"
+        }
+      ],
+      "capture_guard_followup": {
+        "source_checkpoint": "4cf730baf4db3399e16017bbb17abbb2419b126b",
+        "tests_per_scale": 12,
+        "scales": [
+          1,
+          2
+        ],
+        "passed_per_scale": 12,
+        "display": "Native XCB on checkout-local Xvfb; scale 2 used software-renderer settings. Virtual-display evidence, not physical GPU qualification.",
+        "logs": [
+          "logs/editor-review-pathguard-native-1.log",
+          "logs/editor-review-pathguard-native-2.log"
+        ],
+        "warnings": "Scale 2 exited successfully with Chromium shared-image-mailbox startup/teardown diagnostics; no JavaScript/Python warning, deprecation or test failure.",
+        "scope": "Two capture-path containment tests plus the ten original-page DOM/model/focus/undo checks. Both Windows binding ranges also passed the full suite at both scales at 4cf730b."
+      },
+      "physical_gpu_qualified": false
+    },
+    "current_checkpoint": "A fresh full local 90-Rust/40-frontend/46-native run passed at 4cf730b, alongside strict Clippy/Python checks and all reference probes."
+  },
+  "contracts": {
+    "api_inventory": "source-inventory.json files/classes/methods includes all discovered public MCUWebBackendAPI and EditorBridgeAPI methods/signatures/decorators. These are not a direct Tauri capability allowlist.",
+    "event_inventory": "source-inventory.json backend_events and editor_javascript_interfaces preserve named legacy events and candidate renderer exports/calls; computed/minified interfaces need additional review.",
+    "command_completion": "run_action dispatch acknowledgement is not operation completion; preserve scoped queued events and save/renderer/cloud tokens.",
+    "target_scope": "Dynamic installed PlatformIO definitions, downloaded declarations, custom exact associations, all declared frameworks and programmer/native transports. Initial physical boards/default plan do not constrain final scope.",
+    "arduino_cli": "Current explicit prepared routing only UNO Q and Pico2/RP2350; preserve source/FQBN/menu readiness proof.",
+    "serial_send_limits": {
+      "message_bytes": 65536,
+      "active_pending_bytes": 262144,
+      "messages": 16,
+      "driver_timeout_seconds": 1
+    },
+    "cloud_limits": {
+      "files": 128,
+      "file_bytes": 1048576,
+      "source_bytes": 4194304,
+      "revisions": 20,
+      "history_bytes": 16777216,
+      "sketches": 100
+    },
+    "known_no_serial_port_protocols": [
+      "stlink",
+      "jlink",
+      "cmsis-dap",
+      "dfu",
+      "picotool",
+      "mbed",
+      "uf2",
+      "teensy-cli",
+      "teensy-gui",
+      "micronucleus",
+      "wch-link",
+      "nrfjprog",
+      "atmel-ice",
+      "usbasp",
+      "usbtiny"
+    ],
+    "offline": "Package preparation policy is separate from fixed Firebase and explicit user-shell networking.",
+    "data": "Sanitized fixtures only; preserve source bytes, settings, protected journal/cache/IDE trees and old release until native coexistence/rollback is proven.",
+    "cross_version_ownership": {
+      "fixture_os_lock": "desktop/crates/host/src/fixture_lock.rs and fixture_registry.rs provide only explicit fixture OS locking and legacy-shaped registration transactions. claim_with gathers controlled evidence under the lock. They do not publish live ownership or guard source writes.",
+      "legacy_project_protocol": "main/core/config.py keys instances by PID and records one active sketch directory per process. The pure port preserves the legacy strict <2-second creation-time comparison and reserves uncertain peers; this tolerance is not proof of unique identity. The fixture planner supports one workspace per process, requires explicit release before replacing it, and refuses unverifiable current ownership. Production registration/activation and save-time revalidation remain pending; multiple workspace windows in one Tauri process are unsupported by this schema.",
+      "package_namespace": "src/modules/package_jobs.py defaults event/lease roots to the checkout logs/package-jobs, while Linux PlatformIO core storage is per user. Separate checkouts can therefore address the same store with distinct default lease roots. A shared store identity and interoperable legacy/new writer protocol remain unresolved.",
+      "source_write_gate": "Native handle-relative root identity, external-writer races, ACL/xattr preservation and user-project coexistence remain release blockers.",
+      "native_process_evidence": "Linux /proc start ticks plus boot epoch and Windows FILETIME queries produce read-only identity evidence. Host Unknown(ZombieOrDead) represents zombie uncertainty and must never map to core NotRunning/Exited. Recollect evidence under the ownership transaction; snapshots alone do not protect future source writes."
+    }
+  },
+  "open_gates": [
+    "Complete per-feature call-path/failure audit and sanitized schema fixtures; current structural audit is not exhaustive.",
+    "Measure legacy and prototype startup, process-tree RAM/idleCPU, scroll/search/resize and serial/PTY throughput on representative4/6core/Pi hosts.",
+    "Qualify supported webview ownership APIs; current transfer uses Tauri unstable feature.",
+    "Qualify production PID registration/activation and save-time revalidation with the legacy <2-second tolerance, a one-workspace-per-process strategy, project/port/reset locks, and package event/lease namespace versus shared Linux store identity. Fixture ownership/PID/transaction checks do not resolve native directory identity, external-writer/TOCTOU races, ACL/xattr preservation, crash durability or cross-version coexistence before user-project writes.",
+    "Native Windows10/11, Ubuntu24.04/26.04AMD64/ARM64, toolchain ABI and exact physical board/programmer evidence remain separate gates.",
+    "Confirm Nano revision/bootloader, ESP8266 model and Windows version/USB access before physical sessions.",
+    "Verify secure-store compatibility and deployed Firebase rules/API restrictions; bundled client identity is not an unextractable secret.",
+    "Complete full feature/UI/settings/Cloud/AI/downloader/build/upload/reset parity, packaging/signing/upgrade/rollback and asset license review."
+  ],
+  "unassigned_python_verifiers": [],
+  "unassigned_note": "All 123 inventoried Python verifier files are assigned to a feature area, alongside five JavaScript references. This is script-level mapping, not proof that every case/branch has been traced or run.",
+  "features": [
+    {
+      "id": "UI-01",
+      "group": "workspace",
+      "feature": "Startup and background discovery",
+      "original_sources": [
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "showEvent",
+          "line": 173
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "start_services",
+          "line": 644
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_runtime.py",
+        "direct/verify_performance.py",
+        "direct/verify_gui_lifetime.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Show workspace before discovery; start bounded workers afterward.",
+      "failure_race_contract": "Slow source/tool storage cannot block GUI or invent board/port selection.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "UI-02",
+      "group": "workspace",
+      "feature": "Glass themes, fonts, icons and readable controls",
+      "original_sources": [
+        {
+          "path": "main/qt/theme.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/core/theme.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/ui_palette.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/assets/icons/actions/add.svg",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_theme_readability.py",
+        "direct/verify_svg_icons.py",
+        "direct/verify_panel_readability.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Retain default/light/Solarized tokens, SVG family, content fonts and keyboard accessibility.",
+      "failure_race_contract": "Theme/scale retains drafts/focus; all normal/disabled/hover/selection text remains readable.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/ui/src/styles.css",
+          "desktop/ui/src/themes.ts",
+          "desktop/scripts/stage-assets.mjs"
+        ],
+        "implemented_subset": "Initial static glass/theme tokens and selected existing assets only; complete UI/accessibility/auxiliary palette parity pending.",
+        "evidence": [],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "UI-03",
+      "group": "workspace",
+      "feature": "Scaling, screen fit, splitters and compact rows",
+      "original_sources": [
+        {
+          "path": "main/qt/responsive.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "resizeEvent",
+          "line": 194
+        },
+        {
+          "path": "src/modules/ui_metrics.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_responsive.py",
+        "direct/verify_ui_layout.py",
+        "direct/verify_controls.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Use logical sizing, monitor work-area frames and scrolling/reflow; retain pane visibility and toolbar restore.",
+      "failure_race_contract": "No double DPI, blank underpaint, clipped pinned actions, or model/session reload during resize.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "legacy_reference_amendment": "reference-amendments.json: src/modules/tk_glass.py::DialogFit._fit now deduplicates unchanged fitting writes while retaining the complete work-area matrix; legacy regression evidence is separate from Rust feature parity."
+    },
+    {
+      "id": "UI-04",
+      "group": "workspace",
+      "feature": "Detach and reattach live editor",
+      "original_sources": [
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "detach_editor",
+          "line": 1484
+        },
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "attach_editor",
+          "line": 1532
+        },
+        {
+          "path": "main/qt/detached_editor.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_runtime.py",
+        "direct/verify_editor_review_ui.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Preserve dirty active/inactive Unicode models, tab order, focus, selection, view state and undo/redo.",
+      "failure_race_contract": "Live-model ownership must survive repeated native transfers; text copying alone is insufficient.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/src-tauri/src/main.rs#verify_webview_transfer",
+          "desktop/ui/src/probe.ts"
+        ],
+        "implemented_subset": "Fixture native webview transfer retains model identity, undo/redo and view state for three cycles. Uses Tauri unstable reparenting; production window/focus/recovery/full-machine qualification pending.",
+        "evidence": [
+          "audit/migration/native-webview.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "UI-05",
+      "group": "workspace",
+      "feature": "Shortcuts, actions and busy revalidation",
+      "original_sources": [
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "_shortcut_compile",
+          "line": 1183
+        },
+        {
+          "path": "main/qt/toolbar.py",
+          "symbol": "ControlsBar",
+          "line": 1401
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "run_action",
+          "line": 2477
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_actions.py",
+        "direct/verify_controls.py",
+        "direct/verify_cursor.py",
+        "direct/verify_ubuntu_event_filters.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Retain compile/upload/save/save-all/project/search shortcuts and detached routing.",
+      "failure_race_contract": "Revalidate busy/target on dispatch; terminal input must not trigger workspace shortcuts.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "UI-06",
+      "group": "workspace",
+      "feature": "Settings transactions and preferences",
+      "original_sources": [
+        {
+          "path": "main/core/config.py",
+          "symbol": "_save_raw_config",
+          "line": 185
+        },
+        {
+          "path": "main/core/config_store.py",
+          "symbol": "merge_changes",
+          "line": 23
+        },
+        {
+          "path": "main/qt/settings_dialog.py",
+          "symbol": "_save_and_apply",
+          "line": 836
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_preferences.py",
+        "direct/verify_sessions.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Preserve instances/shared merge, fonts/themes/system mode, CPU mode, warnings, autosave and baud/offline options.",
+      "failure_race_contract": "Failed save remains visible/unapplied; stale snapshots cannot overwrite concurrent settings.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/preferences.rs#merge_changes",
+          "desktop/scripts/verify-preferences-merge.py",
+          "desktop/crates/host/src/fixture_registry.rs",
+          "desktop/scripts/verify-registry.py"
+        ],
+        "implemented_subset": "Pure snapshot merge: 1335 differential cases, including correctly rounded floating-point comparison. Explicit fixture settings.json transactions acquire the interoperable OS lock, read fresh JSON, gather supplied evidence under lock and replace only granted changed plans. Private validated JSON fragments preserve huge integer/float spellings and nested private-marker-shaped objects without converting opaque metadata through Value; 21 Rust registry tests and nine interop checks cover this subset. Production settings import/persistence/UI integration and failed-save presentation remain pending.",
+        "evidence": [
+          "audit/migration/preferences-merge.json",
+          "audit/migration/registration-interop.json",
+          "audit/migration/lock-interop.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "UI-07",
+      "group": "workspace",
+      "feature": "Independent projects and cross-process activation",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "open_project_window",
+          "line": 2670
+        },
+        {
+          "path": "main/qt/project_activation.py",
+          "symbol": "install_activation_server",
+          "line": 7
+        },
+        {
+          "path": "main/core/config.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_sessions.py",
+        "direct/verify_projects.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Independent windows own different sketches; focus existing owner without replacing dirty buffers.",
+      "failure_race_contract": "Legacy/new project/port/package/reset locks must interoperate or refuse mutation.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/ownership.rs",
+          "desktop/crates/host/src/process_identity.rs",
+          "desktop/crates/host/src/fixture_registry.rs",
+          "desktop/scripts/verify-ownership.py",
+          "desktop/scripts/verify-process-identity.py",
+          "desktop/scripts/verify-registry.py"
+        ],
+        "implemented_subset": "Pure liveness/port-token comparison has 234 inputs including seven typed refusals; claim plans preserve unrelated records and enforce one workspace per process. Native own/fixed-child creation-time evidence has six psutil checks; nine fixture registration checks and 21 Rust registry tests cover locked fresh-snapshot decisions, contention, refusal, release, exact untouched JSON value preservation and retained unrelated values. Native Windows Server and Ubuntu ARM64 execution passed at d68b50a. No production registration/activation, source-write ownership, multiwindow schema extension or live cross-version coexistence is qualified. Native identity/TOCTOU/ACL/store coordination and legacy <2-second tolerance remain gates.",
+        "evidence": [
+          "audit/migration/ownership-parity.json",
+          "audit/migration/process-identity.json",
+          "audit/migration/registration-interop.json",
+          "audit/migration/lock-interop.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "fixture_feasibility": {
+        "sources": [
+          "desktop/crates/host/src/fixture_lock.rs",
+          "desktop/scripts/verify-lock-interop.py"
+        ],
+        "checks": 8,
+        "verified_host": "Current local Ubuntu 26.04 x86_64 and 4cf730b hosted Ubuntu 24.04 AMD64/ARM64 / Windows Server 2022 AMD64",
+        "scope": "Explicit OS settings-lock interop only. The additional ownership/PID/registry subset is described in prototype_scope; no live project/package/reset or source-write authority."
+      }
+    },
+    {
+      "id": "UI-08",
+      "group": "workspace",
+      "feature": "Close, Stop and repair/restart handoff",
+      "original_sources": [
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "closeEvent",
+          "line": 1743
+        },
+        {
+          "path": "main/qt/main_window.py",
+          "symbol": "restart_for_runtime_repair",
+          "line": 1200
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "stop_operation",
+          "line": 9515
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_operation_close.py",
+        "direct/verify_operation_lifecycle.py",
+        "direct/verify_runtime.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Wait for save acknowledgement and captured worker/child shutdown before safe restart/close.",
+      "failure_race_contract": "No close during writing/erase; stale delayed callback cannot kill a later session.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "UI-09",
+      "group": "workspace",
+      "feature": "Notifications, history, telemetry and log budgets",
+      "original_sources": [
+        {
+          "path": "main/qt/notif_panel.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/signals.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "emit",
+          "line": 795
+        },
+        {
+          "path": "main/qt/garbage_collection.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_notification_persistence.py",
+        "direct/verify_notification_writes.py",
+        "direct/verify_gui_lifetime.py",
+        "direct/verify_qt_binding_lifetime.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "workspace Rust service/shared UI",
+      "acceptance": "Retain IDs/categories/details/history, bounded queued output and worker/timer lifetime.",
+      "failure_race_contract": "Persistence warning cannot recurse; no unbounded event/history growth or hidden repaint loops.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PRJ-01",
+      "group": "project",
+      "feature": "Existing/new/recent/cloud selector and disposal",
+      "original_sources": [
+        {
+          "path": "main/qt/project_dialog.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "open_project",
+          "line": 2552
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "validate_existing_project_folder",
+          "line": 2511
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_projects.py",
+        "direct/verify_cloud_sketch_ui.py",
+        "direct/verify_project_file_lifecycle.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "project Rust service/shared UI",
+      "acceptance": "Preserve every selector mode and dispose preview/foreground work after successful activation.",
+      "failure_race_contract": "Reject app/nonproject root before metadata; cancel leaves current buffers/target unchanged.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PRJ-02",
+      "group": "project",
+      "feature": "Create-only scaffold and checked header includes",
+      "original_sources": [
+        {
+          "path": "main/core/project_scaffold.py",
+          "symbol": "create_project_scaffold",
+          "line": 15
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "create_project",
+          "line": 2832
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_projects.py",
+        "direct/verify_project_file_lifecycle.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "project Rust service/shared UI",
+      "acceptance": "Retain standard/bare/Blink bytes, native EOL and optional exact .h include in .ino and optional .cpp.",
+      "failure_race_contract": "Refuse existing folder; .cpp stays empty without .h; never overwrite user project.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/lib.rs#ProjectService::create_project",
+          "desktop/scripts/verify-scaffold.py"
+        ],
+        "implemented_subset": "Fixture create-only standard/bare/Blink/header generation;16 legacy differential cases. Windows native EOL implementation exists; native target qualification is separate.",
+        "evidence": [
+          "audit/migration/scaffold-parity.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PRJ-03",
+      "group": "project",
+      "feature": "Root manifests, source reads and acknowledged saves",
+      "original_sources": [
+        {
+          "path": "main/core/file_utils.py",
+          "symbol": "get_project_root_source_files",
+          "line": 1473
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "read_file",
+          "line": 1121
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "save_file",
+          "line": 1135
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "finish_save_request",
+          "line": 101
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_storage_io.py",
+        "direct/verify_cloud_editor_manifest.py",
+        "direct/verify_runtime.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "project Rust service/shared UI",
+      "acceptance": "Keep root .ino/.cpp/.c/.h/.hpp/.txt scope, strict scans, exact source bytes and real save result.",
+      "failure_race_contract": "Read failure is not empty project; escaped/symlink/protected paths and stale renderer writes refused.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/lib.rs#ProjectService",
+          "desktop/crates/core/tests/project_service.rs",
+          "desktop/src-tauri/src/main.rs"
+        ],
+        "implemented_subset": "Fixture-owned scoped manifests/read/save/conflicts/acknowledgement. Preserves original BOM and mixed-newline bytes for unchanged/undo-restored models; actual edited saves retain the Monaco model BOM and disclosed model EOL. In-process project ownership only; the separate fixture OS lock is not integrated into source writes. Root identity, external-writer races, ACL/xattr preservation and legacy project/port/package/reset protocols remain unresolved.",
+        "evidence": [
+          "audit/migration/native-webview.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PRJ-04",
+      "group": "project",
+      "feature": "Targeted Modify Add/Rename/Delete and AI context",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "add_project_file",
+          "line": 2386
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "rename_project_file",
+          "line": 2418
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "delete_project_file",
+          "line": 2449
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "_project_files_changed",
+          "line": 2361
+        },
+        {
+          "path": "src/editor/project_files.js",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_project_file_lifecycle.py",
+        "direct/verify_prompt_sources.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "project Rust service/shared UI",
+      "acceptance": "Reconcile affected tabs/manifest only; retain unrelated models/undo/order, PTYs, logs and target.",
+      "failure_race_contract": "Dirty affected rename/delete or pending AI review refuses mutation; discard stale generations.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PRJ-05",
+      "group": "project",
+      "feature": "Recent history, native pickers and folder opening",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "get_recent_projects",
+          "line": 2867
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "clear_recent_projects",
+          "line": 2871
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "open_file_picker",
+          "line": 2772
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "open_in_explorer",
+          "line": 2880
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_projects.py",
+        "direct/verify_actions.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "project Rust service/shared UI",
+      "acceptance": "Keep explicit recent clearing, selected source, native chooser and Explorer/file-manager flow.",
+      "failure_race_contract": "Invalid root/failed launch does not adopt ownership or replace project.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PRJ-06",
+      "group": "project",
+      "feature": "Metadata, generated instructions and safe Clean",
+      "original_sources": [
+        {
+          "path": "main/core/file_utils.py",
+          "symbol": "ensure_hidden_read_first_md",
+          "line": 1238
+        },
+        {
+          "path": "main/core/file_utils.py",
+          "symbol": "hide_internal_project_metadata",
+          "line": 1539
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "clean_cache",
+          "line": 9378
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_hygiene.py",
+        "direct/verify_storage_io.py",
+        "direct/verify_operation_lifecycle.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "project Rust service/shared UI",
+      "acceptance": "Retain generated-file ownership/attributes and exact selected cleanup boundaries.",
+      "failure_race_contract": "Never delete user sources/settings/AI journals or another live cache; avoid equal-content writes.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "ED-01",
+      "group": "editor",
+      "feature": "Offline Monaco bundle, workers and font",
+      "original_sources": [
+        {
+          "path": "src/editor/index.html",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/editor/bundle.js",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/editor/18.bundle.js",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/editor/editor.worker.js",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_editor_resources.js",
+        "direct/verify_editor_review_ui.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "editor Rust service/shared UI",
+      "acceptance": "Reuse pinned bundle/lazy language chunk/worker/font via narrow host adapter.",
+      "failure_race_contract": "Missing/CSP/worker errors remain actionable; no CDN fallback or bundled-source rewrite.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/scripts/stage-assets.mjs",
+          "desktop/ui/src/monaco-host.ts"
+        ],
+        "implemented_subset": "Existing bundle/chunk/worker/font and xterm are copied byte-identically; packaged fixture actually executes worker/diff/language cases. Full original editor host behavior pending.",
+        "evidence": [
+          "audit/migration/native-webview.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "ED-02",
+      "group": "editor",
+      "feature": "Models, tab order, dirty snapshots and renderer recovery",
+      "original_sources": [
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "begin_renderer_load",
+          "line": 407
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "update_renderer_buffer",
+          "line": 382
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "complete_renderer_recovery",
+          "line": 418
+        },
+        {
+          "path": "src/editor/project_files.js",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_editor_recovery.js",
+        "direct/verify_runtime.py",
+        "direct/verify_project_file_lifecycle.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "editor Rust service/shared UI",
+      "acceptance": "Retain document identity and acknowledged edit/save/reload revision across renderer recovery.",
+      "failure_race_contract": "Incomplete recovery stays locked; stale project/renderer replies cannot overwrite dirty buffers.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/ui/src/document-store.ts",
+          "desktop/ui/src/document-store.test.ts"
+        ],
+        "implemented_subset": "Fixture models preserve dirty state, editRevision, identity, undo/redo and view state through saves/layout/themes/tabs/manifest refresh. Original BOM/mixed-EOL bytes remain exact on unchanged or undo-restored saves; edited mixed-EOL content uses the disclosed Monaco model EOL. Delayed save acknowledgement uses the captured model baseline so later edits remain dirty. Crash/recovery/source lifecycle/AI/cloud and native keyboard/IME/focus parity remain pending.",
+        "evidence": [
+          "audit/migration/native-webview.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "legacy_reference_amendment": "reference-amendments.json: original editor AI-bar hide moves focus to Monaco, then its visible toggle, then blurs a still-focused hidden descendant. Original-page DOM/focus/model/undo fixtures passed 10/10 at native XCB 100% and Mesa OpenGL llvmpipe 200%. A contained Qt child viewport avoids window-manager minimum-size interference. This is a legacy source fix and fixture evidence, not complete Tauri AI/editor parity or physical GPU/input qualification. At 4cf730b, the two capture-path guard tests plus those ten UI cases passed 12/12 at both scales on checkout-local Xvfb; this does not replace physical-display/GPU or full native input qualification."
+    },
+    {
+      "id": "ED-03",
+      "group": "editor",
+      "feature": "Autosave, reload and language preferences",
+      "original_sources": [
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "trigger_save_all",
+          "line": 1012
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "trigger_reload",
+          "line": 1055
+        },
+        {
+          "path": "src/editor/index.html",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_editor_preferences.js",
+        "direct/verify_editor_c.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "editor Rust service/shared UI",
+      "acceptance": "Preserve autosave delay, explicit reload, C vs C++ grammar, snippets/braces and per-model indentation.",
+      "failure_race_contract": "Failed saves retain dirty text; first lazy C load cannot replace C grammar or duplicate completions.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "ED-04",
+      "group": "editor",
+      "feature": "Coalesced layout, worker replies and diagnostic navigation",
+      "original_sources": [
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "force_layout",
+          "line": 1261
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "goto_diagnostic",
+          "line": 1173
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "goto_location",
+          "line": 1185
+        },
+        {
+          "path": "src/editor/index.html",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_editor_layout_scheduling.js",
+        "direct/verify_syntax_navigation.py",
+        "direct/verify_editor_review_ui.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "editor Rust service/shared UI",
+      "acceptance": "One layout per frame, correct CSS/DPR, exact canonical model/UTF16 range reveal-at-top.",
+      "failure_race_contract": "No canvas resize recursion, wrong-tab range, or stale worker completion; paint requires native evidence.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "ED-05",
+      "group": "editor",
+      "feature": "Find All over dirty root snapshots",
+      "original_sources": [
+        {
+          "path": "main/qt/project_search.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "show_project_search",
+          "line": 1206
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_project_search.py",
+        "direct/verify_slow_storage_flow.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "editor Rust service/shared UI",
+      "acceptance": "Literal/case/word search overlays dirty sources, supports F3 cycling, bounds bytes/files/results.",
+      "failure_race_contract": "One worker and latest query; stuck storage watchdog must not launch unbounded replacement workers.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "ED-06",
+      "group": "editor",
+      "feature": "AI diff bars, review decisions and visibility",
+      "original_sources": [
+        {
+          "path": "main/core/ai_review.py",
+          "symbol": "build_ai_line_diff",
+          "line": 41
+        },
+        {
+          "path": "src/editor/index.html",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/ai_changes_panel.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ai_line_diff.py",
+        "direct/verify_editor_review_ui.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "editor Rust service/shared UI",
+      "acceptance": "Retain correct added/removed/shared line semantics, compact decision/history bars and independent hide state.",
+      "failure_race_contract": "Hiding never resolves review; new pending reopens; theme recolors current ranges without replay.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "legacy_reference_amendment": "reference-amendments.json: original editor AI-bar hide moves focus to Monaco, then its visible toggle, then blurs a still-focused hidden descendant. Original-page DOM/focus/model/undo fixtures passed 10/10 at native XCB 100% and Mesa OpenGL llvmpipe 200%. A contained Qt child viewport avoids window-manager minimum-size interference. This is a legacy source fix and fixture evidence, not complete Tauri AI/editor parity or physical GPU/input qualification. At 4cf730b, the two capture-path guard tests plus those ten UI cases passed 12/12 at both scales on checkout-local Xvfb; this does not replace physical-display/GPU or full native input qualification."
+    },
+    {
+      "id": "SYN-01",
+      "group": "analysis",
+      "feature": "Bounded syntax checks and source snapshots",
+      "original_sources": [
+        {
+          "path": "src/syntax_checker.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "realtime_check_syntax",
+          "line": 273
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "realtime_check_syntax",
+          "line": 9607
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_syntax_checker.py",
+        "direct/verify_syntax_navigation.py",
+        "direct/verify_performance.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "analysis Rust service/shared UI",
+      "acceptance": "Preserve structural/probable-terminator diagnostics and content-bound caches off GUI.",
+      "failure_race_contract": "Not compiler/type resolution; reject stale snapshots; retain source/project/token/nesting/diagnostic bounds.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SYN-02",
+      "group": "analysis",
+      "feature": "Target declarations, GPIO/library compatibility and ranking",
+      "original_sources": [
+        {
+          "path": "main/core/board_compat.py",
+          "symbol": "detect_board_compatibility",
+          "line": 318
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "filter_compatible_devices",
+          "line": 2355
+        },
+        {
+          "path": "main/core/target_profile.py",
+          "symbol": "target_problem",
+          "line": 11
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_board_declarations.py",
+        "direct/verify_board_families.py",
+        "direct/verify_board_search.py",
+        "direct/verify_target_resolution.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "analysis Rust service/shared UI",
+      "acceptance": "Preserve declared architecture/framework constraints, reasons and warning-confirmation severity.",
+      "failure_race_contract": "Chip/family hint cannot choose exact development board; unknown/ambiguous target refuses unsafe writes.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "TGT-01",
+      "group": "target",
+      "feature": "Dynamic installed and downloaded board catalog",
+      "original_sources": [
+        {
+          "path": "main/core/board_catalog.py",
+          "symbol": "load_dynamic_boards",
+          "line": 1269
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "refresh_board_catalog",
+          "line": 681
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_board_declarations.py",
+        "direct/verify_board_index_targets.py",
+        "direct/verify_board_search.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "target Rust service/shared UI",
+      "acceptance": "Retain every installed PlatformIO definition, Arduino declaration and explicit custom source mapping.",
+      "failure_race_contract": "Initial four physical boards/default packs are not final scope; a catalog row is not readiness proof.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "TGT-02",
+      "group": "target",
+      "feature": "All declared frameworks and programmer transports",
+      "original_sources": [
+        {
+          "path": "main/core/target_profile.py",
+          "symbol": "target_problem",
+          "line": 11
+        },
+        {
+          "path": "main/core/target_profile.py",
+          "symbol": "requires_upload_port",
+          "line": 73
+        },
+        {
+          "path": "main/core/target_profile.py",
+          "symbol": "upload_configuration",
+          "line": 100
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_target_resolution.py",
+        "direct/verify_board_families.py",
+        "direct/verify_board_preparation.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "target Rust service/shared UI",
+      "acceptance": "Preserve exact platform/board/framework/protocol and manifest nonserial transport handling.",
+      "failure_race_contract": "Unsupported/ambiguous framework refuses before write; .ino requires Arduino; unknown transport requires port.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/target_transport.rs",
+          "desktop/crates/host/src/bin/target_probe.rs",
+          "desktop/scripts/verify-target-transport.py"
+        ],
+        "implemented_subset": "Four pure target_profile helpers only: requires_upload_port, serial_upload_speed, upload_configuration and upload_target_ready. 13039 input cases produce 51993 equivalent comparisons plus 163 explicit structural refusal comparisons (64 non-object target fields; 99 truthy non-string upload_protocol values). Dynamic/custom transports and declared overrides are retained. This is not full target validation or transport execution: target_problem, prepared board/source/toolchain validation, Arduino CLI proof, INI safety and actual firmware/device operations remain pending.",
+        "evidence": [
+          "audit/migration/verification.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "TGT-03",
+      "group": "target",
+      "feature": "Board picker, recents, custom mapping and baud",
+      "original_sources": [
+        {
+          "path": "main/qt/board_dialog.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "select_board",
+          "line": 3165
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "set_board_framework",
+          "line": 3197
+        },
+        {
+          "path": "main/core/target_profile.py",
+          "symbol": "serial_upload_speed",
+          "line": 84
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_controls.py",
+        "direct/verify_custom_board_dialog.py",
+        "direct/verify_board_search.py",
+        "direct/verify_upload_logging.py",
+        "direct/verify_arduino_board_chooser.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "target Rust service/shared UI",
+      "acceptance": "Controls retains explicit selection/recent5; ESP upload cap921600, AVR board default, independent monitor baud.",
+      "failure_race_contract": "No automatic selection/invented serial baud; failed settings save preserves form and retry.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "TGT-04",
+      "group": "target",
+      "feature": "Explicit source-bound Arduino CLI backend",
+      "original_sources": [
+        {
+          "path": "main/core/arduino_backend.py",
+          "symbol": "run_arduino_operation",
+          "line": 154
+        },
+        {
+          "path": "src/modules/arduino_board_selection.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/arduino_cli_support.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_arduino_board_selection.py",
+        "direct/verify_arduino_source_targets.py",
+        "direct/verify_arduino_source_namespace.py",
+        "direct/verify_arduino_fallback.py",
+        "direct/verify_ubuntu_arduino_cli.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "target Rust service/shared UI",
+      "acceptance": "Preserve current prepared UNO Q/Pico2-RP2350 routing, FQBN/menu/source proofs and separate receipts.",
+      "failure_race_contract": "No general fallback for other targets or registry evidence mistaken for preparation.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "TGT-05",
+      "group": "target",
+      "feature": "Custom board preparation and full coverage report",
+      "original_sources": [
+        {
+          "path": "src/modules/board_preparation.py",
+          "symbol": "preparation_plan",
+          "line": 181
+        },
+        {
+          "path": "src/modules/bootstrap_board_coverage.py",
+          "symbol": "report_coverage",
+          "line": 107
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_board_preparation.py",
+        "direct/verify_bootstrap_board_coverage.py",
+        "direct/verify_board_index_targets.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "target Rust service/shared UI",
+      "acceptance": "Keep complete previous source/version/framework scope and exact per-board coverage reasons.",
+      "failure_race_contract": "Conflicting source owner, changed bytes or ambiguous identity stays unavailable, never silently omitted.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-01",
+      "group": "build",
+      "feature": "Save-before-build, exact host workspace and library inputs",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "compile_sketch",
+          "line": 3831
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "_board_workspace_dir",
+          "line": 1734
+        },
+        {
+          "path": "main/core/arduino_inputs.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_upload_workers.py",
+        "direct/verify_board_build_cache.py",
+        "direct/verify_arduino_library_inputs.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Acknowledge saves; stage exact target/framework/OS-architecture workspace, library recipes/assets and generated INI.",
+      "failure_race_contract": "Compile is hardware independent; unresolved target/save/lock failure cannot launch upload.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-02",
+      "group": "build",
+      "feature": "Content-bound receipts and Skip Compile",
+      "original_sources": [
+        {
+          "path": "main/core/compiled_cache.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "check_can_skip_compile_for_upload",
+          "line": 1586
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "update_skip_compile_availability",
+          "line": 1547
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_board_build_cache.py",
+        "direct/verify_storage_io.py",
+        "direct/verify_arduino_library_inputs.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Preserve source/config/library/firmware hashes, prebuild signatures and A→B→A/restart reuse.",
+      "failure_race_contract": "Dirty/failed/interrupted/changed image refuses reuse even on coarse timestamps; no SCons DB deserialization.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-03",
+      "group": "build",
+      "feature": "CPU/RAM/storage policy and host admission",
+      "original_sources": [
+        {
+          "path": "main/core/build_resources.py",
+          "symbol": "_resource_safe_worker_count",
+          "line": 22
+        },
+        {
+          "path": "main/core/storage_resources.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/runtime_resources.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_performance.py",
+        "direct/verify_storage_resources.py",
+        "direct/verify_storage_io.py",
+        "direct/verify_slow_storage_flow.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Keep 4–6core headroom, physical/logical/RAM limits and HDD/removable/network I/O policy.",
+      "failure_race_contract": "Host discovery/admission remains separate from pure calculations; all probes off GUI.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/resource_budget.rs",
+          "desktop/scripts/verify-resource-budget.py"
+        ],
+        "implemented_subset": "Pure CPU/RAM/storage-limit calculation:8960 differential cases. Host discovery/admission, actual storage probes, settings and runtime integration/performance baseline remain pending.",
+        "evidence": [
+          "audit/migration/resource-budget.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-04",
+      "group": "build",
+      "feature": "Logs, progress, warning filter, Copy and auto-scroll",
+      "original_sources": [
+        {
+          "path": "main/core/upload_log.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/console_panel.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/log_buffer.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_build_console.py",
+        "direct/verify_builder_output.py",
+        "direct/verify_build_log_routing.py",
+        "direct/verify_upload_logging.py",
+        "direct/verify_ubuntu_logging.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Preserve raw diagnostics, keyed AVR write/verify stages, bounded history, timestamps and mouse-aware follow.",
+      "failure_race_contract": "Only programmer proof permits verified label; presentation never drives replay/cancel/hardware.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-05",
+      "group": "build",
+      "feature": "Session-safe cancellation, drainage and process ownership",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "_begin_operation_session",
+          "line": 3789
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "stop_operation",
+          "line": 9515
+        },
+        {
+          "path": "main/core/process_drain.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_operation_lifecycle.py",
+        "direct/verify_operation_close.py",
+        "direct/verify_process_drain.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Capture session/worker/original process; continue draining after output-consumer failure.",
+      "failure_race_contract": "Stale Stop/PID cannot kill newer action; no silence kill of healthy writer or retry of hardware write.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-06",
+      "group": "build",
+      "feature": "Windows short paths and native host tool adapters",
+      "original_sources": [
+        {
+          "path": "main/core/toolchain.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/platforms/windows.py",
+          "symbol": "compiler_working_directory",
+          "line": 236
+        },
+        {
+          "path": "main/platforms/ubuntu.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_windows_build_paths.py",
+        "direct/verify_platforms.py",
+        "direct/verify_windows_maintenance.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Preserve native Windows junction/UNC/tool aliases and separate Linux paths/env.",
+      "failure_race_contract": "Refuse unrelated/repointed alias or known-long fallback; do not port MAX_PATH fixes to Linux.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "BLD-07",
+      "group": "build",
+      "feature": "PlatformIO Python guards and builder compatibility",
+      "original_sources": [
+        {
+          "path": "src/modules/offline_runtime.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/offline_platformio.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/windows_tool_paths.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/mbed_compat.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/zephyr_compat.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_offline.py",
+        "direct/verify_mbed_compat.py",
+        "direct/verify_zephyr_compat.py",
+        "direct/verify_bootstrap_builders.py"
+      ],
+      "disposition": "retain-tool-runtime",
+      "owner": "build Rust service/shared UI",
+      "acceptance": "Retain approved private-Python installed-only managers and Mbed/Zephyr/path builder hooks.",
+      "failure_race_contract": "Keeping pio executable while deleting package-level hooks is not parity; no generic eval bridge.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "HW-01",
+      "group": "hardware",
+      "feature": "Upload dispatch and port reservation",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "upload_sketch",
+          "line": 6578
+        },
+        {
+          "path": "main/platforms/windows.py",
+          "symbol": "use_native_upload",
+          "line": 833
+        },
+        {
+          "path": "main/platforms/ubuntu.py",
+          "symbol": "use_native_upload",
+          "line": 113
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_upload_workers.py",
+        "direct/verify_board_families.py",
+        "direct/verify_platforms.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "hardware Rust service/shared UI",
+      "acceptance": "Validate/save/reserve target and package store, compile/reuse then exact upload backend/protocol.",
+      "failure_race_contract": "No hardware write before readiness; failed compile does not proceed to flash.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "fixture_feasibility": {
+        "sources": [
+          "desktop/crates/core/src/ownership.rs",
+          "desktop/crates/host/src/fixture_registry.rs"
+        ],
+        "scope": "Port-token collision and fixture claim decisions only. No device enumeration, port opening, monitor/upload reservation lifecycle or hardware execution; full feature remains pending."
+      }
+    },
+    {
+      "id": "HW-02",
+      "group": "hardware",
+      "feature": "Device loss and declared bootloader USB handoff",
+      "original_sources": [
+        {
+          "path": "main/core/connection_loss.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "_serial_handoff_pending",
+          "line": 3797
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_connection_loss.py",
+        "direct/verify_upload_workers.py",
+        "direct/verify_ubuntu_resets.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "hardware Rust service/shared UI",
+      "acceptance": "Observe captured child/USB identity off GUI; preserve bounded declared/nativeUSB bootloader grace.",
+      "failure_race_contract": "No upload/erase/reset replay or automatic reconnect after confirmed loss; fail captured action only.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "HW-03",
+      "group": "hardware",
+      "feature": "DTR/RTS reboot and baud-change reset",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "reset_mcu",
+          "line": 8386
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "pulse_dtr_reset",
+          "line": 3675
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "set_reset_on_baud_change",
+          "line": 3227
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ubuntu_resets.py",
+        "direct/verify_controls.py",
+        "direct/verify_actions.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "hardware Rust service/shared UI",
+      "acceptance": "Retain target-aware nonflash reset and separate monitor Reset warnings.",
+      "failure_race_contract": "Missing target rejects before pulse/clear; stale connection must not reset replacement device.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "HW-04",
+      "group": "hardware",
+      "feature": "Soft recovery, hard erase and reset cache locks",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "soft_reset",
+          "line": 8948
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "hard_reset",
+          "line": 8577
+        },
+        {
+          "path": "main/core/constants.py",
+          "symbol": "board_reset_capabilities",
+          "line": 131
+        },
+        {
+          "path": "main/core/config.py",
+          "symbol": "_try_acquire_reset_cache_lock",
+          "line": 58
+        },
+        {
+          "path": "soft_reset/README.md",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ubuntu_resets.py",
+        "direct/verify_board_families.py",
+        "direct/verify_operation_lifecycle.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "hardware Rust service/shared UI",
+      "acceptance": "Reuse exact-board clean templates and explicit AVR/ESP8266/ESP32 strategies, validated recovery before erase.",
+      "failure_race_contract": "Unsupported/missing chip/address/images fails before erase; failed restoration reports actual condition; serialize reset/Clean.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SER-01",
+      "group": "serial",
+      "feature": "Port discovery and explicit cross-window selection",
+      "original_sources": [
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "refresh_ports",
+          "line": 2966
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "select_port",
+          "line": 3129
+        },
+        {
+          "path": "main/platforms/ubuntu_ports.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_serial_reader.py",
+        "direct/verify_ubuntu_ports.py",
+        "direct/verify_controls.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "serial Rust service/shared UI",
+      "acceptance": "Retain device/description/hwid/nativeUSB identity, worker hotplug and selected-port ownership.",
+      "failure_race_contract": "Never infer selected board/port; confirmed unplug clears state after bounded handoff grace.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "fixture_feasibility": {
+        "sources": [
+          "desktop/crates/core/src/ownership.rs",
+          "desktop/crates/host/src/fixture_registry.rs"
+        ],
+        "scope": "Port-token collision and fixture claim decisions only. No device enumeration, port opening, monitor/upload reservation lifecycle or hardware execution; full feature remains pending."
+      }
+    },
+    {
+      "id": "SER-02",
+      "group": "serial",
+      "feature": "Incremental decoder and generation-scoped reader",
+      "original_sources": [
+        {
+          "path": "main/core/serial_stream.py",
+          "symbol": "SerialTextDecoder",
+          "line": 7
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "_start_serial_monitor",
+          "line": 3270
+        },
+        {
+          "path": "main/qt/signals.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_serial_reader.py",
+        "direct/verify_serial_delivery.py",
+        "direct/verify_serial_view.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "serial Rust service/shared UI",
+      "acceptance": "Keep split UTF8/control records and bounded delivery/Copy snapshot across chunks.",
+      "failure_race_contract": "Old generation cannot affect new connection; no split-valid-Unicode corruption or unbounded queues.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/core/src/serial_text.rs",
+          "desktop/scripts/verify-serial-codec.py"
+        ],
+        "implemented_subset": "Incremental text codec only:325 differential cases, retained incomplete UTF8≤3bytes. No port access, serial driver/reader/send/session implementation.",
+        "evidence": [
+          "audit/migration/serial-codec.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SER-03",
+      "group": "serial",
+      "feature": "Bounded one-attempt Send and input retention",
+      "original_sources": [
+        {
+          "path": "main/core/serial_send.py",
+          "symbol": "SerialSendQueue",
+          "line": 8
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "serial_send",
+          "line": 3772
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_serial_send.py",
+        "direct/verify_serial_delivery.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "serial Rust service/shared UI",
+      "acceptance": "Retain64KiB/message,256KiB active+pending,16messages,1s driver timeout and none/LF/CR/CRLF.",
+      "failure_race_contract": "Queue/lock rejection retains input; discard stale commands; never retry partial writes or unbounded flush.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SER-04",
+      "group": "serial",
+      "feature": "Display, ANSI clear, pause, wrap and upload coexistence",
+      "original_sources": [
+        {
+          "path": "main/qt/serial_panel.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "_stop_serial_monitor",
+          "line": 3638
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "set_baud_rate",
+          "line": 374
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_serial_view.py",
+        "direct/verify_serial_wrap.py",
+        "direct/verify_serial_delivery.py",
+        "direct/verify_connection_loss.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "serial Rust service/shared UI",
+      "acceptance": "Keep bounded literal-copy journal, timestamps, pause/wrap/auto-scroll; compile can retain monitor, upload reserves it.",
+      "failure_race_contract": "Clear is display-only; stale send/close cannot disconnect replacement; no false device-text timestamp removal.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PTY-01",
+      "group": "terminal",
+      "feature": "Reused xterm renderer, fit and control protocol",
+      "original_sources": [
+        {
+          "path": "src/editor/terminal.html",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/editor/opencode.html",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/assets/xterm/xterm.js",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_terminal_scroll.py",
+        "direct/verify_terminal_startup.py",
+        "direct/verify_posix_terminal_state.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "terminal Rust service/shared UI",
+      "acceptance": "Reuse local xterm config/assets; preserve fit/Unicode/capability replies/bracketed paste and theme/font.",
+      "failure_race_contract": "Prompt observation cannot intercept/replay bytes; private bundled viewport usage needs native compatibility check.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/ui/src/main.ts",
+          "desktop/scripts/stage-assets.mjs"
+        ],
+        "implemented_subset": "Reused xterm renders controlled ANSI/Unicode fixture output, waits for the xterm write callback and acknowledges the exact native stream/sequence/byte count. No interactive shell, input/paste or full original terminal control protocol.",
+        "evidence": [
+          "audit/migration/native-webview.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PTY-02",
+      "group": "terminal",
+      "feature": "Native PTY/process tree and consumed-output flow control",
+      "original_sources": [
+        {
+          "path": "main/platforms/ubuntu_pty_process.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/platforms/ubuntu_pty_supervisor.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/posix_terminal_panel.py",
+          "symbol": "consumed",
+          "line": 141
+        },
+        {
+          "path": "src/modules/project_terminal.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ubuntu_pty_lifecycle.py",
+        "direct/verify_native_pty_close.py",
+        "direct/verify_terminal.py",
+        "direct/verify_posix_terminal_state.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "terminal Rust service/shared UI",
+      "acceptance": "Keep owned process tree, resize/EOF/exit, generation identity and acknowledge only after renderer consumes bytes.",
+      "failure_race_contract": "Hidden/failed consumer stays bounded; teardown reaps only owned child, no replay or unbounded pending output.",
+      "status": "partial-fixture-only",
+      "prototype_scope": {
+        "sources": [
+          "desktop/crates/host/src/lib.rs#stream_fixture",
+          "desktop/crates/host/src/bin/pty_probe.rs",
+          "desktop/crates/host/src/stream_ack.rs",
+          "desktop/ui/src/fixture-stream.ts",
+          "desktop/ui/src/fixture-stream.test.ts"
+        ],
+        "implemented_subset": "Fixed self-child native PTY probe only: bounded output, cursor-query replies, child/reader retirement safeguards, and one outstanding chunk with renderer-consumed acknowledgements. Native ownership, stream identity, ordered sequence and exact byte count are required; timeout or consumer failure aborts the fixture without replay. Arbitrary interactive sessions, complete process-tree/cancellation/recovery behavior and production terminal ownership remain pending.",
+        "evidence": [
+          "audit/migration/native-webview.json"
+        ],
+        "full_feature_parity": "pending"
+      },
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "PTY-03",
+      "group": "terminal",
+      "feature": "Multiple shells/sessions, focus and Clear",
+      "original_sources": [
+        {
+          "path": "main/qt/terminal_panel.py",
+          "symbol": "add_session",
+          "line": 694
+        },
+        {
+          "path": "main/qt/posix_terminal_panel.py",
+          "symbol": "add_session",
+          "line": 251
+        },
+        {
+          "path": "src/modules/project_terminal.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_terminal.py",
+        "direct/verify_terminal_startup.py",
+        "direct/verify_terminal_scroll.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "terminal Rust service/shared UI",
+      "acceptance": "Retain session tabs/shell choices, cwd, active close/focus and hide/reveal.",
+      "failure_race_contract": "Clear is display-only; Modify/theme/resize cannot restart sessions; renderer death never replays commands.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "AI-01",
+      "group": "assistant",
+      "feature": "OpenCode native runtime and assistant panel",
+      "original_sources": [
+        {
+          "path": "main/qt/ai_panel.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/posix_ai_panel.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/platforms/ubuntu_opencode.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/dedicated_AI.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ubuntu_ai_panel.py",
+        "direct/verify_ubuntu_opencode.py",
+        "direct/verify_ubuntu_opencode_setup.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "assistant Rust service/shared UI",
+      "acceptance": "Retain project context, host-native setup/focus/hide/lifecycle independent of package Offline Mode.",
+      "failure_race_contract": "Missing runtime yields bounded explicit recovery; no unsolicited account/model request or command replay.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "AI-02",
+      "group": "assistant",
+      "feature": "Prompt provenance, AI watcher and protected recovery",
+      "original_sources": [
+        {
+          "path": "src/modules/ai_prompt_context.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/core/ai_review.py",
+          "symbol": "AIEditWatcher",
+          "line": 856
+        },
+        {
+          "path": "main/core/file_utils.py",
+          "symbol": "AIEditBackupStore",
+          "line": 829
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_prompt_sources.py",
+        "direct/verify_ai_changes.py",
+        "direct/verify_project_file_lifecycle.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "assistant Rust service/shared UI",
+      "acceptance": "Keep cli/assistant sourceVersion1, observed/Mixed/Unknown context, per-file before/AI/current/undo copies.",
+      "failure_race_contract": "Manual Modify/Pull uses user guard; pending conflict refuses mutation; old protected journals remain intact.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "AI-03",
+      "group": "assistant",
+      "feature": "Accept/Reject, Undo/Redo and bounded history",
+      "original_sources": [
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "accept_ai_edit",
+          "line": 497
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "reject_ai_edit",
+          "line": 522
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "undo_ai_edit_decision",
+          "line": 561
+        },
+        {
+          "path": "main/qt/ai_changes_panel.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ai_changes.py",
+        "direct/verify_ai_line_diff.py",
+        "direct/verify_editor_review_ui.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "assistant Rust service/shared UI",
+      "acceptance": "Retain per-file decisions/IDs/navigation, numbered preview blocks and200cards/4MiB display history.",
+      "failure_race_contract": "Delete history cannot erase pending reviews/recovery; changed-current decision conflicts retain explicit handling.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "CLD-01",
+      "group": "cloud",
+      "feature": "Fixed provider, auth and native credential store",
+      "original_sources": [
+        {
+          "path": "main/core/firebase_provider.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/core/credential_store.py",
+          "symbol": "CredentialStore",
+          "line": 36
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "sign_in",
+          "line": 575
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "create_account",
+          "line": 620
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "sign_out",
+          "line": 701
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_cloud_configuration.py",
+        "direct/verify_cloud_sketch_service.py",
+        "direct/verify_offline_mode.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "cloud Rust service/shared UI",
+      "acceptance": "Retain deployment/schema, separate Save login/Remember me, Windows vault/Linux Secret Service and endpointHEAD status.",
+      "failure_race_contract": "No editable override/plaintext fallback/token argv; endpoint reachability is not auth; failed login clears prior identity.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "CLD-02",
+      "group": "cloud",
+      "feature": "Cloud list/revisions/rename/delete and upload duplicates",
+      "original_sources": [
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "list_sketches",
+          "line": 759
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "rename_sketch",
+          "line": 1012
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "delete_sketch",
+          "line": 1032
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "upload_project",
+          "line": 1041
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "list_revisions",
+          "line": 1106
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_cloud_sketch_service.py",
+        "direct/verify_cloud_sketch_ui.py",
+        "direct/verify_cloud_rules.js"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "cloud Rust service/shared UI",
+      "acceptance": "Keep UID/provider separation, ETag/revisions, bounds and Replace/Savecopy/Cancel; local sources survive cloud delete/upload.",
+      "failure_race_contract": "Revalidate name/revision/account after prompt; no silent overwrite or inherited account cache.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "CLD-03",
+      "group": "cloud",
+      "feature": "Independent linked copies and explicit Push/Pull",
+      "original_sources": [
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "working_directory",
+          "line": 896
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "push_project",
+          "line": 1084
+        },
+        {
+          "path": "main/core/cloud_sketch_service.py",
+          "symbol": "pull_project",
+          "line": 1121
+        },
+        {
+          "path": "main/qt/cloud_sketch_panel.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_cloud_sketch_service.py",
+        "direct/verify_cloud_sketch_ui.py",
+        "direct/verify_ubuntu_cloud_workflow.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "cloud Rust service/shared UI",
+      "acceptance": "Focus existing copy; preserve local saved edits, explicit confirmed Pull, Cloud folder links and staged recovery.",
+      "failure_race_contract": "Guard exact bytes/root/link identity; rollback only unchanged attempt files and retain concurrent external edits.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "CLD-04",
+      "group": "cloud",
+      "feature": "Strict full-model Pull refresh and Retry lock",
+      "original_sources": [
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "reload_cloud_snapshot",
+          "line": 818
+        },
+        {
+          "path": "main/qt/editor_panel.py",
+          "symbol": "finish_cloud_reload",
+          "line": 105
+        },
+        {
+          "path": "main/web_bridge.py",
+          "symbol": "get_cloud_project_files",
+          "line": 1108
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_cloud_editor_manifest.py",
+        "direct/verify_runtime.py",
+        "direct/verify_ubuntu_cloud_workflow.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "cloud Rust service/shared UI",
+      "acceptance": "Complete expected root model coverage for requesting renderer before unlocking and resuming autosave.",
+      "failure_race_contract": "Failed/stale/incomplete scan remains PullRetry/locked; preserve native case-only rename semantics.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DEV-01",
+      "group": "developer-portal",
+      "feature": "Five-click entry, local key and authenticated identity",
+      "original_sources": [
+        {
+          "path": "main/qt/toolbar.py",
+          "symbol": "_DeveloperLogoLabel",
+          "line": 54
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "authenticate",
+          "line": 370
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "configure_local_access",
+          "line": 344
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "logout",
+          "line": 462
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_owner_tickets.py",
+        "direct/verify_owner_ticket_service.py",
+        "direct/verify_offline_mode.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "developer-portal Rust service/shared UI",
+      "acceptance": "Retain exactly5completed clicks/pause, local saltedPBKDF2≥12char key and existing Firebase sign-in/reset.",
+      "failure_race_contract": "No default universal key; changing key requires auth; local access cannot inherit cloud UID/cache; repair only known runtime defects.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DEV-02",
+      "group": "developer-portal",
+      "feature": "Tickets, categories, dashboard and isolated cache",
+      "original_sources": [
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "create_ticket",
+          "line": 570
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "update_ticket",
+          "line": 616
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "delete_ticket",
+          "line": 645
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "add_ticket_category",
+          "line": 297
+        },
+        {
+          "path": "main/core/owner_tickets.py",
+          "symbol": "_ticket_cache_path",
+          "line": 670
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_owner_tickets.py",
+        "direct/verify_owner_ticket_service.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "developer-portal Rust service/shared UI",
+      "acceptance": "Retain stats/status/category/search, CRUD and serialized workers with atomic provider+UID caches outside checkout.",
+      "failure_race_contract": "No foreign/local legacy fallback; bound replies/categories and safe URL/errors; failed writes visible.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DEV-03",
+      "group": "developer-portal",
+      "feature": "Intentional neobrutalist portal surfaces",
+      "original_sources": [
+        {
+          "path": "main/qt/owner_ticket_style.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/owner_ticket_dialog.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_owner_tickets.py",
+        "direct/verify_ui_layout.py",
+        "direct/verify_svg_icons.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "developer-portal Rust service/shared UI",
+      "acceptance": "Preserve cream solid cards, black outlines/hard shadows and original circuitSVG across portal forms/menus/prompts.",
+      "failure_race_contract": "Do not replace with workspace glass; long literal text remains selectable and compact controls scroll/reflow.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DL-01",
+      "group": "resources",
+      "feature": "Cached catalogs, details, versions and latest search",
+      "original_sources": [
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "BrowseTab",
+          "line": 1560
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_read_library_catalog",
+          "line": 1526
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_read_board_catalog",
+          "line": 1536
+        },
+        {
+          "path": "src/modules/browser_loading.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_browser_loading.py",
+        "direct/verify_catalog_io.py",
+        "direct/verify_board_search.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "resources Rust service/shared UI",
+      "acceptance": "Retain library/board catalog caches, bounded paging, versions/details and latest-query wins.",
+      "failure_race_contract": "Slow/corrupt cache/network cannot block GUI, clear usable prior state or publish stale selection.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DL-02",
+      "group": "resources",
+      "feature": "Additional indexes/custom package associations",
+      "original_sources": [
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "parse_additional_board_urls",
+          "line": 154
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_normalize_board_manager_url",
+          "line": 98
+        },
+        {
+          "path": "src/modules/board_preparation.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_board_index_targets.py",
+        "direct/verify_custom_board_dialog.py",
+        "direct/verify_board_preparation.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "resources Rust service/shared UI",
+      "acceptance": "Keep validated sourceURLs, custom platform specification and explicit exact board mapping.",
+      "failure_race_contract": "Reject malformed payload/conflicting source without writes; failed-save retry retains literal form.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DL-03",
+      "group": "resources",
+      "feature": "Checksummed resumable downloads and safe promotion",
+      "original_sources": [
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_download_package_archive",
+          "line": 930
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_verify_download",
+          "line": 895
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_extract_archive",
+          "line": 1204
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_promote_directory",
+          "line": 1330
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_download_interruption.py",
+        "direct/verify_bootstrap_archives.py",
+        "direct/verify_ubuntu_download_manager.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "resources Rust service/shared UI",
+      "acceptance": "Retain validator/source-bound partials, bounded waits, explicit range resume, archive containment and staged replacement.",
+      "failure_race_contract": "Stall/trickle/cancel/traversal/checksum failure preserves old installed payload and cannot certify readiness.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DL-04",
+      "group": "resources",
+      "feature": "Installed automatic extracted-folder update and samples",
+      "original_sources": [
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "InstalledTab",
+          "line": 1905
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_update_item",
+          "line": 2515
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_open_example",
+          "line": 2305
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_open_folder",
+          "line": 2499
+        },
+        {
+          "path": "src/modules/arduino_lib_req.py",
+          "symbol": "_delete_item",
+          "line": 2529
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_library_samples.py",
+        "direct/verify_browser_loading.py",
+        "direct/verify_controls.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "resources Rust service/shared UI",
+      "acceptance": "Known installed folder updates by automatic extraction; retain delete confirmation, folder opening, sample search/view.",
+      "failure_race_contract": "Do not restore extraction-mode options; failed update/stale sample request preserves installed selection/payload.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "DL-05",
+      "group": "resources",
+      "feature": "Glass downloader tabs, scrolling and direct URL/Drive",
+      "original_sources": [
+        {
+          "path": "src/modules/tk_glass.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/tk_notebook.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/tk_material_list.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/downloader.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_downloader_appearance.py",
+        "direct/verify_downloader_performance.py",
+        "direct/verify_responsive.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "resources Rust service/shared UI",
+      "acceptance": "Preserve clear shared glass, selected/unselected tab borders, bounded viewport rows and direct-file progress/cancel.",
+      "failure_race_contract": "No hover/tab full-page repaint, hidden refresh/cache growth or laggy resize; never autoexecute payload.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ],
+      "legacy_reference_amendment": "reference-amendments.json: shared Tk DialogFit fix removes repeated geometry/minsize/position writes from unchanged Configure bursts. Verifier changes and added mocked regressions are recorded separately; complete Rust downloader parity and measured representative-host performance remain pending."
+    },
+    {
+      "id": "PKG-01",
+      "group": "packages",
+      "feature": "Store leases, jobs, reports and progress UI",
+      "original_sources": [
+        {
+          "path": "src/modules/package_jobs.py",
+          "symbol": "package_store_lease",
+          "line": 286
+        },
+        {
+          "path": "src/modules/package_jobs.py",
+          "symbol": "publish_event",
+          "line": 79
+        },
+        {
+          "path": "main/qt/package_progress.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "main/qt/package_coverage.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_package_jobs.py",
+        "direct/verify_platformio_locks.py",
+        "direct/verify_package_progress.py",
+        "direct/verify_package_coverage.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "packages Rust service/shared UI",
+      "acceptance": "Keep shared-use/exclusive-mutate locks, atomic bounded records/requests/reports and full coverage/filter/notification links.",
+      "failure_race_contract": "Legacy/new ownership must interoperate; stale/crashed job cannot certify readiness or remove live lease.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SET-01",
+      "group": "setup",
+      "feature": "Host admission and private runtime boundary",
+      "original_sources": [
+        {
+          "path": "src/modules/ubuntu_release.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/ubuntu_architecture.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/private_python_guard.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/runtime_resources.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ubuntu_release.py",
+        "direct/verify_ubuntu_architecture.py",
+        "direct/verify_private_runtimes.py",
+        "direct/verify_ubuntu_first_run.py",
+        "direct/verify_application_guard.py",
+        "direct/verify_ubuntu_runtime.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "setup Rust service/shared UI",
+      "acceptance": "Require native Ubuntu24.04+AMD64/ARM64 and Windows10/11AMD64; validate release/ABI and four-core policy before setup/repair.",
+      "failure_race_contract": "Missing/malformed OS release rejects before cleanup; compiler build alone cannot certify GUI/tool/USB compatibility.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SET-02",
+      "group": "setup",
+      "feature": "Online preparation then offline installed-only work",
+      "original_sources": [
+        {
+          "path": "src/modules/offline_bootstrap.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/offline_mode.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/offline_runtime.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "direct/offline-packages.json",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_offline.py",
+        "direct/verify_offline_mode.py",
+        "direct/verify_bootstrap_cold_cache.py",
+        "direct/verify_bootstrap_seed.py"
+      ],
+      "disposition": "retain-tool-runtime",
+      "owner": "setup Rust service/shared UI",
+      "acceptance": "Retain certified runtime/packs in both modes, explicit online preparation and firmware tool-private Python.",
+      "failure_race_contract": "SCons-only not ready; no workspace package install; Offline Mode does not prohibit Firebase/user shells.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SET-03",
+      "group": "setup",
+      "feature": "Bootstrap stages, archives, cancellation and certification",
+      "original_sources": [
+        {
+          "path": "src/modules/bootstrap_platformio.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/bootstrap_dispatch.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/bootstrap_seed.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/bootstrap_arduino_sources.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_bootstrap_builders.py",
+        "direct/verify_bootstrap_interruption.py",
+        "direct/verify_bootstrap_processes.py",
+        "direct/verify_bootstrap_archives.py",
+        "direct/verify_bootstrap_promotion.py",
+        "direct/verify_bootstrap_arduino_sources.py",
+        "direct/verify_bootstrap_download_failure.py",
+        "direct/verify_bootstrap_headers.py",
+        "direct/verify_bootstrap_updates.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "setup Rust service/shared UI",
+      "acceptance": "Preserve full plan/source/host proofs, staged previous-good payload and bounded HTTP adapter restoration.",
+      "failure_race_contract": "Setup close keeps writer/lease until stopped; interrupted/mismatched package cannot mark ready or launch workspace.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SET-04",
+      "group": "setup",
+      "feature": "Native installers, repair, Fresh and maintenance",
+      "original_sources": [
+        {
+          "path": "direct/windows/run.vbs",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "direct/ubuntu/setup.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "direct/ubuntu/system_setup.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "cleaner/ubuntu/maintenance.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "src/modules/launcher.py",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_windows_board_setup.py",
+        "direct/verify_windows_maintenance.py",
+        "direct/verify_ubuntu_maintenance.py",
+        "direct/verify_ubuntu_system_setup.py",
+        "direct/verify_ubuntu_arm_bootstrap.py",
+        "direct/verify_bootstrap_native.py",
+        "direct/verify_bootstrap_pip_paths.py",
+        "direct/verify_ubuntu_bootstrap.py"
+      ],
+      "disposition": "behavior-preserving-port",
+      "owner": "setup Rust service/shared UI",
+      "acceptance": "Retain scoped elevation/drivers, native private tools, ownership receipts and targeted cleanup/repair.",
+      "failure_race_contract": "No blanket deletion/live-sibling shutdown; preserve sketches/settings/journals and reject wrong-arch tools.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    },
+    {
+      "id": "SET-05",
+      "group": "setup",
+      "feature": "Packaging, launcher, CI and rollback qualification",
+      "original_sources": [
+        {
+          "path": "direct/build_release.py",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": "direct/ubuntu/build_launcher.sh",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": ".github/workflows/compatibility.yml",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": ".github/workflows/ubuntu-arm64.yml",
+          "symbol": null,
+          "line": 1
+        },
+        {
+          "path": ".github/workflows/ui-layout.yml",
+          "symbol": null,
+          "line": 1
+        }
+      ],
+      "legacy_verifiers": [
+        "direct/verify_ubuntu_launcher.py",
+        "direct/verify_ubuntu_first_run.py",
+        "direct/verify_platforms.py",
+        "direct/verify_ui_layout.py"
+      ],
+      "disposition": "host-adapter",
+      "owner": "setup Rust service/shared UI",
+      "acceptance": "Prioritize Windows installer/UbuntuDEB, oldest Linux ABI and reversible data import; retain complete native qualification matrix.",
+      "failure_race_contract": "WindowsServer CI is not Windows10/11 desktop/USB proof; no replacement until full parity/rollback and signing gates pass.",
+      "status": "pending",
+      "prototype_scope": null,
+      "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
+      "native_required": [
+        "Ubuntu24.04AMD64",
+        "Ubuntu24.04ARM64",
+        "Ubuntu26.04AMD64",
+        "Ubuntu26.04ARM64",
+        "Windows10AMD64",
+        "Windows11AMD64"
+      ]
+    }
+  ],
+  "reference_amendments": "reference-amendments.json",
+  "timezone": "Asia/Manila",
+  "baseline_preservation": {
+    "inventory": "source-inventory.json remains unchanged",
+    "intentional_unique_reference_changes": 10,
+    "production_sources": 2,
+    "legacy_verifiers": 7,
+    "legacy_ci_files": 1,
+    "unchanged_source_rows": 291,
+    "source_rows": 300,
+    "unchanged_resource_rows": 131,
+    "resource_rows": 133,
+    "staged_asset_sources": 22,
+    "staged_asset_copies": 25,
+    "staged_asset_byte_changes": 0,
+    "hash_boundary": "Original checkout-byte hashes, including line-ending variants; not a claim that all baseline rows equal Git blob bytes. Sixteen duplicated rows retain original baseline bytes and differ from Git only in CR line-ending characters."
+  }
+}
