@@ -13,6 +13,25 @@ use std::io::{self, Read, Write};
 const MAX_INPUT_BYTES: u64 = 1_000_000;
 const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
+struct BoundedOutput(Vec<u8>);
+
+impl Write for BoundedOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > MAX_OUTPUT_BYTES - self.0.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Fixture output byte budget exceeded",
+            ));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Batch {
@@ -285,23 +304,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    let mut traces = Vec::new();
-    for trace in batch.traces {
+    // Repeated long captured port names can amplify small input. Serialize one
+    // event at a time into the bounded response, before retaining another one.
+    let mut output = BoundedOutput(Vec::new());
+    output.write_all(b"{\"schemaVersion\":1,\"fixtureOnly\":true,\"traces\":[")?;
+    for (index, trace) in batch.traces.into_iter().enumerate() {
+        if index != 0 {
+            output.write_all(b",")?;
+        }
+        output.write_all(b"{\"events\":[")?;
         let mut controller = Controller::new(trace.initial_state);
-        let events = trace
-            .actions
-            .into_iter()
-            .map(|action| controller.step(action))
-            .collect::<Result<Vec<_>, _>>()?;
-        traces.push(json!({"events":events}));
+        for (index, action) in trace.actions.into_iter().enumerate() {
+            if index != 0 {
+                output.write_all(b",")?;
+            }
+            serde_json::to_writer(&mut output, &controller.step(action)?)?;
+        }
+        output.write_all(b"]}")?;
     }
-    let output =
-        serde_json::to_vec(&json!({"schemaVersion":1,"fixtureOnly":true,"traces":traces}))?;
-    if output.len() > MAX_OUTPUT_BYTES {
-        return Err("Fixture output byte budget exceeded".into());
-    }
+    output.write_all(b"]}")?;
     let mut stdout = io::stdout().lock();
-    stdout.write_all(&output)?;
+    stdout.write_all(&output.0)?;
     stdout.write_all(b"\n")?;
     stdout.flush()?;
     Ok(())

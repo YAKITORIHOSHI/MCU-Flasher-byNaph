@@ -472,6 +472,10 @@ def probe_refusals():
               ("trace-budget", dict(schemaVersion=1, traces=[one] * 129)),
               ("action-budget", dict(schemaVersion=1, traces=[trace(
                   "excess-actions", [dict(action="begin")] * 4097)]))]
+    inputs.append(("response-amplification-budget", dict(schemaVersion=1, traces=[trace(
+        "bounded-long-state-snapshots",
+        [submit("", "none") for _ in range(16)] + [dict(action="begin")] * 1000,
+        initial_state(port="x" * 4096))])))
     for label, field, value in [
             ("negative-generation", "generation", -1),
             ("oversized-generation", "generation", 2 ** 64),
