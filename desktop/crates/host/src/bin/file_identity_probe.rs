@@ -48,7 +48,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let source = scope.open_source("Main.ino")?;
     let deadline = Instant::now() + DEADLINE;
     let (sender, receiver) = mpsc::sync_channel(1);
-    // A silent controller cannot retain these fixture handles indefinitely.
+    // A silent input controller cannot retain these handles indefinitely while
+    // output is consumed. The parent separately bounds process/pipe cleanup;
+    // this receive deadline cannot interrupt a blocked stdout write.
     // Limit the bytes read before accepting a complete fixed command, rather
     // than reading an unbounded line and checking its size afterward.
     std::thread::spawn(move || {

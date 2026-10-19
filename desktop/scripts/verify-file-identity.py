@@ -195,6 +195,7 @@ def remove_directory_alias(link):
 
 class FixedProbe:
     def __init__(self, fixture):
+        self.started = time.monotonic()
         self.child = subprocess.Popen(
             [str(EXE), str(ROOT), str(fixture)], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -448,7 +449,10 @@ def main():
             failure(child.frame(timeout=WORKER_DEADLINE_SECONDS + WAIT_SECONDS),
                     "Metadata fixture controller exceeded its deadline")
             elapsed = time.monotonic() - started
-            assert WORKER_DEADLINE_SECONDS - 1 <= elapsed <= WORKER_DEADLINE_SECONDS + WAIT_SECONDS
+            # A loaded controller can receive ready long after native startup.
+            # Bound earliest completion from spawn, latest from ready receipt.
+            assert time.monotonic() - child.started >= WORKER_DEADLINE_SECONDS - 1
+            assert elapsed <= WORKER_DEADLINE_SECONDS + WAIT_SECONDS
             child.finish(1)
             checks.append("silent-controller-deadline-releases-worker-and-handles")
         finally:
