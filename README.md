@@ -1029,6 +1029,16 @@ of that setting.
 
 Rebuild the matching native Linux executable with `bash direct/ubuntu/build_launcher.sh`: it writes `MCU_Flasher` on amd64 and `MCU_Flasher-arm64` on ARM64. An explicit output path is supported; Windows `.exe` outputs are rejected. The supplied binaries need no compiler. Generate the optional local shortcut and Applications menu entry with `bash direct/ubuntu/run.sh --install-shortcut`. The local `MCU Flasher.desktop` resolves the application beside itself and invokes Bash, so it can travel with the folder. Regenerate the Applications menu entry after moving the folder. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. Keep `main/`, `src/` and `direct/` together.
 
+Ubuntu Files can show a generic gear icon for the raw Linux executables. For the
+actual MCU Flasher icon, run `bash direct/ubuntu/run.sh --install-shortcut` once
+and launch **MCU Flasher** from Applications or the generated folder shortcut.
+This registers the existing app artwork for your account; choose **Allow
+Launching** if Ubuntu asks. The folder shortcut's icon survives moves on that
+account. Generate shortcuts again on another computer/account, and refresh the
+Applications entry after moving the folder. Icon and Python app updates do not
+require rebuilding the native launchers; rebuild them only when their native
+launcher source changes. The Rust/Tauri prototype is not a replacement release.
+
 A folder named `_` can be residue from an older archive verification run: a Windows path prefix was incorrectly added to Linux staging paths. Archive helpers now keep Linux paths native. That fixture folder is not an application dependency; see [Ubuntu launch troubleshooting](direct/UBUNTU.md#copied-folders-and-launch-problems).
 
 Windows files live in `direct/windows/`. Host toolchain implementations are separate in `main/platforms/windows.py` and `main/platforms/ubuntu.py`; they share the editor, project windows and CPU/RAM budgets. Ubuntu uses its native virtual environment and architecture-specific PlatformIO store. The older launch paths remain compatibility forwarders.

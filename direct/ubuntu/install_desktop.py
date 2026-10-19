@@ -65,20 +65,28 @@ def desktop_entry(root: Path, *, portable: bool = False) -> str:
         # Field codes must be outside quotes. Do not embed %k in shell source,
         # and do not use Path= with a stale checkout location before Exec runs.
         command = "/bin/bash -c " + exec_argument(PORTABLE_LAUNCH_CODE) + " mcu-flasher %k"
-        location = ("Icon=applications-development",)
+        location = ()
     else:
         command = "/bin/bash " + exec_argument(str(root / "direct/ubuntu/run.sh")) + " --desktop"
-        location = ("Path=" + string_value(str(root)),
-                    "Icon=" + string_value(str(root / "src/assets/mcu_icon.ico")))
+        location = ("Path=" + string_value(str(root)),)
     return "\n".join((
         "[Desktop Entry]", "Version=1.0", "Type=Application",
         "Name=MCU Flasher", "Comment=Compile, flash and monitor microcontrollers",
-        "Exec=" + command, *location,
+        "Exec=" + command, *location, "Icon=mcu-flasher",
         "Terminal=false", "Categories=Development;Electronics;",
-        "StartupNotify=true", "Actions=Repair;", "",
+        "StartupNotify=true", "StartupWMClass=MCU Flasher by Naph", "Actions=Repair;", "",
         "[Desktop Action Repair]", "Name=Repair Ubuntu runtime",
         "Exec=" + command + " --repair", "",
     ))
+
+
+def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
+    """Keep icon/theme directory timestamps stable on repeated registration."""
+    if not path.is_file() or path.read_bytes() != contents:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    if path.stat().st_mode & 0o777 != mode:
+        path.chmod(mode)
 
 
 def main(argv=None) -> int:
@@ -90,19 +98,31 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if not (ROOT / "direct/ubuntu/run.sh").is_file():
         parser.error("Keep direct/, main/ and src/ together in the application folder")
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    if not data_home.is_absolute():
+        parser.error("XDG_DATA_HOME must be an absolute path")
+    # A theme name has no stale checkout path when the folder moves. Register
+    # the existing app artwork for this account even for a folder-only shortcut.
+    # PNG is supported by the desktop icon standard; ICO is Windows-specific.
+    try:
+        icon = (ROOT / "src/assets/mcu_icon.png").read_bytes()
+    except OSError as exc:
+        print(f"Cannot read MCU Flasher's application icon: {exc}", file=sys.stderr)
+        return 1
     entries = [(ROOT / "MCU Flasher.desktop", desktop_entry(ROOT, portable=True))]
     if args.install:
-        data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
-        if not data_home.is_absolute():
-            parser.error("XDG_DATA_HOME must be an absolute path")
         entries.append((data_home / "applications/mcu-flasher.desktop", desktop_entry(ROOT)))
-    for path, text in entries:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-        path.chmod(0o755)
-        print(f"Shortcut created: {path}")
+    try:
+        write_if_changed(data_home / "icons/hicolor/256x256/apps/mcu-flasher.png", icon, 0o644)
+        for path, text in entries:
+            write_if_changed(path, text.encode("utf-8"), 0o755)
+            print(f"Shortcut created: {path}")
+    except OSError as exc:
+        print(f"Cannot register MCU Flasher's icon or shortcuts: {exc}", file=sys.stderr)
+        return 1
     print("If Ubuntu asks, right-click the shortcut and choose Allow Launching.")
     print("Keep the folder shortcut beside the app; regenerate the Applications entry after moving it.")
+    print("On another computer or account, generate shortcuts again to register the app icon there.")
     return 0
 
 

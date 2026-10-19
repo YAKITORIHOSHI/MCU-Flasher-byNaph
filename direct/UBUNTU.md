@@ -240,6 +240,32 @@ The optional Applications menu
 entry uses absolute paths; after moving the folder, run
 `bash direct/ubuntu/run.sh --install-shortcut` to regenerate that menu entry.
 
+### Application icon
+
+The raw native executables may show Ubuntu Files' generic executable/gear icon.
+Generate the branded folder shortcut and Applications entry from the application
+folder, without sudo:
+
+```bash
+bash direct/ubuntu/run.sh --install-shortcut
+```
+
+Both shortcuts use the existing MCU Flasher artwork. Registration copies the
+256px PNG extracted unchanged from `src/assets/mcu_icon.ico` into
+`${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps/mcu-flasher.png`.
+The themed icon name stays valid after a folder move on the same account.
+Generate shortcuts once on each new computer/account; refresh the fixed
+Applications entry after moves. The generated folder shortcut may require
+**Allow Launching** before Ubuntu displays and launches it as an application.
+The running Qt application uses the matching `mcu-flasher` desktop identity;
+the X11 entry also declares its measured window class.
+
+The icon update needs no executable reset, runtime repair or recompilation.
+The native wrappers load the current Python application from the folder beside
+them. Rebuild a wrapper when `src/launcher_ubuntu.c` changes, using the matching
+CPU's build environment. Keep the production launchers while the Rust/Tauri
+migration remains a prototype.
+
 `bash direct/ubuntu/build_launcher.sh` rebuilds `src/launcher_ubuntu.c` into
 `MCU_Flasher` on amd64 or `MCU_Flasher-arm64` on ARM64 by default. Pass an
 explicit output path as its first argument to choose another Linux filename;

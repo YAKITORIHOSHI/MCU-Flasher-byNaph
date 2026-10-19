@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,17 @@ from src.modules import ubuntu_architecture
 
 
 class FirstLaunchPackagingChecks(unittest.TestCase):
+    def test_linux_icon_reuses_exact_existing_256_pixel_png_artwork(self):
+        ico = (ROOT / "src/assets/mcu_icon.ico").read_bytes()
+        embedded = []
+        for index in range(struct.unpack_from("<H", ico, 4)[0]):
+            width, height, _, _, _, _, size, offset = struct.unpack_from("<BBBBHHII", ico, 6 + 16 * index)
+            if (width or 256, height or 256) == (256, 256):
+                embedded.append(ico[offset:offset + size])
+        png = (ROOT / "src/assets/mcu_icon.png").read_bytes()
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertIn(png, embedded)
+
     def test_shipped_launchers_are_distinct_native_64_bit_executables(self):
         for name, machine, other_machine in (("MCU_Flasher", "x86_64", "aarch64"),
                                              ("MCU_Flasher-arm64", "aarch64", "x86_64")):
@@ -362,6 +374,9 @@ class ShortcutChecks(unittest.TestCase):
     def test_installer_creates_distinct_portable_folder_and_fixed_menu_shortcuts(self):
         (self.root / "direct/ubuntu").mkdir(parents=True)
         (self.root / "direct/ubuntu/run.sh").write_text("fixture", encoding="utf-8")
+        (self.root / "src/assets").mkdir(parents=True)
+        icon = (ROOT / "src/assets/mcu_icon.png").read_bytes()
+        (self.root / "src/assets/mcu_icon.png").write_bytes(icon)
         data_home = self.root / "local-data"
         with patch.object(install_desktop, "ROOT", self.root), \
                 patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}):
@@ -372,6 +387,100 @@ class ShortcutChecks(unittest.TestCase):
         self.assertEqual(desktop_command(registered), ["/bin/bash", str(self.root / "direct/ubuntu/run.sh"), "--desktop"])
         self.assertNotIn("%k", registered)
         self.assertNotIn("MCU_Flasher\"", registered)
+        for text in (local, registered):
+            self.assertIn("Icon=mcu-flasher\n", text)
+            self.assertIn("StartupWMClass=MCU Flasher by Naph\n", text)
+            self.assertNotIn("mcu_icon.ico", text)
+        self.assertEqual((data_home / "icons/hicolor/256x256/apps/mcu-flasher.png").read_bytes(), icon)
+
+    def test_folder_only_registration_keeps_icon_after_relocation_and_skips_unchanged_writes(self):
+        folder = self.fixture()
+        (folder / "src/assets").mkdir(parents=True)
+        shutil.copy2(ROOT / "src/assets/mcu_icon.png", folder / "src/assets/mcu_icon.png")
+        data_home = self.root / "local-data"
+        with patch.object(install_desktop, "ROOT", folder), \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}):
+            self.assertEqual(install_desktop.main([]), 0)
+            # A repeat registration needs no writable open for existing bytes.
+            with patch.object(Path, "write_bytes", side_effect=AssertionError("Unchanged registration wrote bytes")):
+                self.assertEqual(install_desktop.main([]), 0)
+        icon = data_home / "icons/hicolor/256x256/apps/mcu-flasher.png"
+        before = icon.read_bytes()
+        moved = self.root / "relocated application"
+        folder.rename(moved)
+        self.assertIn("Icon=mcu-flasher\n", (moved / "MCU Flasher.desktop").read_text())
+        self.assertEqual(icon.read_bytes(), before)
+        self.assertFalse((data_home / "applications").exists())
+
+    def test_shortcut_registration_refuses_relative_data_home_or_missing_icon_before_writes(self):
+        folder = self.fixture()
+        for arguments in ([], ["--install"]):
+            with self.subTest(arguments=arguments), patch.object(install_desktop, "ROOT", folder), \
+                    patch.object(install_desktop, "write_if_changed") as write:
+                with patch.dict(os.environ, {"XDG_DATA_HOME": "relative-data"}), \
+                        self.assertRaises(SystemExit) as stopped:
+                    install_desktop.main(arguments)
+                self.assertEqual(stopped.exception.code, 2)
+                with patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root / "local-data")}):
+                    self.assertEqual(install_desktop.main(arguments), 1)
+                write.assert_not_called()
+
+    def test_shortcut_registration_reports_failed_icon_write(self):
+        folder = self.fixture()
+        (folder / "src/assets").mkdir(parents=True)
+        shutil.copy2(ROOT / "src/assets/mcu_icon.png", folder / "src/assets/mcu_icon.png")
+        with patch.object(install_desktop, "ROOT", folder), \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root / "local-data")}), \
+                patch.object(install_desktop, "write_if_changed", side_effect=PermissionError("fixture write denied")), \
+                patch("sys.stderr.write") as error:
+            self.assertEqual(install_desktop.main(["--install"]), 1)
+        self.assertIn("fixture write denied", "".join(call.args[0] for call in error.call_args_list))
+        self.assertFalse((folder / "MCU Flasher.desktop").exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Native Qt icon theme lookup")
+    def test_registered_icon_resolves_in_qt_and_matches_running_app_identity(self):
+        folder = self.fixture()
+        (folder / "src/assets").mkdir(parents=True)
+        shutil.copy2(ROOT / "src/assets/mcu_icon.png", folder / "src/assets/mcu_icon.png")
+        data_home = self.root / "local-data"
+        with patch.object(install_desktop, "ROOT", folder), \
+                patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}):
+            self.assertEqual(install_desktop.main(["--install"]), 0)
+        # Run Qt in a fresh process with an isolated account. Execute only the
+        # actual startup identity statements, never import the app or services.
+        code = '''import ast, json, sys
+from pathlib import Path
+from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon, QImage
+from PySide6.QtCore import QStandardPaths
+app = QApplication(["mcu_flash_gui.py"])
+tree = ast.parse(Path(sys.argv[1]).read_text(encoding="utf-8"))
+startup = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+identity = [node for node in ast.walk(startup) if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == "app"
+            and node.value.func.attr in ("setApplicationName", "setDesktopFileName")]
+exec(compile(ast.Module(body=identity, type_ignores=[]), "<startup-identity>", "exec"))
+# The offscreen plugin has no desktop platform theme. Supply the standard XDG
+# icon search roots rather than asserting that a headless plugin discovers them.
+QIcon.setThemeSearchPaths([str(Path(path) / "icons") for path in QStandardPaths.standardLocations(QStandardPaths.StandardLocation.GenericDataLocation)])
+QIcon.setThemeName("hicolor")
+icon = QIcon.fromTheme("mcu-flasher")
+assert not icon.isNull(), QIcon.themeSearchPaths()
+format = QImage.Format.Format_ARGB32_Premultiplied
+assert icon.pixmap(256, 256).toImage().convertToFormat(format) == QImage(sys.argv[2]).convertToFormat(format)
+print(json.dumps({"desktopFileName": app.desktopFileName(), "windowClass": app.applicationName(), "icon": icon.name()}))
+'''
+        env = {**os.environ, "HOME": str(self.root), "XDG_DATA_HOME": str(data_home),
+               "XDG_CONFIG_HOME": str(self.root / "config"), "XDG_CACHE_HOME": str(self.root / "cache"),
+               "XDG_DATA_DIRS": "/usr/local/share:/usr/share", "QT_QPA_PLATFORM": "offscreen",
+               "QT_SCALE_FACTOR": "1", "QT_SCREEN_SCALE_FACTORS": "1", "QT_QPA_PLATFORMTHEME": ""}
+        result = subprocess.run([sys.executable, "-B", "-c", code, str(ROOT / "main/mcu_flash_gui.py"),
+                                 str(ROOT / "src/assets/mcu_icon.png")], env=env,
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"desktopFileName": "mcu-flasher",
+                         "windowClass": "MCU Flasher by Naph", "icon": "mcu-flasher"})
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Native Ubuntu launcher")
@@ -668,6 +777,8 @@ class LauncherChecks(unittest.TestCase):
     def test_native_shortcut_and_registration_use_fixture_locations(self):
         (self.root / "direct/ubuntu").mkdir(parents=True)
         (self.root / "direct/ubuntu/run.sh").write_text("fixture", encoding="utf-8")
+        (self.root / "src/assets").mkdir(parents=True)
+        shutil.copy2(ROOT / "src/assets/mcu_icon.png", self.root / "src/assets/mcu_icon.png")
         data_home = self.root / "local-data"
         with patch.object(install_desktop, "ROOT", self.root), \
                 patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}):

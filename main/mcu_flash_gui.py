@@ -226,6 +226,9 @@ def main() -> int:
         app.setApplicationName("MCU Flasher by Naph")
         app.setOrganizationName("Naph")
         app.setApplicationVersion("3.0")
+        if sys.platform.startswith("linux"):
+            # Match the registered launcher for Wayland/dock app association.
+            app.setDesktopFileName("mcu-flasher")
         if sys.platform == "win32":
             try:
                 ctypes.windll.user32.AllowSetForegroundWindow(-1)
