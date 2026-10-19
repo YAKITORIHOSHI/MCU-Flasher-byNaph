@@ -38,6 +38,17 @@ for (const source of sources) {
       sha256: createHash('sha256').update(bytes).digest('hex'), role: 'original-webpack-url' });
   }
 }
+// Notices recovered from integrity-checked npm archives matching the retained
+// xterm JavaScript bytes. Preserve originals, including the CSS attribution.
+for (const filename of ['xterm-5.3.0.LICENSE.txt', 'xterm-addon-fit-0.8.0.LICENSE.txt', 'xterm-css-5.3.0.NOTICE.txt']) {
+  const source = `desktop/ui/notices/${filename}`;
+  const destination = `vendor/notices/${filename}`;
+  const bytes = await readFile(resolve(repo, source));
+  await mkdir(dirname(resolve(publicRoot, destination)), { recursive: true });
+  await copyFile(resolve(repo, source), resolve(publicRoot, destination));
+  records.push({ source, destination, bytes: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'), role: 'matching-upstream-notice' });
+}
 await writeFile(resolve(output, 'manifest.json'), JSON.stringify({
   schemaVersion: 1, generatedBy: 'desktop/scripts/stage-assets.mjs',
   policy: 'Byte-identical copies of existing repository resources; no runtime network fetch.',

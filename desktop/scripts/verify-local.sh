@@ -10,6 +10,7 @@ mkdir -p audit/migration/logs audit/migration/scratch
 pnpm --dir desktop/ui install --frozen-lockfile
 pnpm --dir desktop/ui test
 pnpm --dir desktop/ui build
+python3 -B -W error desktop/scripts/verify-asset-provenance.py
 cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
 cargo test --manifest-path desktop/Cargo.toml --locked
 cargo clippy --manifest-path desktop/Cargo.toml --workspace --all-targets --locked -- -D warnings

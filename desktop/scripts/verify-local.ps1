@@ -18,6 +18,7 @@ try {
     Invoke-Checked pnpm @('--dir', 'desktop/ui', 'install', '--frozen-lockfile')
     Invoke-Checked pnpm @('--dir', 'desktop/ui', 'test')
     Invoke-Checked pnpm @('--dir', 'desktop/ui', 'build')
+    Invoke-Checked python @('-B', '-W', 'error', 'desktop/scripts/verify-asset-provenance.py')
     Invoke-Checked cargo @('fmt', '--manifest-path', 'desktop/Cargo.toml', '--all', '--', '--check')
     Invoke-Checked cargo @('test', '--manifest-path', 'desktop/Cargo.toml', '--locked')
     Invoke-Checked cargo @('clippy', '--manifest-path', 'desktop/Cargo.toml', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')

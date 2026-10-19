@@ -80,6 +80,15 @@ Compare deterministic stepped traces with the original Python class and count
 typed protocol refusals separately. The pure queue does not qualify a driver,
 serial UI, unplug handling or actual hardware delivery.
 
+Existing xterm JavaScript matches integrity-checked npm `xterm@5.3.0` and
+`xterm-addon-fit@0.8.0` artifacts; retain their matching notices and the complete
+original CSS copyright block from `desktop/ui/notices/`. The original 22 resource
+sources still produce 25 identical copies; three notices bring staged output to
+28 files. Run the offline asset-provenance verifier after staging. These matches
+do not close Monaco/transitive-bundle notices, codicon attribution or the full
+dependency/installer provenance gates; do not substitute current upstream text
+for an unidentified artifact's notice.
+
 Preserve untouched native metadata as validated opaque JSON fragments; do not
 round large Python integers or reinterpret private-marker-shaped objects through
 `Value`. The registry uses private `IgnoredAny` boundaries and manual composition

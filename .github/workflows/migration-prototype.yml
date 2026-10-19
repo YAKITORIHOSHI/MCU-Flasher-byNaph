@@ -63,6 +63,7 @@ jobs:
           pnpm --dir desktop/ui install --frozen-lockfile
           pnpm --dir desktop/ui test
           pnpm --dir desktop/ui build
+          python -B -W error desktop/scripts/verify-asset-provenance.py
       - name: Rust contracts, project services and native build
         shell: bash
         run: |
