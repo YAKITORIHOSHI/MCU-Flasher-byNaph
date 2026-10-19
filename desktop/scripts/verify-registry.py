@@ -64,7 +64,10 @@ def main():
             (fixture / name).mkdir()
         target = fixture / "settings.json"
         parent_pid = str(os.getpid())
-        seed = dict(shared=dict(theme="glass", unknown=dict(message="café 日本語", count=1)),
+        seed = dict(shared=dict(theme="glass", unknown=dict(message="café 日本語", count=1,
+                    largePositive=18446744073709551617, largeNegative=-18446744073709551617,
+                    numberMarker={"$serde_json::private::Number": "123"},
+                    rawMarker={"$serde_json::private::RawValue": "{\"preserve\":true}"})),
                     instances={parent_pid: dict(create_time=psutil.Process().create_time(),
                                                 selected_port="FIXTURE-PORT-B", unknown=[1, 2, 3])},
                     futureVersion=dict(preserve=True))
@@ -92,7 +95,9 @@ def main():
             checks.append("simultaneous-claims-have-one-live-winner")
             config = json.loads(target.read_bytes())
             assert config["shared"] == seed["shared"] and config["futureVersion"] == seed["futureVersion"]
-            assert config["instances"][parent_pid] == seed["instances"][parent_pid]
+            assert config["instances"][parent_pid] == seed["instances"][parent_pid], (
+                "Unrelated Python registration changed", seed["instances"][parent_pid],
+                config["instances"][parent_pid])
             own = config["instances"][str(winner.pid)]
             assert own["selected_port"] == "FIXTURE-PORT-A" and own["create_time"] > 0
             checks.append("registration-preserves-unrelated-python-records-and-fields")
@@ -109,6 +114,7 @@ def main():
                 config = json.loads(target.read_bytes())
                 config["shared"]["unknown"]["count"] = 2
                 config["instances"][str(winner.pid)]["concurrentPreference"] = "retained"
+                config["instances"][str(winner.pid)]["futureInteger"] = 18446744073709551617
                 # Use the native-written prefix/spelling to avoid conflating
                 # Windows canonicalization with this registration proof.
                 native_project = config["instances"][str(winner.pid)]["active_sketch_dir"]
@@ -124,6 +130,7 @@ def main():
             own = config["instances"][str(winner.pid)]
             assert own["active_sketch_dir"] == own["selected_port"] == ""
             assert own["concurrentPreference"] == "retained" and config["shared"]["unknown"]["count"] == 2
+            assert own["futureInteger"] == 18446744073709551617
             checks.append("release-rereads-and-preserves-concurrent-python-updates")
 
             crashed = start(fixture)

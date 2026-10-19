@@ -14,6 +14,13 @@ values = [None, False, True, 0, 1, 1.0, "glass", [], [True, 1], {"theme":"glass"
 cases = [[{"setting":current,"keep":"concurrent"}, {"setting":original}, {"setting":edited}]
          for current, original, edited in itertools.product(values, repeat=3)]
 cases += [[{"new":{"other":1},"delete":2},{"delete":1},{"new":{"added":3}}]]
+# These are ordinary user objects. A globally enabled serde_json raw-value or
+# arbitrary-precision feature must not reinterpret their private-looking keys.
+for marker in ({"$serde_json::private::RawValue":"123"},
+               {"$serde_json::private::Number":"123"},
+               {"$serde_json::private::RawValue":"not JSON"}):
+    cases.append([{"keep":marker,"group":{"concurrent":True}},
+                  {"group":{}},{"group":{"changed":marker}}])
 expected = []
 for current, original, edited in cases:
     try:

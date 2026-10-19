@@ -2,9 +2,9 @@ name: Rust migration compatibility prototype
 
 on:
   push:
-    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
+    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', '.github/workflows/migration-prototype.yml']
   pull_request:
-    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', '.github/workflows/migration-prototype.yml']
+    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', '.github/workflows/migration-prototype.yml']
   workflow_dispatch:
 
 permissions:
@@ -110,6 +110,50 @@ jobs:
           path: |
             audit/migration/native-webview.json
             desktop/ui/public/vendor/manifest.json
+          if-no-files-found: warn
+
+  editor-review:
+    name: Windows editor review (Python ${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.11'
+            qt: 'PySide6>=6.7,<6.12'
+          - python: '3.14'
+            qt: 'PySide6>=6.12,<7'
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      QT_QPA_PLATFORM: windows
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Private reference runtime
+        shell: pwsh
+        run: |
+          python -m venv env
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -m pip install '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets pywinpty
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native editor focus and compact viewport at both scales
+        shell: pwsh
+        run: |
+          foreach ($scale in @('1', '2')) {
+            $env:QT_SCALE_FACTOR = $scale
+            & env/Scripts/python.exe -B -W error direct/verify_editor_review_ui.py --render-dir "audit/migration/captures/editor-review-$scale"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Focus and viewport captures
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: editor-review-windows-python-${{ matrix.python }}
+          path: audit/migration/captures/editor-review-*
           if-no-files-found: warn
 
 # These jobs prove only the fixture prototype on their exact runners. Windows

@@ -10,7 +10,8 @@
 
 use crate::fixture_lock::{FixtureLockAttempt, FixtureLockScope};
 use mcu_core::ownership::{plan_claim, ClaimRequest, Collision, OwnershipRefusal, ProcessEvidence};
-use serde_json::Value;
+use serde::de::{Deserialize, IgnoredAny};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions, Permissions};
@@ -53,6 +54,7 @@ pub enum FixtureRegistryRefusal {
     SettingsTooLarge,
     MalformedJson(serde_json::Error),
     NonObjectSettings,
+    UnexpectedOwnershipPlan,
     Ownership(OwnershipRefusal),
     ExternalChange,
 }
@@ -70,6 +72,8 @@ impl fmt::Display for FixtureRegistryRefusal {
             Self::NonObjectSettings => {
                 formatter.write_str("Fixture settings must be a JSON object")
             }
+            Self::UnexpectedOwnershipPlan => formatter
+                .write_str("Ownership plan changed fields outside the caller's ownership record"),
             Self::Ownership(reason) => write!(formatter, "Ownership plan refused: {reason:?}"),
             Self::ExternalChange => formatter
                 .write_str("Fixture settings changed outside their lock; nothing was replaced"),
@@ -84,6 +88,285 @@ type RegistryResult<T> = Result<T, FixtureRegistryRefusal>;
 struct SettingsSnapshot {
     bytes: Option<Vec<u8>>,
     permissions: Option<Permissions>,
+}
+
+type RawObject = BTreeMap<String, JsonFragment>;
+const OWNERSHIP_FIELDS: [&str; 4] = ["create_time", "active_sketch_dir", "selected_port", "hwnd"];
+
+/// A validated, single JSON value whose spelling is retained without numeric
+/// conversion. This stays private instead of enabling serde_json's raw_value
+/// feature, which changes how every Value consumer interprets marker objects.
+#[derive(Clone)]
+struct JsonFragment(String);
+
+fn json_error(message: &str) -> FixtureRegistryRefusal {
+    FixtureRegistryRefusal::MalformedJson(<serde_json::Error as serde::de::Error>::custom(message))
+}
+
+fn json_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\n' | b'\r' | b'\t')
+}
+
+fn parsed_prefix<'a, T: Deserialize<'a>>(text: &'a str) -> RegistryResult<(T, usize)> {
+    let mut stream = serde_json::Deserializer::from_str(text).into_iter::<T>();
+    let value = stream
+        .next()
+        .ok_or_else(|| json_error("Expected a JSON value"))?
+        .map_err(FixtureRegistryRefusal::MalformedJson)?;
+    Ok((value, stream.byte_offset()))
+}
+
+impl JsonFragment {
+    fn parse(bytes: &[u8]) -> RegistryResult<Self> {
+        if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+            return Err(FixtureRegistryRefusal::SettingsTooLarge);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| json_error("Invalid UTF-8 JSON"))?;
+        // IgnoredAny validates JSON syntax without parsing integers/floats into
+        // machine numbers or adopting serde_json's private marker objects.
+        let (_, end) = parsed_prefix::<IgnoredAny>(text)?;
+        if !text.as_bytes()[end..].iter().copied().all(json_whitespace) {
+            return Err(json_error("Trailing characters after JSON value"));
+        }
+        let start = text
+            .as_bytes()
+            .iter()
+            .copied()
+            .take_while(|byte| json_whitespace(*byte))
+            .count();
+        Ok(Self(text[start..end].into()))
+    }
+
+    fn get(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Keep untouched JSON as raw values. Python integers can exceed u64 and valid
+/// user objects may contain serde_json's private Number/RawValue marker keys.
+/// Neither may be passed through Value during a read/modify/write transaction.
+struct SettingsProjection {
+    root: RawObject,
+    instances: RawObject,
+    own: RawObject,
+    policy: Value,
+}
+
+fn raw_object(value: &JsonFragment) -> RegistryResult<Option<RawObject>> {
+    let text = value.get();
+    if !text.starts_with('{') {
+        return Ok(None);
+    }
+    let bytes = text.as_bytes();
+    let mut position = 1;
+    let mut fields = RawObject::new();
+    loop {
+        while bytes.get(position).copied().is_some_and(json_whitespace) {
+            position += 1;
+        }
+        if bytes.get(position) == Some(&b'}') {
+            break;
+        }
+        let (key, consumed) = parsed_prefix::<String>(&text[position..])?;
+        position += consumed;
+        while bytes.get(position).copied().is_some_and(json_whitespace) {
+            position += 1;
+        }
+        if bytes.get(position) != Some(&b':') {
+            return Err(json_error("Expected colon after JSON object key"));
+        }
+        position += 1;
+        while bytes.get(position).copied().is_some_and(json_whitespace) {
+            position += 1;
+        }
+        let (_, consumed) = parsed_prefix::<IgnoredAny>(&text[position..])?;
+        // The parent fragment and this value boundary have both been validated.
+        fields.insert(
+            key,
+            JsonFragment(text[position..position + consumed].into()),
+        );
+        position += consumed;
+        while bytes.get(position).copied().is_some_and(json_whitespace) {
+            position += 1;
+        }
+        match bytes.get(position) {
+            Some(b',') => position += 1,
+            Some(b'}') => break,
+            _ => return Err(json_error("Expected JSON object delimiter")),
+        }
+    }
+    Ok(Some(fields))
+}
+
+fn policy_field(field: &str, raw: &JsonFragment) -> Value {
+    if raw.get().trim() == "null" {
+        return Value::Null;
+    }
+    match field {
+        "create_time" => serde_json::from_str::<f64>(raw.get())
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number)
+            // Invalid non-null identity must not look absent/stale. The core
+            // rejects this non-number if that record needs identity evidence.
+            .unwrap_or(Value::Bool(false)),
+        "active_sketch_dir" | "selected_port" => serde_json::from_str::<String>(raw.get())
+            .map(Value::String)
+            .unwrap_or(Value::Bool(false)),
+        // A repeated native handle must remain an unchanged claim. Invalid or
+        // future handle shapes stay opaque unless this caller replaces them.
+        "hwnd" => serde_json::from_str::<u64>(raw.get())
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
+impl SettingsProjection {
+    fn read(bytes: Option<&[u8]>, pid: &str) -> RegistryResult<Self> {
+        let root = match bytes {
+            Some(bytes) => {
+                let raw = JsonFragment::parse(bytes)?;
+                raw_object(&raw)?.ok_or(FixtureRegistryRefusal::NonObjectSettings)?
+            }
+            None => RawObject::new(),
+        };
+        let mut policy: Map<String, Value> =
+            root.keys().map(|key| (key.clone(), Value::Null)).collect();
+        let mut instances = RawObject::new();
+        let mut own = RawObject::new();
+        if let Some(raw) = root.get("instances") {
+            if let Some(records) = raw_object(raw)? {
+                let mut projected = Map::new();
+                for (owner, record) in &records {
+                    let value = if let Some(fields) = raw_object(record)? {
+                        let projection: Map<String, Value> = fields
+                            .iter()
+                            .map(|(field, raw)| (field.clone(), policy_field(field, raw)))
+                            .collect();
+                        if owner == pid {
+                            own = fields;
+                        }
+                        Value::Object(projection)
+                    } else {
+                        Value::Bool(false)
+                    };
+                    projected.insert(owner.clone(), value);
+                }
+                instances = records;
+                policy.insert("instances".into(), Value::Object(projected));
+            } else {
+                // Even null instances are malformed under the legacy policy.
+                policy.insert("instances".into(), Value::Bool(false));
+            }
+        }
+        Ok(Self {
+            root,
+            instances,
+            own,
+            policy: Value::Object(policy),
+        })
+    }
+
+    fn compose(mut self, next: &Value, request: ClaimRequest<'_>) -> RegistryResult<Vec<u8>> {
+        let invalid = || FixtureRegistryRefusal::UnexpectedOwnershipPlan;
+        let before = self.policy.as_object().ok_or_else(invalid)?;
+        let after = next.as_object().ok_or_else(invalid)?;
+        if !before
+            .iter()
+            .filter(|(key, _)| key.as_str() != "instances")
+            .eq(after.iter().filter(|(key, _)| key.as_str() != "instances"))
+        {
+            return Err(invalid());
+        }
+        let empty = Map::new();
+        let before_instances = before
+            .get("instances")
+            .and_then(Value::as_object)
+            .unwrap_or(&empty);
+        let after_instances = after
+            .get("instances")
+            .and_then(Value::as_object)
+            .ok_or_else(invalid)?;
+        let pid = request.process.pid.to_string();
+        if !before_instances
+            .iter()
+            .filter(|(key, _)| **key != pid)
+            .eq(after_instances.iter().filter(|(key, _)| **key != pid))
+        {
+            return Err(invalid());
+        }
+        let before_own = before_instances
+            .get(&pid)
+            .and_then(Value::as_object)
+            .unwrap_or(&empty);
+        let after_own = after_instances
+            .get(&pid)
+            .and_then(Value::as_object)
+            .ok_or_else(invalid)?;
+        // The core deliberately clears a proven reused PID's entire old block.
+        let reused_pid = before_own
+            .get("create_time")
+            .and_then(Value::as_f64)
+            .is_some_and(|time| (time - request.process.create_time).abs() >= 2.0);
+        let mut own = if reused_pid {
+            RawObject::new()
+        } else {
+            self.own.clone()
+        };
+        if !reused_pid
+            && before_own
+                .keys()
+                .any(|field| !after_own.contains_key(field))
+        {
+            return Err(invalid());
+        }
+        for (field, value) in after_own {
+            if !reused_pid && before_own.get(field) == Some(value) {
+                if !own.contains_key(field) {
+                    return Err(invalid());
+                }
+                continue;
+            }
+            if !OWNERSHIP_FIELDS.contains(&field.as_str()) {
+                return Err(invalid());
+            }
+            own.insert(field.clone(), raw_from_serializable(value)?);
+        }
+        self.instances.insert(pid, raw_from_object(&own)?);
+        self.root
+            .insert("instances".into(), raw_from_object(&self.instances)?);
+        let mut bytes = raw_from_object(&self.root)?.0.into_bytes();
+        bytes.push(b'\n');
+        if bytes.len() as u64 > MAX_SETTINGS_BYTES {
+            return Err(FixtureRegistryRefusal::SettingsTooLarge);
+        }
+        Ok(bytes)
+    }
+}
+
+fn raw_from_serializable(value: &impl serde::Serialize) -> RegistryResult<JsonFragment> {
+    let text = serde_json::to_string(value).map_err(FixtureRegistryRefusal::MalformedJson)?;
+    JsonFragment::parse(text.as_bytes())
+}
+
+fn raw_from_object(fields: &RawObject) -> RegistryResult<JsonFragment> {
+    let mut text = String::from("{");
+    for (index, (key, value)) in fields.iter().enumerate() {
+        if index != 0 {
+            text.push(',');
+        }
+        text.push_str(&serde_json::to_string(key).map_err(FixtureRegistryRefusal::MalformedJson)?);
+        text.push(':');
+        text.push_str(value.get());
+        if text.len() as u64 >= MAX_SETTINGS_BYTES {
+            return Err(FixtureRegistryRefusal::SettingsTooLarge);
+        }
+    }
+    text.push('}');
+    // Keys were serialized by serde_json and every value is an immutable,
+    // validated fragment; composing those with fixed delimiters is valid JSON.
+    Ok(JsonFragment(text))
 }
 
 impl FixtureRegistry {
@@ -115,10 +398,12 @@ impl FixtureRegistry {
         })
     }
 
-    /// Obtain controlled host evidence only after the fresh read and while the
+    /// Obtain controlled host evidence from the ownership policy projection
+    /// only after the fresh read and while the
     /// legacy OS lock remains held. Run this transaction on a worker: native
     /// process/path observations must never block the renderer/IPC thread.
-    /// This fixture API still does not authorize observations of live settings.
+    /// Unrelated fields are opaque nulls; only creation time, project/port and
+    /// native window ownership are exposed. This does not authorize live access.
     pub fn claim_with(
         &self,
         request: ClaimRequest<'_>,
@@ -142,20 +427,11 @@ impl FixtureRegistry {
         };
         let target = self.root.join(SETTINGS_NAME);
         let snapshot = read_settings(&target)?;
-        let config = match &snapshot.bytes {
-            Some(bytes) => {
-                let value: Value =
-                    serde_json::from_slice(bytes).map_err(FixtureRegistryRefusal::MalformedJson)?;
-                if !value.is_object() {
-                    return Err(FixtureRegistryRefusal::NonObjectSettings);
-                }
-                value
-            }
-            None => Value::Object(Default::default()),
-        };
-        let evidence = gather(&config)?;
+        let projection =
+            SettingsProjection::read(snapshot.bytes.as_deref(), &request.process.pid.to_string())?;
+        let evidence = gather(&projection.policy)?;
         let plan = plan_claim(
-            &config,
+            &projection.policy,
             request,
             &evidence.processes,
             &evidence.project_keys,
@@ -164,15 +440,10 @@ impl FixtureRegistry {
         if !plan.granted() {
             return Ok(FixtureRegistryOutcome::Collision(plan.collisions));
         }
-        if plan.config == config {
+        if plan.config == projection.policy {
             return Ok(FixtureRegistryOutcome::Unchanged);
         }
-        let mut bytes = serde_json::to_vec_pretty(&plan.config)
-            .map_err(FixtureRegistryRefusal::MalformedJson)?;
-        bytes.push(b'\n');
-        if bytes.len() as u64 > MAX_SETTINGS_BYTES {
-            return Err(FixtureRegistryRefusal::SettingsTooLarge);
-        }
+        let bytes = projection.compose(&plan.config, request)?;
         self.replace_settings(&target, snapshot, &bytes, before_replace)?;
         Ok(FixtureRegistryOutcome::Updated {
             bytes_written: bytes.len(),
@@ -391,6 +662,12 @@ mod tests {
             serde_json::from_slice(&fs::read(self.settings()).unwrap()).unwrap()
         }
 
+        fn read_raw(&self) -> RawObject {
+            raw_object(&JsonFragment::parse(&fs::read(self.settings()).unwrap()).unwrap())
+                .unwrap()
+                .unwrap()
+        }
+
         fn assert_released_and_clean(&self) {
             assert!(matches!(
                 FixtureLockScope::new(&self.app, &self.root)
@@ -433,6 +710,54 @@ mod tests {
     }
 
     #[test]
+    fn opaque_object_boundaries_preserve_escaped_keys_literals_and_python_duplicate_keys() {
+        let original = r#"
+            {"caf\u00e9 \"key\"": ["comma, colon: braces{}", {"nested": "日本語"}],
+             "duplicate": 0, "\u0064uplicate": 18446744073709551617,
+             "extremeExponent": 1e999999999999999999999999999999,
+             "marker": {"$serde_json::private::RawValue":"not JSON"}}	 "#;
+        let fragment = JsonFragment::parse(original.as_bytes()).unwrap();
+        let fields = raw_object(&fragment).unwrap().unwrap();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields["duplicate"].get(), "18446744073709551617");
+        assert_eq!(
+            fields["extremeExponent"].get(),
+            "1e999999999999999999999999999999"
+        );
+        assert_eq!(
+            fields["café \"key\""].get(),
+            r#"["comma, colon: braces{}", {"nested": "日本語"}]"#
+        );
+        let recomposed = raw_from_object(&fields).unwrap();
+        let reparsed = raw_object(&recomposed).unwrap().unwrap();
+        for (key, original) in &fields {
+            assert_eq!(reparsed[key].get(), original.get());
+        }
+    }
+
+    #[test]
+    fn opaque_value_validation_rejects_malformed_and_trailing_json_before_scanning() {
+        for invalid in [
+            "",
+            "{} {}",
+            "{\"x\":[1,]}",
+            "{\"x\":1,}",
+            "{\"x\":01}",
+            "{\"x\":1.e2}",
+            "{\"x\":1e+}",
+            "{\"x\":tru}",
+            r#"{"x":"\u00xz"}"#,
+            "{\"x\":\"unescaped\nline\"}",
+        ] {
+            assert!(
+                JsonFragment::parse(invalid.as_bytes()).is_err(),
+                "Accepted {invalid:?}"
+            );
+        }
+        assert!(JsonFragment::parse(b"{\"x\":\"\xff\"}").is_err());
+    }
+
+    #[test]
     fn missing_settings_create_then_unchanged_claim_preserves_exact_bytes_and_mtime() {
         let fixture = Fixture::new();
         let registry = fixture.registry();
@@ -458,6 +783,24 @@ mod tests {
                 .unwrap(),
             modified
         );
+        fixture.assert_released_and_clean();
+    }
+
+    #[test]
+    fn repeated_native_window_handle_claim_does_not_rewrite_original_bytes() {
+        let fixture = Fixture::new();
+        let original = b"{ \"instances\": {\"10\": {\"create_time\":100.0,\"hwnd\":42}} }\n";
+        fs::write(fixture.settings(), original).unwrap();
+        let mut claim = request(ClaimChange::Keep, ClaimChange::Keep);
+        claim.hwnd = Some(42);
+        assert_eq!(
+            fixture
+                .registry()
+                .claim(claim, &BTreeMap::new(), &keys())
+                .unwrap(),
+            FixtureRegistryOutcome::Unchanged
+        );
+        assert_eq!(fs::read(fixture.settings()).unwrap(), original);
         fixture.assert_released_and_clean();
     }
 
@@ -505,6 +848,191 @@ mod tests {
     }
 
     #[test]
+    fn python_float_timestamps_survive_claim_and_release_without_rounding() {
+        let fixture = Fixture::new();
+        let registry = fixture.registry();
+        // Python's json.dumps produces this decimal for a possible Windows
+        // psutil timestamp. The default serde_json parser rounds it down by one
+        // ULP; parsing the expected JSON with that same parser would hide loss.
+        let initial = br#"{"shared":{"precise":1792340000.1227617},"instances":{
+            "20":{"create_time":1792340000.1227617,"selected_port":"COM8"}
+        }}"#;
+        fs::write(fixture.settings(), initial).unwrap();
+        let expected_bits = 1792340000.1227617_f64.to_bits();
+        for (project, port) in [
+            (ClaimChange::Set("fixture-sketch"), ClaimChange::Set("COM5")),
+            (ClaimChange::Release, ClaimChange::Release),
+        ] {
+            assert!(matches!(
+                registry
+                    .claim(request(project, port), &BTreeMap::new(), &keys())
+                    .unwrap(),
+                FixtureRegistryOutcome::Updated { .. }
+            ));
+            let saved = fixture.read();
+            for number in [
+                &saved["shared"]["precise"],
+                &saved["instances"]["20"]["create_time"],
+            ] {
+                assert_eq!(number.as_f64().unwrap().to_bits(), expected_bits);
+            }
+            let bytes = fs::read_to_string(fixture.settings()).unwrap();
+            assert_eq!(bytes.matches("1792340000.1227617").count(), 2);
+        }
+        fixture.assert_released_and_clean();
+    }
+
+    #[test]
+    fn unknown_json_objects_are_not_reinterpreted_as_number_markers() {
+        let fixture = Fixture::new();
+        let initial = br#"{"shared":{"$serde_json::private::Number":"123"}}"#;
+        fs::write(fixture.settings(), initial).unwrap();
+        assert!(matches!(
+            fixture
+                .registry()
+                .claim(
+                    request(ClaimChange::Set("fixture-sketch"), ClaimChange::Keep),
+                    &BTreeMap::new(),
+                    &keys()
+                )
+                .unwrap(),
+            FixtureRegistryOutcome::Updated { .. }
+        ));
+        let saved = fixture.read_raw();
+        let shared: BTreeMap<String, String> = serde_json::from_str(saved["shared"].get()).unwrap();
+        assert_eq!(shared["$serde_json::private::Number"], "123");
+        fixture.assert_released_and_clean();
+    }
+
+    #[test]
+    fn unknown_numbers_and_marker_objects_remain_raw_through_claim_and_release() {
+        let fixture = Fixture::new();
+        let registry = fixture.registry();
+        let opaque = r#"{"positive":18446744073709551617,"negative":-18446744073709551617,"precise":1792340000.1227617,"nested":[{"$serde_json::private::Number":"not a number"},{"$serde_json::private::RawValue":"not JSON"}]}"#;
+        let peer = format!(
+            r#"{{"create_time":1792340000.1227617,"selected_port":"COM8","future":{opaque}}}"#
+        );
+        let original = format!(
+            r#"{{"shared":{opaque},"futureInteger":18446744073709551617,"instances":{{"10":{{"create_time":100.0,"future":{opaque},"futureInteger":-18446744073709551617}},"20":{peer}}}}}"#
+        );
+        fs::write(fixture.settings(), original).unwrap();
+        for (project, port) in [
+            (ClaimChange::Set("fixture-sketch"), ClaimChange::Set("COM5")),
+            (ClaimChange::Release, ClaimChange::Release),
+        ] {
+            assert!(matches!(
+                registry
+                    .claim(request(project, port), &BTreeMap::new(), &keys())
+                    .unwrap(),
+                FixtureRegistryOutcome::Updated { .. }
+            ));
+            let root = fixture.read_raw();
+            assert_eq!(root["shared"].get(), opaque);
+            assert_eq!(root["futureInteger"].get(), "18446744073709551617");
+            let instances = raw_object(&root["instances"]).unwrap().unwrap();
+            assert_eq!(instances["20"].get(), peer);
+            let own = raw_object(&instances["10"]).unwrap().unwrap();
+            assert_eq!(own["future"].get(), opaque);
+            assert_eq!(own["futureInteger"].get(), "-18446744073709551617");
+            assert_eq!(own["create_time"].get(), "100.0");
+        }
+        fixture.assert_released_and_clean();
+    }
+
+    #[test]
+    fn proven_reused_pid_discards_only_its_old_raw_record() {
+        let fixture = Fixture::new();
+        let peer = r#"{"future":18446744073709551617}"#;
+        let original = format!(
+            r#"{{"future":-18446744073709551617,"instances":{{"10":{{"create_time":1.0,"future":18446744073709551617}},"20":{peer}}}}}"#
+        );
+        fs::write(fixture.settings(), original).unwrap();
+        fixture
+            .registry()
+            .claim(
+                request(ClaimChange::Set("fixture-sketch"), ClaimChange::Keep),
+                &BTreeMap::new(),
+                &keys(),
+            )
+            .unwrap();
+        let root = fixture.read_raw();
+        assert_eq!(root["future"].get(), "-18446744073709551617");
+        let instances = raw_object(&root["instances"]).unwrap().unwrap();
+        assert_eq!(instances["20"].get(), peer);
+        let own = raw_object(&instances["10"]).unwrap().unwrap();
+        assert!(!own.contains_key("future"));
+        assert_eq!(own["create_time"].get(), "100.0");
+        fixture.assert_released_and_clean();
+    }
+
+    #[test]
+    fn malformed_known_identity_fields_cannot_be_adopted_through_private_markers() {
+        for creation_time in [
+            r#"{"$serde_json::private::Number":"100.0"}"#,
+            r#"{"$serde_json::private::RawValue":"100.0"}"#,
+            "[]",
+            "true",
+            r#""100.0""#,
+            "1e400",
+        ] {
+            let fixture = Fixture::new();
+            let original = format!(r#"{{"instances":{{"10":{{"create_time":{creation_time}}}}}}}"#);
+            fs::write(fixture.settings(), &original).unwrap();
+            assert!(matches!(
+                fixture.registry().claim(
+                    request(ClaimChange::Set("fixture-sketch"), ClaimChange::Keep),
+                    &BTreeMap::new(),
+                    &keys()
+                ),
+                Err(FixtureRegistryRefusal::Ownership(
+                    OwnershipRefusal::InvalidCreationTime
+                ))
+            ));
+            assert_eq!(fs::read_to_string(fixture.settings()).unwrap(), original);
+            fixture.assert_released_and_clean();
+        }
+    }
+
+    #[test]
+    fn releasing_ignores_and_preserves_malformed_unrelated_peer_identity() {
+        let fixture = Fixture::new();
+        let peer = r#"{"create_time":{"$serde_json::private::RawValue":"100.0"},"selected_port":"COM5","future":18446744073709551617}"#;
+        let original = format!(r#"{{"instances":{{"20":{peer}}}}}"#);
+        fs::write(fixture.settings(), original).unwrap();
+        fixture
+            .registry()
+            .claim(
+                request(ClaimChange::Release, ClaimChange::Release),
+                &BTreeMap::new(),
+                &keys(),
+            )
+            .unwrap();
+        let root = fixture.read_raw();
+        let instances = raw_object(&root["instances"]).unwrap().unwrap();
+        assert_eq!(instances["20"].get(), peer);
+        fixture.assert_released_and_clean();
+    }
+
+    #[test]
+    fn raw_composer_rejects_unrelated_root_peer_and_own_field_changes() {
+        let initial = br#"{"shared":{"future":18446744073709551617},"instances":{"10":{"create_time":100.0,"future":123},"20":{"future":true}}}"#;
+        for alteration in 0..3 {
+            let projection = SettingsProjection::read(Some(initial), "10").unwrap();
+            let mut next = projection.policy.clone();
+            next["instances"]["10"]["selected_port"] = json!("COM5");
+            match alteration {
+                0 => next["shared"] = json!("changed"),
+                1 => next["instances"]["20"]["future"] = json!("changed"),
+                _ => next["instances"]["10"]["future"] = json!("changed"),
+            }
+            assert!(matches!(
+                projection.compose(&next, request(ClaimChange::Keep, ClaimChange::Set("COM5"))),
+                Err(FixtureRegistryRefusal::UnexpectedOwnershipPlan)
+            ));
+        }
+    }
+
+    #[test]
     fn contending_lock_is_busy_without_creating_settings_then_release_allows_claim() {
         let fixture = Fixture::new();
         let registry = fixture.registry();
@@ -530,13 +1058,17 @@ mod tests {
     fn host_evidence_is_gathered_from_the_fresh_snapshot_under_the_os_lock() {
         let fixture = Fixture::new();
         let registry = fixture.registry();
-        fs::write(fixture.settings(), b"{\"shared\":{\"revision\":2}}").unwrap();
+        fs::write(
+            fixture.settings(),
+            b"{\"shared\":{\"revision\":2},\"instances\":{\"20\":{\"create_time\":200.0}}}",
+        )
+        .unwrap();
         let scope = FixtureLockScope::new(&fixture.app, &fixture.root).unwrap();
         let outcome = registry
             .claim_with(
                 request(ClaimChange::Set("fixture-sketch"), ClaimChange::Keep),
                 |snapshot| {
-                    assert_eq!(snapshot["shared"]["revision"], 2);
+                    assert_eq!(snapshot["instances"]["20"]["create_time"], 200.0);
                     assert!(matches!(
                         scope.try_acquire(LOCK_NAME).unwrap(),
                         FixtureLockAttempt::Busy

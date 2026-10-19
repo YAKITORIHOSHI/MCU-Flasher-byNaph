@@ -21,7 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer, QUrl
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from main.qt.garbage_collection import install_gui_garbage_collector
@@ -200,7 +200,15 @@ class ReviewPage(QWebEnginePage):
 
 class EditorReviewChecks(unittest.TestCase):
     def setUp(self):
-        self.view = QWebEngineView()
+        # Match the application's embedded editor. A WM can maximize/clamp a
+        # top-level WebEngine window at 200%, preventing the compact viewport
+        # requests below from ever reaching its real render-widget geometry.
+        self.host = QWidget()
+        self.host.resize(1000, 620)
+        self.view = QWebEngineView(self.host)
+        self.host_layout = QVBoxLayout(self.host)
+        self.host_layout.setContentsMargins(0, 0, 0, 0)
+        self.host_layout.addWidget(self.view)
         self.profile = QWebEngineProfile(self.view)  # Off the record: no saved browser/session data.
         self.page = ReviewPage(self.profile, self.view)
         self.view.setPage(self.page)
@@ -209,7 +217,8 @@ class EditorReviewChecks(unittest.TestCase):
         self.addCleanup(self.assertFalse, self.page.console_issues)
         self.addCleanup(self._dispose_renderer)
         self.view.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
-        self.view.resize(1000, 620)
+        self.view.setMaximumSize(1000, 620)
+        self.host.show()
         self.view.show()
         self.load()
         self.js(FIXTURE)
@@ -221,6 +230,8 @@ class EditorReviewChecks(unittest.TestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.profile.deleteLater()
         self.view.deleteLater()
+        self.host.close()
+        self.host.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         APP.processEvents()
 
@@ -259,6 +270,32 @@ class EditorReviewChecks(unittest.TestCase):
     def snapshot(self):
         return self.js(SNAPSHOT)
 
+    def resize_viewport(self, width, height):
+        """Wait for CSS to reflect the client size actually granted by Qt."""
+        # The layout caps this logical viewport to the visible host contents.
+        # It also responds if the WM subsequently changes the host's size.
+        self.view.setMaximumSize(width, height)
+        self.host_layout.activate()
+        observed = {'requested': {'width': width, 'height': height}}
+
+        def ready():
+            contents = self.view.contentsRect()
+            host = self.host.contentsRect()
+            zoom = self.page.zoomFactor()
+            observed.update(qtViewport={'width': contents.width(), 'height': contents.height()},
+                            hostViewport={'width': host.width(), 'height': host.height()}, zoom=zoom)
+            observed['cssViewport'] = self.js('({width:innerWidth,height:innerHeight})')
+            return (host.contains(self.view.geometry()) and
+                    all(observed['qtViewport'][axis] == min(observed['requested'][axis], observed['hostViewport'][axis])
+                        and abs(observed['cssViewport'][axis] - observed['qtViewport'][axis]/zoom) <= 1
+                        for axis in ('width', 'height')))
+
+        try:
+            until(ready)
+        except AssertionError as error:
+            self.fail('WebEngine viewport did not settle: ' + json.dumps(observed) + ': ' + str(error))
+        return observed
+
     def review(self, revision='review-1'):
         return self.async_js(r"""
           const f = window.__reviewFixture, model = f.models.get(window.projectPathKey(f.mainPath));
@@ -293,9 +330,7 @@ class EditorReviewChecks(unittest.TestCase):
                                     (1.25,850,480),(2,900,500),(1,1200,700)):
             with self.subTest(zoom=zoom,width=width,height=height):
                 self.page.setZoomFactor(zoom)
-                self.view.resize(width,height)
-                until(lambda: abs(self.js('innerWidth') - self.view.contentsRect().width()/zoom) <= 1 and
-                      abs(self.js('innerHeight') - self.view.contentsRect().height()/zoom) <= 1)
+                self.resize_viewport(width, height)
                 self.async_js('await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));return true;')
                 geometry = self.js(r"""(() => {
                   const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();
@@ -391,12 +426,15 @@ class EditorReviewChecks(unittest.TestCase):
         self.assertFalse(before['close']['disabled'])
         self.assertNotEqual(before['close']['display'], 'none')
         self.assertEqual(len(before['decorations']), 3, before)
-        self.js("document.getElementById('ai-history-close').click(); true")
+        self.js("(() => {const close=document.getElementById('ai-history-close');close.focus();close.click();return true;})()")
         hidden = self.snapshot()
         self.assertEqual(hidden['banner'], 'none')
         self.assertEqual(hidden['toggle']['expanded'], 'false')
         self.assertFalse(hidden['toggle']['disabled'])
         self.assertTrue(hidden['toggle']['label'])
+        focus = self.js("({inside:document.getElementById('ai-diff-banner').contains(document.activeElement),editor:window.editorInstance.hasTextFocus(),toggle:document.activeElement===document.getElementById('ai-banner-toggle')})")
+        self.assertFalse(focus['inside'], focus)
+        self.assertTrue(focus['editor'] or focus['toggle'], focus)
         for key in ('uri','content','version','readOnly','glyphMargin','decorations','pending','accept','reject','calls'):
             self.assertEqual(hidden[key], before[key], key)
         self.js("document.getElementById('ai-banner-toggle').click(); true")
@@ -425,6 +463,76 @@ class EditorReviewChecks(unittest.TestCase):
         until(lambda: not self.snapshot()['pending'])
         self.assertEqual(len(self.snapshot()['calls']), 1)
         self.assertEqual(self.snapshot()['calls'][0]['method'], 'accept_ai_edit')
+
+        # Focus fallback must not edit buffers or consume their real undo stack.
+        self.review('focus-fallbacks')
+        # Explicit navigation retires the review's delayed first-change reveal;
+        # its 90 ms callback must not race the independent focus checks below.
+        self.assertTrue(self.async_js("return await window.navigateToSource({path:window.__reviewFixture.mainPath,line:5,column:1,reveal:'top'});"))
+        original = self.js("window.editorInstance.getModel().getValue()")
+        self.js(r"""(() => {
+          const editor=window.editorInstance;
+          window.__focusModel=editor.getModel();
+          editor.pushUndoStop();
+          editor.executeEdits('focus-fixture',[{range:new monaco.Range(1,1,1,1),text:'// focus sentinel\n'}]);
+          editor.pushUndoStop();return true;
+        })()""")
+        buffer_state = r"""(() => ({identity:editorInstance.getModel()===window.__focusModel,
+          models:Array.from(window.__reviewFixture.models.values()).map(model=>({
+            uri:model.uri.toString(),content:model.getValue(),version:model.getAlternativeVersionId(),
+            undo:model.canUndo(),redo:model.canRedo()})),selection:editorInstance.getSelection()}))()"""
+        buffers = self.js(buffer_state)
+        self.assertTrue(buffers['identity'])
+        self.assertTrue(self.js('window.__focusModel.canUndo()'))
+        fallback = self.js(r"""(() => {
+          const editor=window.editorInstance,focus=editor.focus;
+          try {
+            editor.focus=()=>{};
+            document.getElementById('ai-history-close').focus();
+            window.setAiBannerHidden(true);
+            const toggle=document.getElementById('ai-banner-toggle');
+            return {toggle:document.activeElement===toggle,visible:getComputedStyle(toggle).display,
+              inside:document.getElementById('ai-diff-banner').contains(document.activeElement)};
+          } finally {editor.focus=focus;}
+        })()""")
+        self.assertTrue(fallback['toggle'], fallback)
+        self.assertNotEqual(fallback['visible'], 'none', fallback)
+        self.assertFalse(fallback['inside'], fallback)
+        self.assertEqual(self.js(buffer_state), buffers)
+        self.js('window.setAiBannerHidden(false);true')
+        external = self.js(r"""(() => {
+          const toolbar=document.getElementById('detached-action-bar'),display=toolbar.style.display;
+          const button=toolbar.querySelector('button.compile');
+          try {
+            toolbar.style.display='flex';button.focus();
+            const before=document.activeElement===button;
+            window.setAiBannerHidden(true);
+            return {before,after:document.activeElement===button};
+          } finally {button.blur();toolbar.style.display=display;}
+        })()""")
+        self.assertTrue(external['before'], external)
+        self.assertTrue(external['after'], external)
+        self.assertEqual(self.js(buffer_state), buffers)
+        self.js('window.setAiBannerHidden(false);true')
+        empty = self.js(r"""(() => {
+          const editor=window.editorInstance,focus=editor.focus;
+          try {
+            editor.focus=()=>{};
+            document.getElementById('ai-history-close').focus();
+            window.__reviewFixture.reviews=[];
+            window.__reviewFixture.history={canUndo:false,canRedo:false};
+            window.resetAiReviewForProject();window.setAiBannerHidden(true);
+            return {inside:document.getElementById('ai-diff-banner').contains(document.activeElement),
+              toggle:getComputedStyle(document.getElementById('ai-banner-toggle')).display};
+          } finally {editor.focus=focus;}
+        })()""")
+        self.assertFalse(empty['inside'], empty)
+        self.assertEqual(empty['toggle'], 'none', empty)
+        self.assertEqual(self.js(buffer_state), buffers)
+        undone = self.async_js('await window.__focusModel.undo();return window.__focusModel.getValue();')
+        self.assertEqual(undone, original)
+        self.async_js('await window.__focusModel.redo();return true;')
+        self.assertEqual(self.js(buffer_state)['models'], buffers['models'])
 
     def test_history_hide_remains_hidden_on_new_state_and_reload(self):
         self.js("(() => {const f=window.__reviewFixture; f.history={canUndo:true,canRedo:false,undoDepth:1,redoDepth:0,undo:{path:f.mainPath,fileName:'Sketch.ino',action:'accepted'}};window.resetAiReviewForProject();return true;})()")
@@ -492,13 +600,11 @@ class EditorReviewChecks(unittest.TestCase):
                 for label,width,height,zoom in sizes:
                     with self.subTest(mode=mode,theme=theme,size=label):
                         self.page.setZoomFactor(zoom)
-                        self.view.resize(width,height)
+                        self.resize_viewport(width, height)
                         # Native windows may clamp a top-level WebEngine view
                         # to the monitor. Compare CSS with the actual reading
                         # viewport, while retaining the complete control bounds
                         # and one-row assertions below.
-                        until(lambda: abs(self.js('innerWidth') - self.view.contentsRect().width()/zoom) <= 1 and
-                            abs(self.js('innerHeight') - self.view.contentsRect().height()/zoom) <= 1)
                         self.async_js('await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));return true;')
                         geometry = self.js(BANNER_GEOMETRY)
                         bar, editor = geometry['banner'], geometry['editor']
@@ -563,8 +669,8 @@ class EditorReviewChecks(unittest.TestCase):
             reviewIndex:2,content:helper.getValue(),beforeContent:helper.getValue(),diff:{}});
           await window.reloadActiveFileWithDiff(f.mainPath);return true;
         """)
-        self.view.resize(320,140)
-        until(lambda: self.js('innerWidth') == 320)
+        viewport = self.resize_viewport(320, 140)
+        self.assertLessEqual(viewport['cssViewport']['width'], 320, viewport)
         self.async_js('await window.reloadActiveFileWithDiff(window.__reviewFixture.helperPath);return true;')
         self.assertTrue(self.snapshot()['path'].endswith('Sketch.ino'))
         self.assertIn('Another AI-edited file is queued', self.js("document.getElementById('ai-diff-banner').title"))
@@ -638,8 +744,14 @@ class EditorReviewChecks(unittest.TestCase):
                 """)
                 title = label + ' source' + (' (CLI + Assistant)' if label == 'Mixed' else '') + '\n' + prompt
                 for width,height,expected in ((1000,620,label),(280,140,compact)):
-                    self.view.resize(width,height)
-                    until(lambda: self.js('innerWidth') == width)
+                    viewport = self.resize_viewport(width, height)
+                    # A native top-level window can be clamped by its monitor.
+                    # Keep both sides of the actual source-label CSS breakpoint
+                    # covered instead of waiting for an ungranted requested size.
+                    if width > 320:
+                        self.assertGreater(viewport['cssViewport']['width'], 320, viewport)
+                    else:
+                        self.assertLessEqual(viewport['cssViewport']['width'], 320, viewport)
                     state = self.snapshot()
                     self.assertEqual(state['source']['text'], expected)
                     self.assertEqual(state['source']['title'], title)

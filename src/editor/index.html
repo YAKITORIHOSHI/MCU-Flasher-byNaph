@@ -2388,10 +2388,26 @@
         const toggle = document.getElementById('ai-banner-toggle');
         const available = hasAiBannerContent();
         const visible = available && !aiBannerHidden;
+        if (toggle) {
+          toggle.style.display = available ? 'inline-flex' : 'none';
+          toggle.setAttribute('aria-expanded', String(visible));
+          const entry = currentReview || lastAiHistoryState?.undo || lastAiHistoryState?.redo;
+          const source = aiEditProvenance(entry);
+          const title = `${source.label} ${currentReview ? 'Review' : 'History'}`;
+          const count = currentReview ? Number(currentReview.pendingCount) || 1 : 0;
+          toggle.textContent = visible ? 'Hide AI bar' : title + (count ? ` (${count})` : '');
+          toggle.title = visible ? `Hide ${title}` : `Show ${title}${count ? ` — ${count} pending` : ''}`;
+          toggle.setAttribute('aria-label', toggle.title);
+        }
         if (banner) {
           if (!visible && banner.contains(document.activeElement)) {
             if (window.editorInstance && window.editorInstance.focus) window.editorInstance.focus();
-            else document.activeElement.blur();
+            // Monaco may not take focus synchronously during a compact layout
+            // or project transition. Never hide a still-focused descendant.
+            if (banner.contains(document.activeElement) && available && toggle) {
+              toggle.focus({preventScroll: true});
+            }
+            if (banner.contains(document.activeElement)) document.activeElement.blur();
           }
           banner.style.display = visible ? 'flex' : 'none';
           banner.setAttribute('aria-hidden', String(!visible));
@@ -2403,17 +2419,6 @@
           const context = contextIds.map(id => document.getElementById(id)?.title || '').filter(Boolean).join('\n');
           banner.title = context;
           banner.setAttribute('aria-description', context);
-        }
-        if (toggle) {
-          toggle.style.display = available ? 'inline-flex' : 'none';
-          toggle.setAttribute('aria-expanded', String(visible));
-          const entry = currentReview || lastAiHistoryState?.undo || lastAiHistoryState?.redo;
-          const source = aiEditProvenance(entry);
-          const title = `${source.label} ${currentReview ? 'Review' : 'History'}`;
-          const count = currentReview ? Number(currentReview.pendingCount) || 1 : 0;
-          toggle.textContent = visible ? 'Hide AI bar' : title + (count ? ` (${count})` : '');
-          toggle.title = visible ? `Hide ${title}` : `Show ${title}${count ? ` — ${count} pending` : ''}`;
-          toggle.setAttribute('aria-label', toggle.title);
         }
       }
 
