@@ -237,9 +237,16 @@ with tempfile.TemporaryDirectory(prefix="native café 日本語 ", dir=SCRATCH) 
 
         def replace_leaf(fixture, info):
             path = Path(info["pio_manifest"])
+            original_identity = native_identity(path)
+            original_bytes = path.read_bytes()
             replacement = path.with_suffix(".replacement")
-            replacement.write_bytes(path.read_bytes())
-            os.replace(replacement, path)
+            replacement.write_bytes(original_bytes)
+            # Windows can refuse overwriting a retained open file. Move the
+            # original object aside, then put the distinct same-byte file here.
+            path.rename(path.with_suffix(".retained-original"))
+            replacement.rename(path)
+            assert path.read_bytes() == original_bytes
+            assert native_identity(path) != original_identity
 
         parent = outer / (target + "-leaf")
         parent.mkdir()
