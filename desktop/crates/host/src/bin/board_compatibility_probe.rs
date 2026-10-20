@@ -393,13 +393,30 @@ mod tests {
             reader.read_regular(&path, &root.0.join("missing")),
             Err(SnapshotRefusal::Io)
         );
+        // PathBuf::join normalizes '..' after a Windows verbatim prefix.
+        // Preserve the literal native units so the guard receives the alias.
+        let mut parent_alias = root.0.as_os_str().to_owned();
+        parent_alias.push(std::path::MAIN_SEPARATOR_STR);
+        parent_alias.push("..");
+        parent_alias.push(std::path::MAIN_SEPARATOR_STR);
+        parent_alias.push("package.json");
+        let parent_alias = PathBuf::from(parent_alias);
+        assert!(parent_alias
+            .as_os_str()
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|part| part == ".."));
         for path in [
             PathBuf::from("relative.json"),
-            root.0.join("../package.json"),
+            parent_alias,
             root.0.join("NUL.json"),
             root.0.join("COM¹.json"),
         ] {
-            assert_eq!(ordinary_path(&path), Err(SnapshotRefusal::UnsafePath));
+            assert_eq!(
+                ordinary_path(&path),
+                Err(SnapshotRefusal::UnsafePath),
+                "literal refusal case: {path:?}"
+            );
         }
     }
     #[cfg(target_os = "linux")]
