@@ -4,27 +4,19 @@ use mcu_native_ui_probe::{
     workspace_design::{Theme, PRIMARY_ACTIONS, TOOL_TABS},
     RendererMessage,
 };
-use serde::Serialize;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
     sync::mpsc,
     time::{Duration, Instant},
 };
 use wry::WebView;
 
-#[derive(Serialize)]
-struct SourceDocument {
-    id: String,
-    name: String,
-    content: String,
-}
+use mcu_native_ui_probe::workspace_project::read_project;
+pub use mcu_native_ui_probe::workspace_project::{CHECK_HEADER, CHECK_SOURCE};
 type TabStates = BTreeMap<String, (gtk::Label, String, u64, gtk::Button)>;
-type LoadedProject = (Vec<(String, String)>, String);
-pub const CHECK_SOURCE: &str = "\u{feff}void setup() {}\r\nvoid loop() {}\n";
-pub const CHECK_HEADER: &str = "#pragma once\n// café 日本語\n";
 
 pub struct WorkspaceShell {
     pub body: gtk::Box,
@@ -224,7 +216,13 @@ impl WorkspaceShell {
         let sources = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         sources.style_context().add_class("source-tabs");
         let editor_area = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        editor_area.pack_start(&sources, false, false, 0);
+        let source_scroll =
+            gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+        source_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
+        source_scroll.set_propagate_natural_width(false);
+        source_scroll.set_min_content_width(1);
+        source_scroll.add(&sources);
+        editor_area.pack_start(&source_scroll, false, false, 0);
         editor_area.pack_start(editor_host, true, true, 0);
         let split = gtk::Paned::new(gtk::Orientation::Vertical);
         split.set_wide_handle(true);
@@ -681,7 +679,7 @@ impl WorkspaceShell {
             .workspace {{ background-image: linear-gradient(135deg, {light}, {dark} 35%, {deep} 80%); }}
             .header {{ padding: 6px 8px; border-bottom: 1px solid {border}; background-image: linear-gradient(to bottom,{light},{dark}); }}
             .controls {{ padding: 10px 8px 8px; }} flowboxchild {{ padding: 0; background: transparent; }}
-            .brand {{ color: {accent}; font-weight: bold; font-size: 14px; }}
+            .brand {{ color: {logo}; font-weight: bold; font-size: 14px; }}
             .caption {{ color: {dim}; font-weight: 600; font-size: 10px; }}
             button, combobox button {{ min-height: 20px; padding: 3px 9px; color: {text}; background-image: linear-gradient(to bottom,{light},{dark}); border: 1px solid {border}; border-radius: 6px; box-shadow: none; text-shadow: none; }}
             button:hover, button:focus {{ border-color: {accent}; }} button:disabled {{ opacity: 0.45; }}
@@ -699,7 +697,8 @@ impl WorkspaceShell {
             paned separator {{ min-height: 8px; background: transparent; }}
             .status {{ padding: 4px 8px; color: {dim}; border-top: 1px solid {border}; }}
         "#, dark=c("BG_DARK"), deep=c("BG_DARKEST"), light=c("BG_LIGHT"), text=c("TEXT"),
-            dim=c("TEXT_DIM"), bright=c("TEXT_BRIGHT"), border=c("BORDER"), accent=c("CYAN"), hover=c("BG_HOVER")).as_bytes())?;
+            dim=c("TEXT_DIM"), bright=c("TEXT_BRIGHT"), border=c("BORDER"), accent=c("CYAN"), hover=c("BG_HOVER"),
+            logo=mcu_native_ui_probe::workspace_design::LOGO_INK).as_bytes())?;
         let palette = serde_json::json!({"background": c("BG_DARKEST"), "foreground": c("TEXT"), "accent": c("CYAN"), "selection":c("BG_LIGHT")});
         refresh_icons(self.body.upcast_ref(), theme);
         let mode = serde_json::to_string(theme.key())?;
@@ -714,90 +713,63 @@ impl WorkspaceShell {
     }
 }
 
-fn read_project(selected: &Path) -> Result<LoadedProject, String> {
-    let application = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("Application root unavailable")?;
-    // Only read APIs are reachable from the native workspace. Source saves and
-    // live-write/ownership activation remain outside this adapter.
-    let mut service = if selected.starts_with(application.join("audit/migration/scratch")) {
-        mcu_core::ProjectService::fixture(application, selected)
-    } else {
-        mcu_core::ProjectService::new(application)
-    }
-    .map_err(|error| error.message)?;
-    let workspace = service
-        .register_project("native-workspace-reader", selected)
-        .map_err(|error| error.message)?;
-    let mut documents = Vec::new();
-    for file in workspace.manifest.files {
-        let document = service
-            .read_document(
-                "native-workspace-reader",
-                &workspace.workspace_id,
-                &file.document_id,
-            )
-            .map_err(|error| error.message)?;
-        documents.push(SourceDocument {
-            id: file.document_id.0,
-            name: file.name,
-            content: document.content,
-        });
-    }
-    let entries = documents
-        .iter()
-        .map(|file| (file.id.clone(), file.name.clone()))
-        .collect();
-    let json = serde_json::to_string(&documents).map_err(|error| error.to_string())?;
-    Ok((entries, format!("window.__mcuOpenDocuments({json});")))
-}
-
 #[cfg(test)]
-mod reader_checks {
+mod source_row_checks {
     use super::*;
-    fn fixture() -> PathBuf {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let application = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("application root");
-        let root = application.join(format!(
-            "audit/migration/scratch/source-reader-{}-{nonce}",
-            std::process::id()
-        ));
-        std::fs::create_dir(&root).expect("owned source fixture");
-        root
-    }
     #[test]
-    fn root_sources_keep_bytes_and_nested_sources_stay_outside_manifest() {
-        let root = fixture();
-        std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE).expect("source");
-        std::fs::create_dir(root.join("user-folder")).expect("nested fixture");
-        std::fs::write(root.join("user-folder/Nested.ino"), "never staged").expect("nested source");
-        let (entries, script) = read_project(&root).expect("native source reader");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].1, "Sketch.ino");
-        assert!(script.contains("void setup()"));
-        assert!(!script.contains("never staged"));
-        assert_eq!(
-            std::fs::read(root.join("Sketch.ino")).expect("original"),
-            CHECK_SOURCE.as_bytes()
+    #[ignore = "requires an isolated GTK display"]
+    fn wide_source_manifest_keeps_native_window_bounded_and_all_tabs() {
+        gtk::init().expect("isolated GTK display");
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.set_default_size(960, 540);
+        let shell = WorkspaceShell::new(
+            &window,
+            &gtk::ComboBoxText::new(),
+            &gtk::Button::new(),
+            &gtk::Button::new(),
+            &gtk::Box::new(gtk::Orientation::Vertical, 0),
+            &gtk::Box::new(gtk::Orientation::Vertical, 0),
+            &gtk::Label::new(None),
+            false,
+            Theme::Glass,
+            None,
+            false,
+        )
+        .expect("native workspace");
+        let entries: Vec<_> = (0..40)
+            .map(|index| {
+                (
+                    format!("owned-{index}"),
+                    format!("LongSourceHeader{index:02}.hpp"),
+                )
+            })
+            .collect();
+        shell.set_tabs(&entries);
+        window.add(&shell.body);
+        window.show_all();
+        glib::timeout_add_local_once(Duration::from_millis(250), gtk::main_quit);
+        gtk::main();
+        println!(
+            "Bounded source row: window={} row={} retained_tabs={}",
+            window.allocated_width(),
+            shell.sources.allocated_width(),
+            shell.tabs.borrow().len()
         );
-        std::fs::remove_dir_all(root).expect("owned fixture cleanup");
-    }
-    #[test]
-    fn native_adapter_preserves_core_alias_refusal_before_canonicalization() {
-        let root = fixture();
-        let project = root.join("project");
-        std::fs::create_dir(&project).expect("project");
-        std::fs::write(project.join("Sketch.ino"), CHECK_SOURCE).expect("source");
-        assert!(read_project(&project).is_ok());
-        std::os::unix::fs::symlink(&project, root.join("alias")).expect("owned alias");
-        assert!(read_project(&root.join("alias")).is_err());
-        std::fs::remove_dir_all(root).expect("owned fixture cleanup");
+        assert_eq!(
+            shell.tabs.borrow().len(),
+            40,
+            "Every source model selector must remain reachable"
+        );
+        assert!(
+            window.allocated_width() <= 960,
+            "Wide manifests must not force a larger native frame: {}",
+            window.allocated_width()
+        );
+        assert!(
+            shell.sources.allocated_width() > window.allocated_width(),
+            "The retained row must scroll inside its bounded viewport"
+        );
+        shell.release_views();
+        window.close();
     }
 }

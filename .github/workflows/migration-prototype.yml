@@ -80,6 +80,7 @@ jobs:
         timeout-minutes: 2
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p audit/migration/logs
           python -B -W error desktop/scripts/verify-serial-codec.py
           python -B -W error desktop/scripts/verify-serial-send.py | tee audit/migration/logs/serial-send.json
@@ -88,6 +89,7 @@ jobs:
           python -B -W error desktop/scripts/verify-resource-budget.py
           python -B -W error desktop/scripts/verify-lock-interop.py
           python -B -W error desktop/scripts/verify-target-transport.py
+          python -B -W error desktop/scripts/verify-board-recipe.py | tee audit/migration/logs/board-recipe-rust.json
           python -B -W error desktop/scripts/verify-ownership.py
           python -B -W error desktop/scripts/verify-process-identity.py
           python -B -W error desktop/scripts/verify-file-identity.py | tee audit/migration/logs/file-identity.json
@@ -124,6 +126,7 @@ jobs:
           cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe
           xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display
           xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display --workspace
+          xvfb-run -a cargo test --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe wide_source_manifest_keeps_native_window_bounded_and_all_tabs -- --ignored
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
         timeout-minutes: 2
@@ -154,6 +157,22 @@ jobs:
           $receipt | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 audit/migration/logs/native-ui-windows.json
           if ($nativeExit -ne 0 -or !$receipt.passed -or $receipt.displayBackend -ne 'Win32') { throw 'Native Win32 widget fixture failed.' }
           if (@($receipt.checks.PSObject.Properties).Count -ne 17 -or @($receipt.checks.PSObject.Properties | Where-Object { !$_.Value }).Count) { throw 'Incomplete native Win32 checks.' }
+          $workspaceCapture = @(& desktop/target/debug/mcu-native-ui-probe.exe --workspace-smoke 2>&1)
+          $workspaceExit = $LASTEXITCODE
+          $workspaceCapture | Set-Content -Encoding utf8 audit/migration/logs/native-workspace-windows-output.log
+          $workspaceReceipts = @($workspaceCapture | Where-Object { "$_".StartsWith('MCU_NATIVE_WORKSPACE=') })
+          if ($workspaceReceipts.Count -ne 1) { throw 'Expected one native Win32 workspace receipt.' }
+          $workspace = "$($workspaceReceipts[0])".Substring('MCU_NATIVE_WORKSPACE='.Length) | ConvertFrom-Json
+          $workspace | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 audit/migration/logs/native-workspace-windows.json
+          $required = @('undo_redo', 'native_tools', 'native_source_tabs', 'native_owned_source_controls', 'no_python_application_service', 'source_bytes_unchanged')
+          foreach ($phase in 0..3) {
+            foreach ($kind in @('models', 'dirty_selection', 'theme')) { $required += "phase_${phase}_${kind}" }
+          }
+          if ($workspaceExit -ne 0 -or !$workspace.passed) { throw 'Native Win32 workspace fixture failed.' }
+          if (@($workspace.checks.PSObject.Properties).Count -ne 18) { throw 'Incomplete native Win32 workspace checks.' }
+          foreach ($name in $required) {
+            if ($workspace.checks.$name -ne $true) { throw "Missing native Win32 workspace check: $name" }
+          }
       - name: Collect native fixture evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -168,8 +187,11 @@ jobs:
             audit/migration/logs/native-ui-paths.log
             audit/migration/logs/board-campaign-guards.log
             audit/migration/logs/board-recipe-compat.log
+            audit/migration/logs/board-recipe-rust.json
             audit/migration/logs/native-ui-windows.json
             audit/migration/logs/native-ui-windows-output.log
+            audit/migration/logs/native-workspace-windows.json
+            audit/migration/logs/native-workspace-windows-output.log
             audit/migration/scratch/native-ui/latest-smoke.json
             audit/migration/scratch/native-ui/latest-output.log
             audit/migration/scratch/native-workspace/latest-smoke.json

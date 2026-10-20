@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 pub mod workspace_design;
+pub mod workspace_project;
 
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 pub const SOURCE: &str = "void setup() {}\nvoid loop() {}\n";

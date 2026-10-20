@@ -3,6 +3,9 @@
 use mcu_native_ui_probe::workspace_design::{
     controls_layout, primary_layout, Theme, PRIMARY_ACTIONS, TOOL_TABS,
 };
+use mcu_native_ui_probe::workspace_project::{
+    read_project, LoadedProject, CHECK_HEADER, CHECK_SOURCE,
+};
 use mcu_native_ui_probe::{
     asset_path, checked_scratch_root, parse_message, windows_navigation_allowed, Island,
     RendererMessage, CHANGED_SOURCE, SOURCE,
@@ -20,6 +23,7 @@ use std::{
     path::{Path, PathBuf},
     ptr::null_mut,
     rc::Rc,
+    sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows_sys::Win32::{
@@ -50,7 +54,9 @@ const COMPILE: usize = 102;
 const DETACH: usize = 103;
 const THEME: usize = 104;
 const ACTION: usize = 120;
-const SOURCE_TAB: usize = 200;
+// Keep all 256 source IDs disjoint from tool/action IDs.
+const SOURCE_TAB: usize = 1000;
+const SOURCE_MORE: usize = 403;
 const TOOL: usize = 300;
 const CLEAR: usize = 400;
 const HIDE_EDITOR: usize = 401;
@@ -115,6 +121,7 @@ struct Events {
     theme: Cell<Theme>,
     surface: Cell<HBRUSH>,
     tool: Cell<usize>,
+    source: Cell<usize>,
     commands: RefCell<VecDeque<usize>>,
 }
 
@@ -163,7 +170,7 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, events: &Events) {
     unsafe {
         let theme = events.theme.get();
         let id = item.CtlID as usize;
-        let selected = id == SOURCE_TAB || id == TOOL + events.tool.get();
+        let selected = id == SOURCE_TAB + events.source.get() || id == TOOL + events.tool.get();
         let key = "BG_MID";
         let background = if item.itemState & ODS_SELECTED != 0 {
             "BG_DARKEST"
@@ -196,22 +203,21 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, events: &Events) {
         }
         let old = SelectObject(item.hDC, SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as _);
         SetBkMode(item.hDC, TRANSPARENT as i32);
-        let foreground = if id == BRAND {
-            "CYAN"
-        } else if item.itemState & ODS_DISABLED != 0 {
+        let foreground = if item.itemState & ODS_DISABLED != 0 {
             "TEXT_DIM"
-        } else if selected {
-            "CYAN"
         } else {
-            match id {
-                COMPILE | 124 => "GREEN",
-                121 | 125 => "BLUE",
-                122 => "RED",
-                127 => "CYAN",
-                _ => "TEXT_BRIGHT",
-            }
+            // The final portable-glass stylesheet overrides the earlier
+            // semantic Compile/Upload fills and inks with bright text.
+            "TEXT_BRIGHT"
         };
-        SetTextColor(item.hDC, color(theme, foreground));
+        SetTextColor(
+            item.hDC,
+            if id == BRAND {
+                0x00bf_cf56 // Original fixed #56cfbf logo ink, in COLORREF order.
+            } else {
+                color(theme, foreground)
+            },
+        );
         let mut text = [0_u16; 128];
         let length = GetWindowTextW(item.hwndItem, text.as_mut_ptr(), text.len() as i32);
         let mut bounds = item.rcItem;
@@ -278,7 +284,8 @@ unsafe fn draw_button(item: &DRAWITEMSTRUCT, events: &Events) {
             (if id == BRAND { DT_LEFT } else { DT_CENTER })
                 | DT_VCENTER
                 | DT_SINGLELINE
-                | DT_END_ELLIPSIS,
+                | DT_END_ELLIPSIS
+                | DT_NOPREFIX,
         );
         if item.itemState & ODS_FOCUS != 0 {
             InflateRect(&mut bounds, -3, -3);
@@ -460,7 +467,8 @@ struct NativeWindows {
     captions: Vec<HWND>,
     selectors: Vec<HWND>,
     workspace: Vec<HWND>,
-    source_tab: HWND,
+    source_tabs: Vec<HWND>,
+    source_more: HWND,
     tools: Vec<HWND>,
     tool_heading: HWND,
     tool_output: HWND,
@@ -539,7 +547,8 @@ impl NativeWindows {
                 captions: Vec::new(),
                 selectors: Vec::new(),
                 workspace: Vec::new(),
-                source_tab: null_mut(),
+                source_tabs: Vec::new(),
+                source_more: null_mut(),
                 tools: Vec::new(),
                 tool_heading: null_mut(),
                 tool_output: null_mut(),
@@ -590,6 +599,9 @@ impl NativeWindows {
                 if index == 0 {
                     windows.compile = button;
                 }
+                // Only the original isolated smoke exposes its callback probe.
+                // Backend and picker actions remain gated in manual previews.
+                EnableWindow(button, (smoke && index == 0) as i32);
                 windows.actions.push(button);
             }
             windows.detach = windows.child(
@@ -667,8 +679,11 @@ impl NativeWindows {
                     id,
                     main,
                 )?);
+                if !(2..4).contains(&index) {
+                    EnableWindow(*windows.workspace.last().expect("created child"), 0);
+                }
             }
-            windows.source_tab = windows.child(
+            windows.source_tabs.push(windows.child(
                 "BUTTON",
                 if smoke {
                     "fixture.ino  •"
@@ -677,6 +692,13 @@ impl NativeWindows {
                 },
                 WS_TABSTOP | BS_OWNERDRAW as u32,
                 SOURCE_TAB,
+                main,
+            )?);
+            windows.source_more = windows.child(
+                "BUTTON",
+                "Sources…",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                SOURCE_MORE,
                 main,
             )?;
             for (index, label) in TOOL_TABS.iter().enumerate() {
@@ -695,7 +717,7 @@ impl NativeWindows {
                 0,
                 main,
             )?;
-            windows.tool_output = windows.child("EDIT", "Native Rust workspace preview\r\n\r\nSelect a tool tab to inspect its isolated preview.\r\nNo live project, device, settings or cloud operation is enabled.", ES_MULTILINE as u32 | ES_READONLY as u32 | WS_VSCROLL, 0, main)?;
+            windows.tool_output = windows.child("EDIT", "Native Rust workspace preview\r\n\r\nSelect a tool tab to inspect its preview.\r\nSource edits stay in memory. Device, settings and cloud operations are unavailable.", ES_MULTILINE as u32 | ES_READONLY as u32 | WS_VSCROLL, 0, main)?;
             windows.clear = windows.child(
                 "BUTTON",
                 "Clear",
@@ -705,7 +727,7 @@ impl NativeWindows {
             )?;
             windows.notice = windows.child(
                 "STATIC",
-                "Isolated fixture · no hardware, live projects or settings",
+                "Source edits stay in memory · device operations unavailable",
                 0,
                 0,
                 main,
@@ -872,6 +894,27 @@ impl HasWindowHandle for Parent {
     }
 }
 
+#[derive(Clone)]
+struct SourceTab {
+    id: String,
+    name: String,
+    revision: u64,
+    dirty: bool,
+}
+impl SourceTab {
+    fn new(id: String, name: String) -> Self {
+        Self {
+            id,
+            name,
+            revision: 0,
+            dirty: false,
+        }
+    }
+    fn label(&self) -> String {
+        format!("{}{}", self.name, if self.dirty { " *" } else { "" })
+    }
+}
+
 #[derive(Default)]
 struct Evidence {
     error: Option<String>,
@@ -882,26 +925,54 @@ struct Evidence {
     compile_events: u32,
     checks: BTreeMap<String, bool>,
     workspace_ready: bool,
-    document_dirty: bool,
-    document_revision: u64,
+    sources: Vec<SourceTab>,
+    source_generation: u64,
+    pending_tabs: Option<Vec<(String, String)>>,
+    workspace_snapshot: Option<RendererMessage>,
 }
 fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
     let mut state = state.borrow_mut();
-    if state.error.is_some() {
-        return;
-    }
     match parse_message(island, body) {
-        Ok(RendererMessage::DocumentsOpened { .. }) => {}
-        Ok(RendererMessage::WorkspaceSnapshot { .. }) => {}
-        Ok(RendererMessage::WorkspaceReady {}) => state.workspace_ready = true,
+        Ok(RendererMessage::DocumentsOpened { documents }) => {
+            if let Some(entries) = state.pending_tabs.take() {
+                if entries.iter().map(|(id, _)| id).eq(documents.iter()) {
+                    state.sources = entries
+                        .into_iter()
+                        .map(|(id, name)| SourceTab::new(id, name))
+                        .collect();
+                    state.source_generation += 1;
+                } else {
+                    state.error = Some(
+                        "The editor did not acknowledge the exact ordered native source IDs."
+                            .into(),
+                    );
+                }
+            }
+        }
+        Ok(message @ RendererMessage::WorkspaceSnapshot { .. }) => {
+            if state.workspace_snapshot.replace(message).is_some() {
+                state.error =
+                    Some("The workspace snapshot queue exceeded its one-report budget.".into());
+            }
+        }
+        Ok(RendererMessage::WorkspaceReady {}) => {
+            state.workspace_ready = true;
+            if state.sources.is_empty() {
+                state
+                    .sources
+                    .push(SourceTab::new("untitled".into(), "Untitled.ino".into()));
+            }
+        }
         Ok(RendererMessage::DocumentChanged {
             document_id,
             edit_revision,
             dirty,
         }) => {
-            if document_id == "untitled" && edit_revision > state.document_revision {
-                state.document_revision = edit_revision;
-                state.document_dirty = dirty;
+            if let Some(tab) = state.sources.iter_mut().find(|tab| tab.id == document_id) {
+                if edit_revision > tab.revision {
+                    tab.revision = edit_revision;
+                    tab.dirty = dirty;
+                }
             }
         }
         Err(error) => state.error = Some(error),
@@ -951,6 +1022,9 @@ fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
             }
             state.editor = Some((model_id, history_retained));
         }
+    }
+    if state.error.is_some() {
+        state.pending_tabs = None;
     }
 }
 
@@ -1069,7 +1143,16 @@ struct App {
     monitors_visible: bool,
     workspace_initialized: bool,
     terminal_initialized: bool,
-    source_dirty: bool,
+    source_labels: Vec<String>,
+    source_generation: u64,
+    project_path: Option<PathBuf>,
+    project_worker: Option<(mpsc::Receiver<Result<LoadedProject, String>>, Instant)>,
+    project_deadline: Option<Instant>,
+    workspace_smoke: bool,
+    workspace_phase: u8,
+    workspace_waiting: bool,
+    workspace_checks: BTreeMap<String, bool>,
+    smoke: bool,
 }
 
 fn client(hwnd: HWND) -> Result<RECT, Box<dyn std::error::Error>> {
@@ -1164,6 +1247,288 @@ fn class_name(hwnd: HWND) -> String {
 }
 
 impl App {
+    fn status(&self, message: &str) {
+        // SAFETY: This owned child copies the string synchronously on the UI thread.
+        unsafe {
+            SetWindowTextW(self.native.status, wide(message).as_ptr());
+        }
+    }
+
+    fn select_source(&self, index: usize) -> Result<(), Box<dyn std::error::Error>> {
+        let id = self
+            .evidence
+            .borrow()
+            .sources
+            .get(index)
+            .map(|tab| tab.id.clone());
+        if let Some(id) = id {
+            self.editor.evaluate_script(&format!(
+                "window.__mcuSelectDocument({});",
+                serde_json::to_string(&id)?
+            ))?;
+            self.native.events.source.set(index);
+            // SAFETY: Each source child is retained by the native owner.
+            unsafe {
+                for tab in &self.native.source_tabs {
+                    InvalidateRect(*tab, std::ptr::null(), 1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_sources(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let (generation, tabs) = {
+            let evidence = self.evidence.borrow();
+            (evidence.source_generation, evidence.sources.clone())
+        };
+        if generation != self.source_generation {
+            // Allocate the complete replacement before retiring any old control.
+            // These IDs are derived only from the native reader's acknowledged order.
+            let mut controls = Vec::new();
+            for (index, tab) in tabs.iter().enumerate() {
+                match self.native.child(
+                    "BUTTON",
+                    &tab.label(),
+                    WS_TABSTOP | BS_OWNERDRAW as u32,
+                    SOURCE_TAB + index,
+                    self.native.main,
+                ) {
+                    Ok(button) => controls.push(button),
+                    Err(error) => {
+                        // SAFETY: Only children created by this attempt are destroyed.
+                        unsafe {
+                            for button in controls {
+                                DestroyWindow(button);
+                            }
+                        }
+                        return Err(error);
+                    }
+                }
+            }
+            // SAFETY: Views are attached to their separate editor/terminal hosts;
+            // source buttons own no WebView references or editor model resources.
+            unsafe {
+                for button in self.native.source_tabs.drain(..) {
+                    DestroyWindow(button);
+                }
+            }
+            self.native.source_tabs = controls;
+            self.source_generation = generation;
+            self.source_labels = tabs.iter().map(SourceTab::label).collect();
+            self.select_source(0)?;
+            self.project_deadline = None;
+            self.status("Project opened. Source files are unchanged; edits stay in memory.");
+            self.layout()?;
+        }
+        let mut changed = false;
+        for (index, tab) in tabs.iter().enumerate() {
+            let label = tab.label();
+            if self.source_labels.get(index) != Some(&label) {
+                if let Some(button) = self.native.source_tabs.get(index) {
+                    // SAFETY: This child is live on the UI thread; Win32 copies its caption.
+                    unsafe {
+                        SetWindowTextW(*button, wide(&label).as_ptr());
+                    }
+                    if index < self.source_labels.len() {
+                        self.source_labels[index] = label;
+                    }
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.layout()?;
+        }
+        Ok(())
+    }
+
+    fn start_project_read(&mut self, selected: PathBuf) {
+        if self.project_deadline.is_some() || self.project_worker.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        // Only owned snapshot data crosses threads. No HWND, COM object or
+        // live service/ownership handle leaves the native UI thread.
+        std::thread::spawn(move || {
+            let _ = sender.send(read_project(&selected));
+        });
+        let now = Instant::now();
+        self.project_worker = Some((receiver, now));
+        self.project_deadline = Some(now);
+        self.status("Reading project sources…");
+    }
+
+    fn poll_project(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let outcome = self.project_worker.as_ref().map(|(receiver, started)| {
+            if started.elapsed() > Duration::from_secs(20) {
+                Ok(Err(
+                    "The project read timed out. Existing editor buffers are unchanged.".into(),
+                ))
+            } else {
+                receiver.try_recv()
+            }
+        });
+        match outcome {
+            Some(Ok(result)) => {
+                self.project_worker = None;
+                match result {
+                    Ok((entries, script)) => {
+                        self.evidence.borrow_mut().pending_tabs = Some(entries);
+                        if let Err(error) = self.editor.evaluate_script(&script) {
+                            self.evidence.borrow_mut().pending_tabs = None;
+                            self.project_deadline = None;
+                            self.evidence.borrow_mut().error = Some(error.to_string());
+                        }
+                    }
+                    Err(error) => {
+                        self.project_deadline = None;
+                        self.evidence.borrow_mut().error = Some(error);
+                    }
+                }
+            }
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                self.project_worker = None;
+                self.project_deadline = None;
+                self.evidence.borrow_mut().error =
+                    Some("The project reader stopped before completing.".into());
+            }
+            _ => {}
+        }
+        if self
+            .project_deadline
+            .is_some_and(|started| started.elapsed() > Duration::from_secs(25))
+        {
+            self.project_deadline = None;
+            self.evidence.borrow_mut().pending_tabs = None;
+            self.evidence.borrow_mut().error = Some(
+                "The editor did not acknowledge the project load. Existing buffers are retained."
+                    .into(),
+            );
+        }
+        if self.evidence.borrow().error.is_some() {
+            self.evidence.borrow_mut().pending_tabs = None;
+            self.project_worker = None;
+            self.project_deadline = None;
+            if !self.smoke && !self.workspace_smoke {
+                if let Some(error) = self.evidence.borrow_mut().error.take() {
+                    self.status(&error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn workspace_smoke_step(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+        if self.source_generation == 0 || !self.terminal_initialized {
+            return Ok(false);
+        }
+        let snapshot = self.evidence.borrow_mut().workspace_snapshot.take();
+        if let Some(RendererMessage::WorkspaceSnapshot {
+            phase,
+            documents,
+            same_models,
+            dirty_retained,
+            history_retained,
+            selection_retained,
+            theme,
+            background,
+        }) = snapshot
+        {
+            let palette = self.native.events.theme.get();
+            let rgb = palette.rgb("BG_DARKEST");
+            let expected = format!(
+                "rgb({}, {}, {})",
+                (rgb >> 16) & 255,
+                (rgb >> 8) & 255,
+                rgb & 255
+            );
+            self.workspace_checks.insert(
+                format!("phase_{phase}_models"),
+                self.workspace_waiting
+                    && phase == self.workspace_phase
+                    && documents == 2
+                    && same_models,
+            );
+            self.workspace_checks.insert(
+                format!("phase_{phase}_dirty_selection"),
+                dirty_retained
+                    && selection_retained
+                    && self
+                        .evidence
+                        .borrow()
+                        .sources
+                        .iter()
+                        .enumerate()
+                        .any(|(index, tab)| {
+                            tab.dirty
+                                && tab.revision > 0
+                                && self.source_labels.get(index) == Some(&tab.label())
+                        }),
+            );
+            self.workspace_checks.insert(
+                format!("phase_{phase}_theme"),
+                theme == palette.key() && background == expected,
+            );
+            if phase == 3 {
+                self.workspace_checks
+                    .insert("undo_redo".into(), history_retained);
+            }
+            if !self.workspace_checks.values().all(|value| *value) {
+                return Err("A native Win32 workspace assertion failed.".into());
+            }
+            if phase == 3 {
+                self.workspace_checks
+                    .insert("native_tools".into(), self.native.tools.len() == 7);
+                self.workspace_checks.insert(
+                    "native_source_tabs".into(),
+                    self.native.source_tabs.len() == 2,
+                );
+                // SAFETY: Read only owned native children, never renderer HWNDs.
+                let owned = unsafe {
+                    self.native.source_tabs.iter().all(|button| {
+                        GetParent(*button) == self.native.main
+                            && class_name(*button).eq_ignore_ascii_case("Button")
+                    })
+                };
+                self.workspace_checks
+                    .insert("native_owned_source_controls".into(), owned);
+                self.workspace_checks
+                    .insert("no_python_application_service".into(), no_python_loaded());
+                let unchanged = self.project_path.as_ref().is_some_and(|root| {
+                    std::fs::read(root.join("Sketch.ino"))
+                        .is_ok_and(|bytes| bytes == CHECK_SOURCE.as_bytes())
+                        && std::fs::read(root.join("Config.h"))
+                            .is_ok_and(|bytes| bytes == CHECK_HEADER.as_bytes())
+                });
+                self.workspace_checks
+                    .insert("source_bytes_unchanged".into(), unchanged);
+                return Ok(true);
+            }
+            self.workspace_phase += 1;
+            self.workspace_waiting = false;
+        }
+        if !self.workspace_waiting {
+            let selection = [0, 1, 2, 0][usize::from(self.workspace_phase)];
+            // Exercise the same native theme and source-button dispatch as users.
+            // SAFETY: Both messages address owned UI-thread controls.
+            unsafe {
+                SendMessageW(self.native.selectors[2], CB_SETCURSEL, selection, 0);
+                SendMessageW(
+                    self.native.source_tabs[usize::from(self.workspace_phase) % 2],
+                    BM_CLICK,
+                    0,
+                    0,
+                );
+            }
+            self.native.events.command(THEME);
+            self.drain_commands()?;
+            self.workspace_waiting = true;
+            self.editor.evaluate_script(&format!("window.__mcuWorkspaceSnapshot({}).catch(error => window.ipc.postMessage(JSON.stringify({{kind:'error',message:String(error).slice(0,1024)}})));", self.workspace_phase))?;
+        }
+        Ok(false)
+    }
+
     fn layout(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.native.refresh_font();
         let n = &self.native;
@@ -1280,7 +1645,28 @@ impl App {
             }
             y += px(34);
         }
-        place(n.source_tab, 0, y, px(174), px(29));
+        // A single bounded row never expands the window for wide manifests.
+        // All retained sources remain reachable through the native Sources menu.
+        let more_width = px(102).min(width);
+        let mut source_x = 0;
+        let mut overflow = false;
+        for (index, button) in n.source_tabs.iter().enumerate() {
+            let label = self
+                .source_labels
+                .get(index)
+                .map_or("Untitled.ino", String::as_str);
+            let size = (text_width(n.main, n.font, label) + px(24)).clamp(px(100), px(240));
+            let fits = !overflow && source_x + size <= width - more_width;
+            show(*button, fits);
+            if fits {
+                place(*button, source_x, y, size, px(29));
+                source_x += size + px(3);
+            } else {
+                overflow = true;
+            }
+        }
+        show(n.source_more, overflow);
+        place(n.source_more, width - more_width, y, more_width, px(29));
         self.body_top = y + px(29);
         let footer = px(if short { 24 } else { 46 });
         let available = (height - self.body_top - footer).max(2);
@@ -1435,11 +1821,31 @@ impl App {
         for command in commands {
             match command {
                 COMBO => self.evidence.borrow_mut().combo_events += 1,
-                COMPILE => {
+                COMPILE if self.smoke => {
                     self.evidence.borrow_mut().compile_events += 1;
                     // SAFETY: Static text is copied synchronously into this live label.
                     unsafe {
                         SetWindowTextW(self.native.status, wide("Rust callback passed. Firmware compilation remains a separate migration gate.").as_ptr());
+                    }
+                }
+                id if (SOURCE_TAB..SOURCE_TAB + 256).contains(&id) => {
+                    self.select_source(id - SOURCE_TAB)?
+                }
+                SOURCE_MORE => {
+                    let labels: Vec<_> = self
+                        .evidence
+                        .borrow()
+                        .sources
+                        .iter()
+                        .map(|tab| tab.label().replace('&', "&&"))
+                        .collect();
+                    let entries: Vec<_> = labels
+                        .iter()
+                        .enumerate()
+                        .map(|(index, label)| (SOURCE_TAB + index, label.as_str(), true))
+                        .collect();
+                    if let Some(id) = popup(self.native.main, self.native.source_more, &entries) {
+                        self.native.events.command(id);
                     }
                 }
                 DETACH
@@ -1453,7 +1859,7 @@ impl App {
                         .iter()
                         .enumerate()
                         .filter(|(index, _)| (2..8).contains(index))
-                        .map(|(index, label)| (ACTION + index, *label, true))
+                        .map(|(index, label)| (ACTION + index, *label, false))
                         .collect();
                     if let Some(id) = popup(self.native.main, self.native.more_actions, &entries) {
                         self.native.events.command(id);
@@ -1534,8 +1940,9 @@ impl App {
                             .iter()
                             .chain(&self.native.tools)
                             .chain(&self.native.workspace)
+                            .chain(&self.native.source_tabs)
                             .chain([
-                                &self.native.source_tab,
+                                &self.native.source_more,
                                 &self.native.detach,
                                 &self.native.more_actions,
                                 &self.native.options,
@@ -1788,7 +2195,13 @@ struct Receipt {
     limits: &'static str,
 }
 
-fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn run_window(
+    smoke: bool,
+    profile: &Path,
+    theme: Theme,
+    project: Option<PathBuf>,
+    workspace_smoke: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
     let native = NativeWindows::new(smoke)?;
     let evidence = Rc::new(RefCell::new(Evidence::default()));
@@ -1827,8 +2240,34 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
         monitors_visible: true,
         workspace_initialized: false,
         terminal_initialized: false,
-        source_dirty: false,
+        source_labels: vec![if smoke {
+            "fixture.ino  •".into()
+        } else {
+            "Untitled.ino".into()
+        }],
+        source_generation: 0,
+        project_path: project,
+        project_worker: None,
+        project_deadline: None,
+        workspace_smoke,
+        workspace_phase: 0,
+        workspace_waiting: false,
+        workspace_checks: BTreeMap::new(),
+        smoke,
     };
+    // SAFETY: Select only an existing theme item in the owned native combo.
+    unsafe {
+        SendMessageW(
+            app.native.selectors[2],
+            CB_SETCURSEL,
+            match theme {
+                Theme::Glass => 0,
+                Theme::FrostedLight => 1,
+                Theme::SolarizedDark => 2,
+            },
+            0,
+        );
+    }
     app.layout()?;
     let mut done = false;
     loop {
@@ -1886,39 +2325,33 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
             if app.evidence.borrow().workspace_ready && !app.workspace_initialized {
                 app.workspace_initialized = true;
                 app.native.events.command(THEME);
+                if let Some(selected) = app.project_path.clone() {
+                    app.start_project_read(selected);
+                }
             }
             if app.evidence.borrow().terminal_ready && !app.terminal_initialized {
                 app.terminal_initialized = true;
                 app.native.events.command(THEME);
             }
-            let dirty = app.evidence.borrow().document_dirty;
-            if !smoke && dirty != app.source_dirty {
-                app.source_dirty = dirty;
-                // SAFETY: A renderer dirty report changes a native tab caption
-                // only; it never authorizes a source path, write or project owner.
-                unsafe {
-                    SetWindowTextW(
-                        app.native.source_tab,
-                        wide(if dirty {
-                            "Untitled.ino  •"
-                        } else {
-                            "Untitled.ino"
-                        })
-                        .as_ptr(),
-                    );
-                }
+            app.poll_project()?;
+            if !smoke {
+                app.sync_sources()?;
             }
             // SAFETY: Enabling an owned child does not transfer its ownership.
             unsafe {
                 EnableWindow(app.native.detach, ready as i32);
             }
-            if smoke {
+            if smoke || workspace_smoke {
                 if started.elapsed() > Duration::from_secs(45) {
                     app.evidence.borrow_mut().error =
                         Some("Native Win32 smoke deadline expired.".into());
                 }
                 if app.evidence.borrow().error.is_none() {
-                    match app.smoke_step() {
+                    match if workspace_smoke {
+                        app.workspace_smoke_step()
+                    } else {
+                        app.smoke_step()
+                    } {
                         Ok(value) => done = value,
                         Err(error) => app.evidence.borrow_mut().error = Some(error.to_string()),
                     }
@@ -1927,6 +2360,31 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
                     break;
                 }
             }
+        }
+    }
+    if workspace_smoke {
+        let e = app.evidence.borrow();
+        let error = e.error.clone().or_else(|| {
+            (!done).then(|| "Native workspace closed before completing smoke checks.".into())
+        });
+        let passed = done
+            && error.is_none()
+            && app.workspace_checks.len() == 18
+            && app.workspace_checks.values().all(|value| *value);
+        let receipt = Receipt {
+            schema_version: 1, passed, mode: "isolated_native_workspace_fixture", os: "windows",
+            architecture: std::env::consts::ARCH, display_backend: "Win32",
+            webview_version: wry::webview_version().unwrap_or_else(|_| "unavailable".into()),
+            widget_types: app.native.source_tabs.iter().copied().map(class_name).collect(),
+            checks: app.workspace_checks.clone(), error,
+            limits: "Win32/WebView2 read-only Rust source-reader fixture; 45-second message-loop deadline; 20-second reader / 25-second acknowledgement deadlines; 16-KiB typed reports; owned two-file scratch only; no save, device, live ownership, settings, cloud or Python application service.",
+        };
+        println!("MCU_NATIVE_WORKSPACE={}", serde_json::to_string(&receipt)?);
+        if !passed {
+            return Err(receipt
+                .error
+                .unwrap_or_else(|| "A native Win32 workspace assertion failed.".into())
+                .into());
         }
     }
     if smoke {
@@ -1954,12 +2412,32 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let smoke = match args.as_slice() {
-        [] => false,
-        [flag] if flag == "--smoke" => true,
-        _ => return Err("Usage: mcu-native-ui-probe [--smoke]".into()),
-    };
+    let mut smoke = false;
+    let mut workspace_smoke = false;
+    let mut theme = Theme::Glass;
+    let mut project = None;
+    let mut args = std::env::args_os().skip(1);
+    let mut count = 0;
+    while let Some(flag) = args.next() {
+        count += 1;
+        if count > 4 {
+            return Err("Too many native preview options.".into());
+        }
+        match flag.to_str() {
+            Some("--smoke") if !smoke => smoke = true,
+            Some("--workspace-smoke") if !workspace_smoke => workspace_smoke = true,
+            Some("--theme") => theme = Theme::parse(args.next().and_then(|value| value.into_string().ok()).as_deref().ok_or("--theme requires a value")?),
+            Some("--project") if project.is_none() => {
+                let selected = args.next().ok_or("--project requires a folder")?;
+                if selected.is_empty() { return Err("--project requires a folder".into()); }
+                project = Some(PathBuf::from(selected));
+            }
+            _ => return Err("Usage: mcu-native-ui-probe [--smoke | --workspace-smoke | --project FOLDER] [--theme NAME]".into()),
+        }
+    }
+    if (smoke && project.is_some()) || (workspace_smoke && (smoke || project.is_some())) {
+        return Err("Native smoke verification owns its source fixture.".into());
+    }
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()?;
@@ -1973,7 +2451,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // A process-local inherited override must not redirect WebView2's explicit
     // private data-directory request into a user's normal browser profile.
     std::env::remove_var("WEBVIEW2_USER_DATA_FOLDER");
-    let result = run_window(smoke, &profile);
+    let result = (|| {
+        if workspace_smoke {
+            let root = profile.join("project");
+            std::fs::create_dir(&root)?;
+            std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE)?;
+            std::fs::write(root.join("Config.h"), CHECK_HEADER)?;
+            project = Some(root);
+        }
+        run_window(smoke, &profile, theme, project, workspace_smoke)
+    })();
     // WebView2 may release profile files shortly after its controllers close.
     // Cleanup is bounded and restricted to this atomically created directory.
     let mut cleanup = std::fs::remove_dir_all(&profile);
@@ -1993,4 +2480,76 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     result?;
     cleanup?;
     Ok(())
+}
+
+#[cfg(test)]
+mod source_checks {
+    use super::*;
+    fn changed(state: &RefCell<Evidence>, id: &str, revision: u64, dirty: bool) {
+        receive(state, Island::Editor, &serde_json::json!({"kind":"document_changed", "document_id":id, "edit_revision":revision, "dirty":dirty}).to_string());
+    }
+    #[test]
+    fn only_exact_ordered_ack_commits_native_source_names() {
+        let state = RefCell::new(Evidence::default());
+        receive(&state, Island::Editor, r#"{"kind":"workspace_ready"}"#);
+        state.borrow_mut().pending_tabs = Some(vec![
+            ("a".into(), "Sketch.ino".into()),
+            ("b".into(), "Config.h".into()),
+        ]);
+        receive(
+            &state,
+            Island::Editor,
+            r#"{"kind":"documents_opened","documents":["b","a"]}"#,
+        );
+        assert!(state.borrow().pending_tabs.is_none());
+        assert_eq!(state.borrow().sources[0].id, "untitled");
+        state.borrow_mut().error = None;
+        state.borrow_mut().pending_tabs = Some(vec![
+            ("a".into(), "Sketch.ino".into()),
+            ("b".into(), "Config.h".into()),
+        ]);
+        receive(
+            &state,
+            Island::Editor,
+            r#"{"kind":"documents_opened","documents":["a","b"]}"#,
+        );
+        assert_eq!(
+            state
+                .borrow()
+                .sources
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert!(state.borrow().pending_tabs.is_none());
+    }
+    #[test]
+    fn native_dirty_labels_accept_only_known_ids_and_newer_revisions() {
+        let state = RefCell::new(Evidence::default());
+        receive(&state, Island::Editor, r#"{"kind":"workspace_ready"}"#);
+        changed(&state, "outside", 1, true);
+        assert!(!state.borrow().sources[0].dirty);
+        changed(&state, "untitled", 2, true);
+        changed(&state, "untitled", 1, false);
+        changed(&state, "untitled", 2, false);
+        assert!(state.borrow().sources[0].dirty);
+        changed(&state, "untitled", 3, false);
+        assert!(!state.borrow().sources[0].dirty);
+    }
+    #[test]
+    fn editor_refusal_clears_pending_and_retains_native_tabs_and_dirty_state() {
+        let state = RefCell::new(Evidence::default());
+        receive(&state, Island::Editor, r#"{"kind":"workspace_ready"}"#);
+        changed(&state, "untitled", 1, true);
+        state.borrow_mut().pending_tabs = Some(vec![("a".into(), "Sketch.ino".into())]);
+        receive(
+            &state,
+            Island::Editor,
+            r#"{"kind":"error","message":"unsaved edits are still open"}"#,
+        );
+        assert!(state.borrow().pending_tabs.is_none());
+        assert_eq!(state.borrow().sources[0].id, "untitled");
+        assert!(state.borrow().sources[0].dirty);
+    }
 }

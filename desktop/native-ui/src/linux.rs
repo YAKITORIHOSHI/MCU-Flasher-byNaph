@@ -351,6 +351,13 @@ fn run_window(
     let state = Rc::new(RefCell::new(ProbeState::default()));
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("MCU Flasher by Naph — Rust development workspace");
+    let icon_loader = gtk::gdk_pixbuf::PixbufLoader::new();
+    icon_loader.write(include_bytes!("../../../src/assets/mcu_icon.png"))?;
+    icon_loader.close()?;
+    let application_icon = icon_loader
+        .pixbuf()
+        .ok_or("Application icon is unavailable")?;
+    window.set_icon(Some(&application_icon));
     window.set_default_size(1100, 740);
     if let Some(monitor) = gtk::gdk::Display::default()
         .and_then(|display| display.primary_monitor().or_else(|| display.monitor(0)))
@@ -430,6 +437,7 @@ fn run_window(
     let terminal_pointer = terminal_widget.as_ptr() as usize;
     let detached_window = gtk::Window::new(gtk::WindowType::Toplevel);
     detached_window.set_title("Fixture editor — native Rust");
+    detached_window.set_icon(Some(&application_icon));
     detached_window.set_default_size(840, 560);
     let detached_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     detached_window.add(&detached_box);
