@@ -1,12 +1,14 @@
 # Code and resource reuse ledger
 
-Latest continuation code: `1131c7e`. Local 117 Rust / 40 frontend / 46 native checks,
-31 Linux metadata-identity checks and 401 Send traces/7,411 action comparisons
-plus 27 typed refusals pass. The ledger now has 14 partial fixture subsets and 53
-pending capabilities; no retirement approval. xterm 5.3.0/fit 0.8.0 exact JS matches
-and3 recovered notices are verified;28 staged files retain the original 25 copies.
-Final native CI and limitations belong to STATUS.md/ci-results.json. These new
-proofs do not grant production source writes, serial integration or public release.
+Latest continuation code: `8dbdb9d`. Final architecture requires native Rust
+GUI widgets and Rust backend services, with Monaco/xterm embedded and Python only
+for approved firmware tools. The GTK/Win32 fixtures and configured-index compile
+campaign are recorded in [status](STATUS.md), [native evidence](native-rust-ui.json)
+and [compile evidence](board-compile-campaign.json). The 67-capability ledger
+remains **14 partial fixture subsets and 53 pending**, with no service retired.
+The original Tauri evidence below remains historical and does not fulfill the
+new native-widget requirement. Native input, complete backend parity and release
+qualification remain open.
 
 19 October 2026 · Asia/Manila · Legacy reference `1d00ff0` · Prototype checkpoint `4cf730b`
 
@@ -53,7 +55,7 @@ The current code remains the behavioral source of truth. **Reuse assets and prov
 
 ## Resource evidence and limits
 
-The preserved structural report records **133 resource hashes**, separately from 300 source entries and 123 Python verifier entries; these are overlapping inventory sections, not a count of unique executed assets. The current reference amendments cover **16 unique paths: four production sources, ten legacy verifiers and two legacy CI files**. The source rows retain 286/300 original hashes and the resource rows retain 130/133; the changed resource rows include the original editor HTML and compatibility CI. The original inventory is not regenerated. The production Ubuntu PNG addition extracts the existing ICO's 256px PNG bytes unchanged. The prototype stager copies **22 existing source files to 25 destinations**, including three duplicate original webpack URLs, with no byte changes. Existing byte preservation does not establish artifact version or license provenance.
+The preserved structural report records **133 resource hashes**, separately from 300 source entries and 123 Python verifier entries; these are overlapping inventory sections, not a count of unique executed assets. The current reference amendments cover **21 unique paths: eight production sources, eleven legacy verifiers and two legacy CI files**. The source rows retain 281/300 original hashes and the resource rows retain 130/133; the changed resource rows include the original editor HTML and compatibility CI. The original inventory is not regenerated. The production Ubuntu PNG addition extracts the existing ICO's 256px PNG bytes unchanged. The prototype stager copies **22 existing source files to 25 destinations**, including three duplicate original webpack URLs, with no byte changes. Existing byte preservation does not establish artifact version or license provenance.
 
 Inventory hashes are the original checkout-byte hashes. Sixteen duplicated inventory rows differ from corresponding Git blobs in line-ending bytes, including mixed and doubled CRLF; all retain the recorded baseline bytes, and normalized content matches after removing CR. This is recorded explicitly rather than described as universal Git-blob identity or silently normalized.
 

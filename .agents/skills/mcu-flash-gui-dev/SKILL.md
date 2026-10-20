@@ -16,8 +16,8 @@ The final application uses native Rust GUI widgets with Monaco and xterm as
 embedded components, and Rust application backend services. Private Python may
 remain only for approved firmware tools. The older Tauri application web shell
 is a reference prototype. Read `audit/migration/NATIVE_RUST_PLAN.md` for this
-requirement amendment and `desktop/native-ui/README.md` for the Linux-only GTK
-feasibility fixture and its Windows/Wayland/input gates. Never promote fixture
+requirement amendment and `desktop/native-ui/README.md` for the GTK and Win32
+feasibility adapters and their desktop/Wayland/input gates. Never promote fixture
 callbacks or library-mapping checks into full backend migration claims.
 
 For explicitly requested configured-index board qualification, use
@@ -35,6 +35,13 @@ platform dispatch and package identities; preserve explicit/new recipes and neve
 rewrite installed packages. Run `direct/verify_platformio_board_compat.py` in
 isolated fixtures. Its cold campaign retry is build-only and retains both
 attempts; never extend that policy to upload/reset or hardware writes.
+For experimental Linux Arduino Q rc.4, the verified tool-only post-script
+`src/modules/arduinoq_link_paths.py` preserves linker paths with spaces as SCons
+file nodes. Require exact platform/board/builder hashes and framework identity;
+keep its digest in generated INI inputs to invalidate firmware reuse on changes.
+It is an approved firmware-tool hook, not a Python application service. Port its
+selection/ownership policy to Rust with the remaining backend; Python may remain
+inside the external builder. Never patch installed package files.
 
 The parallel prototype lives in `desktop/`; the Python application remains the
 behavior reference and release entry point. Read `audit/migration/STATUS.md`,
@@ -67,6 +74,13 @@ Migration audit material belongs in `audit/`, overriding the older `temp/audit/`
 convention for this work. Commit compact reports and handoffs; keep large logs,
 captures and scratch projects in its ignored subdirectories. Update audit and
 skills at the end of actual code/check work unless an earlier update is needed.
+
+The current Python release ZIP intentionally omits the top-level `desktop/` and
+`audit/` developer trees. `direct/build_release.py` records their file/byte counts
+while continuing to reject accidental personal state and protected cache paths
+in shipped sources. Run `direct/verify_release_sources.py` for source selection;
+the full packager verifies all file hashes, installer receipts, bundled Windows
+runtime and native launcher architecture/permissions without launching installers.
 
 The prototype also verifies BOM/mixed-newline source handling, fixed-child PTY
 renderer-to-host consumed-byte acknowledgements, four pure transport helpers,

@@ -70,6 +70,16 @@ then may the campaign perform one build-only retry with newly verified options;
 it retains the original failed attempt and the helper hash. These rules never
 retry an upload or hardware write.
 
+The experimental Linux Arduino Q rc.4 recipe also needs its two linker-script
+arguments represented as SCons file nodes when paths contain spaces. The
+tool-only `src/modules/arduinoq_link_paths.py` post-script checks exact platform,
+board and builder bytes plus the framework version. It changes command argument
+representation and never rewrites packages or linker scripts. The actual
+application and campaign share this hook selection. Its digest is recorded in
+the INI configuration so changing the hook invalidates saved-build reuse.
+The final UNO Q compile passes in the original path containing spaces; the
+earlier no-space namespace workaround remains historical evidence only.
+
 The campaign isolates PlatformIO stores, HOME, XDG directories and temporary
 files under its marked scratch directory. Completed project/build outputs and
 platform batches are removed only through owned cleanup boundaries.

@@ -6,10 +6,11 @@ application. It does not change either entry point.
 
 The Windows adapter now constructs real Win32 controls and two child WebView2
 islands. It preserves the native owner and moves only the retained editor view.
-The Linux adapter and its previously recorded results are unchanged. Windows
-cross-target strict Clippy passes; actual Windows execution is requested by CI
-and remains unqualified until its receipt succeeds. A hosted Windows Server
-fixture does not qualify Windows 10/11 desktop input, IME or mixed-monitor DPI.
+The Linux adapter retains GTK3 controls and WebKitGTK child views. Windows
+cross-target strict Clippy passes. Actual Windows Server and Ubuntu AMD64/ARM64
+execution now pass 17 native smoke checks per host at `77e5ccb`, in migration
+CI run 39357769519. These are hosted fixture receipts; Windows 10/11 desktop
+input, IME, mixed-monitor DPI and physical device workflows remain unqualified.
 
 The window, Controls label, fixture-board combo box, Compile fixture button,
 status label, splitter and detach action are real GTK3 widgets constructed by
@@ -86,8 +87,12 @@ That command requires a real accessible Wayland session. No Wayland result has
 been claimed from an Xvfb run. For manual fixture inspection, run
 `desktop/target/debug/mcu-native-ui-probe` without `--smoke`.
 
-Verification on 20 October 2026 passed six protocol/origin/scratch-root tests and
-17 native smoke checks on Linux AMD64, GdkX11Display and WebKitGTK 2.52.6. The
+Initial verification on 20 October 2026 at `4b42146` passed six
+protocol/origin/scratch-root tests and 17 native smoke checks on Linux AMD64,
+GdkX11Display and WebKitGTK 2.52.6. The `7da4be0` Windows adapter and fixed-origin
+guard bring the protocol checks to seven on Linux and six on Windows; the
+scratch-root canary is Unix-only. SDK correction `77e5ccb` also passes all five
+migration jobs, including 17 native smoke checks on all three native hosts. The
 smoke inspects actual GTK runtime types and callbacks; loads the original C++
 grammar; executes a real Monaco diff worker; checks xterm-rendered Unicode;
 then moves only the editor through three detach/reattach cycles. It retains
@@ -110,7 +115,7 @@ output/root aliases redirected writes. Five controller lifecycle checks now
 cover survivor cleanup, escalation, retained child identity, an unrelated
 session remaining alive and refusal after external reaping. Three path checks
 cover root escape, both selected output symlinks and hardlink-safe publication;
-the Rust scratch-root canary is part of its six checks. All canary files and
+the Rust scratch-root canary is part of the Linux protocol checks. All canary files and
 directories are created inside owned audit fixtures.
 
 Additional checks:
@@ -125,17 +130,23 @@ CARGO_BUILD_JOBS=2 cargo clippy --offline --manifest-path desktop/Cargo.toml -p 
 cargo fmt --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe -- --check
 ```
 
-The existing migration-prototype CI matrix also runs the six Rust checks, five
-controller lifecycle checks, three path checks and 17 native widget smoke checks
-on Ubuntu 24.04 AMD64 and ARM64. It reuses the job's GTK/WebKit dependencies,
+The migration-prototype CI matrix runs seven Rust checks, five controller
+lifecycle checks, three path checks and 17 native widget smoke checks on
+Ubuntu 24.04 AMD64 and ARM64. It reuses the job's GTK/WebKit dependencies,
 pinned Rust toolchain and Python runtime. CI supplies its display with
 `xvfb-run` and the controller's `--current-display` option, so the checkout-local
 Xvfb binary is unnecessary there. The existing per-runner artifact contains
 the protocol/controller logs and `latest-smoke.json` / `latest-output.log`.
-These are configured checks; CI results must be recorded from the actual run.
-Windows runs only the five portable Rust protocol checks; the additional
-scratch-root canary is Unix-only. Native Windows widget execution remains gated
-on implementing its adapter. Existing Tauri and editor-review jobs are retained.
+Windows runs six Rust protocol checks and the actual Win32/WebView2 adapter's
+17 native smoke checks. Existing Tauri and editor-review jobs are retained.
+All five migration jobs pass at `77e5ccb` in
+[run 39357769519](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39357769519).
+The firmware-tool hook checkpoint `f249c21` also passes all five focused
+migration jobs in
+[run 39359319887](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39359319887),
+with native Rust UI source unchanged. Focused CI for subsequent reader/release
+selection checkpoint `8dbdb9d` remains pending. Each receipt retains its tested
+source; no configured or pending job is counted as successful.
 
 ## Next gates
 
@@ -143,11 +154,12 @@ Keep `mcu-contracts`, `mcu-core` and `mcu-host` as reusable Rust service layers;
 the Tauri adapter can remain a differential fixture. This UI probe intentionally
 does not duplicate or activate their live-write capabilities.
 
-1. Build and execute this Linux adapter on native Ubuntu 24.04+ AMD64 and ARM64,
-   under both Wayland and X11. Wry's supported Wayland route uses GTK containers;
+1. Qualify the Linux adapter on actual Ubuntu 24.04+ AMD64 and ARM64 desktops,
+   under both Wayland and X11. Hosted native X11 execution already passes on
+   both architectures. Wry's supported Wayland route uses GTK containers;
    a raw winit handle with `build_as_child` supports Linux X11 only.
-2. Execute and review the Windows native-widget/WebView2 adapter on its native
-   runner, then qualify actual Windows 10/11 desktop workflows. Unsupported
+2. Qualify actual Windows 10/11 desktop workflows after the passing Windows
+   Server native-widget/WebView2 fixture. Unsupported
    hosts exit with code 78; no adapter falls back to the Tauri application shell.
 3. Prove actual keyboard focus, IME, clipboard, accessibility, editor tab order,
    resizing, 100–200% and fractional DPI, maximize/restore, mixed monitors and

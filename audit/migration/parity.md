@@ -1,12 +1,14 @@
 # Migration parity ledger
 
-Latest continuation code: `1131c7e`. Local 117 Rust / 40 frontend / 46 native checks,
-31 Linux metadata-identity checks and 401 Send traces/7,411 action comparisons
-plus 27 typed refusals pass. The ledger now has 14 partial fixture subsets and 53
-pending capabilities; no retirement approval. xterm 5.3.0/fit 0.8.0 exact JS matches
-and3 recovered notices are verified;28 staged files retain the original 25 copies.
-Final native CI and limitations belong to STATUS.md/ci-results.json. These new
-proofs do not grant production source writes, serial integration or public release.
+Latest continuation code: `8dbdb9d`. Final architecture requires native Rust
+GUI widgets and Rust backend services, with Monaco/xterm embedded and Python only
+for approved firmware tools. The GTK/Win32 fixtures and configured-index compile
+campaign are recorded in [status](STATUS.md), [native evidence](native-rust-ui.json)
+and [compile evidence](board-compile-campaign.json). The 67-capability ledger
+remains **14 partial fixture subsets and 53 pending**, with no service retired.
+The original Tauri evidence below remains historical and does not fulfill the
+new native-widget requirement. Native input, complete backend parity and release
+qualification remain open.
 
 19 October 2026 · Asia/Manila · Legacy `1d00ff0` · Prototype checkpoint `4cf730b`
 
@@ -32,7 +34,7 @@ The preserved structural baseline covers 300 source/launcher/verifier files, 280
 
 ## Reference changes during the prototype
 
-The baseline inventory remains unchanged. [Reference amendments](reference-amendments.json) records **13 unique amended paths: two production sources, nine legacy verifiers and two legacy CI files**, plus separately added migration workflows. Of the baseline rows, **289 of 300 source entries and 130 of 133 resource entries** remain byte-identical. The changed resource rows include the original editor HTML and compatibility CI; the **22 original runtime assets staged to 25 destinations remain byte-identical**.
+The baseline inventory remains unchanged. [Reference amendments](reference-amendments.json) records **21 unique amended paths: eight production sources, eleven legacy verifiers and two legacy CI files**, plus separately added migration workflows. Of the baseline rows, **281 of 300 source entries and 130 of 133 resource entries** remain byte-identical. The changed resource rows include the original editor HTML and compatibility CI; the **22 original runtime assets staged to 25 destinations remain byte-identical**.
 
 These baseline hashes describe exact original **checkout bytes**, not an assertion that every inventory row equals its Git blob. Sixteen duplicated inventory rows have checkout line-ending variants, including mixed and doubled CRLF. Their current bytes still match the preserved original baseline hashes, and their content matches Git after removing CR. The original inventory is retained rather than regenerated to conceal these differences.
 

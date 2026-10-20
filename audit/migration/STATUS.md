@@ -1,13 +1,13 @@
 # Migration status
 
-Updated: 19 October 2026, Asia/Manila. Latest code checkpoint:
-`0cc3ec56d0fbacbda8182c87f045e01b4b511a12` on `codex/rust-tauri-migration`.
+Updated: 20 October 2026, Asia/Manila. Latest code checkpoint:
+`8dbdb9def32916bb4179f0c68735202ffc82cdc9` on `codex/rust-tauri-migration`.
 [Prior Rust/Tauri checkpoint CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39253280765).
 
-**The full Rust/Tauri replacement remains unfinished. The Python application
+**The full native Rust GUI/backend replacement remains unfinished. The Python application
 remains the production release and behavioral reference.** No Python application
-service has been retired; no live project/settings/cloud/hardware writes have
-been enabled. The 67-capability ledger now contains **14 partial fixture subsets
+service has been retired; live prototype project/settings/cloud/hardware writes
+remain gated. The 67-capability ledger now contains **14 partial fixture subsets
 and 53 pending capabilities**, with no retirement approval.
 
 ## Production Ubuntu icon follow-up
@@ -24,9 +24,93 @@ validate; an isolated native Xvfb/xcb window resolves the installed icon and
 exposes the expected WM_CLASS and application ID. These fixtures never install
 into the live account or qualify actual GNOME shortcut trust/rendering. Historical
 CI below retains its exact prior revisions. See [icon receipt](ubuntu-launcher-icons.json).
-New-source CI was queued/running when saved: compatibility `39261359647`, native
-ARM64 `39261359788`, migration `39261359735`, layout `39261359712`. Completion is
-not claimed for those runs.
+All 25 jobs for that icon checkpoint subsequently passed: compatibility
+`39261359647`, native ARM64 `39261359788`, migration `39261359735` and layout
+`39261359712`. These are exact-source hosted fixtures, not physical GNOME/USB proof.
+
+## Current native Rust and compile continuation
+
+The final architecture is **native Rust widgets and Rust application backend**,
+with offline Monaco/xterm embedded and Python only for approved firmware tools.
+The older Tauri web shell remains a reference fixture. See the
+[native Rust plan](NATIVE_RUST_PLAN.md), [native widget receipt](native-rust-ui.json)
+and [compile report](board-compile-campaign.json).
+
+`4b42146` adds real GTK controls around separate Monaco/xterm views. All five
+migration jobs pass; Linux AMD64/ARM64 each pass 17 native widget checks, six Rust
+checks, five lifecycle and three path checks. Windows at that checkpoint runs
+only five portable checks. The native editor alone moves through three detach/
+reattach cycles while its dirty model, selection and undo/redo remain intact.
+
+`7da4be0` adds an authentic Win32/WebView2 adapter and one additional fixed-origin
+protocol check (seven Linux/six Windows). Cross-target strict Clippy passes.
+All 25 jobs pass at `7da4be0` across migration, compatibility, ARM64 and layout.
+SDK proof correction `77e5ccb` also passes all five migration jobs in
+[run 39357769519](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39357769519):
+Windows Win32 and both Linux GTK hosts each execute 17 native smoke checks.
+The UNO Q hook checkpoint `f249c21` passes all five focused migration jobs in
+[run 39359319887](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39359319887).
+The subsequent metadata-reader/release-selection checkpoint `8dbdb9d` still
+awaits focused CI completion. Exact source/job receipts remain in ci-results.json;
+pending work is not a pass. Native input, IME, clipboard, accessibility,
+mixed monitors and complete workspace layout
+remain gates on every required desktop.
+
+The current Python application accepts legitimate plus-sign board IDs without
+relaxing platform/framework/protocol validation. A complete registry query has
+1,654 boards; 34 catalog checks and 16 target-resolution checks pass. Default
+Rust services pass 119 tests. The narrow ID predicate has 13,462 differential
+comparisons; transport has 53,685 comparisons and 163 structural refusals.
+These do not qualify the full target validator or live build service.
+
+All configured indexes yield 37 inventoried package entries (36 unique releases),
+949 visible declaration rows and 543 distinct declarations. Exact ID/name and
+single-candidate matching selects 318 PlatformIO/Arduino targets, including one
+explicitly experimental community UNO Q release. There are 213 distinct
+skipped declarations: 180 unresolved and 33 ambiguous. They remain skips, not substitute boards or
+proof of target absence. Historical aliases and storage/interrupted attempts
+remain separately retained.
+
+The real compile campaign is complete: **318/318 targets passed**, with firmware
+artifact hashes retained in board-compile-campaign.json. The UNO Q path-with-spaces
+blocker is closed at `f249c21`: a fresh isolated original-path campaign job
+retains its preparation failure and successful build-only compatibility retry.
+The actual linker, strip and pack steps produce the 5,376-byte ELF/LLEXT and
+packed sketch; resident firmware is still required. Its earlier no-space alias
+pass is historical evidence only. See [full compile report](BOARD_COMPILE_REPORT.md).
+
+The shared application/campaign compatibility selector pins exact board,
+platform/builder and framework identities. It selects the Onehorse DIO boot/SDK
+and MiniMain S2 native USB repairs, plus the Linux-only UNO Q SCons post hook
+`src/modules/arduinoq_link_paths.py`. The hook represents only the two known
+`-T` linker-script operands as SCons File nodes; its digest enters generated
+INI inputs so changed hook bytes invalidate reuse. Installed packages are never
+patched. This Python hook belongs to the firmware tool, while its application
+selection/ownership policy still needs a Rust port.
+
+At `f249c21`, fifteen local recipe checks pass; Windows skips three Linux-only
+UNO Q cases as expected. `8dbdb9d` then reproduces and closes a FIFO metadata
+read stall with bounded reads from verified regular-file descriptors. Its sixteen
+local recipe checks pass, with four Linux-only cases expected to skip on Windows.
+Five release source-selection checks pass: Python release packages omit the
+developer-only `desktop/` and `audit/` trees while retaining the strict shipped
+state guard. These checks do not represent a new 318-target compile rerun or
+an installed release.
+
+Thirteen campaign guard checks and 46 runtime checks plus Qt/Monaco recovery/Pull
+pass. The responsive suite passes 20 checks and 135 terminal
+layout cases. Original failed compiles remain retained. Current Python build
+qualification passes; unrestricted deployment remains false pending user desktop,
+device/upload/reset/USB and installation qualification. The complete Rust
+replacement remains unfinished.
+
+The campaign uses twelve compiler jobs, preserves 5 GiB free space and removes
+only owned scratch packages/build outputs. Every owned campaign work/package
+tree is now cleaned, leaving approximately 10.9 GiB free at the recorded cleanup.
+No serial port, upload/reset, live
+settings, sketch or protected cache/journal was used. Compile-only coverage does
+not qualify full release workflows or the unfinished Rust replacement.
+
 
 ## Implemented in this continuation
 
@@ -169,8 +253,9 @@ The initial boards never narrow final supported feature/target coverage. Consult
 
 Inventory SHA-256 remains
 `70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52`.
-Baseline hashes were not regenerated. Reference amendments explain four
-production sources, ten verifiers and two legacy CI files separately. The added
+Baseline hashes were not regenerated. Reference amendments now explain eight
+production sources, eleven verifiers and two legacy CI files separately; 281/300
+source rows, 130/133 resource rows and 112/123 verifier rows retain original hashes. The added
 production PNG reuses exact existing ICO bytes. All 22 reused
 asset sources, restored root launcher and unrelated catalog/bootstrap/installer
 inputs retain their continuation-start hashes. No live sketches, protected

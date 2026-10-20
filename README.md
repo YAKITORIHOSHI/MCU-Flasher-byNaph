@@ -14,9 +14,9 @@ The Rust migration is being developed alongside this Python release in
 [`desktop/`](desktop/). Its final GUI will use native Rust widgets with Monaco
 and xterm embedded; application backend logic will also run in Rust. Python will
 remain only for approved firmware tools. The existing Tauri web shell is a
-reference prototype. A separate Linux native-widget fixture now exercises the
-embedded components and editor-only detach, while Windows integration and full
-application parity remain unfinished. See the [native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
+reference prototype. Separate GTK and Win32 native-widget fixtures now exercise
+the embedded components and editor-only detach. Full application parity remains
+unfinished. See the [native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
 Native metadata fixtures retain original root/source identities and refuse
 Windows device-name and junction aliases. The pure serial-send queue now preserves
 active-plus-pending limits, captured connection identity, one-attempt writes and
@@ -37,6 +37,21 @@ Current Python release qualification also includes an isolated
 one Arduino sample per uniquely matched exact PlatformIO target, records skipped
 declarations, and stops within its storage reserve. Compile results do not
 qualify upload/reset behavior or the unfinished Rust replacement.
+
+The configured-index sweep now records 318 successful exact-target sample
+builds. Narrow verified compatibility repairs cover Onehorse boot/SDK selection,
+MiniMain S2 native USB mode and experimental Linux UNO Q linker paths containing
+spaces. Installed package files remain unchanged. See the
+[compile report](audit/migration/BOARD_COMPILE_REPORT.md) for skipped declarations,
+exact versions and qualification limits.
+
+`direct/build_release.py` packages the current Python application from committed
+sources, verified installer files and the private Windows Python distribution.
+Its release ZIP omits the developer-only `desktop/` Rust prototype and `audit/`
+evidence trees; both remain in the repository. The release manifest records those
+omissions and verifies every shipped file, launcher architecture and executable
+permission. Accidental committed personal state or protected cache paths still
+stop packaging. Check source selection with `direct/verify_release_sources.py`.
 
 Downloader dialog fitting now avoids repeated geometry/minimum writes when the
 observed window and work area have not changed. This stops a Configure feedback

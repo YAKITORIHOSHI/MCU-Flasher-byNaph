@@ -1,21 +1,22 @@
 {
   "schema_version": 1,
-  "date": "2026-10-19",
+  "date": "2026-10-20",
   "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
-  "current_checkpoint_commit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+  "current_checkpoint_commit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
   "baseline_inventory": "source-inventory.json",
   "method": "Inventory SHA-256 values capture the original checkout bytes; committed Git blob hashes are separate. Checkout line-ending variants include LF, CRLF, mixed and doubled CRLF. Baseline hashes are preserved, not regenerated. Current hashes explain only intentional migration-owned amendments; unrelated installer/catalog/bootstrap changes are excluded.",
   "scope": "Reference amendments, not proof of full feature parity or production migration approval.",
   "summary": {
-    "amended_baseline_entries": 16,
-    "production_source_files": 4,
-    "legacy_verifier_files": 10,
+    "amended_baseline_entries": 21,
+    "production_source_files": 8,
+    "legacy_verifier_files": 11,
     "legacy_ci_files": 2,
     "additional_ci_files": 1,
-    "unchanged_source_inventory_entries": 286,
+    "unchanged_source_inventory_entries": 281,
     "unchanged_resource_inventory_entries": 130,
     "supplemental_verification_files": 2,
-    "production_asset_additions": 1
+    "production_asset_additions": 1,
+    "unchanged_legacy_verifier_inventory_entries": 112
   },
   "amendments": [
     {
@@ -252,6 +253,80 @@
       "original_git_bytes": 44545,
       "current_bytes": 51839,
       "reason": "Add exact embedded PNG reuse, per-account theme registration, relocation/unchanged-write checks, refused invalid XDG/missing asset, surfaced write failure and isolated native Qt theme/pixel/desktop identity checks. Existing CPU/ELF/GLib/literal-argument cases are retained."
+    },
+    {
+      "path": "main/core/target_profile.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "9b12428c9db7e8e2a59c4a303d6101083d8e8395942107fa0ae5ca1fde333e33",
+      "original_git_sha256": "9b12428c9db7e8e2a59c4a303d6101083d8e8395942107fa0ae5ca1fde333e33",
+      "current_sha256": "249c2f3cf76a246b9d88b19dd9d64fb787530436c0dd1813b3e3fe661d103d9d",
+      "original_bytes": 6758,
+      "original_git_bytes": 6758,
+      "current_bytes": 7107,
+      "reason": "Split PlatformIO board-ID syntax from other strict target identifiers. Preserve literal plus signs in legitimate board IDs without relaxing platform/framework/upload field rules; malformed/path/INI/control/Unicode inputs remain refused. Syntax acceptance does not prove target equivalence or installed toolchain readiness.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "src/modules/board_index_targets.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "4576258ed37fa4ce43edea247f7f2b225ea37cd54cfc59b610362d7ab491c908",
+      "original_git_sha256": "4576258ed37fa4ce43edea247f7f2b225ea37cd54cfc59b610362d7ab491c908",
+      "current_sha256": "0b2d78c358d6d130e5bceb5b2da805f0b507def519ac99ed5d1df360dbd20855",
+      "original_bytes": 15532,
+      "original_git_bytes": 15532,
+      "current_bytes": 15610,
+      "reason": "Apply the same narrow PlatformIO board-ID validator to exact board catalog candidates so legitimate plus-sign IDs are not discarded. Unique exact board identity, Arduino framework and platform release still require independent evidence; shared-chip/variant aliases cannot certify another board.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "direct/verify_board_index_targets.py",
+      "kind": "legacy-verifier",
+      "inventory_sections": [
+        "files",
+        "legacy_verifiers"
+      ],
+      "original_sha256": "cc179c2fa78cd92ce5f40ea56bb76cf1aa2d0c3a84beface036694c845324b09",
+      "original_git_sha256": "cc179c2fa78cd92ce5f40ea56bb76cf1aa2d0c3a84beface036694c845324b09",
+      "current_sha256": "953a8580c7bc61f5cd531a9ba1442b2b150d86be564809a98b582403dfb09b3e",
+      "original_bytes": 34271,
+      "original_git_bytes": 34271,
+      "current_bytes": 35601,
+      "reason": "Add explicit legitimate plus-sign board IDs and unsafe board-ID refusals while preserving strict non-board fields. Fresh catalog verification passes 34 checks; this amendment does not certify the configured-index real compile campaign.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "main/web_bridge.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "3185004df86d183e60b4033cc518510f18d694c5994abec2d9c8222eb55628b0",
+      "original_git_sha256": "3185004df86d183e60b4033cc518510f18d694c5994abec2d9c8222eb55628b0",
+      "original_bytes": 491701,
+      "original_git_bytes": 491701,
+      "reason": "Compile/upload-worker INI generation uses the shared exact-board/version/package-identity compatibility helper for the reproduced Onehorse boot/SDK and MiniMain S2 USB-mode recipe defects. Original board identity and installed package bytes are preserved; new/explicit definitions are not overridden. No live cache generation or hardware operation was performed by verification.",
+      "current_sha256": "6b4c481b0d629257d1b3ad353609cd47719d5bb72bd67df9a2343cfbd5b6df7b",
+      "current_bytes": 492042
+    },
+    {
+      "path": "direct/build_release.py",
+      "kind": "production-source",
+      "inventory_sections": [
+        "files"
+      ],
+      "original_sha256": "10adc17f9f28b6c9aea30b993e457c33071bb9f0b025e9dcbd82eebd62ba7f99",
+      "original_git_sha256": "10adc17f9f28b6c9aea30b993e457c33071bb9f0b025e9dcbd82eebd62ba7f99",
+      "original_bytes": 12679,
+      "original_git_bytes": 12679,
+      "reason": "The current Python release deliberately omits top-level desktop/ and audit/ developer trees with manifest counts. Unsafe paths are rejected before omission; shipped protected caches and personal state remain hard failures. Archive bytes, installer receipts and native launcher checks stay mandatory.",
+      "current_sha256": "15d658cfb3869eefa82636455b51eb632ce7167b27d3e38e2c49cc75b0207d7f",
+      "current_bytes": 13609
     }
   ],
   "additions": [
@@ -259,9 +334,17 @@
       "path": ".github/workflows/migration-prototype.yml",
       "kind": "migration-ci",
       "original_sha256": null,
-      "current_sha256": "37f253ddf17868e2b8aa810cee06179a23e09816b7e22fec0272d3c305f4c171",
-      "current_bytes": 7215,
-      "reason": "Separate fixture-only native prototype matrix on Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022, plus both Windows legacy-editor binding ranges at 100%/200%; not Windows 10/11 desktop or USB qualification."
+      "current_sha256": "27e825e1cf9b5dee9607ea1e9251858827cabae42f7e0ad593fc60845977eae7",
+      "current_bytes": 10863,
+      "reason": "Separate fixture-only native prototype matrix on Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022, plus both Windows legacy-editor binding ranges at 100%/200%; not Windows 10/11 desktop or USB qualification. Checkpoint 4b42146 additionally requests Linux native-widget Rust/controller/path/smoke checks and portable Windows protocol checks; current runs are unqualified until actual results arrive.",
+      "historical_versions": [
+        {
+          "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+          "sha256": "37f253ddf17868e2b8aa810cee06179a23e09816b7e22fec0272d3c305f4c171",
+          "bytes": 7215,
+          "reason": "Separate fixture-only native prototype matrix on Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022, plus both Windows legacy-editor binding ranges at 100%/200%; not Windows 10/11 desktop or USB qualification."
+        }
+      ]
     },
     {
       "path": "direct/native_esp32_fixture.py",
@@ -286,10 +369,78 @@
       "current_sha256": "ef860c5f733443e5d39619e15fb1349ec753527633b409a4a03df7ade5e3878b",
       "current_bytes": 7342,
       "reason": "Exact existing 256x256 PNG bytes extracted from src/assets/mcu_icon.ico; no changed pixels or dependency on the migration prototype."
+    },
+    {
+      "path": "direct/board_compile_indexes.py",
+      "kind": "verification-helper",
+      "original_sha256": null,
+      "current_sha256": "271e5e0f77ebc310095774e7309043ac30d4854ebee2e6e47479a15805652e24",
+      "current_bytes": 20856,
+      "reason": "Opt-in isolated configured-index compile qualification harness or offline guard verifier. Separate from production selection and from completed compile qualification; current campaign remains in progress. See direct/BOARD_COMPILE_CAMPAIGN.md and NATIVE_RUST_PLAN.md.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "direct/board_compile_manifest.py",
+      "kind": "verification-helper",
+      "original_sha256": null,
+      "current_sha256": "8119e2a6f143b8fc86d2c04cb5269e49a09f69a16c6dfdcf09669ad7db350549",
+      "current_bytes": 19994,
+      "reason": "Opt-in isolated configured-index compile qualification harness or offline guard verifier. Separate from production selection and from completed compile qualification; current campaign remains in progress. See direct/BOARD_COMPILE_CAMPAIGN.md and NATIVE_RUST_PLAN.md.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "direct/board_compile_campaign.py",
+      "kind": "verification-harness",
+      "original_sha256": null,
+      "current_sha256": "9f8606ec08ad380b358e192a447ab2af945584f9eba6d45c11ec7d2ab8f321d2",
+      "current_bytes": 33660,
+      "reason": "Opt-in isolated configured-index compile qualification harness or offline guard verifier. Separate from production selection and from completed compile qualification; current campaign remains in progress. See direct/BOARD_COMPILE_CAMPAIGN.md and NATIVE_RUST_PLAN.md.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "direct/verify_board_compile_campaign.py",
+      "kind": "supplemental-verifier",
+      "original_sha256": null,
+      "current_sha256": "469986c82571515979ed80112d7e3bc2179a65b858c1e253690435307b277f01",
+      "current_bytes": 12454,
+      "reason": "Opt-in isolated configured-index compile qualification harness or offline guard verifier. Separate from production selection and from completed compile qualification; current campaign remains in progress. See direct/BOARD_COMPILE_CAMPAIGN.md and NATIVE_RUST_PLAN.md.",
+      "introduced_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    {
+      "path": "main/core/platformio_board_compat.py",
+      "kind": "production-source-addition",
+      "original_sha256": null,
+      "current_sha256": "a2689614c375895adbd6b063a9ece82391a6b9afa6d85569c608a05daf6b2ac9",
+      "current_bytes": 11379,
+      "reason": "Narrow verified exact-board recipe decision and isolated app/campaign regressions; no package writes or generic board substitution."
+    },
+    {
+      "path": "direct/verify_platformio_board_compat.py",
+      "kind": "supplemental-verification",
+      "original_sha256": null,
+      "current_sha256": "7ec05fd55e4ad6a85a71ed9e29cebd45018ec84136322df681f31688d270682b",
+      "current_bytes": 41198,
+      "reason": "Narrow verified exact-board recipe decision and isolated app/campaign regressions; no package writes or generic board substitution."
+    },
+    {
+      "path": "src/modules/arduinoq_link_paths.py",
+      "kind": "firmware-tool-source",
+      "original_sha256": null,
+      "current_sha256": "2b65a17cd05d6ca78d0bd6b3100824c58aac46c3775d1a0755a6b5439dcb7003",
+      "current_bytes": 3017,
+      "reason": "Exact Linux UNO Q rc.4 post-hook represents only two linker-script operands as native SCons File nodes; approved external firmware tooling only, no Python application service or installed-package edits."
+    },
+    {
+      "path": "direct/verify_release_sources.py",
+      "kind": "supplemental-verification",
+      "original_sha256": null,
+      "current_sha256": "f62c95d4328cc7704f9b1d39e2f78721dc54e550e5eba51d7c14daf764d19287",
+      "current_bytes": 2868,
+      "reason": "Five isolated Python archive source-selection guards including the actual committed-tree inventory; no live runtime/settings reads."
     }
   ],
   "limitations": [
-    "Ten legacy verifier amendments and four production source amendments require separate review; passing amended checks alone does not establish unchanged-reference equivalence.",
+    "Eleven legacy verifier amendments and six production source amendments require separate review; passing amended checks alone does not establish unchanged-reference equivalence.",
     "The 133 resource rows include CI. Two CI resource hashes and the original editor HTML changed; this does not change the 22 original assets staged byte-identically to 25 prototype destinations. The added production PNG duplicates existing ICO artwork.",
     "No user sketches, live settings, credentials, deployed Firebase rules, protected caches/journals or hardware were read or changed for this amendment report."
   ],
@@ -454,5 +605,24 @@
       "checkout_crlf": 474,
       "checkout_doubled_crlf": 0
     }
-  ]
+  ],
+  "historical_summaries": [
+    {
+      "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+      "date": "2026-10-19",
+      "summary": {
+        "amended_baseline_entries": 16,
+        "production_source_files": 4,
+        "legacy_verifier_files": 10,
+        "legacy_ci_files": 2,
+        "additional_ci_files": 1,
+        "unchanged_source_inventory_entries": 286,
+        "unchanged_resource_inventory_entries": 130,
+        "supplemental_verification_files": 2,
+        "production_asset_additions": 1
+      }
+    }
+  ],
+  "native_widget_source_evidence": "native-rust-ui.json; native Rust prototype files are new migration source, not amended original inventory rows.",
+  "checkpoint_scope": "Native Rust widget adapters and exact-index compile audit; current Python changes retain exact board identity and protected state. Inventory was never regenerated; complete migration/release parity remains pending."
 }

@@ -6,7 +6,7 @@
 
 **Architecture:** A native Rust widget shell owns windows, focus, layout and commands. Existing GUI-independent Rust core/host services remain the foundation. Embedded editor/terminal components use a bounded typed bridge to Rust; they cannot own filesystem, serial, cloud, credentials or process authority. The Tauri web shell remains a tested prototype while native widget/WebView integration is qualified.
 
-**Tech Stack:** Rust core/host/contracts; native widget toolkit selected after cross-platform embedding proof; existing Monaco/xterm assets; certified PlatformIO/private Python and native firmware utilities as subprocess tools.
+**Tech Stack:** Rust core/host/contracts; GTK3 on Linux and Win32 on Windows for the current native-widget feasibility adapters; existing Monaco/xterm assets embedded through the host browser engine; certified PlatformIO/private Python and native firmware utilities as subprocess tools. Full desktop and release qualification remains open.
 
 **Spec:** User clarification, 20 October 2026 (Asia/Manila), and `docs/rust-tauri-transition-proposal.md` with this amendment taking precedence over its earlier TypeScript application-shell design.
 
@@ -39,8 +39,9 @@
 - [x] Reproduce current registry rejection of legitimate plus-sign board IDs.
 - [x] Verify the narrow board-ID fix and unsafe input refusals, including a fresh complete registry response.
 - [x] Checksum index archives, retain exact declarations, resolve unique compatible PlatformIO targets and report every skipped/failed source.
-- [ ] Run real builds with `--jobs 12`, retain logs/artifact hashes, remove only completed owned build outputs, and report every eligible target's outcome.
-- [ ] Review actual application Compile integration and all relevant CI results; qualify current Python release independently of the incomplete Rust replacement.
+- [x] Run real builds with `--jobs 12`, retain logs/artifact hashes, remove only completed owned build outputs, and report every eligible target's outcome.
+- [x] Verify shared production INI/compatibility selection and close UNO Q's path-with-spaces defect with a real original-path tool build and pinned firmware-tool post hook.
+- [ ] Complete current-checkpoint CI review and actual user desktop/device/installation release qualification. Shared generation fixtures and the compile campaign do not qualify every target's GUI Compile workflow or upload/reset/USB.
 
 ## Task 2: Prove the native Rust widget shell and embedded components
 
@@ -49,7 +50,8 @@
 **Interfaces:** Native window supplies trusted workspace/window identity; editor/terminal supply only typed requests and consumed-byte acknowledgements. No fixture may activate live workspaces or devices.
 
 - [ ] Compare official toolkit support for actual native controls and child WebViews on all required hosts. Record dependency/bundle costs and Windows/Ubuntu/ARM64 constraints before selecting.
-- [ ] Implement native Controls, source tabs and split panes around offline Monaco/xterm fixture views, preserving the established visual assets.
+- [x] Prove real native Controls and split panes around separate offline Monaco/xterm fixture views on GTK Linux and Win32 Windows, including editor-only detach/reattach through native ownership.
+- [ ] Complete the actual workspace, source tabs, saved fonts/static glass/assets, auxiliary screens and live service integration beyond the feasibility controls.
 - [ ] Verify resize/focus/tab order/IME/clipboard at native 100–200%, editor-only detach/reattach, stale response refusal and bounded stream backpressure on each host.
 - [ ] Preserve the Tauri prototype's reusable Rust service/contract proofs; retire only the superseded application web shell after equivalent native evidence exists.
 
@@ -75,20 +77,63 @@
 
 ## Execution record
 
+The completed campaign records **318/318 successful exact target builds** across
+ten pinned platforms from all configured indexes (official Arduino and the saved
+Espressif index). Of 213 distinct skipped declarations, 180 are unresolved and
+33 ambiguous. Onehorse and MiniMain pass the shared exact-recipe repairs.
+Experimental Linux UNO Q's path-with-spaces blocker is closed at `f249c21`:
+`scratch/board-campaign-20261019/unoq-app-hook-batch/results.jsonl` retains a fresh
+original-path job's preparation failure and successful real compatibility retry.
+Its earlier no-space alias pass remains historical evidence only.
+
+The shared production selector verifies exact board/platform/builder hashes and
+framework identity before selecting `src/modules/arduinoq_link_paths.py`. This
+Linux-only SCons post hook represents only two known `-T` operands as File nodes;
+its digest is part of generated INI inputs and firmware reuse invalidation.
+It is approved firmware-tool Python, not an application backend service. Port
+its application selection/ownership policy to Rust; tool-integrated Python may
+remain inside the external builder. Installed packages are never patched.
+The 5,376-byte UNO Q ELF/LLEXT/packed sketch requires resident firmware and does
+not qualify a standalone full-device image. See `BOARD_COMPILE_REPORT.md` and
+`board-compile-campaign.json`.
+
+All owned campaign work/package stores are cleaned, with approximately 10.9 GiB
+free at cleanup. Metadata pruning preserved every board/platform hash while
+removing approximately 398 MiB of unnecessary owned content. No user/global
+stores were cleaned. At `f249c21`, fifteen local recipe checks pass and Windows
+skips three Linux-only cases. Current checkpoint `8dbdb9d` reproduces and fixes
+a FIFO metadata-reader stall with bounded regular-file descriptor reads; sixteen
+local recipe checks pass, with four Linux-only cases expected to skip on Windows.
+Five release source-selection checks pass for excluding developer `desktop/`
+and `audit/` roots from current Python packages while preserving the strict
+shipped state guard. These are source-selection and reader regressions, not a
+fresh 318-target compile rerun or release installation. Thirteen campaign guard
+checks, 46 runtime checks and 20 responsive checks pass at their recorded source.
+Current Python build qualification passes;
+actual user desktop/device/upload/reset/USB and installation qualification still
+prevent unrestricted deployment.
+
+All 25 CI jobs pass at `7da4be0`. The SDK-specific `77e5ccb` correction passes
+all five migration jobs in run 39357769519: Windows Win32/WebView2 and Linux GTK
+AMD64/ARM64 each execute 17 native smoke checks. The follow-up protocol has seven
+checks on Linux and six on Windows. The `f249c21` focused migration run
+39359319887 also passes all five jobs. The subsequent `8dbdb9d` focused CI remains
+pending. These are native fixture proofs; full application/backend,
+Windows 10/11 input, Wayland and mixed-monitor qualification remain open.
+
 20 October 2026: both configured index sources produced 37 inventoried package
 entries and 949 visible declarations. The refreshed registry has 1,654 boards.
 The narrow Python board-ID fix passes 34 catalog and 16 target-resolution checks;
 Rust syntax parity covers 13,462 comparisons while strict non-board fields stay
-unchanged. Real board compilation remains in progress in storage-bounded MCU
-batches. Unresolved declarations remain explicit, rather than accepted aliases.
+unchanged. Real board compilation completed in storage-bounded MCU batches.
+Unresolved declarations remain explicit, rather than accepted aliases.
 
-The Linux native-widget fixture passes six Rust protocol/path checks, five
-controller lifecycle checks, three output/path checks and 17 native X11 smoke
-checks. It retains the editor model and terminal through three editor-only
-detach/reattach cycles. Those results qualify only the isolated Linux fixture,
-not the remaining native UI/input/backend work above. CI wiring now requests
-Linux AMD64/ARM64 execution and portable Windows protocol checks; configured
-jobs are not recorded as successful until their actual results arrive.
+The native-widget smoke retains the editor model/history and terminal through
+three editor-only detach/reattach cycles. Five controller lifecycle checks and
+three output/path checks cover the Linux controller's bounded cleanup and owned
+scratch publication. The 67-capability ledger remains 14 partial fixture subsets
+and 53 pending, with zero Python application services retired. Native mappings
+and fixture callbacks do not qualify the remaining Rust application services.
 
 Campaign review reproduced and corrected shared-identity false matches,
 surviving child-process cleanup and scratch-ancestor symlink acceptance. Thirteen
@@ -96,4 +141,7 @@ offline guard checks pass. The audit runner refuses non-Linux hosts pending a
 separate qualified native process implementation; this does not change the
 production application's Windows support.
 
-The user explicitly authorized continuation. Continue the campaign and independent backend work while native GUI feasibility is evaluated; no new approval checkpoint is required for reversible implementation within these boundaries. Final deployment remains a separate concrete release decision.
+The user explicitly authorized continuation. Continue remaining native application
+and Rust backend work without restarting the completed campaign. No new approval
+checkpoint is required for reversible implementation within these boundaries.
+Final deployment remains a separate concrete release decision.

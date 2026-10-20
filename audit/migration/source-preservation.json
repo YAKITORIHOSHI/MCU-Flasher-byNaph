@@ -1,16 +1,18 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
-  "recordedAtUtc": "2026-10-19T13:35:32.410601+00:00",
+  "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+  "recordedAtUtc": "2026-10-20T02:38:50.436104+00:00",
   "inventorySha256": "70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52",
   "baselineRegenerated": false,
   "sections": {
     "files": {
       "baselineEntries": 300,
-      "unchanged": 286,
+      "unchanged": 281,
       "intentionalAmendments": [
+        "direct/build_release.py",
         "direct/ubuntu/install_desktop.py",
         "direct/verify_arduino_board_chooser.py",
+        "direct/verify_board_index_targets.py",
         "direct/verify_board_search.py",
         "direct/verify_custom_board_dialog.py",
         "direct/verify_downloader_appearance.py",
@@ -20,8 +22,11 @@
         "direct/verify_ubuntu_first_run.py",
         "direct/verify_ubuntu_launcher.py",
         "direct/verify_ubuntu_pty_lifecycle.py",
+        "main/core/target_profile.py",
         "main/mcu_flash_gui.py",
+        "main/web_bridge.py",
         "src/editor/index.html",
+        "src/modules/board_index_targets.py",
         "src/modules/tk_glass.py"
       ]
     },
@@ -36,9 +41,10 @@
     },
     "legacy_verifiers": {
       "baselineEntries": 123,
-      "unchanged": 113,
+      "unchanged": 112,
       "intentionalAmendments": [
         "direct/verify_arduino_board_chooser.py",
+        "direct/verify_board_index_targets.py",
         "direct/verify_board_search.py",
         "direct/verify_custom_board_dialog.py",
         "direct/verify_downloader_appearance.py",
@@ -53,5 +59,112 @@
   },
   "continuationPreservedInputs": 11,
   "allContinuationInputsUnchanged": true,
-  "scope": "Read-only source/resource hashes only; no behavior, license, hardware or full release approval"
+  "scope": "Read-only source/resource hashes only; no behavior, license, hardware or full release approval",
+  "historicalSnapshots": [
+    {
+      "schemaVersion": 1,
+      "sourceCommit": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+      "recordedAtUtc": "2026-10-19T13:35:32.410601+00:00",
+      "inventorySha256": "70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52",
+      "baselineRegenerated": false,
+      "sections": {
+        "files": {
+          "baselineEntries": 300,
+          "unchanged": 286,
+          "intentionalAmendments": [
+            "direct/ubuntu/install_desktop.py",
+            "direct/verify_arduino_board_chooser.py",
+            "direct/verify_board_search.py",
+            "direct/verify_custom_board_dialog.py",
+            "direct/verify_downloader_appearance.py",
+            "direct/verify_editor_review_ui.py",
+            "direct/verify_responsive.py",
+            "direct/verify_target_resolution.py",
+            "direct/verify_ubuntu_first_run.py",
+            "direct/verify_ubuntu_launcher.py",
+            "direct/verify_ubuntu_pty_lifecycle.py",
+            "main/mcu_flash_gui.py",
+            "src/editor/index.html",
+            "src/modules/tk_glass.py"
+          ]
+        },
+        "resources": {
+          "baselineEntries": 133,
+          "unchanged": 130,
+          "intentionalAmendments": [
+            ".github/workflows/compatibility.yml",
+            ".github/workflows/ubuntu-arm64.yml",
+            "src/editor/index.html"
+          ]
+        },
+        "legacy_verifiers": {
+          "baselineEntries": 123,
+          "unchanged": 113,
+          "intentionalAmendments": [
+            "direct/verify_arduino_board_chooser.py",
+            "direct/verify_board_search.py",
+            "direct/verify_custom_board_dialog.py",
+            "direct/verify_downloader_appearance.py",
+            "direct/verify_editor_review_ui.py",
+            "direct/verify_responsive.py",
+            "direct/verify_target_resolution.py",
+            "direct/verify_ubuntu_first_run.py",
+            "direct/verify_ubuntu_launcher.py",
+            "direct/verify_ubuntu_pty_lifecycle.py"
+          ]
+        }
+      },
+      "continuationPreservedInputs": 11,
+      "allContinuationInputsUnchanged": true,
+      "scope": "Read-only source/resource hashes only; no behavior, license, hardware or full release approval"
+    }
+  ],
+  "continuationInputHashes": {
+    "audit/migration/source-inventory.json": "70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52",
+    "mcu_flash_gui.py": "d550d9002048c454c478384bd5444e8e7870de69431778482938ae6b915dc2ac",
+    "index_json/package_index.json": "8c205d493d047027c25d61202ba5928ce6b91119237c9120e3befbb39cab939e",
+    "src/dbs/bootstrap_config.json": "2662546dcd7b7d0240233b8d67ab99c56c60fefd6954065ebd7d5e3be3d9a384",
+    "installers/.handsoff/python-3.14.7-amd64.exe": "9d9eb2709ef81bf5cd30db3c2096bdbc4ea10087c22e62f27d356b36f6ae9649",
+    "installers/CH34x/CH341SER.exe": "458c37bdafbe4ce3cd0baf728c232b4b765b36d7463956e9b94cdf099212cad1",
+    "installers/CP210x/CP210xVCPInstaller_x64.exe": "01a3b9e1ce2104c58a32cfb199bb4577012f71fcd54d3eeb3483461680d29406",
+    "installers/CP210x/CP210xVCPInstaller_x86.exe": "8d94e8dd8eed18c8ab2808f6c2186e57aab4c5bcd93628ec1f14cbd330c7b7c2",
+    "installers/MicrosoftEdgeWebview2Setup.exe": "f91077e2c116dcf6377e555d0d4a3a564d242351ad6718b6954658d4f74819c1",
+    "installers/arduino-cli.msi": "f5ec9eddc0704170272c993c3e01c96237e0a7e2c08e465fd05382e5891faca8",
+    "installers/msys2-x86_64-20260611.exe": "3150d7d9aa5dedd900a7f52300d4d918271e3a8fc47de94848818fd5a430e6b0"
+  },
+  "unrelatedInputsExcludedFromAmendments": [
+    "index_json/package_index.json",
+    "src/dbs/bootstrap_config.json",
+    "installers/.handsoff/python-3.14.7-amd64.exe",
+    "installers/CH34x/CH341SER.exe",
+    "installers/CP210x/CP210xVCPInstaller_x64.exe",
+    "installers/CP210x/CP210xVCPInstaller_x86.exe",
+    "installers/MicrosoftEdgeWebview2Setup.exe",
+    "installers/arduino-cli.msi",
+    "installers/msys2-x86_64-20260611.exe"
+  ],
+  "intentionalUniqueAmendments": 21,
+  "currentSourceMatchesCheckpoint": true,
+  "nativeExecutableAndSourceHashesUnchanged": [
+    {
+      "path": "MCU_Flasher.exe",
+      "sha256": "f17d4be8437c28a6c3bcad1bae443d10185ba74eafbd9c408eca2d154b928df3",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    },
+    {
+      "path": "MCU_Flasher",
+      "sha256": "2f7018af66df3f50defb7709200e91b88663a9b293418ca51f997160b8b9c4b8",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    },
+    {
+      "path": "MCU_Flasher-arm64",
+      "sha256": "0a8b8d1eb2c6a6c49319d7d64814d41a73aa5b698d5aa55ed4f209b2ea48f3da",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    },
+    {
+      "path": "src/launcher_ubuntu.c",
+      "sha256": "fa79b0af8551747cbde3684a729f3a7a61790d5d2daa3534b7d4501e2a1cf6de",
+      "unchangedFrom": "855ba5832b5c77ff36681f7f8fc7442e2427fb41"
+    }
+  ]
 }

@@ -1,10 +1,10 @@
 # Restart handoff
 
-Updated: 19 October 2026, Asia/Manila.
+Updated: 20 October 2026, Asia/Manila.
 
 ## Objective and checkpoint
 
-Continue the full, reuse-first Rust/Tauri 2 migration with actual code and bounded
+Continue the full, reuse-first native Rust GUI and Rust backend migration with actual code and bounded
 subagent ownership. The user reiterated “Continue all and everything according to
 plan.” Full current feature/board/framework/programmer parity is required before
 Python is replaced; private Python ultimately remains only for approved firmware
@@ -12,7 +12,7 @@ tools. Support Ubuntu 24.04+ AMD64/ARM64 and Windows 10/11 AMD64. Preserve curre
 compact workflow/static glass, offline Monaco/xterm, fixed Firebase deployment,
 prepared offline tools, independent projects and editor/terminal/AI state.
 
-Latest code checkpoint is `0cc3ec56d0fbacbda8182c87f045e01b4b511a12`, safely pushed on
+Latest code checkpoint is `8dbdb9def32916bb4179f0c68735202ffc82cdc9` on
 `codex/rust-tauri-migration`. Documentation receipts may advance HEAD without
 changing tested source. Original reference is
 `1d00ff0bfdac7d158dde3df84b07741c5b1df6d4`. Python remains production; no service
@@ -23,6 +23,68 @@ reference-amendments.json, reuse.md, xterm-provenance.json and desktop/README.md
 The 67-capability ledger now has 14 partial fixture subsets and 53 pending. There
 is no retirement approval. Do not restart, reduce scope to implemented probes or
 physical boards, regenerate baseline hashes, or publish an incomplete replacement.
+
+## Current continuation
+
+Read NATIVE_RUST_PLAN.md, native-rust-ui.json and board-compile-campaign.json first.
+Final GUI uses native Rust widgets; retain Monaco/xterm as embedded islands.
+All application backend moves to Rust; private Python remains only firmware tools.
+Do not reinterpret the Tauri web shell as fulfilling this requirement.
+
+Code 4b42146: Linux GTK/native owner/editor-only reparent fixture, board-ID fix,
+configured-index inventory/exact mapping and storage-bounded compile helpers.
+Code 7da4be0: Win32 controls/WebView2 adapter plus exact Onehorse/MiniMain recipe
+repairs shared by the current Python application and campaign. All 25 CI jobs
+pass at `7da4be0`; SDK-specific correction `77e5ccb` passes all five migration
+jobs in run 39357769519. Windows Win32 and Linux GTK AMD64/ARM64 each execute
+17 native smoke checks. Hosted results do not qualify Windows 10/11 desktop
+input or physical USB.
+
+Code `f249c21` closes UNO Q's linker-path defect in the shared production
+compatibility path. Fifteen local recipe checks pass; Windows deliberately skips
+three Linux-only checks. All five focused migration jobs pass in 39359319887.
+The subsequent `8dbdb9d` reproduces and fixes a FIFO metadata-reader stall using
+bounded regular-file descriptor reads, then passes sixteen local recipe checks.
+Its new FIFO case makes four expected Linux-only skips on Windows. Five release
+source-selection checks pass: current Python release packaging omits the
+developer `desktop/` and `audit/` roots while keeping its strict shipped state
+guard. This does not install a release or rerun all 318 target compiles. Focused
+CI for this newer checkpoint remains pending; record its actual result before
+calling that CI complete. Thirteen campaign guard checks, 46 runtime checks and
+20 responsive checks pass at their recorded source.
+
+The campaign is complete: 318/318 exact targets from all configured indexes
+produced real artifacts. Every final outcome and skip belongs to
+board-compile-campaign.json and BOARD_COMPILE_REPORT.md. Original failures remain.
+There are 213 distinct skipped declarations: 180 unresolved and 33 ambiguous.
+Do not restart completed targets or silently accept old aliases. UNO Q's latest
+receipt is `scratch/board-campaign-20261019/unoq-app-hook-batch/results.jsonl`:
+a fresh owned job in the original checkout path containing spaces retains its
+preparation failure and successful real compatibility retry. The former no-space
+Bubblewrap alias pass is historical only. The Linux-only tool hook
+`src/modules/arduinoq_link_paths.py` pins platform/board/builder hashes and
+framework identity, then changes only two `-T` operands to SCons File nodes.
+Its digest is a generated INI input; installed packages remain untouched. The
+5,376-byte ELF/LLEXT/packed sketch requires resident firmware and is not a
+standalone device image. All owned campaign work/package stores are cleaned;
+approximately 10.9 GiB was free at cleanup.
+
+The current Python release passes build qualification. Unrestricted deployment
+remains false pending actual user desktop/device/upload/reset/USB and installation
+qualification. No replacement entry point or shipped executable was installed.
+Continue the native Rust/backend plan and release gates below.
+
+All 11 continuation-start input hashes, three shipped launcher hashes and the
+Ubuntu launcher C-source hash remain unchanged. Original inventory hash remains
+70072652...e8d52; it was not
+regenerated. Current baseline preservation: sources 281/300, resources 130/133,
+legacy verifiers 112/123. Twenty-one unique amended baseline paths are documented.
+
+The native fixture has Linux 7/Windows 6 protocol checks; local lifecycle 5,
+path 3, native Linux 17 and strict Linux/Windows-target Clippy pass. The default
+Rust services remain 119 tests, and the ledger stays 14 partial/53 pending with
+no Python service retired. Actual CI and artifact receipts are in ci-results.json
+and native-rust-ui.json; pending jobs are never promoted to successful evidence.
 
 ## Code stages completed in this continuation
 
@@ -112,7 +174,17 @@ desktop/target remain selected by dev-env.sh. No system install/profile change.
 
 ## CI and native scope
 
-All these matrices are complete and successful, with each actual source retained:
+Current continuation results retain their actual source:
+
+- `7da4be0`: all 25 jobs pass across migration 39356653640, compatibility
+  39356653665, ARM64 39356653643 and layout 39356653635.
+- `77e5ccb`: all five migration jobs pass in 39357769519, including 17 native
+  smoke checks on Windows and both Linux architectures.
+- `f249c21`: all five focused migration jobs pass in 39359319887.
+- `8dbdb9d`: newer bounded-reader/release-selection focused CI remains pending.
+  Do not promote configured or pending jobs.
+
+Earlier successful matrices remain historical evidence at their actual source:
 
 - Rust/Tauri `1131c7e`: migration/editor 39253280765, all 5 jobs.
 - Reference-verifier correction `f952325`: compatibility 39254790860, all 14 jobs.

@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "date": "2026-10-19",
+  "date": "2026-10-20",
   "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
   "prototype_checkpoint_commit": "1131c7e250b0688b75f86675943601c8b6c93d07",
-  "scope": "Initial traced parity/reuse ledger. No legacy component is approved for replacement.",
+  "scope": "Full 67-capability parity remains required. Final GUI uses native Rust widgets and application backend uses Rust; offline Monaco/xterm may remain embedded JavaScript and Python only approved firmware tools. No legacy component approved for replacement.",
   "baseline_behavior_audit": "incomplete",
   "performance_baseline": "pending",
   "inventory": {
@@ -221,6 +221,74 @@
       "local_synthetic_checks": 9,
       "local_target_resolution_checks": 16,
       "meaning": "Only native legacy verification helpers/check wiring changed after1131c7e; real fresh native setup/ESP32 compilation and all14 compatibility jobs pass atf952325. Rust/Tauri source remains1131c7e."
+    },
+    "native_rust_widget_followup": {
+      "source_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+      "report": "audit/migration/native-rust-ui.json",
+      "rust_checks": 6,
+      "lifecycle_checks": 5,
+      "path_checks": 3,
+      "native_smoke_checks": 17,
+      "elapsed_seconds": 2.271,
+      "default_rust_workspace_tests": 119,
+      "meaning": "Additional isolated Linux AMD64 GTK widget/editor-only transfer evidence. Existing 14 partial/53 pending counts are unchanged; complete native GUI/input/backend parity remains pending."
+    },
+    "target_syntax_followup": {
+      "boardIdSyntaxComparisons": 13462,
+      "equivalentHelperComparisons": 53685,
+      "structuredRefusalComparisons": 163,
+      "pythonStrictOtherFieldComparisons": 16,
+      "fullTargetValidationQualified": false,
+      "countingNote": "Syntax inputs, helper comparisons and explicit refusal comparisons are separate units; do not add them to historical pure-input totals.",
+      "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e"
+    },
+    "prior_production_icon_checkpoint_ci": {
+      "source_checkpoint": "0cc3ec56d0fbacbda8182c87f045e01b4b511a12",
+      "jobs_passed": 25,
+      "jobs_total": 25,
+      "evidence": "audit/migration/verification.json#priorProductionIconCiVerification"
+    },
+    "current_checkpoint_ci_followup": {
+      "source_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+      "runs": [
+        {
+          "matrix": "migration",
+          "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "runId": 39355267393,
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39355267393",
+          "status": "reported_in_progress",
+          "conclusion": null,
+          "qualified": false
+        },
+        {
+          "matrix": "compatibility",
+          "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "runId": 39355267637,
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39355267637",
+          "status": "reported_in_progress",
+          "conclusion": null,
+          "qualified": false
+        },
+        {
+          "matrix": "arm64",
+          "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "runId": 39355267587,
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39355267587",
+          "status": "reported_in_progress",
+          "conclusion": null,
+          "qualified": false
+        },
+        {
+          "matrix": "layout",
+          "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "runId": 39355267490,
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39355267490",
+          "status": "reported_in_progress",
+          "conclusion": null,
+          "qualified": false
+        }
+      ],
+      "meaning": "Recorded in progress; not qualified."
     }
   },
   "contracts": {
@@ -271,6 +339,7 @@
     }
   },
   "open_gates": [
+    "Implement and qualify the final native Rust widget GUI and all Rust application backend services on Windows 10/11 AMD64 and Ubuntu 24.04+ AMD64/ARM64; embedded Monaco/xterm allowed, Python only approved firmware-tool dependencies. Tauri web-shell and isolated Linux native-widget fixtures do not fulfill the complete requirement.",
     "Complete per-feature call-path/failure audit and sanitized schema fixtures; current structural audit is not exhaustive.",
     "Measure legacy and prototype startup, process-tree RAM/idleCPU, scroll/search/resize and serial/PTY throughput on representative4/6core/Pi hosts.",
     "Qualify supported webview ownership APIs; current transfer uses Tauri unstable feature.",
@@ -364,7 +433,13 @@
         ],
         "implemented_subset": "Initial static glass/theme tokens and selected existing assets only; complete UI/accessibility/auxiliary palette parity pending.",
         "evidence": [],
-        "full_feature_parity": "pending"
+        "full_feature_parity": "pending",
+        "native_widget_followup": {
+          "source_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "evidence": "audit/migration/native-rust-ui.json",
+          "subset": "Isolated Linux GTK native controls and separate offline Monaco/xterm islands; three editor-only transfers retain the same model, dirty text, selection and public undo/redo history. Complete native input, tab/buffer recovery, host matrix and application integration remain pending.",
+          "full_feature_parity": "pending"
+        }
       },
       "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
       "native_required": [
@@ -458,7 +533,13 @@
         "evidence": [
           "audit/migration/native-webview.json"
         ],
-        "full_feature_parity": "pending"
+        "full_feature_parity": "pending",
+        "native_widget_followup": {
+          "source_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "evidence": "audit/migration/native-rust-ui.json",
+          "subset": "Isolated Linux GTK native controls and separate offline Monaco/xterm islands; three editor-only transfers retain the same model, dirty text, selection and public undo/redo history. Complete native input, tab/buffer recovery, host matrix and application integration remain pending.",
+          "full_feature_parity": "pending"
+        }
       },
       "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
       "native_required": [
@@ -1057,7 +1138,13 @@
         "evidence": [
           "audit/migration/native-webview.json"
         ],
-        "full_feature_parity": "pending"
+        "full_feature_parity": "pending",
+        "native_widget_followup": {
+          "source_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "evidence": "audit/migration/native-rust-ui.json",
+          "subset": "Isolated Linux GTK native controls and separate offline Monaco/xterm islands; three editor-only transfers retain the same model, dirty text, selection and public undo/redo history. Complete native input, tab/buffer recovery, host matrix and application integration remain pending.",
+          "full_feature_parity": "pending"
+        }
       },
       "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
       "native_required": [
@@ -1114,7 +1201,13 @@
         "evidence": [
           "audit/migration/native-webview.json"
         ],
-        "full_feature_parity": "pending"
+        "full_feature_parity": "pending",
+        "native_widget_followup": {
+          "source_checkpoint": "4b42146452c007b5bd54d50ad2981d5149443e3e",
+          "evidence": "audit/migration/native-rust-ui.json",
+          "subset": "Isolated Linux GTK native controls and separate offline Monaco/xterm islands; three editor-only transfers retain the same model, dirty text, selection and public undo/redo history. Complete native input, tab/buffer recovery, host matrix and application integration remain pending.",
+          "full_feature_parity": "pending"
+        }
       },
       "retirement_gate": "Legacy/replacement differential success, refusal, cancellation, contention and stale-generation fixtures; corresponding native host/transport coverage; coexistence/rollback proven. No current entry authorizes legacy removal.",
       "native_required": [
@@ -1668,7 +1761,7 @@
       ],
       "disposition": "behavior-preserving-port",
       "owner": "build Rust service/shared UI",
-      "acceptance": "Preserve source/config/library/firmware hashes, prebuild signatures and A\u2192B\u2192A/restart reuse.",
+      "acceptance": "Preserve source/config/library/firmware hashes, prebuild signatures and A→B→A/restart reuse.",
       "failure_race_contract": "Dirty/failed/interrupted/changed image refuses reuse even on coarse timestamps; no SCons DB deserialization.",
       "status": "pending",
       "prototype_scope": null,
@@ -1711,7 +1804,7 @@
       ],
       "disposition": "behavior-preserving-port",
       "owner": "build Rust service/shared UI",
-      "acceptance": "Keep 4\u20136core headroom, physical/logical/RAM limits and HDD/removable/network I/O policy.",
+      "acceptance": "Keep 4–6core headroom, physical/logical/RAM limits and HDD/removable/network I/O policy.",
       "failure_race_contract": "Host discovery/admission remains separate from pure calculations; all probes off GUI.",
       "status": "partial-fixture-only",
       "prototype_scope": {
@@ -2181,7 +2274,7 @@
           "desktop/crates/core/src/serial_text.rs",
           "desktop/scripts/verify-serial-codec.py"
         ],
-        "implemented_subset": "Incremental text codec only:325 differential cases, retained incomplete UTF8\u22643bytes. No port access, serial driver/reader/send/session implementation.",
+        "implemented_subset": "Incremental text codec only:325 differential cases, retained incomplete UTF8≤3bytes. No port access, serial driver/reader/send/session implementation.",
         "evidence": [
           "audit/migration/serial-codec.json"
         ],
@@ -2804,7 +2897,7 @@
       ],
       "disposition": "behavior-preserving-port",
       "owner": "developer-portal Rust service/shared UI",
-      "acceptance": "Retain exactly5completed clicks/pause, local saltedPBKDF2\u226512char key and existing Firebase sign-in/reset.",
+      "acceptance": "Retain exactly5completed clicks/pause, local saltedPBKDF2≥12char key and existing Firebase sign-in/reset.",
       "failure_race_contract": "No default universal key; changing key requires auth; local access cannot inherit cloud UID/cache; repair only known runtime defects.",
       "status": "pending",
       "prototype_scope": null,
@@ -3456,18 +3549,48 @@
   "timezone": "Asia/Manila",
   "baseline_preservation": {
     "inventory": "source-inventory.json remains unchanged",
-    "intentional_unique_reference_changes": 10,
-    "production_sources": 2,
-    "legacy_verifiers": 7,
-    "legacy_ci_files": 1,
-    "unchanged_source_rows": 291,
+    "intentional_unique_reference_changes": 21,
+    "production_sources": 8,
+    "legacy_verifiers": 11,
+    "legacy_ci_files": 2,
+    "unchanged_source_rows": 281,
     "source_rows": 300,
-    "unchanged_resource_rows": 131,
+    "unchanged_resource_rows": 130,
     "resource_rows": 133,
     "staged_asset_sources": 22,
     "staged_asset_copies": 25,
     "staged_asset_byte_changes": 0,
-    "hash_boundary": "Original checkout-byte hashes, including line-ending variants; not a claim that all baseline rows equal Git blob bytes. Sixteen duplicated rows retain original baseline bytes and differ from Git only in CR line-ending characters."
+    "hash_boundary": "Original checkout-byte hashes, including line-ending variants; not a claim that all baseline rows equal Git blob bytes. Sixteen duplicated rows retain original baseline bytes and differ from Git only in CR line-ending characters.",
+    "unchanged_legacy_verifier_rows": 112,
+    "legacy_verifier_rows": 123
   },
-  "latest_repository_checkpoint": "f952325ca4acfdf044c17c7813bc36609821381c"
+  "latest_repository_checkpoint": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+  "final_architecture_requirement": {
+    "finalGui": "Native Rust application widgets; Monaco and xterm remain embedded offline JavaScript components. A whole Tauri HTML application shell does not fulfill this requirement.",
+    "finalBackend": "All application state, orchestration and authority in Rust; no Python GUI, application server or hidden Python backend service in the replacement.",
+    "pythonRuntime": "Only approved external firmware-tool dependencies in the replacement; development reference/controller verifiers may use Python.",
+    "nativeDependencies": "Rust-authored application code may use GTK/Win32 and system WebKit/WebView2 libraries; this does not claim every dependency is implemented in Rust.",
+    "preserveExistingRustServices": true,
+    "tauriRole": "Retain the tested web-shell fixture and reusable core/host/contracts while the native widget adapters and full backend are completed.",
+    "productionEntryPoint": "Current Python application until all parity, packaging, native workflow/device and rollback gates pass."
+  },
+  "historical_baseline_preservation": [
+    {
+      "inventory": "source-inventory.json remains unchanged",
+      "intentional_unique_reference_changes": 10,
+      "production_sources": 2,
+      "legacy_verifiers": 7,
+      "legacy_ci_files": 1,
+      "unchanged_source_rows": 291,
+      "source_rows": 300,
+      "unchanged_resource_rows": 131,
+      "resource_rows": 133,
+      "staged_asset_sources": 22,
+      "staged_asset_copies": 25,
+      "staged_asset_byte_changes": 0,
+      "hash_boundary": "Original checkout-byte hashes, including line-ending variants; not a claim that all baseline rows equal Git blob bytes. Sixteen duplicated rows retain original baseline bytes and differ from Git only in CR line-ending characters."
+    }
+  ],
+  "native_widget_followup_evidence": "native-rust-ui.json",
+  "current_python_compile_evidence": "board-compile-campaign.json"
 }
