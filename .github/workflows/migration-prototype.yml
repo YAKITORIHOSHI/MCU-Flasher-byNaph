@@ -8,7 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       windows_only:
-        description: Run only the native Windows migration job
+        description: Limit native or backend jobs to Windows
+        type: boolean
+        default: false
+      backend_only:
+        description: Run Rust backend fixtures without GUI or editor setup
         type: boolean
         default: false
 
@@ -21,6 +25,7 @@ concurrency:
 
 jobs:
   native-prototype:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.backend_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -95,6 +100,7 @@ jobs:
           python -B -W error desktop/scripts/verify-lock-interop.py
           python -B -W error desktop/scripts/verify-target-transport.py
           python -B -W error desktop/scripts/verify-board-recipe.py | tee audit/migration/logs/board-recipe-rust.json
+          python -B -W error desktop/scripts/verify-board-compatibility.py | tee audit/migration/logs/board-compatibility-rust.json
           python -B -W error desktop/scripts/verify-ownership.py
           python -B -W error desktop/scripts/verify-process-identity.py
           python -B -W error desktop/scripts/verify-file-identity.py | tee audit/migration/logs/file-identity.json
@@ -193,6 +199,7 @@ jobs:
             audit/migration/logs/board-campaign-guards.log
             audit/migration/logs/board-recipe-compat.log
             audit/migration/logs/board-recipe-rust.json
+            audit/migration/logs/board-compatibility-rust.json
             audit/migration/logs/native-ui-windows.json
             audit/migration/logs/native-ui-windows-output.log
             audit/migration/logs/native-workspace-windows.json
@@ -205,7 +212,7 @@ jobs:
           if-no-files-found: warn
 
   editor-review:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only) }}
     name: Windows editor review (Python ${{ matrix.python }})
     runs-on: windows-latest
     timeout-minutes: 12
@@ -255,3 +262,50 @@ jobs:
 # Native widget execution covers Linux GTK and Windows Win32/WebView2 fixture
 # adapters. Hosted Windows Server still does not qualify Windows 10/11 desktops,
 # physical input/IME, mixed-monitor behavior or complete application parity.
+
+  backend-fixtures:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_only }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.windows_only && '["windows-2022"]' || '["ubuntu-24.04","ubuntu-24.04-arm","windows-2022"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: '4'
+      RUSTUP_TOOLCHAIN: '1.99.1'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/desktop/target
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Prepare pinned Rust
+        shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Rust backend units and strict checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit/migration/logs
+          cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
+          cargo test --manifest-path desktop/Cargo.toml --locked 2>&1 | tee audit/migration/logs/backend-unit.log
+          cargo clippy --manifest-path desktop/Cargo.toml --locked -p mcu-contracts -p mcu-core -p mcu-host --all-targets -- -D warnings
+          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin board_recipe_probe --bin board_compatibility_probe
+      - name: Exact compatibility policy and descriptor fixtures
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B -W error desktop/scripts/verify-board-recipe.py | tee audit/migration/logs/board-recipe-rust.json
+          python -B -W error desktop/scripts/verify-board-compatibility.py | tee audit/migration/logs/board-compatibility-rust.json
+      - name: Collect compact backend receipts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: migration-backend-${{ matrix.os }}
+          path: |
+            audit/migration/logs/backend-unit.log
+            audit/migration/logs/board-recipe-rust.json
+            audit/migration/logs/board-compatibility-rust.json
+          if-no-files-found: warn

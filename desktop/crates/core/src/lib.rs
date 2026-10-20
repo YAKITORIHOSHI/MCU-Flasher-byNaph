@@ -13,6 +13,7 @@ use mcu_contracts::{
     SaveDocumentRequest, ScaffoldOptions, ScaffoldTemplate, ServiceError, ServiceResult,
     SourceFile, SourceManifest, WorkspaceId, WorkspaceRegistration, PROTOCOL_VERSION,
 };
+pub mod board_compatibility;
 pub mod board_recipe;
 pub mod ownership;
 pub mod preferences;
