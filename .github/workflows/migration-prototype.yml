@@ -101,6 +101,7 @@ jobs:
           python -B -W error desktop/scripts/verify-target-transport.py
           python -B -W error desktop/scripts/verify-board-recipe.py | tee audit/migration/logs/board-recipe-rust.json
           python -B -W error desktop/scripts/verify-board-compatibility.py | tee audit/migration/logs/board-compatibility-rust.json
+          python -B -W error desktop/scripts/verify-recipe-generation.py | tee audit/migration/logs/recipe-generation-rust.json
           python -B -W error desktop/scripts/verify-ownership.py
           python -B -W error desktop/scripts/verify-process-identity.py
           python -B -W error desktop/scripts/verify-file-identity.py | tee audit/migration/logs/file-identity.json
@@ -200,6 +201,7 @@ jobs:
             audit/migration/logs/board-recipe-compat.log
             audit/migration/logs/board-recipe-rust.json
             audit/migration/logs/board-compatibility-rust.json
+            audit/migration/logs/recipe-generation-rust.json
             audit/migration/logs/native-ui-windows.json
             audit/migration/logs/native-ui-windows-output.log
             audit/migration/logs/native-workspace-windows.json
@@ -291,7 +293,7 @@ jobs:
           cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
           cargo test --manifest-path desktop/Cargo.toml --locked 2>&1 | tee audit/migration/logs/backend-unit.log
           cargo clippy --manifest-path desktop/Cargo.toml --locked -p mcu-contracts -p mcu-core -p mcu-host --all-targets -- -D warnings
-          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin board_recipe_probe --bin board_compatibility_probe
+          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-host --bin board_recipe_probe --bin board_compatibility_probe --bin recipe_generation_probe
       - name: Exact compatibility policy and descriptor fixtures
         timeout-minutes: 3
         shell: bash
@@ -299,6 +301,7 @@ jobs:
           set -euo pipefail
           python -B -W error desktop/scripts/verify-board-recipe.py | tee audit/migration/logs/board-recipe-rust.json
           python -B -W error desktop/scripts/verify-board-compatibility.py | tee audit/migration/logs/board-compatibility-rust.json
+          python -B -W error desktop/scripts/verify-recipe-generation.py | tee audit/migration/logs/recipe-generation-rust.json
       - name: Collect compact backend receipts
         if: always()
         uses: actions/upload-artifact@v6
@@ -308,4 +311,5 @@ jobs:
             audit/migration/logs/backend-unit.log
             audit/migration/logs/board-recipe-rust.json
             audit/migration/logs/board-compatibility-rust.json
+            audit/migration/logs/recipe-generation-rust.json
           if-no-files-found: warn

@@ -205,7 +205,7 @@ fn open_metadata(path: &Path, kind: EntryKind) -> io::Result<MetadataHandle> {
     }
 }
 
-fn native_identity(file: &File) -> io::Result<NativeFileIdentity> {
+pub(crate) fn native_identity(file: &File) -> io::Result<NativeFileIdentity> {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::MetadataExt;
