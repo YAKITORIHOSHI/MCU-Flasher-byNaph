@@ -3,9 +3,11 @@
 
 The GCC probe compiles a tiny C file with the prepared compiler, without
 PlatformIO, libraries, downloads, accounts, metadata generation or hardware.
+Use --compiler to select an existing compiler from an owned checkout temp/ fixture.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -22,6 +24,8 @@ from main.core.cloud_sketch_service import _io_path
 
 @unittest.skipUnless(sys.platform == "win32", "Native Windows execution required")
 class WindowsBuildPaths(unittest.TestCase):
+    compiler = None
+
     def setUp(self):
         audit = ROOT / "temp" / "audit" / "windows-build-paths"
         audit.mkdir(parents=True, exist_ok=True)
@@ -43,14 +47,16 @@ class WindowsBuildPaths(unittest.TestCase):
         self.addCleanup(self.remove_aliases)
 
     def remove_aliases(self):
-        for alias in self.aliases:
-            if windows._is_windows_reparse_point(alias):
+        for alias, canonical in self.aliases:
+            if (windows._is_windows_reparse_point(alias)
+                    and alias.resolve() == canonical):
                 os.rmdir(alias)  # Remove only the fixture junction entry.
 
     def alias(self, workspace=None):
-        alias = windows.compiler_working_directory(workspace or self.workspace)
-        if alias != (workspace or self.workspace):
-            self.aliases.append(alias)
+        workspace = workspace or self.workspace
+        alias = windows.compiler_working_directory(workspace)
+        if alias != workspace:
+            self.aliases.append((alias, workspace.resolve()))
         return alias
 
     def test_alias_reuses_the_same_workspace_and_separates_exact_boards(self):
@@ -88,9 +94,10 @@ class WindowsBuildPaths(unittest.TestCase):
         self.assertEqual(alias.resolve(), canonical.resolve())
 
     def test_installed_gcc_long_dependency_failure_is_fixed_by_short_cwd(self):
-        gcc = ROOT / "src/.platformio-mcu-gui/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-gcc.exe"
-        if not gcc.is_file():
+        gcc = self.compiler or ROOT / "src/.platformio-mcu-gui/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-gcc.exe"
+        if self.compiler is None and not gcc.is_file():
             self.skipTest("Prepared ESP32 compiler is unavailable")
+        self.assertTrue(gcc.is_file(), "Selected fixture compiler is unavailable")
         if str(self.short_root).startswith("\\\\?\\"):
             self.skipTest("Fixture volume has no short names; production drive-root alias is covered separately")
         relative = Path(".pio/build/mcu_env/libc62/NimBLE_Arduino-2.5.1/nimble/nimble/transport/esp_ipc_legacy/src/hci_esp_ipc_legacy.c.d")
@@ -110,9 +117,21 @@ class WindowsBuildPaths(unittest.TestCase):
         self.assertEqual(fixed.returncode, 0, fixed.stderr)
         self.assertTrue(_io_path(self.workspace / relative).is_file())
         self.assertTrue((self.workspace / "probe.o").is_file())
-        print(f"Native ESP32 GCC: dependency path {len(str(self.workspace / relative))} chars fails; "
+        print(f"Native GCC ({gcc.name}): dependency path {len(str(self.workspace / relative))} chars fails; "
               f"{len(str(alias / relative))} chars succeeds.")
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--compiler", type=Path,
+                        help="Existing GCC executable inside this checkout's temp/ fixture tree")
+    args, remaining = parser.parse_known_args()
+    if args.compiler is not None:
+        try:
+            compiler = args.compiler.resolve(strict=True)
+        except OSError as error:
+            parser.error(f"Cannot resolve the fixture compiler: {error}")
+        if not compiler.is_file() or not compiler.is_relative_to((ROOT / "temp").resolve()):
+            parser.error("--compiler must select an existing file inside this checkout's temp/ fixture tree")
+        WindowsBuildPaths.compiler = compiler
+    unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

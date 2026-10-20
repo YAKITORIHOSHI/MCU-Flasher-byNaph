@@ -4,12 +4,18 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Run only the two Windows runtime qualification jobs
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   qt-binding-diagnostics:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +43,7 @@ jobs:
           .venv-qt-probe/bin/python -m pip install '${{ matrix.qt }}'
           .venv-qt-probe/bin/python -B direct/verify_qt_binding_lifetime.py
   svg-ui-native:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -110,6 +117,7 @@ jobs:
           path: temp/audit/svg-native/**/*.png
           if-no-files-found: warn
   developer-access-windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,6 +163,7 @@ jobs:
           path: temp/audit/developer-windows
           if-no-files-found: ignore
   ubuntu-first-run:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -199,19 +208,7 @@ jobs:
   runtime:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            python: '3.11'
-          - os: windows-latest
-            python: '3.14'
-            bundled: true
-          - os: ubuntu-24.04
-            python: '3.11'
-          - os: ubuntu-24.04
-            python: '3.12'
-          - os: ubuntu-26.04
-            python: '3.14'
+      matrix: ${{ fromJSON(inputs.windows_only && '{"include":[{"os":"windows-latest","python":"3.11"},{"os":"windows-latest","python":"3.14","bundled":true}]}' || '{"include":[{"os":"windows-latest","python":"3.11"},{"os":"windows-latest","python":"3.14","bundled":true},{"os":"ubuntu-24.04","python":"3.11"},{"os":"ubuntu-24.04","python":"3.12"},{"os":"ubuntu-26.04","python":"3.14"}]}') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -434,6 +431,29 @@ jobs:
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Windows shipped executable argument transport
+        id: windows_launcher
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force temp/audit/windows-qualification | Out-Null
+          & env/Scripts/python.exe -B -W error direct/verify_windows_launcher.py *> temp/audit/windows-qualification/verify_windows_launcher.log
+          $code = $LASTEXITCODE
+          Get-Content temp/audit/windows-qualification/verify_windows_launcher.log
+          exit $code
+      - name: Windows setup, paths, maintenance and release guards
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force temp/audit/windows-qualification | Out-Null
+          foreach ($check in 'verify_windows_board_setup', 'verify_windows_build_paths', 'verify_windows_maintenance', 'verify_platformio_board_compat', 'verify_release_sources') {
+            $log = "temp/audit/windows-qualification/$check.log"
+            & env/Scripts/python.exe -B -W error "direct/$check.py" *> $log
+            $code = $LASTEXITCODE
+            Get-Content $log
+            if ($code -ne 0) { exit $code }
+          }
       - name: Windows editor and auxiliary windows
         if: runner.os == 'Windows'
         timeout-minutes: 5
@@ -481,6 +501,47 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           exit $LASTEXITCODE
+      - name: Native Windows AVR Compile-button integration
+        if: runner.os == 'Windows' && matrix.bundled
+        timeout-minutes: 8
+        env:
+          PLATFORMIO_CORE_DIR: ${{ github.workspace }}/temp/audit/windows-avr-core
+          PLATFORMIO_PACKAGES_DIR: ${{ github.workspace }}/temp/audit/windows-avr-core/packages
+          PLATFORMIO_PLATFORMS_DIR: ${{ github.workspace }}/temp/audit/windows-avr-core/platforms
+          PLATFORMIO_GLOBALLIB_DIR: ${{ github.workspace }}/temp/audit/windows-avr-core/lib
+          PLATFORMIO_CACHE_DIR: ${{ github.workspace }}/temp/audit/windows-avr-core/.cache
+          MCU_PACKAGE_EVENTS_ROOT: ${{ github.workspace }}/temp/audit/windows-avr-events
+          PLATFORMIO_NO_TELEMETRY: '1'
+          PLATFORMIO_DISABLE_UPGRADE_CHECK: '1'
+          QT_QPA_PLATFORM: windows
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          project = Path('temp/audit/windows-avr-project')
+          (project / 'src').mkdir(parents=True, exist_ok=True)
+          (project / 'platformio.ini').write_text('[env:probe]\nplatform = platformio/atmelavr@5.3.0\nboard = uno\nframework = arduino\n')
+          (project / 'src/main.cpp').write_text('#include <Arduino.h>\nvoid setup() {}\nvoid loop() {}\n')
+          '@ | & env/Scripts/python.exe -B -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B -m platformio run -d temp/audit/windows-avr-project --jobs 2 *> temp/audit/windows-qualification/avr-provision.log
+          $code = $LASTEXITCODE
+          Get-Content temp/audit/windows-qualification/avr-provision.log
+          if ($code -ne 0) { exit $code }
+          & env/Scripts/python.exe -B -m platformio pkg install -g -t platformio/tool-avrdude
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_target_resolution.py --compile-installed-avr --avr-core temp/audit/windows-avr-core --no-finalize *> temp/audit/windows-qualification/avr-compile-buttons.log
+          $code = $LASTEXITCODE
+          Get-Content temp/audit/windows-qualification/avr-compile-buttons.log
+          if ($code -ne 0) { exit $code }
+          & env/Scripts/python.exe -B -W error direct/verify_windows_build_paths.py --compiler temp/audit/windows-avr-core/packages/toolchain-atmelavr/bin/avr-gcc.exe *> temp/audit/windows-qualification/avr-gcc-paths.log
+          $code = $LASTEXITCODE
+          Get-Content temp/audit/windows-qualification/avr-gcc-paths.log
+          exit $code
+      - name: Require Windows executable transport qualification
+        if: always() && runner.os == 'Windows' && steps.windows_launcher.outcome != 'success'
+        shell: pwsh
+        run: throw 'The shipped executable argument-transport check failed; see its retained receipt.'
       - name: Desktop previews
         if: always()
         uses: actions/upload-artifact@v6
@@ -491,4 +552,7 @@ jobs:
             temp/audit/compatibility/*.log
             temp/audit/target-resolution/*/*.json
             temp/audit/target-resolution/*/*.log
+            temp/audit/windows-qualification/*.log
+            temp/audit/windows-launcher/*.json
+            temp/audit/terminal/protocol-report.json
           if-no-files-found: ignore

@@ -562,6 +562,46 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         kwargs["env"]["PYTHONDONTWRITEBYTECODE"] = "1"
         return original_popen(*args, **kwargs)
     with ExitStack() as stack:
+        if sys.platform == "win32":
+            from main.platforms import windows as windows_host
+            namespace = sandbox / "app"
+            if len(str(namespace / "builds" / ("0" * 24)).encode("utf-16-le")) // 2 > 100:
+                raise RuntimeError("The Windows compile fixture needs a shorter temp/ path or NTFS short names.")
+            if os.path.lexists(namespace) and (windows_host._is_windows_reparse_point(namespace)
+                                               or not namespace.is_dir()):
+                raise RuntimeError("The fixture compiler namespace is occupied by unrelated material.")
+            namespace_identity = namespace.resolve()
+            created_aliases = []
+            create_junction = windows_host._create_compiler_junction
+
+            def create_fixture_junction(alias, canonical):
+                alias, canonical = Path(alias), Path(canonical).resolve()
+                if (alias.parent != namespace / "builds"
+                        or not canonical.is_relative_to(sandbox.resolve())):
+                    raise AssertionError("Compiler junction escaped its owned fixture.")
+                existed = os.path.lexists(alias)
+                result = create_junction(alias, canonical)
+                if (not existed and windows_host._is_windows_reparse_point(alias)
+                        and alias.resolve() == canonical):
+                    created_aliases.append((alias, canonical))
+                return result
+
+            def remove_fixture_junctions():
+                worker = getattr(api, "_operation_worker", None)
+                if worker is not None and worker.is_alive():
+                    return  # An active worker retains its fixture paths.
+                if (namespace.resolve() != namespace_identity
+                        or windows_host._is_windows_reparse_point(namespace)
+                        or windows_host._is_windows_reparse_point(namespace / "builds")):
+                    return
+                for alias, canonical in reversed(created_aliases):
+                    if (windows_host._is_windows_reparse_point(alias)
+                            and alias.resolve() == canonical):
+                        os.rmdir(alias)  # Unlink this verified entry, never its workspace.
+
+            stack.enter_context(patch.object(windows_host, "_mcuflasher_app_root", return_value=namespace))
+            stack.enter_context(patch.object(windows_host, "_create_compiler_junction", new=create_fixture_junction))
+            stack.callback(remove_fixture_junctions)
         stack.enter_context(patch.dict(os.environ, {
             "MCU_PACKAGE_EVENTS_ROOT": str(sandbox / "package-events"),
             "PLATFORMIO_CORE_DIR": str(core), "PLATFORMIO_PACKAGES_DIR": str(core / "packages"),

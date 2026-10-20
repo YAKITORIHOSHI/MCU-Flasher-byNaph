@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Run only the two Windows display-layout jobs
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,20 +17,7 @@ jobs:
   render:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            python: '3.11'
-            qt: 'PySide6>=6.7,<6.12'
-          - os: windows-latest
-            python: '3.14'
-            qt: 'PySide6>=6.12,<7'
-          - os: ubuntu-24.04
-            python: '3.12'
-            qt: 'PySide6>=6.12,<7'
-          - os: ubuntu-26.04
-            python: '3.14'
-            qt: 'PySide6>=6.12,<7'
+      matrix: ${{ fromJSON(inputs.windows_only && '{"include":[{"os":"windows-latest","python":"3.11","qt":"PySide6>=6.7,<6.12"},{"os":"windows-latest","python":"3.14","qt":"PySide6>=6.12,<7"}]}' || '{"include":[{"os":"windows-latest","python":"3.11","qt":"PySide6>=6.7,<6.12"},{"os":"windows-latest","python":"3.14","qt":"PySide6>=6.12,<7"},{"os":"ubuntu-24.04","python":"3.12","qt":"PySide6>=6.12,<7"},{"os":"ubuntu-26.04","python":"3.14","qt":"PySide6>=6.12,<7"}]}') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
