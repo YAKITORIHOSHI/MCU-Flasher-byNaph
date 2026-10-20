@@ -14,9 +14,35 @@ The Rust migration is being developed alongside this Python release in
 [`desktop/`](desktop/). Its final GUI will use native Rust widgets with Monaco
 and xterm embedded; application backend logic will also run in Rust. Python will
 remain only for approved firmware tools. The existing Tauri web shell is a
-reference prototype. Separate GTK and Win32 native-widget fixtures now exercise
-the embedded components and editor-only detach. Full application parity remains
-unfinished. See the [native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
+reference prototype. The native GTK and Win32 development workspace now reuses
+the original three palettes (117 exact color values) and Montserrat around native
+toolbar, Controls, source tabs and tool tabs. GTK reuses the original action
+SVGs; Win32 reproduces the brand mark through native drawing paths, while its
+action and tool-tab icons still require parity work. Monaco and xterm
+remain embedded components. At `297cae7`, both native hosts read an explicit
+`--project FOLDER` through the shared Rust project service into retained editor
+models; source saves and live project ownership remain disabled. GTK uses the
+existing application icon for its main and detached windows, and a scrollable
+source row keeps many tabs within the compact window. Windows native Project
+picker and application-icon integration remain pending. The original 17-check
+editor-only detach fixture remains, alongside a new 18-check Linux workspace
+smoke for models, dirty state, selection, themes, undo and unchanged source bytes.
+At `e334d7b`, all five jobs pass in
+[migration CI 39392866712](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392866712):
+Windows Server executes 17 native checks and Ubuntu AMD64/ARM64 each execute 35,
+including the new workspace smoke. The new shared-reader/recipe-policy
+checkpoint `297cae7` finishes four of five jobs in
+[CI 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096);
+both Ubuntu jobs pass, while the new Windows workspace fails before assertions
+at trusted-root path spelling. The local prefix fix awaits Windows rerun, so
+the new Windows workspace checks are not yet qualified. Rust also has pure
+exact Onehorse/MiniMain recipe decisions, without installed-metadata reading
+or build integration. Real Windows 10/11 desktops, native input and full
+design parity still need qualification. Full application parity remains
+unfinished: all 67 ledger entries
+remain 14 partial fixture subsets and 53 pending, with no Python application
+service retired. See the [preview commands](desktop/native-ui/README.md) and
+[native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
 Native metadata fixtures retain original root/source identities and refuse
 Windows device-name and junction aliases. The pure serial-send queue now preserves
 active-plus-pending limits, captured connection identity, one-attempt writes and

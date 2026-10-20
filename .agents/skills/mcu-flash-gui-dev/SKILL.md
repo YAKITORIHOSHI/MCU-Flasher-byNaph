@@ -5,6 +5,10 @@ description: "Developer and troubleshooting guide for MCU Flasher on Windows and
 
 # MCU Flash GUI Development & Maintenance Skill
 
+For migration continuation, read [CURRENT.md](../../../audit/migration/CURRENT.md)
+first, then only targeted reports needed for the current slice. Preserve the
+historical audit without rereading every long status/JSON file by default.
+
 Use this skill when developing, debugging, or extending the **MCU Flash GUI** desktop application (`mcu_flash_gui.py`, `main/mcu_flash_gui.py`, `main/qt/`, `main/web_bridge.py`) on Windows 10/11 and native Ubuntu. Ordinary firmware work still follows the live root-sketch boundaries in AGENTS.md.
 
 For explicitly requested assistant delegation, use the local
@@ -19,6 +23,61 @@ is a reference prototype. Read `audit/migration/NATIVE_RUST_PLAN.md` for this
 requirement amendment and `desktop/native-ui/README.md` for the GTK and Win32
 feasibility adapters and their desktop/Wayland/input gates. Never promote fixture
 callbacks or library-mapping checks into full backend migration claims.
+
+The current native workspace milestone shares the original 39 palette tokens
+across three themes (117 exact color values) and Montserrat between GTK and
+Win32 chrome. GTK loads original action SVGs; Win32 reproduces native brand
+paths but still uses text action buttons. Its action/tool-tab icon parity stays
+open. Keep toolbar, Controls, source tabs and the seven tool tabs
+native; only Monaco/xterm are embedded. Unavailable application actions stay
+disabled rather than reporting a simulated success. At `297cae7`, both adapters
+accept `--project`, `--theme` and `--workspace-smoke`; shared `workspace_project.rs`
+uses `mcu_core::ProjectService` on a worker. Exact ordered acknowledgements and
+known-ID newer dirty revisions govern native controls. GTK's Project picker
+opens an independent process and preserves existing buffers.
+This is read-only: no live activation/registration, metadata generation, source
+save, settings/cloud/device write or build/package service is enabled. Windows
+native Project picker/HICON remain pending. GTK embeds the existing app icon
+in main/detached windows; all five captures verify 256×256 `_NET_WM_ICON`.
+
+After building `mcu-native-ui-probe`, run
+`.venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --workspace` for the
+18-check owned GTK workspace fixture, separately from the original 17-check
+detach smoke without `--workspace`. The workspace fixture proves retained
+models, dirty state/selection, themes, undo and unchanged source bytes; its
+receipt lives under `audit/migration/scratch/native-workspace/`. Fourteen shared
+native units pass on Linux, alongside five
+controller lifecycle, three path and the separate 17 detach checks (35 GTK GUI
+checks total). Original-size three-theme captures live in ignored
+`audit/migration/captures/native-workspace/`, alongside reviewed compact 960×540
+and `GDK_SCALE=2` captures (measured 1792×1062 on 1920×1080). Native reading spans
+and active controls remain visible; normal close/source-byte preservation pass.
+At `e334d7b`, focused CI `39392866712` passes all five jobs: 17 native Windows
+Server checks and 35 GTK checks on each Ubuntu AMD64/ARM64 host, including
+Win32 short-height/DPI corrections. Later logo/action-ink corrections are in
+`297cae7`; both Ubuntu jobs pass and its Windows workspace remains unqualified
+as detailed below. Settings, menus, auxiliary
+screens, tool-tab icons and live toolbar/service behavior remain exact
+design-parity work.
+New `297cae7` CI `39421097096` finishes 4/5: Ubuntu 35 GUI plus the extra 40-tab
+regression and policy checks pass; Windows old 17, three source-state units and
+policy checks pass, but the new 18 workspace fails before assertions at trusted-
+root path spelling. The shared prefix fix preserves the selected literal path;
+three local reader checks/GTK 35 pass, with Windows rerun pending. Do not claim
+Windows 35 passed. The GTK row must scroll all sources without growing the
+window (GREEN window 960 / row 6412 / 40 retained tabs; 42-source capture 960×540).
+Pure Onehorse/MiniMain policy has 126 default tests (119+7), 951 differential
+decisions (16 positive / 935 empty) and 11 protocol checks. It has no trusted
+installed-metadata reader, Arduino Q hook selection or real Rust build caller.
+BLD-01 remains pending; bounded source/policy reviews do not retire a service.
+Native profile cleanup is scoped to owned audit scratch. WebKit helpers can
+recreate empty owned directories after Rust exits; do not claim zero residuals
+from a manual preview. The controller stops captured descendants. Keep later
+working-tree changes, fractional-DPI/mixed-monitor behavior, real desktop input
+and full service integration gated independently. Prior checkpoint CI never
+automatically qualifies working-tree changes. The ledger stays 14 partial/53 pending and zero
+Python application services retired until their actual full contracts pass.
+See `desktop/native-ui/README.md` for current host-specific preview flags.
 
 For explicitly requested configured-index board qualification, use
 `direct/BOARD_COMPILE_CAMPAIGN.md`. Keep inventories, package stores and real

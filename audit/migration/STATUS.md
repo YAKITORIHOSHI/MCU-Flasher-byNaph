@@ -1,7 +1,18 @@
 # Migration status
 
-Updated: 20 October 2026, Asia/Manila. Latest code checkpoint:
-`8dbdb9def32916bb4179f0c68735202ffc82cdc9` on `codex/rust-tauri-migration`.
+Read [CURRENT.md](CURRENT.md) first for continuation; consult targeted historical
+reports below only as needed.
+
+Updated: 20 October 2026, Asia/Manila. Latest recorded committed checkpoint:
+`297cae75c5d4202461b3ab6dc0ba2aafe76fab25` on `codex/rust-tauri-migration`.
+Its five-job [migration run 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096)
+finished with four of five jobs passed. The new Windows workspace smoke failed
+before assertions at trusted-root canonical/plain path spelling; its fix passes
+three local reader checks and GTK 35 GUI, with native Windows rerun pending.
+The earlier focused
+[migration run 39392866712](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392866712)
+passes all five jobs at `e334d7b`; the later shared reader and color changes
+are outside that completed receipt.
 [Prior Rust/Tauri checkpoint CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39253280765).
 
 **The full native Rust GUI/backend replacement remains unfinished. The Python application
@@ -49,6 +60,74 @@ and [compile report](board-compile-campaign.json).
 The [toolkit decision](../../docs/native-rust-widget-decision.md) records the
 provisional GTK3/Win32 direction, official alternatives and dependency gates.
 
+`e334d7b` adds the original three-theme design to the native
+workspace: 39 shared palette tokens / 117 exact color values, Montserrat,
+native toolbar/Controls, source tabs and all seven tool tabs. GTK reuses the
+original action SVGs; Win32 reproduces native brand paths and still uses text
+action buttons. Its action/tool-tab icon parity remains unfinished. Monaco and
+xterm remain retained embedded components. These controls are
+workspace implementation, while unavailable application actions remain disabled.
+
+`297cae7` shares `workspace_project.rs` / `mcu_core::ProjectService` across GTK
+and Win32 to read root sources from an explicit `--project` folder on a worker.
+Windows now accepts `--project`, `--theme` and `--workspace-smoke`. Exact ordered
+acknowledged IDs bind source controls, and only known IDs/newer revisions update
+dirty labels. The GTK native Project picker starts an independent
+workspace process and preserves the original window's buffers. Source selection,
+dirty markers and three-theme updates use retained Monaco models. No source
+save, live ownership activation/registration, settings/cloud/hardware write or
+build/package service is enabled. Manual backend/fixture actions remain disabled.
+Windows native Project picker and HICON remain pending. GTK main and detached
+windows now reuse the existing `mcu_icon.png` native icon; no installer, launcher
+or runtime entry changed.
+
+Current local verification passes **35 GTK GUI smoke checks** (18 workspace and
+17 editor-only detach), **14 shared native-unit checks**, **five controller
+lifecycle checks** and **three path checks**. Three new Windows-only source/ack
+unit checks now pass in Windows CI. Its old 17-check smoke and policy checks
+also pass, but the new 18-check workspace fails before assertions at trusted-root
+path spelling; all 35 Windows GUI checks are not yet qualified.
+The workspace smoke owns its two-file project and checks model identity, dirty content,
+selection, all three themes, undo/redo, native-parented source controls and
+unchanged source bytes. Five reviewed GTK captures are retained under ignored
+`captures/native-workspace/`: dark/light/Solarized at 1100×740, compact 960×540
+and a `GDK_SCALE=2` window measured at 1792×1062 on a 1920×1080 display. Native
+reading spans and active controls remain visible, normal close completes and
+explicit project source bytes stay unchanged. Visual review also corrected GTK
+tool-tab contrast. These are local geometry/appearance checks. Hosted CI at
+`e334d7b` now passes 17 native Windows Server checks and 35 GTK checks on each
+Ubuntu AMD64/ARM64 host, including the Win32 short-height/DPI corrections.
+Later logo-ink (`#56cfbf`) and final Win32 glass `TEXT_BRIGHT` action-ink
+corrections pass local strict Linux/MSVC-target Clippy only; no fresh CI receipt
+covers the later prefix fix. `297cae7` CI passes both Ubuntu jobs, including GTK
+35 GUI, the wide-tab regression and recipe checks. Its Windows source-state
+units and old smoke pass; the workspace fails because canonical `\\?\D:` fixture
+spelling differs from the plain trusted app root. The shared fix recognizes both
+trusted-root spellings while preserving the literal selected path; three local
+reader checks and GTK 35 GUI pass, with Windows rerun pending. An additional real GTK 40-tab regression went from a 6412-pixel
+top-level window to `window=960 row=6412 retained_tabs=40`; a 42-source 960×540
+capture is retained under ignored `captures/native-workspace-many-sources/`.
+Scoped follow-up review found no new actionable issue after the source-overflow
+and manual-Windows-fixture-action corrections; see
+`scratch/native-ui/windows-reader-review.md`.
+GTK `_NET_WM_ICON` is confirmed as 256×256 in all five captures. Windows native
+Project picker/HICON integration remains pending. Exact
+design parity still needs Settings, menus, auxiliary
+screens, tool-tab icons and live toolbar/service behavior. See
+[native preview and commands](../../desktop/native-ui/README.md).
+
+The original Windows layout follow-up passes both jobs at `7733ac9` in run
+`39388295330`.
+The original runtime run `39390146279` passes Python 3.11; Python 3.14 exposed
+an AVR fixture environment-wrapper failure. `60e4bc4` preserves the inherited
+environment; runtime rerun `39392313449` passes both Windows jobs at that source,
+including actual AVR Uno/Nano/Mega Compile and native GCC path fixtures. At `cd2fdf5`, the
+five valid EXE argument cases and final VBS-to-Python five valid cases pass on
+both versions;
+the separate embedded-quote filename diagnostic is not a valid filename case.
+These reference checks do not qualify the native workspace, and no
+shipped executable rebuild is needed for the fixture correction.
+
 `4b42146` adds real GTK controls around separate Monaco/xterm views. All five
 migration jobs pass; Linux AMD64/ARM64 each pass 17 native widget checks, six Rust
 checks, five lifecycle and three path checks. Windows at that checkpoint runs
@@ -72,7 +151,13 @@ remain gates on every required desktop.
 The current Python application accepts legitimate plus-sign board IDs without
 relaxing platform/framework/protocol validation. A complete registry query has
 1,654 boards; 34 catalog checks and 16 target-resolution checks pass. Default
-Rust services pass 119 tests. The narrow ID predicate has 13,462 differential
+Rust services now pass 126 tests (119 existing + seven recipe-policy tests).
+At `69d845a`, the pure exact Onehorse/MiniMain decision port matches 951
+differential decisions (16 positive / 935 empty), plus 11 separate protocol/
+boundary checks. The bounded independent review is clean in
+`scratch/native-ui/recipe-policy-review.md`. This policy does not read trusted
+installed metadata, select the Arduino Q hook or compile firmware through Rust;
+full BLD-01 stays pending. The narrow ID predicate has 13,462 differential
 comparisons; transport has 53,685 comparisons and 163 structural refusals.
 These do not qualify the full target validator or live build service.
 
@@ -266,9 +351,11 @@ The initial boards never narrow final supported feature/target coverage. Consult
 
 Inventory SHA-256 remains
 `70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52`.
-Baseline hashes were not regenerated. Reference amendments now explain eight
-production sources, eleven verifiers and two legacy CI files separately; 281/300
-source rows, 130/133 resource rows and 112/123 verifier rows retain original hashes. The added
+Baseline hashes were not regenerated. The 23 unique reference amendments now
+explain eight production sources, twelve verifiers and three legacy CI files
+separately; 280/300 source rows, 129/133 resource rows and 111/123 verifier rows
+retain original hashes. All 11 continuation inputs and the four launcher
+executable/source hashes remain unchanged. The added
 production PNG reuses exact existing ICO bytes. All 22 reused
 asset sources, restored root launcher and unrelated catalog/bootstrap/installer
 inputs retain their continuation-start hashes. No live sketches, protected

@@ -52,6 +52,9 @@
 - [x] Compare official toolkit/control/WebView support on required hosts and record the provisional GTK3/Win32 decision, alternatives and dependency classes in the [toolkit decision](../../docs/native-rust-widget-decision.md).
 - [ ] Measure clean-host prerequisite downloads, installed dependency closure, artifact/assets and process-tree RAM on each architecture before production toolkit/distribution qualification.
 - [x] Prove real native Controls and split panes around separate offline Monaco/xterm fixture views on GTK Linux and Win32 Windows, including editor-only detach/reattach through native ownership.
+- [x] Implement the shared original three-theme palette (39 tokens / 117 exact color values) and Montserrat in native GTK/Win32 toolbar, Controls, source-tab and tool-tab chrome. GTK reuses original action SVGs; Win32 reproduces native brand paths, while its action/tool-tab icons remain unfinished. Hosted CI passes at `e334d7b`; actual Windows 10/11 input and responsive desktop qualification remain open.
+- [x] Add the GTK read-only Rust project-service adapter for an explicit `--project` folder and the native Project picker, opening each chosen folder in an independent process. Verify retained models/dirty state/selection/themes/undo and unchanged owned source bytes with 18 workspace smoke checks; no save or ownership activation is enabled.
+- [x] Share the read-only project adapter with Win32 at `297cae7`, with `--project`, `--theme`, `--workspace-smoke`, exact ordered acknowledgements and known-ID monotonic dirty updates. Three Windows source-state units and old 17 smoke pass; the new workspace fails before assertions at trusted-root path spelling. The local prefix fix awaits Windows rerun. Native Windows Project picker/HICON remain separate pending work.
 - [ ] Complete the actual workspace, source tabs, saved fonts/static glass/assets, auxiliary screens and live service integration beyond the feasibility controls.
 - [ ] Verify resize/focus/tab order/IME/clipboard at native 100–200%, editor-only detach/reattach, stale response refusal and bounded stream backpressure on each host.
 - [ ] Preserve the Tauri prototype's reusable Rust service/contract proofs; retire only the superseded application web shell after equivalent native evidence exists.
@@ -62,6 +65,7 @@
 
 **Interfaces:** Trusted native window/service registry owns workspace revisions, leases and process/device observations. Existing pure ports and metadata-only identity APIs keep their current scope until explicit transactional write/recovery tests pass.
 
+- [x] Port the pure exact Onehorse/MiniMain recipe decisions at `69d845a`: seven new unit tests and 951 differential decisions (16 positive / 935 empty) plus 11 protocol checks. This subset performs no installed-metadata reading, Arduino Q hook selection or actual Rust compilation and does not complete BLD-01 or retire a service.
 - [ ] Complete exact target/catalog and build-input policy, source-save transactions/identity races/recovery, coexistence leases and activation/release.
 - [ ] Integrate Rust serial reader/Send worker and PTY/process ownership with finite deadlines and no replay/retry of hardware writes.
 - [ ] Port settings, cloud/auth/vault, downloader/package/setup/repair and native maintenance orchestration under the 67-capability ledger.
@@ -77,6 +81,75 @@
 - [ ] Replace the production entry point only after every required parity/release gate passes; otherwise retain the working Python release and report the remaining gates.
 
 ## Execution record
+
+The `e334d7b` `desktop/native-ui/` workspace milestone extends the
+GTK/Win32 fixture with native toolbar/Controls/source/tool chrome and the shared
+original design tokens and font. GTK loads original action SVGs; Win32
+reproduces native brand paths but still uses text action buttons and needs
+action/tool-tab icon parity. GTK reads an explicitly selected project's
+root-source manifest through `mcu_core::ProjectService` on a worker, then binds
+the results to retained Monaco models. The native Project picker opens another
+independent process instead of replacing the current editor's buffers. It does
+not register live ownership, write source/settings/cache files, or enable
+compile/upload/reset/cloud/package services. Unavailable actions stay disabled.
+
+The local GTK workspace smoke passes 18 checks across all three themes, including
+two retained source models, dirty content/selection, undo/redo and source bytes
+left unchanged. Twelve protocol/design unit checks and two Linux reader unit
+checks pass, alongside five controller lifecycle and three path checks. The
+separate 17-check detach fixture also passes, for 35 local GTK GUI smoke checks.
+Five visually reviewed captures are retained under ignored
+`captures/native-workspace/`: three themes at 1100×740, compact 960×540 and
+`GDK_SCALE=2` at measured 1792×1062 on a 1920×1080 display. Their native reading
+spans/active controls remain visible; normal close and unchanged explicit-source
+bytes pass. Visual review corrected GTK tool-tab contrast. The `e334d7b`
+styled adapters and Win32 short-height/DPI corrections now pass hosted native
+execution: 17 Windows Server checks and 35 GTK checks on each Ubuntu AMD64/ARM64
+host. Exact design parity still needs Settings, menus, auxiliary screens,
+tool-tab icons and live toolbar/service behavior. Actual Windows 10/11 desktop
+input, fractional-DPI/mixed-monitor layout and full service integration remain
+unqualified. Subsequent GTK/Win32 logo ink (`#56cfbf`) and final Win32 glass
+`TEXT_BRIGHT` action-ink corrections pass local strict Linux/MSVC-target Clippy
+only; those corrections are included in `297cae7` and are outside the older
+tested checkpoint. `297cae7` shares `workspace_project.rs` between GTK/Win32 for
+explicit read-only projects. Ordered acknowledgements and known-ID monotonic
+dirty updates preserve native ownership of source controls. Manual backend
+actions remain disabled; Windows Project picker/HICON work remains pending.
+
+Current Linux evidence is 14 shared native-unit checks, 35 GUI smoke checks,
+and an additional real 40-tab GTK regression: before the fix the top-level
+window grew to 6412 pixels; after the fix it remains 960 pixels while retaining
+the 6412-pixel scrollable row and all 40 tabs. A 42-source compact 960×540 capture
+is retained under ignored `captures/native-workspace-many-sources/`. Main and
+detached GTK windows reuse the existing `mcu_icon.png` native icon. The bounded
+source review in `scratch/native-ui/windows-reader-review.md` found no new
+actionable issue after the two prior overflow/manual-action findings were fixed.
+No launcher, runtime entry or installer changed.
+The ledger remains 14 partial/53 pending with zero Python application services
+retired, and the shipping Python launcher is unchanged. Use the current
+[preview commands](../../desktop/native-ui/README.md) and update receipts only
+after the corresponding execution completes.
+Focused migration CI `39392866712` passes all five jobs at `e334d7b`, including
+the new Linux workspace smoke. The separate current Python Windows runtime run
+`39392313449` also passes both jobs at `60e4bc4`, including actual Uno/Nano/Mega
+AVR Compile and native GCC path fixtures. These results retain their tested
+sources and do not close replacement desktop/device/release gates.
+CI `39421097096` at `297cae75c5d4202461b3ab6dc0ba2aafe76fab25` finishes 4/5.
+Both Ubuntu jobs pass GTK 35, the extra wide-tab regression and recipe checks;
+both Windows editor jobs pass. Windows native old 17, three source-state units
+and recipe checks pass, but the new workspace fails before assertions because
+canonical `\\?\D:` fixture spelling differs from the plain trusted app root.
+The shared fix recognizes original/canonical trusted-root spellings without
+changing the selected literal path; three local reader checks and GTK 35 pass.
+The full Windows 35-check path awaits native rerun.
+
+`69d845a` adds pure exact Onehorse/MiniMain recipe policy and brings the default
+Rust suite to 126 tests (119 existing + seven policy tests). The differential
+probe matches 951 decisions, with 16 positive and 935 empty decisions, plus 11
+separate protocol/boundary checks. Independent bounded review found no
+actionable issue (`scratch/native-ui/recipe-policy-review.md`). Trusted installed
+metadata acquisition, Arduino Q filesystem/hook selection and real Rust build
+integration remain open. This is a pure-policy appendix to pending BLD-01.
 
 The completed campaign records **318/318 successful exact target builds** across
 ten pinned platforms from all configured indexes (official Arduino and the saved

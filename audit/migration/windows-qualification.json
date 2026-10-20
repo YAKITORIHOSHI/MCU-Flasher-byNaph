@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "60e4bc44df03bcdda2e22e92a5f01168c1da8765",
+  "scope": "Current Python reference application on hosted native Windows; no Rust service retirement or physical Windows10/11/device qualification",
+  "runId": 39392313449,
+  "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392313449",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {
+      "name": "runtime (windows-latest, 3.14, true)",
+      "conclusion": "success"
+    },
+    {
+      "name": "runtime (windows-latest, 3.11)",
+      "conclusion": "success"
+    }
+  ],
+  "priorLayout": {
+    "runId": 39388295330,
+    "sourceCommit": "7733ac9591e15b7877691bc221ccb36cd035684f",
+    "jobsPassed": 2
+  },
+  "actualCompileTargets": [
+    {
+      "target": "atmelavr:megaatmega2560",
+      "framework": "arduino",
+      "success": true,
+      "rawReceipt": "scratch/windows-reference-ci-60e4bc4/target-resolution/avr-build-c_5tmock/megaatmega2560-build-result.json",
+      "sha256": "5275c64abf55a7b53b467628dce8f1f5d3832c716bfa3ccfab60a470bfb072b6"
+    },
+    {
+      "target": "atmelavr:nanoatmega328",
+      "framework": "arduino",
+      "success": true,
+      "rawReceipt": "scratch/windows-reference-ci-60e4bc4/target-resolution/avr-build-c_5tmock/nanoatmega328-build-result.json",
+      "sha256": "835688d2d9047bcb88d3f96d8d539b8db91820d2c62069ea0ed67ec79d580528"
+    },
+    {
+      "target": "atmelavr:uno",
+      "framework": "arduino",
+      "success": true,
+      "rawReceipt": "scratch/windows-reference-ci-60e4bc4/target-resolution/avr-build-c_5tmock/uno-build-result.json",
+      "sha256": "045c5d5c298c90fedd3c28d749ba082a14b70132007c7f8ea75b07173ac65835"
+    }
+  ],
+  "launcherValidPaths": {
+    "exeToWsh": 5,
+    "finalWshToPython": 5,
+    "passed": true,
+    "embeddedQuoteDiagnosticIsSeparate": true,
+    "shippedExecutableRebuilt": false
+  },
+  "gccPath": {
+    "compiler": "native avr-gcc.exe",
+    "longDependencyChars": 262,
+    "longPathFailed": true,
+    "shortCwdDependencyChars": 205,
+    "shortCwdSucceeded": true,
+    "checksPassed": 5
+  },
+  "rawLogs": [
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/avr-compile-buttons.log",
+      "sha256": "3b5e077b5bfffb6920f5733ba8fe9b07d1470a1d18daed9464734eb9b093c0ea"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/avr-gcc-paths.log",
+      "sha256": "bb5f283fbba14d48148c0d3f01be41e21d3ac104dc8609e018d4e1c8a288d16a"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/avr-provision.log",
+      "sha256": "5ec24dd3a647cc7cbb3ebdf583686b2458d024728cdacfea951c689a40f36c47"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/verify_platformio_board_compat.log",
+      "sha256": "ae33fc677ff0b6449ac97e31ba4b83e61bec5728b8d2d5b21383a75649210ff7"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/verify_release_sources.log",
+      "sha256": "144dfb1c2912400736a332ec8bb7fbc810ecfb8412fdf462a4e47a1048a6b9a2"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/verify_windows_board_setup.log",
+      "sha256": "bcb5dbe41282472fa8ff3ee795a89ec849f908f1b3738a85edfb899636ef295b"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/verify_windows_build_paths.log",
+      "sha256": "5250333deca8cf2d49b69a455c2ae80e14486fbc2da6125f4805711d60993d6a"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/verify_windows_launcher.log",
+      "sha256": "6906ab48c085410686573523564ef17c50e5cd5e415da58450da37c7017d3184"
+    },
+    {
+      "path": "scratch/windows-reference-ci-60e4bc4/windows-qualification/verify_windows_maintenance.log",
+      "sha256": "c289b2c1550b0b1308d75d375eae4238e93bae28f27fb4c02ea9257b6bc0cdc7"
+    }
+  ],
+  "limitations": [
+    "Three AVR GUI Compile targets on Windows; configured-index318-boardcampaign remainsLinux-only",
+    "No upload/reset or physicalUSB",
+    "HostedWindowsServer doesnotqualifyWindows10/11desktop installations,IME,mixedmonitors or offline repair"
+  ]
+}

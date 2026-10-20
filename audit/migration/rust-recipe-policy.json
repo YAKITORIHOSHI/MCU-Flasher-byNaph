@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "69d845a",
+  "includedByNativeCheckpoint": "297cae75c5d4202461b3ab6dc0ba2aafe76fab25",
+  "scope": "Pure Rust compatibility decisions for the exact reviewed Onehorse and MiniMain recipes; no trusted-reader or firmware-tool authority",
+  "implementation": "desktop/crates/core/src/board_recipe.rs",
+  "parity": {
+    "reference": "main/core/platformio_board_compat.py",
+    "functions": [
+      "onehorse_recipe_options",
+      "minimain_recipe_options"
+    ],
+    "cases": 951,
+    "positiveDecisions": 16,
+    "emptyDecisions": 935,
+    "equivalentComparisons": 951,
+    "protocolBoundaryChecks": 11,
+    "inputBytes": 733414,
+    "maximumInputBytes": 8000000,
+    "maximumCases": 32768,
+    "maximumOutputBytes": 32000000,
+    "passed": true,
+    "hardwareAccess": false,
+    "productionImports": false,
+    "filesystemReaderQualified": false,
+    "arduinoQSelectionQualified": false,
+    "platform": "linux",
+    "architecture": "x86_64"
+  },
+  "rustVerification": {
+    "defaultSuitePassed": 126,
+    "existingSuite": 119,
+    "newPolicyUnitChecks": 7,
+    "warningsAsErrors": true,
+    "offlineBuild": true
+  },
+  "independentReview": {
+    "report": "scratch/native-ui/recipe-policy-review.md",
+    "actionableIssues": 0,
+    "scope": "Exact decision parity, malformed data, bounded stdin/stdout fixture, independent differential execution"
+  },
+  "sourceFiles": [
+    {
+      "path": "desktop/crates/core/src/board_recipe.rs",
+      "sha256": "747ca76468fa2b6a18ec698b9d6064e74ad6280f6cd972152a72c37009132afd"
+    },
+    {
+      "path": "desktop/crates/host/src/bin/board_recipe_probe.rs",
+      "sha256": "79f2c8435352a9542db91c80d5372ee00f1bcf8741616119c51cca09ceff6121"
+    },
+    {
+      "path": "desktop/scripts/verify-board-recipe.py",
+      "sha256": "0dec4afc4e176284552eb55e7122d1b06d41e922145419bef78c690006f327c0"
+    }
+  ],
+  "ci": {
+    "runId": 39421097096,
+    "sourceCommit": "297cae75c5d4202461b3ab6dc0ba2aafe76fab25",
+    "status": "completed",
+    "conclusion": "failure",
+    "policyChecksPassedOnAllThreeHosts": true,
+    "failingScope": "NewWindowsworkspace projectfixture; purepolicy decisionspassed951cases+11boundariesonall3hosts"
+  },
+  "limits": [
+    "Inputs must be obtained from a future trusted installed-metadata reader; supplied hash text is not proof of ownership or actual bytes",
+    "No application compile/upload worker or renderer bridge calls this policy yet",
+    "Arduino Q filesystem/hook-selection policy remains a separate Rust task",
+    "No application service retired and no hardware action qualified"
+  ]
+}

@@ -2327,5 +2327,27 @@
       "releaseQualified": false
     }
   ],
-  "ciSourceBoundary": "The latest 8dbdb9d source has five actual focused migration jobs. The last complete 25-job matrix remains at 7da4be0, with each original source/job receipt retained. Python package selection and full ZIP validation are local artifact checks."
+  "ciSourceBoundary": "Current styled native checkpoint e334d7b has5passingfocusedmigrationjobs. Windowsreference60e4bc4 has2passingWindowsruntimejobs. Everyearlierreceiptretainsitsoriginalsource. SubsequentlocaldesigncorrectionandWindowsreaderintegrationrequirefreshruntimeevidence.",
+  "nativeWorkspaceCheckpoint": {
+    "sourceCommit": "e334d7b1cb1d230c0ad5cc6c2def3eae61076f81",
+    "runId": 39392866712,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392866712",
+    "status": "completed",
+    "conclusion": "success",
+    "jobsPassed": 5,
+    "jobsTotal": 5,
+    "receipt": "native-workspace.json",
+    "hostedChecks": "Linux AMD64/ARM64 each18workspace+17detach; Windows17detach. Windowsread-onlyprojectintegration not yet in thischeckpoint.",
+    "releaseQualified": false
+  },
+  "windowsReferenceQualification": {
+    "sourceCommit": "60e4bc44df03bcdda2e22e92a5f01168c1da8765",
+    "runId": 39392313449,
+    "status": "completed",
+    "conclusion": "success",
+    "jobsPassed": 2,
+    "jobsTotal": 2,
+    "receipt": "windows-qualification.json",
+    "scope": "CurrentPythonreference; 3realAVRCompile-button targets and nativeGCCpathcheck; no hardwareupload/reset or Rustservice retirement"
+  }
 }

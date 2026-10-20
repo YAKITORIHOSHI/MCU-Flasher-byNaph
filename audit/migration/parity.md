@@ -1,6 +1,10 @@
 # Migration parity ledger
 
-Latest continuation code: `8dbdb9d`. Final architecture requires native Rust
+Latest committed continuation code: `297cae7`. CI `39421097096` finishes 4/5;
+Windows passes old smoke/source-state/recipe checks but its new workspace fails
+before assertions at trusted-root canonical/plain spelling. The prefix fix
+passes three local reader checks and GTK 35, with Windows rerun pending.
+Prior `e334d7b` CI `39392866712` passes all five jobs. Final architecture requires native Rust
 GUI widgets and Rust backend services, with Monaco/xterm embedded and Python only
 for approved firmware tools. The GTK/Win32 fixtures and configured-index compile
 campaign are recorded in [status](STATUS.md), [native evidence](native-rust-ui.json)
@@ -9,6 +13,37 @@ remains **14 partial fixture subsets and 53 pending**, with no service retired.
 The original Tauri evidence below remains historical and does not fulfill the
 new native-widget requirement. Native input, complete backend parity and release
 qualification remain open.
+
+The current native workspace milestone reuses all three original palettes
+(39 tokens / 117 exact color values) and Montserrat in GTK/Win32 toolbar,
+Controls, source tabs and seven tool tabs. GTK reuses original action SVGs;
+Win32 reproduces native brand paths and still uses text action buttons, with
+action/tool-tab icon parity unfinished. Both adapters now read an explicit
+`--project` through shared `workspace_project.rs` on a worker; exact ordered
+acknowledgements and known-ID monotonic dirty updates bind native source tabs.
+GTK's Project picker opens an independent process; Windows native picker/HICON
+remain pending. Local evidence includes 14 shared native units, GTK 35 GUI,
+an extra actual 40-tab overflow regression and a 42-source 960×540 capture.
+Five original GTK captures
+cover three themes, compact height and `GDK_SCALE=2`; visual review corrected
+tool-tab contrast and verified visible reading spans/active controls, normal
+close and unchanged explicit-source bytes. Hosted `e334d7b` CI passes 17 native
+Windows Server checks and 35 GTK checks on each Ubuntu AMD64/ARM64 host,
+including Win32 short-height/DPI corrections. Subsequent logo/action-ink
+corrections and the shared reader are now in `297cae7`; both Ubuntu jobs pass
+35 GUI, the wide-tab regression and recipe checks. Windows new 18 workspace is
+still unqualified after its pre-assertion path-spelling failure. Actual Windows 10/11 desktop input remains
+unqualified. Settings, menus, auxiliary screens, tool-tab icons and live toolbar
+behavior still need exact design parity. This extends the
+existing UI-02, UI-04, UI-07, PRJ-03, ED-01 and ED-02 fixture evidence; it does not
+change any full-parity status or authorize live registration/source writes.
+
+Pure-policy appendix only: `69d845a` adds exact Onehorse/MiniMain decisions,
+bringing default Rust tests to 126 (119+7), with 951 differential decisions
+(16 positive / 935 empty) and 11 protocol checks. Bounded independent policy
+and source follow-up reviews are clean. Trusted installed-metadata acquisition,
+Arduino Q hook selection and real Rust compile integration remain open;
+BLD-01 and the 14 partial / 53 pending / zero-retired ledger are unchanged.
 
 19 October 2026 · Asia/Manila · Legacy `1d00ff0` · Prototype checkpoint `4cf730b`
 
@@ -29,12 +64,12 @@ The preserved structural baseline covers 300 source/launcher/verifier files, 280
 - The legacy schema records one active sketch per PID and uses a strict **less than two seconds** creation-time tolerance. That tolerance is not unique-identity proof. The fixture planner enforces one workspace per process and refuses unverifiable current ownership or implicit replacement with another workspace. Production registration/activation and save-time revalidation remain pending. Package event/lease roots are per checkout while the Linux PlatformIO store is per user; shared store coordination, native root identity, TOCTOU/external-writer races, ACL/xattr preservation and crash durability continue to block user-project writes.
 - The Tauri editor fixture preserves original BOM and mixed-EOL bytes on unchanged or undo-restored saves; edited content uses the model BOM/EOL and discloses normalization. Acknowledged PTY flow control allows one exact stream/sequence/byte chunk at a time and aborts failed consumers without replay. These are fixture subsets, not complete editor or terminal parity.
 - The original Python/Qt page now moves focus out of the AI bar before hiding it, with visible-toggle and blur fallbacks if Monaco cannot take focus immediately. Its contained Qt child-viewport/DOM/model/focus/undo suite passed **10/10** at native XCB 100% and **10/10** at 200% using verified Mesa OpenGL llvmpipe software rendering. Qt also initialized NVIDIA Vulkan; physical NVIDIA 200% attempts were incomplete. See [editor evidence](editor-review.json). At `4cf730b`, the two new capture-path containment tests plus those ten UI cases passed **12/12 at each of 100% and 200%** on checkout-local Xvfb. The successful 200% run emitted Chromium shared-image-mailbox startup/teardown diagnostics, with no JavaScript/Python warning, deprecation or test failure. These results do not establish physical GPU performance or full keyboard/IME/clipboard behavior.
-- Full Windows 10/11, Ubuntu 24.04/26.04 desktops, Raspberry Pi, driver/toolchain/physical USB behavior and installation/offline/repair/rollback require separate evidence. Windows Server and hosted ARM64 results do not substitute for these qualifications. Editor transfer still uses Tauri unstable reparenting of the whole fixture webview; production editor-only ownership, keyboard/IME/focus and recovery remain gates.
+- Full Windows 10/11, Ubuntu 24.04/26.04 desktops, Raspberry Pi, driver/toolchain/physical USB behavior and installation/offline/repair/rollback require separate evidence. Windows Server and hosted ARM64 results do not substitute for these qualifications. The older Tauri transfer uses unstable whole-fixture-webview reparenting; the separate native adapter proves editor-only transfer in its 17-check smoke. Production project ownership, keyboard/IME/focus and recovery remain gates.
 - Finish source/schema/failure traces and measured startup, process-tree RAM, idle CPU, latency and throughput baselines before declaring full parity or performance improvement. Preserve fixed Firebase identity/schema and OS-vault policy; deployed rules require separate validation.
 
 ## Reference changes during the prototype
 
-The baseline inventory remains unchanged. [Reference amendments](reference-amendments.json) records **21 unique amended paths: eight production sources, eleven legacy verifiers and two legacy CI files**, plus separately added migration workflows. Of the baseline rows, **281 of 300 source entries and 130 of 133 resource entries** remain byte-identical. The changed resource rows include the original editor HTML and compatibility CI; the **22 original runtime assets staged to 25 destinations remain byte-identical**.
+The baseline inventory remains unchanged. [Reference amendments](reference-amendments.json) records **23 unique amended paths: eight production sources, twelve legacy verifiers and three legacy CI files**, plus separately added migration workflows. Of the baseline rows, **280 of 300 source entries, 129 of 133 resource entries and 111 of 123 legacy verifier entries** remain byte-identical. All 11 continuation inputs and the four launcher executable/source hashes remain unchanged. The changed resource rows include the original editor HTML and compatibility CI; the **22 original runtime assets staged to 25 destinations remain byte-identical**.
 
 These baseline hashes describe exact original **checkout bytes**, not an assertion that every inventory row equals its Git blob. Sixteen duplicated inventory rows have checkout line-ending variants, including mixed and doubled CRLF. Their current bytes still match the preserved original baseline hashes, and their content matches Git after removing CR. The original inventory is retained rather than regenerated to conceal these differences.
 

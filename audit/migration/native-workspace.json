@@ -1,0 +1,308 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "e334d7b1cb1d230c0ad5cc6c2def3eae61076f81",
+  "scope": "Native Rust workspace development preview; current shipping GUI/backend remains Python. No application service retired.",
+  "implementation": {
+    "shared": "117 original theme values across 3 palettes; native chrome, retained Monaco/xterm",
+    "linux": "Rust GTK workspace; original Montserrat and action SVGs; worker ProjectService root-source reads from explicit native selection; independent Project process",
+    "windows": "Rust Win32 styled controls; original Montserrat, brand paths rendered with GDI; compact menus and short-height/DPI layout correction; source reader not integrated",
+    "sourceWritesEnabled": false,
+    "liveOwnershipActivated": false,
+    "realCompileUploadEnabled": false,
+    "pythonApplicationServicesRetired": 0,
+    "remainingLedger": {
+      "partial": 14,
+      "pending": 53
+    }
+  },
+  "localVerification": {
+    "host": "Ubuntu AMD64",
+    "display": "owned Xvfb X11, software rendering; no native Wayland or hardware-input claim",
+    "rustProtocolDesignChecks": 12,
+    "linuxReaderUnitChecks": 2,
+    "controllerLifecycleChecks": 5,
+    "controllerPathChecks": 3,
+    "workspace": {
+      "checks": {
+        "native_owned_source_controls": true,
+        "native_source_tabs": true,
+        "native_tools": true,
+        "no_python_application_service": true,
+        "phase_0_dirty_selection": true,
+        "phase_0_models": true,
+        "phase_0_theme": true,
+        "phase_1_dirty_selection": true,
+        "phase_1_models": true,
+        "phase_1_theme": true,
+        "phase_2_dirty_selection": true,
+        "phase_2_models": true,
+        "phase_2_theme": true,
+        "phase_3_dirty_selection": true,
+        "phase_3_models": true,
+        "phase_3_theme": true,
+        "source_bytes_unchanged": true,
+        "undo_redo": true
+      },
+      "passed": true,
+      "scope": "Native GTK workspace and Rust source reader; owned files only; no save/device/settings operations",
+      "controller": "Python developer verification only",
+      "elapsedSeconds": 1.488,
+      "displayMode": "owned-Xvfb-x11-software-rendering"
+    },
+    "detach": {
+      "schemaVersion": 1,
+      "passed": true,
+      "mode": "isolated_native_widget_fixture",
+      "os": "linux",
+      "architecture": "x86_64",
+      "displayBackend": "GdkX11Display",
+      "webviewVersion": "2.52.6",
+      "widgetTypes": [
+        "GtkWindow",
+        "GtkComboBoxText",
+        "GtkButton",
+        "GtkLabel",
+        "GtkPaned"
+      ],
+      "checks": {
+        "dirty_model_retained": true,
+        "native_button_callback": true,
+        "native_combo_callback": true,
+        "native_gtk_controls": true,
+        "native_owner_retained": true,
+        "no_python_application_service": true,
+        "offline_cpp_chunk": true,
+        "offline_monaco": true,
+        "offline_monaco_worker": true,
+        "offline_xterm_unicode": true,
+        "same_editor_widget": true,
+        "selection_retained": true,
+        "separate_webviews": true,
+        "terminal_widget_retained": true,
+        "three_editor_only_reparents": true,
+        "typed_ipc_refuses_owner_forgery": true,
+        "undo_redo_retained": true
+      },
+      "error": null,
+      "limits": "Linux GTK3 receipt; 45-second smoke; 16-KiB IPC; embedded fixed assets; no live source/settings/cloud/hardware or firmware compile; Windows has a separate adapter and receipt; native IME/mixed-monitor qualification remains open",
+      "controller": "Python developer verification only",
+      "elapsedSeconds": 1.739,
+      "displayMode": "owned-Xvfb-x11-software-rendering"
+    },
+    "windowsStrictMsvcClippy": true,
+    "reviewedCaptures": [
+      {
+        "theme": "default",
+        "scale": 1,
+        "width": 1100,
+        "height": 740,
+        "capture": "default-1x.png",
+        "exit": 0,
+        "sourceUnchanged": true,
+        "path": "captures/native-workspace/default-1x.png",
+        "sha256": "d1419ef37252b6f884ddc442b46817d76c5053e27ac71ef50e6ef1b7d2e02c4b",
+        "review": "Native controls and reading spans visible; GTK tool-tab contrast corrected; literal source bytes retained"
+      },
+      {
+        "theme": "light",
+        "scale": 1,
+        "width": 1100,
+        "height": 740,
+        "capture": "light-1x.png",
+        "exit": 0,
+        "sourceUnchanged": true,
+        "path": "captures/native-workspace/light-1x.png",
+        "sha256": "f438294e77eb495f55c1bc9f360e74f9de9f66967fb6f522dba9144e09206605",
+        "review": "Native controls and reading spans visible; GTK tool-tab contrast corrected; literal source bytes retained"
+      },
+      {
+        "theme": "solarized_dark",
+        "scale": 1,
+        "width": 1100,
+        "height": 740,
+        "capture": "solarized_dark-1x.png",
+        "exit": 0,
+        "sourceUnchanged": true,
+        "path": "captures/native-workspace/solarized_dark-1x.png",
+        "sha256": "e8a0e237acb2f6909e440cd93a015fd7c61efdfb103f1c23c42030f3c76aa532",
+        "review": "Native controls and reading spans visible; GTK tool-tab contrast corrected; literal source bytes retained"
+      },
+      {
+        "theme": "default",
+        "scale": 1,
+        "width": 960,
+        "height": 540,
+        "capture": "default-1x-compact.png",
+        "exit": 0,
+        "sourceUnchanged": true,
+        "path": "captures/native-workspace/default-1x-compact.png",
+        "sha256": "1eeb7da336d9033b6e1b131e881647c0284743fec97e796587474df10e53b619",
+        "review": "Native controls and reading spans visible; GTK tool-tab contrast corrected; literal source bytes retained"
+      },
+      {
+        "theme": "default",
+        "scale": 2,
+        "width": 1792,
+        "height": 1062,
+        "capture": "default-2x.png",
+        "exit": 0,
+        "sourceUnchanged": true,
+        "path": "captures/native-workspace/default-2x.png",
+        "sha256": "36978473fdd134ba2bb9aeec84e2ef3896e480a895d3f663d974350fdb374b20",
+        "review": "Native controls and reading spans visible; GTK tool-tab contrast corrected; literal source bytes retained"
+      }
+    ],
+    "reviewedCapturesSourceBoundary": "Local GTK capture includes the subsequent fixed original logo-ink correction; hosted e334d7b precedes that narrow ink correction."
+  },
+  "sourceFiles": [
+    {
+      "path": ".github/workflows/migration-prototype.yml",
+      "sha256": "3f841a7ed5d1714b2e0006cbf717d017d1ef82ee7d45d289652f5dcbfd27348a"
+    },
+    {
+      "path": "desktop/Cargo.lock",
+      "sha256": "4a514a8e2a9742520aaf63169afe47cc7b6a77f0b720b4b28367f5b383b1129a"
+    },
+    {
+      "path": "desktop/native-ui/Cargo.toml",
+      "sha256": "c25be751a15bd476d5ce640e80a220d8053b80d973c7f16afd76916610fbdd1e"
+    },
+    {
+      "path": "desktop/native-ui/assets/probe-editor.js",
+      "sha256": "abe7a425c87acbdeb7e5608557efad9f0bd000493d0f5e1cb7559aecbcd021fe"
+    },
+    {
+      "path": "desktop/native-ui/assets/probe-terminal.js",
+      "sha256": "d76f5d48f880b1d4048f569ac31fcca03ec08792b78ee12644f90571c66be268"
+    },
+    {
+      "path": "desktop/native-ui/src/lib.rs",
+      "sha256": "a84c05e1564180e372a4d6e722748d775a56b0b19d130b3a3a1e5e7f307fe757"
+    },
+    {
+      "path": "desktop/native-ui/src/linux.rs",
+      "sha256": "d953f234861122a82af2f25be229b637d549fea529e78d012bad107ff75258b3"
+    },
+    {
+      "path": "desktop/native-ui/src/main.rs",
+      "sha256": "1908d3341bc170dee322241ba43145c4f0093e1781b3c439a7a72f38d1274085"
+    },
+    {
+      "path": "desktop/native-ui/src/windows.rs",
+      "sha256": "711b962838f42bc80076e4c4e6812b416447cfbdb63c9bd505830272465a58ae"
+    },
+    {
+      "path": "desktop/native-ui/src/linux_workspace.rs",
+      "sha256": "a7bea2f61dd856f5e088b0b503b2f9d474c056ce5f0e690c96ca40dd5360888a"
+    },
+    {
+      "path": "desktop/native-ui/src/workspace_design.rs",
+      "sha256": "429a5b2e2ecc131910507a8c00eafac5a8b2a43e3572b0d5efd844eb97ebbccf"
+    },
+    {
+      "path": "desktop/native-ui/verify-smoke.py",
+      "sha256": "4a87a07675c497446d247a266ae0cce9fe526869c52e2305a343c44d0713fa1e"
+    }
+  ],
+  "ci": {
+    "runId": 39392866712,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392866712",
+    "status": "completed",
+    "conclusion": "success",
+    "sourceCommit": "e334d7b1cb1d230c0ad5cc6c2def3eae61076f81",
+    "jobsPassed": 5,
+    "jobsTotal": 5,
+    "rawSnapshot": "scratch/native-workspace-ci-e334d7b/run.json",
+    "receipts": [
+      {
+        "path": "scratch/native-workspace-ci-e334d7b/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-ui/latest-smoke.json",
+        "checks": 17,
+        "passed": true,
+        "sha256": "77f8fbb9fd20f6a2c64d186a5d74bb1ce6e237b6c22838e82d7c62aae526b752"
+      },
+      {
+        "path": "scratch/native-workspace-ci-e334d7b/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-workspace/latest-smoke.json",
+        "checks": 18,
+        "passed": true,
+        "sha256": "8cfbd029f76cff4e4f5698cd9c2515fc97154f22b52a7d437cfaf8e95aaeac15"
+      },
+      {
+        "path": "scratch/native-workspace-ci-e334d7b/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-ui/latest-smoke.json",
+        "checks": 17,
+        "passed": true,
+        "sha256": "ba0e2c766ec23030767b88e03cd02f724dce89aaa7dfcbf4785bcfec95037a2e"
+      },
+      {
+        "path": "scratch/native-workspace-ci-e334d7b/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-workspace/latest-smoke.json",
+        "checks": 18,
+        "passed": true,
+        "sha256": "ecfb309eec5a4c450f2cf36898fa042b366b54d63abc76a73d19b33f6142aa90"
+      },
+      {
+        "path": "scratch/native-workspace-ci-e334d7b/migration-prototype-windows-2022/audit/migration/logs/native-ui-windows.json",
+        "checks": 17,
+        "passed": true,
+        "sha256": "1ea0875909ded26c7880270c27ce24449604e5d6651e09f5dbb56c2aa3aaae41"
+      }
+    ]
+  },
+  "remaining": [
+    "Win32 read-only ProjectService integration and corresponding workspace smoke",
+    "Complete native settings, menus, auxiliary screens, original action/tool-tab icons on every host",
+    "Native keyboard focus, IME, clipboard, fractional and mixed-monitor DPI, Wayland",
+    "Rust source-write leases/recovery, all remaining compile/upload/package/serial/PTY/settings/cloud/application services",
+    "Packaging, install/offline/repair/upgrade/rollback, actual Windows 10/11 and Ubuntu desktop/device qualification"
+  ],
+  "review": {
+    "report": "scratch/native-ui/workspace-review.md",
+    "openFindings": [
+      "GTK many-source-tab overflow",
+      "Windows unavailable backend actions need manual-mode gating"
+    ],
+    "fixStatus": "Both findings corrected in297cae7; scoped re-review clean. Actual new Windows workspace runtime remains a separate gate."
+  },
+  "readerFollowup": {
+    "sourceCommit": "297cae75c5d4202461b3ab6dc0ba2aafe76fab25",
+    "sharedReader": "desktop/native-ui/src/workspace_project.rs",
+    "windowsFlags": [
+      "--project FOLDER",
+      "--theme NAME",
+      "--workspace-smoke"
+    ],
+    "nativeAuthority": "Read snapshots from explicit native input only; no source write, metadata generation or live owner activation",
+    "linuxSharedUnitChecks": 14,
+    "linuxGuiSmokeChecks": 35,
+    "extraWideSourceRowRegression": {
+      "retainedControls": 40,
+      "beforeWidth": 6412,
+      "afterWindowWidth": 960,
+      "afterRowWidth": 6412,
+      "passed": true,
+      "rawLog": "scratch/native-ui/source-row-green.log"
+    },
+    "parentManyFileCapture": {
+      "rootFiles": 42,
+      "windowWidth": 960,
+      "windowHeight": 540,
+      "sourceBytesUnchanged": true,
+      "capture": "captures/native-workspace-many-sources/default-1x-compact.png",
+      "sha256": "cc4f6edcd9f06eed12a8489d2f3c783f3e32acaf08d0b7c191233e72e30c04cd"
+    },
+    "review": {
+      "report": "scratch/native-ui/windows-reader-review.md",
+      "priorFindingsAddressed": 2,
+      "newActionableIssues": 0
+    },
+    "windowsRuntime": "Original17detach +3newsource-state unit checks passed onWindows; new18workspacefailed atprojectload beforechecks, notqualifiedyet.",
+    "gtkApplicationIcon": "Original256x256mcu_icon.png verified through actualX11 _NET_WM_ICON property inall5theme/scale captures; main/detached use embeddedasset.",
+    "windowsProjectPicker": "Still disabled in this checkpoint; follow-up implementation in progress",
+    "ci": {
+      "runId": 39421097096,
+      "status": "completed",
+      "conclusion": "failure",
+      "jobsPassed": 4,
+      "jobsTotal": 5,
+      "failure": "NewWindowsworkspace18fixture refuses owned project due trusted-path spelling mismatch; originalWindows17passed. Sharedcanonical/originaltrustedrootprefixfixawaitingnative rerun."
+    }
+  }
+}

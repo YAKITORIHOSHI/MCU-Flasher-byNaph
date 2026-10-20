@@ -1,51 +1,99 @@
-# Native Rust widget feasibility fixture
+# Native Rust workspace development preview
 
-This is an isolated native-widget prototype for the requested Rust GUI. It is
+This is a native-widget development preview for the requested Rust GUI. It is
 separate from the existing Tauri web-shell fixture and the production Python
 application. It does not change either entry point.
 
-The Windows adapter now constructs real Win32 controls and two child WebView2
-islands. It preserves the native owner and moves only the retained editor view.
-The Linux adapter retains GTK3 controls and WebKitGTK child views. Windows
-cross-target strict Clippy passes. Actual Windows Server and Ubuntu AMD64/ARM64
-execution now pass 17 native smoke checks per host at `77e5ccb`, in migration
-CI run 39357769519. These are hosted fixture receipts; Windows 10/11 desktop
-input, IME, mixed-monitor DPI and physical device workflows remain unqualified.
+Checkpoint `297cae7` has real GTK3 and Win32 toolbar/Controls, source-tab
+and seven-tool-tab chrome around two retained embedded editor/terminal views.
+The shared Rust design module copies the original 39 palette tokens across
+Glass Smoked Dark, Glass Frosted Light and Solarized Dark (117 exact color
+values), and both adapters reuse the existing Montserrat font. GTK reuses the
+original action SVGs; Win32 reproduces the brand mark through native drawing
+paths and still uses text action buttons. Win32 action and tool-tab icon parity
+remain unfinished. Monaco and
+xterm remain the embedded components; application chrome is native. GTK and
+the system browser engine remain native dependencies, and the two embedded
+components remain JavaScript. Python is used by developer verification only.
 
-The window, Controls label, fixture-board combo box, Compile fixture button,
-status label, splitter and detach action are real GTK3 widgets constructed by
-Rust. Two independent embedded Wry/WebKitGTK views contain the retained offline
-Monaco editor and xterm terminal. There is no HTML application toolbar. The
-application callbacks and bounded renderer-report handling are Rust; Python is
-used only by the developer smoke controller. GTK and the system browser engine
-remain native dependencies, and the two embedded components remain JavaScript.
-This is not a claim that every dependency or native library is implemented in
-Rust.
+On both hosts, `--project FOLDER` explicitly reads that project's root sources
+through the shared Rust `workspace_project.rs` / `mcu_core::ProjectService` on a
+worker. Exact ordered document acknowledgements bind native source controls;
+dirty updates accept only known document IDs and newer revisions. Native source
+tabs select retained Monaco models. On GTK, the native Project picker opens
+the chosen folder in a new process, preserving the current window's buffers.
+This is a read-only filesystem adapter: edits stay in editor memory, Save/Save
+All are disabled, and no live ownership registration or activation runs.
+Windows accepts `--project`, `--theme` and `--workspace-smoke`; its native Project
+picker and HICON integration remain pending. GTK main/detached windows now reuse
+the existing `mcu_icon.png` as their native icon. Unavailable backend actions
+remain disabled in manual previews, including the old Windows Compile fixture
+action and compact-menu backend entries.
 
-The board names are explicitly fictional fixture values. **Compile fixture
-exercises a native Rust callback; it does not compile firmware.** Current Python
+The current local GTK workspace smoke passes 18 checks for retained models,
+dirty content/selection, all three themes, undo/redo, native source controls and
+unchanged owned source bytes. Fourteen shared native-unit checks pass on Linux,
+alongside the separate 17-check detach smoke,
+five controller lifecycle checks and three path checks. This is 35 local GTK GUI
+checks. Original-size captures under ignored
+`audit/migration/captures/native-workspace/` cover dark, light and Solarized at
+1100×740, compact 960×540 and `GDK_SCALE=2` measured at 1792×1062 on a 1920×1080
+display. Visual review of all five verifies visible native reading spans and
+active controls; normal close and unchanged explicit-source bytes also pass.
+GTK tool-tab contrast was corrected during that review. Hosted execution of the
+styled adapters now passes at `e334d7b`: Windows Server executes 17 native checks
+and Ubuntu AMD64/ARM64 each execute 35. These results include the Win32
+short-height/DPI corrections, but do not qualify Windows 10/11 desktop input or
+mixed monitors. Subsequent logo-ink (`#56cfbf`) and final Win32 glass
+`TEXT_BRIGHT` action-ink corrections pass local strict Linux/MSVC-target Clippy;
+they are included in `297cae7`, whose CI `39421097096` finishes 4/5. Both Ubuntu
+jobs pass; Windows passes three new source-state units, old 17 smoke and recipe
+checks, then fails new workspace before assertions at trusted-root canonical/
+plain path spelling. The shared fix accepts both trusted app-root spellings
+while preserving the literal selected project path; three local reader checks
+and GTK 35 pass, with Windows rerun pending. Do not claim Windows 35 passed. An additional
+real GTK 40-tab regression failed with a 6412-pixel top-level window before
+source-row scrolling, then passed at `window=960 row=6412 retained_tabs=40`.
+The separate 42-source 960×540 capture is retained under ignored
+`audit/migration/captures/native-workspace-many-sources/`. Scoped follow-up
+review found no new actionable issue after the overflow/manual-action fixes;
+the report is `scratch/native-ui/windows-reader-review.md` under the migration
+audit. Settings, menus, auxiliary screens, tool-tab
+icons and live toolbar/service behavior still need exact design parity.
+
+The separate original detach fixture remains available with `--smoke`. It uses
+explicitly fictional board names and a **Compile fixture** callback that does
+not compile firmware. Its 17 checks passed on Windows Server and Ubuntu
+AMD64/ARM64 at `77e5ccb` and subsequent recorded checkpoints. Current Python
 application board compilation qualification is a separate campaign. The full
-application backend still requires migration and parity qualification before
-Python application modules can be retired.
+application backend still requires migration and parity qualification: the
+67-capability ledger remains 14 partial fixture subsets and 53 pending, with
+zero Python application services retired.
 
 ## Isolation and resource limits
 
 - All web resources are fixed, compile-time copies of existing repository
   assets. The original Monaco/xterm files are unchanged. A finite custom-origin
   asset allowlist exposes no filesystem path or network proxy.
-- CSP blocks remote content, frames, forms and object embedding. Navigation,
-  new windows and downloads are refused. Only the native Detach editor action
-  opens an additional window.
+- CSP blocks remote content, frames, forms and object embedding. Renderer
+  navigation, new windows and downloads are refused. Native Project and Detach
+  Editor actions explicitly open independent windows.
 - Typed IPC accepts reports from the native-bound editor or terminal island.
   It refuses unknown fields, renderer-supplied ownership, the wrong island and
-  messages over 16 KiB. It offers no file, process, serial or settings command.
+  messages over 16 KiB. Renderer messages offer no file, process, serial or
+  settings authority. The shared root-source reader starts only from native
+  `--project` selection, or the GTK native Project picker.
 - The original native main window remains the fixture owner while only the
   editor view moves. No renderer-supplied owner identifier is accepted. This is
   a UI fixture, not qualification of live project ownership or source writes.
 - WebKit profiles and process-local XDG data/config/cache folders are created
   atomically under `audit/migration/scratch/` and only that owned profile is
-  removed on normal exit. No user HOME, shell profile, application settings,
-  sketch or protected build cache is changed.
+  eligible for exit cleanup. WebKit helpers can recreate empty owned profile
+  directories after the Rust process exits; normal manual exit is not a claim
+  of zero residual directories. The smoke controller stops its captured
+  descendants. No user HOME, shell profile, application settings,
+  sketch or protected build cache is changed. Explicit project reading does
+  not create metadata or write the selected project's source files.
 - Selected scratch ancestors must be real directories inside the checkout.
   The developer controller holds no-follow directory handles, refuses existing
   output symlinks, and publishes logs/receipts by atomic leaf replacement. An
@@ -71,21 +119,49 @@ GTK3/WebKitGTK 4.1 prerequisites:
 source desktop/dev-env.sh
 CARGO_BUILD_JOBS=2 cargo build --offline --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe
 .venv-linux/bin/python3 desktop/native-ui/verify-smoke.py
+.venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --workspace
 ```
 
 The controller creates its own private Xvfb display and D-Bus session. It writes
-`audit/migration/scratch/native-ui/latest-smoke.json` and `latest-output.log`.
+`audit/migration/scratch/native-ui/latest-smoke.json` and `latest-output.log` for
+the 17-check detach fixture. `--workspace` writes the same leaf names under
+`audit/migration/scratch/native-workspace/` and invokes `--workspace-smoke` with
+its own two-file source fixture; it never selects a user project.
 This is native X11 functional execution using software rendering; it does not
 qualify GPU performance or a GNOME desktop session. Use the existing display
 only when explicitly verifying that display:
 
 ```bash
 GDK_BACKEND=wayland .venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --current-display
+GDK_BACKEND=wayland .venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --current-display --workspace
 ```
 
 That command requires a real accessible Wayland session. No Wayland result has
-been claimed from an Xvfb run. For manual fixture inspection, run
-`desktop/target/debug/mcu-native-ui-probe` without `--smoke`.
+been claimed from an Xvfb run. On a native Linux desktop, preview the workspace
+or explicitly read a project with:
+
+```bash
+desktop/target/debug/mcu-native-ui-probe --theme default
+desktop/target/debug/mcu-native-ui-probe --theme light
+desktop/target/debug/mcu-native-ui-probe --theme solarized_dark
+desktop/target/debug/mcu-native-ui-probe --project "/path/to/sketch"
+```
+
+The project path is explicit input, not inferred hardware state. Memory edits
+are not saved. On Windows:
+
+```powershell
+cargo build --locked --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe
+& desktop/target/debug/mcu-native-ui-probe.exe
+& desktop/target/debug/mcu-native-ui-probe.exe --theme light --project "C:\path\to\sketch"
+& desktop/target/debug/mcu-native-ui-probe.exe --smoke
+& desktop/target/debug/mcu-native-ui-probe.exe --workspace-smoke
+```
+
+Use the pinned development toolchain and installed WebView2 prerequisites;
+this command does not install them. The workspace smoke owns its project fixture
+and runs separately from the original detach smoke. Native Windows Project
+picker/HICON work is not included in checkpoint `297cae7`.
 
 Initial verification on 20 October 2026 at `4b42146` passed six
 protocol/origin/scratch-root tests and 17 native smoke checks on Linux AMD64,
@@ -130,7 +206,7 @@ CARGO_BUILD_JOBS=2 cargo clippy --offline --manifest-path desktop/Cargo.toml -p 
 cargo fmt --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe -- --check
 ```
 
-The migration-prototype CI matrix runs seven Rust checks, five controller
+The previously completed migration-prototype CI matrix runs seven Rust checks, five controller
 lifecycle checks, three path checks and 17 native widget smoke checks on
 Ubuntu 24.04 AMD64 and ARM64. It reuses the job's GTK/WebKit dependencies,
 pinned Rust toolchain and Python runtime. CI supplies its display with
@@ -144,15 +220,29 @@ All five migration jobs pass at `77e5ccb` in
 The firmware-tool hook checkpoint `f249c21` also passes all five focused
 migration jobs in
 [run 39359319887](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39359319887),
-with native Rust UI source unchanged. Focused CI for subsequent reader/release
-selection checkpoint `8dbdb9d` remains pending. Each receipt retains its tested
-source; no configured or pending job is counted as successful.
+with native Rust UI source unchanged. The subsequent reader/release-selection
+checkpoint `8dbdb9d` passes all five focused jobs in
+[run 39360040590](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590).
+Those results predate the current workspace styling/reader changes. Checkpoint
+`e334d7b` adds the Linux `--workspace` CI step;
+all five jobs pass at `e334d7b` in the focused
+[run 39392866712](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392866712)
+with 17 native Windows Server checks and 35 GTK checks on each Ubuntu
+AMD64/ARM64 host. The later `297cae7` checkpoint adds the shared Windows reader,
+ordered acknowledgements, native-source overflow fixes and new Windows workspace
+checks. Its five-job [run 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096)
+finishes 4/5: both Ubuntu and both Windows editor jobs pass; Windows native
+fails the new workspace at trusted-root path spelling before assertions after
+passing old 17/source-state/recipe checks. The prefix fix is locally verified
+and awaits Windows rerun; the older 17 result does not qualify Windows 35.
+Each result retains its actual tested source;
+hosted execution does not qualify actual Windows 10/11 desktops or physical USB.
 
 ## Next gates
 
 Keep `mcu-contracts`, `mcu-core` and `mcu-host` as reusable Rust service layers;
-the Tauri adapter can remain a differential fixture. This UI probe intentionally
-does not duplicate or activate their live-write capabilities.
+the Tauri adapter can remain a differential fixture. Both native adapters reuse the
+core's source reader but does not activate live-write capabilities.
 
 1. Qualify the Linux adapter on actual Ubuntu 24.04+ AMD64 and ARM64 desktops,
    under both Wayland and X11. Hosted native X11 execution already passes on
@@ -164,9 +254,13 @@ does not duplicate or activate their live-write capabilities.
 3. Prove actual keyboard focus, IME, clipboard, accessibility, editor tab order,
    resizing, 100–200% and fractional DPI, maximize/restore, mixed monitors and
    native editor-only detach. Current smoke proves model history through Monaco
-   APIs, not keyboard routing or complete buffer/tab behavior.
-4. Carry the existing compact glass palette, icons, saved fonts and auxiliary
-   screens into the native shell, with full responsive and resource budgets.
+   APIs; the workspace smoke adds retained source models and theme changes.
+   Complete keyboard routing, recovery, saved fonts and lifecycle behavior remain
+   separate gates.
+4. Extend the local compact / `GDK_SCALE=2` evidence to supported native desktops,
+   fractional DPI and mixed monitors, then complete Settings, menus, auxiliary
+   screens, tool-tab icons and saved preferences with
+   full responsive and resource budgets.
 5. Port the remaining compile/upload, package/index management, serial, PTY,
    settings, discovery, persistence, cloud and lifecycle application services
    to Rust. Python may remain an explicitly invoked firmware-tool dependency.

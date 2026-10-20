@@ -1,5 +1,8 @@
 # Restart handoff
 
+Read [CURRENT.md](CURRENT.md) first; open only targeted reports needed for the
+current slice. This file preserves the longer historical handoff.
+
 Updated: 20 October 2026, Asia/Manila.
 
 ## Objective and checkpoint
@@ -12,14 +15,20 @@ tools. Support Ubuntu 24.04+ AMD64/ARM64 and Windows 10/11 AMD64. Preserve curre
 compact workflow/static glass, offline Monaco/xterm, fixed Firebase deployment,
 prepared offline tools, independent projects and editor/terminal/AI state.
 
-Latest code checkpoint is `8dbdb9def32916bb4179f0c68735202ffc82cdc9` on
-`codex/rust-tauri-migration`. Documentation receipts may advance HEAD without
-changing tested source. Original reference is
+Latest recorded committed checkpoint is
+`297cae75c5d4202461b3ab6dc0ba2aafe76fab25` on
+`codex/rust-tauri-migration`. CI `39421097096` finishes 4/5: both Ubuntu and both
+Windows editor jobs pass; the Windows native job passes old 17/source-state/
+recipe checks but fails the new workspace at trusted-root path spelling before
+assertions. The prefix fix passes three local reader checks and GTK 35 GUI;
+Windows rerun is pending. Prior `e334d7b` CI `39392866712` passes all five jobs.
+Documentation receipts may
+advance HEAD without changing tested source. Original reference is
 `1d00ff0bfdac7d158dde3df84b07741c5b1df6d4`. Python remains production; no service
 is retired. **This is still an incomplete fixture prototype, not a public release.**
 
-Read STATUS.md, parity.json/parity.md, verification.json, ci-results.json,
-reference-amendments.json, reuse.md, xterm-provenance.json and desktop/README.md.
+After CURRENT.md, consult only the relevant status/parity/verification/reuse
+report for the change being made; do not reload every historical JSON by default.
 The 67-capability ledger now has 14 partial fixture subsets and 53 pending. There
 is no retirement approval. Do not restart, reduce scope to implemented probes or
 physical boards, regenerate baseline hashes, or publish an incomplete replacement.
@@ -33,6 +42,77 @@ Do not reinterpret the Tauri web shell as fulfilling this requirement.
 The [toolkit decision](../../docs/native-rust-widget-decision.md) provisionally
 retains GTK3/Win32 with Wry. Official alternatives and dependency classes are
 recorded; measured costs, native input and packaging remain qualification gates.
+
+The `e334d7b` `desktop/native-ui/` checkpoint implements native GTK/Win32
+toolbar, Controls, source tabs and all seven tool tabs around retained
+Monaco/xterm islands. `workspace_design.rs` shares 39 original palette tokens
+across three themes (117 exact color values). Both adapters reuse original
+Montserrat; GTK loads original action SVGs, while Win32 reproduces native brand
+paths and still uses text action buttons. Win32 action/tool-tab icons remain
+unfinished. Retain these assets/design choices; auxiliary surfaces and saved
+preferences still require implementation and qualification.
+
+`297cae7` shares `workspace_project.rs` across GTK/Win32, reading explicit
+root-source manifests through `mcu_core::ProjectService` on a worker. Both hosts
+accept `--project FOLDER`, `--theme` and `--workspace-smoke`. Exact ordered
+acknowledgements bind native controls; dirty updates require known IDs and newer
+revisions. GTK's native Project picker opens an independent
+process instead of replacing the current buffers. Native source tabs/dirty
+markers and theme updates operate on retained Monaco models. This is read-only
+filesystem integration: no save, metadata generation, live registration or
+activation, settings/cloud/device write or compile/package service is enabled.
+Unavailable manual backend/fixture actions stay disabled. Windows native
+Project picker/HICON remain pending; GTK main/detached windows use the original
+`mcu_icon.png` and expose actual 256×256 `_NET_WM_ICON` in all five captures.
+
+Current Linux checks pass: 14 shared native units, three focused reader checks
+after the prefix fix, 18 GTK workspace smoke and 17 editor-only detach smoke
+checks (35 GUI checks total), five controller lifecycle and three path checks.
+The workspace smoke owns its two-file source project and verifies retained model
+identity, dirty content/selection, themes, undo/redo, native-parented source
+controls and unchanged source bytes. It is not a save/ownership/device proof.
+Five reviewed captures live under ignored
+`audit/migration/captures/native-workspace/`: dark/light/Solarized at 1100×740,
+compact 960×540 and `GDK_SCALE=2` measured at 1792×1062 on a 1920×1080 display.
+The receipt records visible native reading spans/active controls, normal close
+and unchanged explicit-source bytes. Visual review corrected GTK tool-tab
+contrast. Hosted CI now verifies the `e334d7b` styled adapters and Win32
+short-height/DPI corrections: 17 native Windows Server checks and 35 GTK checks
+on each Ubuntu AMD64/ARM64 host. Later GTK/Win32 logo ink (`#56cfbf`) and final
+Win32 glass `TEXT_BRIGHT` action-ink corrections pass local strict Linux and
+MSVC-target Clippy; they are now included in `297cae7`, whose Ubuntu jobs pass.
+The Windows new workspace fails at canonical/plain trusted-root spelling before
+assertions; the shared prefix fix preserves the literal selected project path
+and awaits Windows rerun. Three Windows source-state units, old 17 smoke and
+951 recipe / 11 protocol checks pass. An extra real GTK 40-tab check went from
+RED window 6412 px to GREEN window 960 / row 6412 / all 40 retained; the separate
+42-source compact capture is 960×540. The scoped review in
+`scratch/native-ui/windows-reader-review.md` is clean after the overflow and
+manual-action fixes. Exact Settings, menus, auxiliary screens, tool-tab
+icons and live toolbar/service design parity remain unfinished. Hosted Windows
+Server results do not qualify actual Windows 10/11 desktops or physical USB.
+
+Preview on a real Ubuntu display:
+
+```sh
+source desktop/dev-env.sh
+CARGO_BUILD_JOBS=2 cargo build --offline --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe
+desktop/target/debug/mcu-native-ui-probe --theme light --project "/explicit/source-folder"
+```
+
+Run owned verification separately:
+
+```sh
+.venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --workspace
+.venv-linux/bin/python3 desktop/native-ui/verify-smoke.py
+```
+
+The first command writes `scratch/native-workspace/latest-smoke.json`; the
+second retains `scratch/native-ui/latest-smoke.json`. Both are developer
+controllers, not Python application services. A manual preview may leave empty
+owned profile directories recreated by WebKit helpers after Rust exits; do not
+claim zero residuals. The controller bounds and stops captured descendants.
+See `desktop/native-ui/README.md` for host-specific flags and remaining gates.
 
 Code 4b42146: Linux GTK/native owner/editor-only reparent fixture, board-ID fix,
 configured-index inventory/exact mapping and storage-bounded compile helpers.
@@ -78,17 +158,25 @@ remains false pending actual user desktop/device/upload/reset/USB and installati
 qualification. No replacement entry point or shipped executable was installed.
 Continue the native Rust/backend plan and release gates below.
 
-All 11 continuation-start input hashes, three shipped launcher hashes and the
-Ubuntu launcher C-source hash remain unchanged. Original inventory hash remains
+All 11 continuation-start input hashes and all four launcher executable/source
+hashes (three shipped executables and Ubuntu C source) remain unchanged. Original inventory hash remains
 70072652...e8d52; it was not
-regenerated. Current baseline preservation: sources 281/300, resources 130/133,
-legacy verifiers 112/123. Twenty-one unique amended baseline paths are documented.
+regenerated. Current baseline preservation: sources 280/300, resources 129/133,
+legacy verifiers 111/123. Twenty-three unique amended baseline paths are
+documented: eight production sources, twelve legacy verifiers and three legacy
+CI files.
 
-The native fixture has Linux 7/Windows 6 protocol checks; local lifecycle 5,
-path 3, native Linux 17 and strict Linux/Windows-target Clippy pass. The default
-Rust services remain 119 tests, and the ledger stays 14 partial/53 pending with
+The historical native fixture has Linux 7/Windows 6 protocol checks at its
+recorded source. Current workspace counts are listed above. The default
+Rust services pass 126 tests (119+7 pure recipe-policy tests), and the ledger stays 14 partial/53 pending with
 no Python service retired. Actual CI and artifact receipts are in ci-results.json
 and native-rust-ui.json; pending jobs are never promoted to successful evidence.
+
+`69d845a` ports pure exact Onehorse/MiniMain recipe decisions: 951 differential
+decisions (16 positive / 935 empty) plus 11 protocol checks. The bounded review
+`scratch/native-ui/recipe-policy-review.md` is clean. This performs no installed-
+metadata reading, Arduino Q hook selection or real Rust compile integration;
+BLD-01 remains pending.
 
 ## Verified current Python candidate
 
@@ -150,7 +238,8 @@ remains. Registry unknown JSON stays opaque; never pass private fragments throug
 Value. Known timestamps use float_roundtrip. Only confirmed Exited frees a claim;
 Unknown, including zombie/dead uncertainty, reserves it. One workspace per PID
 is still the initial coexistence strategy. The whole-webview transfer remains
-feasibility only; editor-only detach and full native input remain unfinished.
+feasibility only; the separate native fixture proves editor-only detach. Full
+native input, integrated project ownership and recovery remain unfinished.
 
 ## Verification
 
@@ -199,6 +288,28 @@ Current continuation results retain their actual source:
 - `8dbdb9d`: bounded-reader/release-selection focused CI passes all five jobs in
   run 39360040590. Actual artifacts confirm 17 native widget checks per host and
   16 recipe checks (four expected Linux-only skips on Windows).
+- `e334d7b`: focused migration run `39392866712` passes all five jobs for the
+  styled GTK/Win32 workspace. Native Windows Server executes 17 checks and
+  Ubuntu AMD64/ARM64 each execute 35 (18 workspace / 17 detach), including
+  Windows short-height/DPI/readiness-status corrections. Later color and
+  Windows project-reader work are outside this receipt.
+- `297cae7`: migration `39421097096` finishes 4/5. Ubuntu AMD64/ARM64 pass 35
+  GUI, the extra wide-tab regression and 951 recipe / 11 protocol checks. Both
+  Windows original-editor jobs pass. Windows native old 17, three source-state
+  units and recipe checks pass; new workspace fails before assertions at
+  trusted-root canonical/plain spelling. The local reader-prefix fix and GTK
+  35 pass, but Windows rerun remains pending. Do not claim 35 Windows GUI pass.
+- Original Windows layout follow-up at `7733ac9`: both jobs pass in run
+  `39388295330`.
+  Original runtime `39390146279` passes Python 3.11; Python 3.14's AVR fixture
+  failed because its environment wrapper lost inherited variables. `60e4bc4`
+  corrects that fixture; rerun `39392313449` passes both Windows jobs at that
+  source, including actual Uno/Nano/Mega AVR Compile and native GCC path
+  fixtures. At `cd2fdf5`, five
+  valid EXE cases and the final five valid VBS-to-Python argument cases pass on both Python
+  versions. Keep the separate embedded-quote filename diagnostic separate from
+  valid Windows paths. No executable rebuild is required for this verifier-only
+  correction. These are original-application results, not new native UI proof.
 
 Earlier successful matrices remain historical evidence at their actual source:
 

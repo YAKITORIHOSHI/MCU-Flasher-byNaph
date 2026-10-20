@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
-  "recordedAtUtc": "2026-10-20T02:38:50.436104+00:00",
+  "sourceCommit": "e334d7b1cb1d230c0ad5cc6c2def3eae61076f81",
+  "recordedAtUtc": "2026-10-20T08:24:15.491233+00:00",
   "inventorySha256": "70072652a96ad7a51f7134d7f10ee3ff3314947a1816842d9ef2bbe60d6e8d52",
   "baselineRegenerated": false,
   "sections": {
     "files": {
       "baselineEntries": 300,
-      "unchanged": 281,
+      "unchanged": 280,
       "intentionalAmendments": [
         "direct/build_release.py",
         "direct/ubuntu/install_desktop.py",
@@ -22,6 +22,7 @@
         "direct/verify_ubuntu_first_run.py",
         "direct/verify_ubuntu_launcher.py",
         "direct/verify_ubuntu_pty_lifecycle.py",
+        "direct/verify_windows_build_paths.py",
         "main/core/target_profile.py",
         "main/mcu_flash_gui.py",
         "main/web_bridge.py",
@@ -32,16 +33,17 @@
     },
     "resources": {
       "baselineEntries": 133,
-      "unchanged": 130,
+      "unchanged": 129,
       "intentionalAmendments": [
         ".github/workflows/compatibility.yml",
         ".github/workflows/ubuntu-arm64.yml",
+        ".github/workflows/ui-layout.yml",
         "src/editor/index.html"
       ]
     },
     "legacy_verifiers": {
       "baselineEntries": 123,
-      "unchanged": 112,
+      "unchanged": 111,
       "intentionalAmendments": [
         "direct/verify_arduino_board_chooser.py",
         "direct/verify_board_index_targets.py",
@@ -53,7 +55,8 @@
         "direct/verify_target_resolution.py",
         "direct/verify_ubuntu_first_run.py",
         "direct/verify_ubuntu_launcher.py",
-        "direct/verify_ubuntu_pty_lifecycle.py"
+        "direct/verify_ubuntu_pty_lifecycle.py",
+        "direct/verify_windows_build_paths.py"
       ]
     }
   },
@@ -143,7 +146,7 @@
     "installers/arduino-cli.msi",
     "installers/msys2-x86_64-20260611.exe"
   ],
-  "intentionalUniqueAmendments": 21,
+  "intentionalUniqueAmendments": 23,
   "currentSourceMatchesCheckpoint": true,
   "nativeExecutableAndSourceHashesUnchanged": [
     {
