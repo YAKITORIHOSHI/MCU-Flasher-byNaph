@@ -1,9 +1,11 @@
 # Migration parity ledger
 
-Latest committed continuation code: `297cae7`. CI `39421097096` finishes 4/5;
+Latest committed code: `6ef749a`; only “Select serial port” differs from tested
+`0e0db8a`, with strict MSVC/fmt checks. Windows CI `39426407678` passes its native job at exact `0e0db8a`.
+Four unchanged successful jobs retain their prior source. At `297cae7`, CI `39421097096` finishes 4/5;
 Windows passes old smoke/source-state/recipe checks but its new workspace fails
 before assertions at trusted-root canonical/plain spelling. The prefix fix
-passes three local reader checks and GTK 35, with Windows rerun pending.
+passes three local reader checks and GTK 35, then the focused Windows 35 rerun.
 Prior `e334d7b` CI `39392866712` passes all five jobs. Final architecture requires native Rust
 GUI widgets and Rust backend services, with Monaco/xterm embedded and Python only
 for approved firmware tools. The GTK/Win32 fixtures and configured-index compile
@@ -21,8 +23,9 @@ Win32 reproduces native brand paths and still uses text action buttons, with
 action/tool-tab icon parity unfinished. Both adapters now read an explicit
 `--project` through shared `workspace_project.rs` on a worker; exact ordered
 acknowledgements and known-ID monotonic dirty updates bind native source tabs.
-GTK's Project picker opens an independent process; Windows native picker/HICON
-remain pending. Local evidence includes 14 shared native units, GTK 35 GUI,
+GTK's Project picker opens an independent process. Windows picker and original-
+ICO owned small/large HICONs are implemented in `0e0db8a`, with native units and
+35 GUI passing. Local evidence includes 18 Linux native units, GTK 35 GUI,
 an extra actual 40-tab overflow regression and a 42-source 960×540 capture.
 Five original GTK captures
 cover three themes, compact height and `GDK_SCALE=2`; visual review corrected
@@ -32,7 +35,8 @@ Windows Server checks and 35 GTK checks on each Ubuntu AMD64/ARM64 host,
 including Win32 short-height/DPI corrections. Subsequent logo/action-ink
 corrections and the shared reader are now in `297cae7`; both Ubuntu jobs pass
 35 GUI, the wide-tab regression and recipe checks. Windows new 18 workspace is
-still unqualified after its pre-assertion path-spelling failure. Actual Windows 10/11 desktop input remains
+subsequently passes at `0e0db8a` after the retained path-spelling failure.
+Actual Windows 10/11 desktop input remains
 unqualified. Settings, menus, auxiliary screens, tool-tab icons and live toolbar
 behavior still need exact design parity. This extends the
 existing UI-02, UI-04, UI-07, PRJ-03, ED-01 and ED-02 fixture evidence; it does not
@@ -44,6 +48,17 @@ bringing default Rust tests to 126 (119+7), with 951 differential decisions
 and source follow-up reviews are clean. Trusted installed-metadata acquisition,
 Arduino Q hook selection and real Rust compile integration remain open;
 BLD-01 and the 14 partial / 53 pending / zero-retired ledger are unchanged.
+
+The new Windows picker uses literal native path/current-theme arguments to a
+fresh current-Rust executable off-thread, cancel/no-spawn, a 16-child cap and
+retained parent buffers. The bounded ICO parser has three pure tests; aligned
+`Vec<u32>` storage fixes the reviewed DWORD precondition while preserving exact
+bytes/length. Scoped re-review is clean. Windows cancel/Unicode UTF-16 argument,
+HICON/alignment checks pass: 16 shared-library/seven Windows binary units,
+17/17 detach, 18/18 workspace, recipe 951 + 11 protocol, including real icons,
+deliberately unaligned payloads and both Unicode/space source files. Four other
+jobs remain at `297cae7`; this is not a new full matrix. Actual chooser/child survival, Windows 10/11
+input and PE Explorer icon/packaging are still full-parity gates.
 
 19 October 2026 · Asia/Manila · Legacy `1d00ff0` · Prototype checkpoint `4cf730b`
 

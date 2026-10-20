@@ -16,12 +16,16 @@ compact workflow/static glass, offline Monaco/xterm, fixed Firebase deployment,
 prepared offline tools, independent projects and editor/terminal/AI state.
 
 Latest recorded committed checkpoint is
-`297cae75c5d4202461b3ab6dc0ba2aafe76fab25` on
-`codex/rust-tauri-migration`. CI `39421097096` finishes 4/5: both Ubuntu and both
+`6ef749a1f55841359fc380a572265c8323408a15` on
+`codex/rust-tauri-migration`. Only the “Select serial port” caption differs from
+tested `0e0db8a`; strict all-target MSVC Clippy/fmt pass and no Escape behavior
+change remains. One-job Windows CI `39426407678` passes at exact `0e0db8a`
+for the combined prefix/picker/icon checkpoint. The four unchanged successful
+jobs retain their prior source. Earlier `297cae7` CI `39421097096` finishes 4/5: both Ubuntu and both
 Windows editor jobs pass; the Windows native job passes old 17/source-state/
 recipe checks but fails the new workspace at trusted-root path spelling before
 assertions. The prefix fix passes three local reader checks and GTK 35 GUI;
-Windows rerun is pending. Prior `e334d7b` CI `39392866712` passes all five jobs.
+the corrected Windows rerun now passes. Prior `e334d7b` CI `39392866712` passes all five jobs.
 Documentation receipts may
 advance HEAD without changing tested source. Original reference is
 `1d00ff0bfdac7d158dde3df84b07741c5b1df6d4`. Python remains production; no service
@@ -62,10 +66,11 @@ markers and theme updates operate on retained Monaco models. This is read-only
 filesystem integration: no save, metadata generation, live registration or
 activation, settings/cloud/device write or compile/package service is enabled.
 Unavailable manual backend/fixture actions stay disabled. Windows native
-Project picker/HICON remain pending; GTK main/detached windows use the original
+Project picker/HICON are implemented and pass native units at `0e0db8a`;
+GTK main/detached windows use the original
 `mcu_icon.png` and expose actual 256×256 `_NET_WM_ICON` in all five captures.
 
-Current Linux checks pass: 14 shared native units, three focused reader checks
+Current Linux checks pass: 18 native units, three focused reader checks
 after the prefix fix, 18 GTK workspace smoke and 17 editor-only detach smoke
 checks (35 GUI checks total), five controller lifecycle and three path checks.
 The workspace smoke owns its two-file source project and verifies retained model
@@ -83,7 +88,7 @@ Win32 glass `TEXT_BRIGHT` action-ink corrections pass local strict Linux and
 MSVC-target Clippy; they are now included in `297cae7`, whose Ubuntu jobs pass.
 The Windows new workspace fails at canonical/plain trusted-root spelling before
 assertions; the shared prefix fix preserves the literal selected project path
-and awaits Windows rerun. Three Windows source-state units, old 17 smoke and
+and subsequently passes the Windows rerun. Three Windows source-state units, old 17 smoke and
 951 recipe / 11 protocol checks pass. An extra real GTK 40-tab check went from
 RED window 6412 px to GREEN window 960 / row 6412 / all 40 retained; the separate
 42-source compact capture is 960×540. The scoped review in
@@ -91,6 +96,21 @@ RED window 6412 px to GREEN window 960 / row 6412 / all 40 retained; the separat
 manual-action fixes. Exact Settings, menus, auxiliary screens, tool-tab
 icons and live toolbar/service design parity remain unfinished. Hosted Windows
 Server results do not qualify actual Windows 10/11 desktops or physical USB.
+
+The new Windows picker launches the current Rust executable off-thread with
+literal native path/current-theme arguments, cancel/no-spawn, a 16-child cap and
+retained parent buffers. Small/large owned HICONs use the original ICO through a
+bounded shared parser (three pure tests) and DWORD-aligned `Vec<u32>` storage,
+preserving exact payload bytes/length. Scoped re-review is clean after fixing
+the alignment P2; see `scratch/native-ui/windows-picker-icon-review.md`.
+Windows CI `39426407678` passes 16 library/seven Windows binary units, 17/17
+detach, 18/18 workspace and recipe 951 + 11 protocol checks. Cancel/Unicode
+UTF-16 args, real small/large owned HICON and deliberately unaligned-buffer units
+pass, as does the two-source Unicode/space fixture. Receipts are under
+`scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/`.
+Actual chooser/child survival, Windows 10/11 input/IME, PE Explorer
+icon and packaging remain gates. No new Cargo dependency/lockfile or runtime/
+installer entry changed; only minimal existing Windows COM/Shell features.
 
 Preview on a real Ubuntu display:
 
@@ -298,7 +318,12 @@ Current continuation results retain their actual source:
   Windows original-editor jobs pass. Windows native old 17, three source-state
   units and recipe checks pass; new workspace fails before assertions at
   trusted-root canonical/plain spelling. The local reader-prefix fix and GTK
-  35 pass, but Windows rerun remains pending. Do not claim 35 Windows GUI pass.
+  35 pass; the corrected Windows rerun subsequently passes at `0e0db8a`.
+- `0e0db8a`: one-job Windows run `39426407678` passes for the combined
+  trusted-prefix repair, native Project picker and original-ICO/alignment source.
+  Preserve the four prior successful jobs at their actual source; no new full
+  five-job execution is claimed. Windows 16 library/seven binary units, 35 GUI
+  and recipe 951 + 11 protocol pass at this exact source.
 - Original Windows layout follow-up at `7733ac9`: both jobs pass in run
   `39388295330`.
   Original runtime `39390146279` passes Python 3.11; Python 3.14's AVR fixture

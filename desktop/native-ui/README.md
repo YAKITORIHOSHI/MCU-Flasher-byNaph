@@ -4,7 +4,8 @@ This is a native-widget development preview for the requested Rust GUI. It is
 separate from the existing Tauri web-shell fixture and the production Python
 application. It does not change either entry point.
 
-Checkpoint `297cae7` has real GTK3 and Win32 toolbar/Controls, source-tab
+Current `6ef749a` differs from CI-tested `0e0db8a` only by the “Select serial
+port” caption (strict MSVC/fmt checks). The preview has real GTK3 and Win32 toolbar/Controls, source-tab
 and seven-tool-tab chrome around two retained embedded editor/terminal views.
 The shared Rust design module copies the original 39 palette tokens across
 Glass Smoked Dark, Glass Frosted Light and Solarized Dark (117 exact color
@@ -24,15 +25,20 @@ tabs select retained Monaco models. On GTK, the native Project picker opens
 the chosen folder in a new process, preserving the current window's buffers.
 This is a read-only filesystem adapter: edits stay in editor memory, Save/Save
 All are disabled, and no live ownership registration or activation runs.
-Windows accepts `--project`, `--theme` and `--workspace-smoke`; its native Project
-picker and HICON integration remain pending. GTK main/detached windows now reuse
+Windows accepts `--project`, `--theme` and `--workspace-smoke`. Its new native
+Project picker cancels without spawning or launches the current Rust executable
+with literal native path/current-theme arguments on a worker; the 16-child cap
+and independent process preserve existing buffers. Main/detached windows borrow
+owned small/large HICONs decoded from the original ICO through a bounded shared
+parser. Decoder storage is DWORD-aligned `Vec<u32>` with exact bytes/length;
+the reviewed alignment P2 is fixed. Native Windows units now pass. GTK main/detached windows now reuse
 the existing `mcu_icon.png` as their native icon. Unavailable backend actions
 remain disabled in manual previews, including the old Windows Compile fixture
 action and compact-menu backend entries.
 
 The current local GTK workspace smoke passes 18 checks for retained models,
 dirty content/selection, all three themes, undo/redo, native source controls and
-unchanged owned source bytes. Fourteen shared native-unit checks pass on Linux,
+unchanged owned source bytes. Eighteen local native-unit checks pass on Linux,
 alongside the separate 17-check detach smoke,
 five controller lifecycle checks and three path checks. This is 35 local GTK GUI
 checks. Original-size captures under ignored
@@ -51,14 +57,21 @@ jobs pass; Windows passes three new source-state units, old 17 smoke and recipe
 checks, then fails new workspace before assertions at trusted-root canonical/
 plain path spelling. The shared fix accepts both trusted app-root spellings
 while preserving the literal selected project path; three local reader checks
-and GTK 35 pass, with Windows rerun pending. Do not claim Windows 35 passed. An additional
+and GTK 35 pass. The combined prefix/picker/icon checkpoint is now `0e0db8a`;
+one-job Windows CI `39426407678` passes 16 library/seven Windows binary units,
+17 detach + 18 workspace GUI and recipe 951 + 11 protocol checks. Cancel/Unicode
+UTF-16 args, real owned small/large HICON and deliberately unaligned-buffer units
+pass; both source files use the Unicode/space fixture. An additional
 real GTK 40-tab regression failed with a 6412-pixel top-level window before
 source-row scrolling, then passed at `window=960 row=6412 retained_tabs=40`.
 The separate 42-source 960×540 capture is retained under ignored
 `audit/migration/captures/native-workspace-many-sources/`. Scoped follow-up
 review found no new actionable issue after the overflow/manual-action fixes;
 the report is `scratch/native-ui/windows-reader-review.md` under the migration
-audit. Settings, menus, auxiliary screens, tool-tab
+audit. The new picker/icon scoped re-review is clean in
+`scratch/native-ui/windows-picker-icon-review.md` after the alignment correction.
+There are no new Cargo dependencies or lockfile changes, only minimal existing
+Windows COM/Shell features. Settings, menus, auxiliary screens, tool-tab
 icons and live toolbar/service behavior still need exact design parity.
 
 The separate original detach fixture remains available with `--smoke`. It uses
@@ -161,7 +174,9 @@ cargo build --locked --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe
 Use the pinned development toolchain and installed WebView2 prerequisites;
 this command does not install them. The workspace smoke owns its project fixture
 and runs separately from the original detach smoke. Native Windows Project
-picker/HICON work is not included in checkpoint `297cae7`.
+picker/HICON source is included in `0e0db8a`, with actual chooser interaction,
+child survival, Windows 10/11 input, high DPI icons and PE Explorer packaging
+still separate qualification gates. No installer/runtime entry changed.
 
 Initial verification on 20 October 2026 at `4b42146` passed six
 protocol/origin/scratch-root tests and 17 native smoke checks on Linux AMD64,
@@ -233,16 +248,26 @@ ordered acknowledgements, native-source overflow fixes and new Windows workspace
 checks. Its five-job [run 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096)
 finishes 4/5: both Ubuntu and both Windows editor jobs pass; Windows native
 fails the new workspace at trusted-root path spelling before assertions after
-passing old 17/source-state/recipe checks. The prefix fix is locally verified
-and awaits Windows rerun; the older 17 result does not qualify Windows 35.
+passing old 17/source-state/recipe checks. The prefix fix subsequently passes
+the focused 35-check Windows GUI run at `0e0db8a`; historical failure is retained.
 Each result retains its actual tested source;
 hosted execution does not qualify actual Windows 10/11 desktops or physical USB.
+
+The combined prefix/picker/original-ICO checkpoint
+`0e0db8ac2505db273c4750b2b44fca0502d31ed8` runs the focused one-job
+[Windows CI 39426407678](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39426407678),
+passes its native job: 16 library/seven Windows binary units, 17/17 detach,
+18/18 workspace and 951/951 recipe plus 11 protocol checks. The four unchanged successful jobs retain their prior
+`297cae7` results; they are not a new full-matrix execution at this checkpoint.
+Receipts are under `audit/migration/scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/`.
+Actual chooser/cancel/child survival, Windows 10/11 input/IME and Explorer icon/
+packaging remain gates. No popup Escape behavior changed after CI.
 
 ## Next gates
 
 Keep `mcu-contracts`, `mcu-core` and `mcu-host` as reusable Rust service layers;
 the Tauri adapter can remain a differential fixture. Both native adapters reuse the
-core's source reader but does not activate live-write capabilities.
+core's source reader but do not activate live-write capabilities.
 
 1. Qualify the Linux adapter on actual Ubuntu 24.04+ AMD64 and ARM64 desktops,
    under both Wayland and X11. Hosted native X11 execution already passes on

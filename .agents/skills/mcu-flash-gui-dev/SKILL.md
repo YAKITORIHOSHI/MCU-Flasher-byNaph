@@ -37,7 +37,12 @@ known-ID newer dirty revisions govern native controls. GTK's Project picker
 opens an independent process and preserves existing buffers.
 This is read-only: no live activation/registration, metadata generation, source
 save, settings/cloud/device write or build/package service is enabled. Windows
-native Project picker/HICON remain pending. GTK embeds the existing app icon
+native Project picker/HICON are implemented in `0e0db8a` with passing native units/GUI.
+The picker launches current Rust EXE with literal OS path/theme arguments on a
+worker, cancel/no-spawn, 16-child cap and retained parent buffers. The bounded
+original-ICO parser has three pure tests; main/detached own small/large HICONs.
+Use DWORD-aligned `Vec<u32>` payload storage with exact bytes/length; scoped
+re-review is clean after the alignment P2 fix. GTK embeds the existing app icon
 in main/detached windows; all five captures verify 256×256 `_NET_WM_ICON`.
 
 After building `mcu-native-ui-probe`, run
@@ -45,8 +50,9 @@ After building `mcu-native-ui-probe`, run
 18-check owned GTK workspace fixture, separately from the original 17-check
 detach smoke without `--workspace`. The workspace fixture proves retained
 models, dirty state/selection, themes, undo and unchanged source bytes; its
-receipt lives under `audit/migration/scratch/native-workspace/`. Fourteen shared
-native units pass on Linux, alongside five
+receipt lives under `audit/migration/scratch/native-workspace/`. Current Linux
+native units total 18,
+alongside GTK 35 GUI and strict Linux/MSVC-target Clippy. Retain the five
 controller lifecycle, three path and the separate 17 detach checks (35 GTK GUI
 checks total). Original-size three-theme captures live in ignored
 `audit/migration/captures/native-workspace/`, alongside reviewed compact 960×540
@@ -55,21 +61,29 @@ and active controls remain visible; normal close/source-byte preservation pass.
 At `e334d7b`, focused CI `39392866712` passes all five jobs: 17 native Windows
 Server checks and 35 GTK checks on each Ubuntu AMD64/ARM64 host, including
 Win32 short-height/DPI corrections. Later logo/action-ink corrections are in
-`297cae7`; both Ubuntu jobs pass and its Windows workspace remains unqualified
-as detailed below. Settings, menus, auxiliary
+`297cae7`; both Ubuntu jobs pass and its Windows workspace failure is corrected
+by the passing `0e0db8a` rerun below. Settings, menus, auxiliary
 screens, tool-tab icons and live toolbar/service behavior remain exact
 design-parity work.
 New `297cae7` CI `39421097096` finishes 4/5: Ubuntu 35 GUI plus the extra 40-tab
 regression and policy checks pass; Windows old 17, three source-state units and
 policy checks pass, but the new 18 workspace fails before assertions at trusted-
 root path spelling. The shared prefix fix preserves the selected literal path;
-three local reader checks/GTK 35 pass, with Windows rerun pending. Do not claim
-Windows 35 passed. The GTK row must scroll all sources without growing the
+three local reader checks/GTK 35 pass, then Windows 35 passes at `0e0db8a`.
+The GTK row must scroll all sources without growing the
 window (GREEN window 960 / row 6412 / 40 retained tabs; 42-source capture 960×540).
 Pure Onehorse/MiniMain policy has 126 default tests (119+7), 951 differential
 decisions (16 positive / 935 empty) and 11 protocol checks. It has no trusted
 installed-metadata reader, Arduino Q hook selection or real Rust build caller.
 BLD-01 remains pending; bounded source/policy reviews do not retire a service.
+The combined `0e0db8a` Windows-only CI `39426407678` passes its native job:
+16 library/seven Windows binary units, 17/17 detach, 18/18 workspace, recipe
+951 + 11 protocol checks. Real owned small/large HICON, deliberately unaligned
+buffer and Unicode/space source fixtures pass. Preserve the four prior jobs at
+their `297cae7` source; no new full-matrix execution is implied. Current
+`6ef749a` differs only by “Select serial port” (strict MSVC/fmt checks), with no
+popup Escape change. Actual chooser/child survival, Windows 10/11 input/IME and PE Explorer icon/
+packaging need separate evidence. No new dependency/lockfile/runtime entry.
 Native profile cleanup is scoped to owned audit scratch. WebKit helpers can
 recreate empty owned directories after Rust exits; do not claim zero residuals
 from a manual preview. The controller stops captured descendants. Keep later

@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0e0db8ac2505db273c4750b2b44fca0502d31ed8",
+  "scope": "Native development preview only; real Project selection and native window icons, with read-only source snapshots. Production entry remains Python.",
+  "windowsProject": {
+    "entry": "Explicit native Project action only; disabled in both fixture modes",
+    "picker": "Native shell filesystem-folder STA dialog; no new-folder button",
+    "selectedPath": "Literal native UTF16 OS path, never renderer input; reader keeps original selection for core validation",
+    "launch": "Fresh current Rust executable, literal --project and current --theme arguments; no shell or Python",
+    "lifecycle": "Spawn/result/reap worker; bounded16activechildren; parent close does not kill independent project",
+    "cancel": "No launch arguments/process created"
+  },
+  "icons": {
+    "asset": "src/assets/mcu_icon.ico",
+    "originalAssetSha256": "83ff0de254bdeb9445d3a52a0cffa45f3c5bef10cb9c870763614356925247c3",
+    "native": "Owned unshared small/large HICONs for main and detached editor; lifetime exceeds windows and registered class",
+    "decoder": "Bounded validated ICO entries copied to initialized Vec<u32> for DWORD alignment; exact original byte length",
+    "gtk": "Original PNG embedded for main/detached; actual X11 _NET_WM_ICON 256x256 verified in5captures"
+  },
+  "localVerification": {
+    "linuxNativeLibraryTestsPassed": 18,
+    "gtkWorkspaceChecksPassed": 18,
+    "gtkDetachChecksPassed": 17,
+    "strictLinuxAndMsvcClippy": true,
+    "formatCheck": true,
+    "windowsSourceTestsCompiled": [
+      "cancel=>noarguments",
+      "literalUnicode/space/metachar/trailingseparator/nativeUTF16arguments",
+      "originalICOcreatesrealownedHICONs",
+      "unalignedsource=>DWORDalignedexactbytesstorage",
+      "exactorderedsourceack",
+      "knownIDandmonotonicrevision",
+      "errorcleanupretainsnativebuffers"
+    ],
+    "windowsExecutionClaimed": false
+  },
+  "reviews": {
+    "initial": "scratch/native-ui/windows-picker-icon-review.md",
+    "initialActionableFindings": 1,
+    "finding": "CreateIconFromResourceEx buffer alignment precondition",
+    "corrected": true,
+    "scopedRereview": "P2 addressed, no new actionable finding in correction"
+  },
+  "ci": {
+    "runId": 39426407678,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39426407678",
+    "sourceCommit": "0e0db8ac2505db273c4750b2b44fca0502d31ed8",
+    "windowsOnly": true,
+    "status": "completed",
+    "conclusion": "success",
+    "jobsPassed": 1,
+    "jobsExecuted": 1,
+    "editorReviewSkipped": true,
+    "sharedLibraryUnitsPassed": 16,
+    "windowsBinaryUnitsPassed": 7,
+    "detachChecksPassed": 17,
+    "workspaceChecksPassed": 18,
+    "boardRecipeComparisonsPassed": 951,
+    "boardRecipeProtocolChecksPassed": 11,
+    "nativeIconHandlesCreated": true,
+    "receipts": [
+      {
+        "path": "scratch/native-project-ci-0e0db8a/run.json",
+        "bytes": 3194,
+        "sha256": "294a2cd7bda12467174ed147db065a5df797a66319adf8f7d7b1586ecceaeb6b"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/native-ui-protocol.log",
+        "bytes": 3665,
+        "sha256": "f57610bf5a81fdc284acf916998eb86a6e86b5551064b659abc955a0b32fe3c6"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/native-ui-windows.json",
+        "bytes": 1249,
+        "sha256": "1ea0875909ded26c7880270c27ce24449604e5d6651e09f5dbb56c2aa3aaae41"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/native-workspace-windows.json",
+        "bytes": 1182,
+        "sha256": "9373f107a18fdf3efe269d03e79584ada3f771af8f5db870bd48f2fa56a80d07"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/board-recipe-rust.json",
+        "bytes": 543,
+        "sha256": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65"
+      }
+    ],
+    "scope": "Windows Server 2022 AMD64 hosted fixtures; interactive Windows 10/11 desktop, picker interaction, child survival, device and release qualification remain open.",
+    "releaseQualified": false
+  },
+  "sourceFiles": [
+    {
+      "path": "desktop/native-ui/Cargo.toml",
+      "sha256": "da2f90a43bb28b8eaccef78859c6fdda8689242b3a4b894febe9d4636eb25bab"
+    },
+    {
+      "path": "desktop/native-ui/src/windows.rs",
+      "sha256": "0060ba20a64b54c94b0dc9d099d9bcfe87dcea5a295f4824f205ea334bad36a8"
+    },
+    {
+      "path": "desktop/native-ui/src/workspace_icon.rs",
+      "sha256": "4967c6b2ed1b0c96c93ab3cf5eb4cce70cf00b16f0bc4a39b610cae02993e91e"
+    },
+    {
+      "path": "desktop/native-ui/src/workspace_project.rs",
+      "sha256": "09f429c7cb1dc5689acad70bda5d4cdd4d822b0fab8a7e26e4e570b8480e8bde"
+    },
+    {
+      "path": ".github/workflows/migration-prototype.yml",
+      "sha256": "e34ee2dc12858dc211387972957406ef2ad5376fb73a8ecc81e7fa8f6e5cfc6c"
+    }
+  ],
+  "remaining": [
+    "Supporteddesktopnativepickerinteraction/cancel andindependentchildsurvival",
+    "Nativekeyboard/IME/clipboard/mixedDPI/Waylanddesktopqualification",
+    "PEExplorericon/subsystem,packaging/install/upgrade/repair/rollback",
+    "Sourcewrites/liveownership andremainingRustapplicationbackendservices"
+  ],
+  "applicationServicesRetired": 0,
+  "recordedAtUtc": "2026-10-20T13:09:42.881630+00:00",
+  "postCiFollowup": {
+    "sourceCommit": "6ef749a1f55841359fc380a572265c8323408a15",
+    "change": "Serial-port placeholder caption only: Select serial port.",
+    "strictMsvcAllTargetsClippyPassed": true,
+    "formatCheckPassed": true,
+    "runtimeCiRepeated": false,
+    "runtimeReceiptSource": "0e0db8ac2505db273c4750b2b44fca0502d31ed8"
+  },
+  "windowsRuntime": {
+    "sharedLibraryUnitsPassed": 16,
+    "windowsBinaryUnitsPassed": 7,
+    "detachChecksPassed": 17,
+    "workspaceChecksPassed": 18,
+    "actualOriginalSmallAndLargeIconHandlesPassed": true,
+    "unalignedSourceToAlignedExactPayloadPassed": true,
+    "literalUnicodeAndNativeUtf16ArgumentsPassed": true,
+    "isolatedUnicodeProjectSnapshotPassed": true,
+    "noPythonApplicationServiceInBothGuiFixtures": true,
+    "actualDialogInteractionQualified": false,
+    "independentChildSurvivalQualified": false
+  }
+}

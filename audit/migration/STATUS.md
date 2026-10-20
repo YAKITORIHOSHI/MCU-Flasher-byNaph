@@ -4,11 +4,16 @@ Read [CURRENT.md](CURRENT.md) first for continuation; consult targeted historica
 reports below only as needed.
 
 Updated: 20 October 2026, Asia/Manila. Latest recorded committed checkpoint:
-`297cae75c5d4202461b3ab6dc0ba2aafe76fab25` on `codex/rust-tauri-migration`.
-Its five-job [migration run 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096)
+`6ef749a1f55841359fc380a572265c8323408a15` on `codex/rust-tauri-migration`.
+Only the “Select serial port” caption differs from CI-tested `0e0db8a`, with
+strict all-target MSVC Clippy/fmt checks and no popup Escape change.
+Its one-job [Windows run 39426407678](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39426407678)
+passes at exact `0e0db8a` for the combined prefix/picker/icon correction. The four
+unchanged successful jobs retain their prior `297cae7` results.
+That checkpoint's [migration run 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096)
 finished with four of five jobs passed. The new Windows workspace smoke failed
 before assertions at trusted-root canonical/plain path spelling; its fix passes
-three local reader checks and GTK 35 GUI, with native Windows rerun pending.
+three local reader checks and GTK 35 GUI, then passes the focused Windows rerun.
 The earlier focused
 [migration run 39392866712](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39392866712)
 passes all five jobs at `e334d7b`; the later shared reader and color changes
@@ -77,16 +82,24 @@ workspace process and preserves the original window's buffers. Source selection,
 dirty markers and three-theme updates use retained Monaco models. No source
 save, live ownership activation/registration, settings/cloud/hardware write or
 build/package service is enabled. Manual backend/fixture actions remain disabled.
-Windows native Project picker and HICON remain pending. GTK main and detached
+`0e0db8a` implements the native Windows Project picker and owned small/large
+HICONs in source. Cancel creates no child; accepted native paths/current themes
+go as literal OS arguments to the current Rust executable on a worker, capped
+at 16 independent children with parent buffers retained. Original ICO parsing
+is bounded/shared with three pure tests; aligned `Vec<u32>` storage preserves
+exact payload bytes/length for the native decoder. The alignment P2 is fixed
+and scoped re-review is clean (`scratch/native-ui/windows-picker-icon-review.md`).
+GTK main and detached
 windows now reuse the existing `mcu_icon.png` native icon; no installer, launcher
 or runtime entry changed.
 
 Current local verification passes **35 GTK GUI smoke checks** (18 workspace and
-17 editor-only detach), **14 shared native-unit checks**, **five controller
+17 editor-only detach), **18 local Linux native-unit checks**, **five controller
 lifecycle checks** and **three path checks**. Three new Windows-only source/ack
 unit checks now pass in Windows CI. Its old 17-check smoke and policy checks
 also pass, but the new 18-check workspace fails before assertions at trusted-root
-path spelling; all 35 Windows GUI checks are not yet qualified.
+path spelling at `297cae7`. The corrected `0e0db8a` Windows run now passes all
+35 GUI checks, 16 library/seven Windows binary units and recipe 951 + 11 protocol.
 The workspace smoke owns its two-file project and checks model identity, dirty content,
 selection, all three themes, undo/redo, native-parented source controls and
 unchanged source bytes. Five reviewed GTK captures are retained under ignored
@@ -104,14 +117,21 @@ covers the later prefix fix. `297cae7` CI passes both Ubuntu jobs, including GTK
 units and old smoke pass; the workspace fails because canonical `\\?\D:` fixture
 spelling differs from the plain trusted app root. The shared fix recognizes both
 trusted-root spellings while preserving the literal selected path; three local
-reader checks and GTK 35 GUI pass, with Windows rerun pending. An additional real GTK 40-tab regression went from a 6412-pixel
+reader checks and GTK 35 GUI pass; the focused Windows rerun now passes at
+`0e0db8a`, including both Unicode/space source files. An additional real GTK 40-tab regression went from a 6412-pixel
 top-level window to `window=960 row=6412 retained_tabs=40`; a 42-source 960×540
 capture is retained under ignored `captures/native-workspace-many-sources/`.
 Scoped follow-up review found no new actionable issue after the source-overflow
 and manual-Windows-fixture-action corrections; see
 `scratch/native-ui/windows-reader-review.md`.
 GTK `_NET_WM_ICON` is confirmed as 256×256 in all five captures. Windows native
-Project picker/HICON integration remains pending. Exact
+Project picker/HICON, cancel/Unicode UTF-16 arguments and deliberately unaligned
+payload units pass on native Windows, including real owned small/large HICONs.
+Receipts: `scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/`.
+Actual picker interaction,
+child survival, Windows 10/11 input and PE Explorer icon/packaging remain gates.
+No new Cargo dependency/lockfile change or installer/runtime entry is involved;
+only minimal existing Windows COM/Shell features were added. Exact
 design parity still needs Settings, menus, auxiliary
 screens, tool-tab icons and live toolbar/service behavior. See
 [native preview and commands](../../desktop/native-ui/README.md).

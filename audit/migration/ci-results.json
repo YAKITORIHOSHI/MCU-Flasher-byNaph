@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "recordedAtUtc": "2026-10-20T02:45:34.175624+00:00",
-  "latestCodeCheckpoint": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+  "recordedAtUtc": "2026-10-20T13:09:42.881630+00:00",
+  "latestCodeCheckpoint": "6ef749a1f55841359fc380a572265c8323408a15",
   "scope": "Exact source runner fixtures only; not Windows 10/11 desktop or physical USB/installer qualification",
   "runs": {
     "latestPrototype": {
@@ -2327,5 +2327,61 @@
     "jobsTotal": 2,
     "receipt": "windows-qualification.json",
     "scope": "CurrentPythonreference; 3realAVRCompile-button targets and nativeGCCpathcheck; no hardwareupload/reset or Rustservice retirement"
+  },
+  "nativeProjectCheckpoint": {
+    "runId": 39426407678,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39426407678",
+    "sourceCommit": "0e0db8ac2505db273c4750b2b44fca0502d31ed8",
+    "windowsOnly": true,
+    "status": "completed",
+    "conclusion": "success",
+    "jobsPassed": 1,
+    "jobsExecuted": 1,
+    "editorReviewSkipped": true,
+    "sharedLibraryUnitsPassed": 16,
+    "windowsBinaryUnitsPassed": 7,
+    "detachChecksPassed": 17,
+    "workspaceChecksPassed": 18,
+    "boardRecipeComparisonsPassed": 951,
+    "boardRecipeProtocolChecksPassed": 11,
+    "nativeIconHandlesCreated": true,
+    "receipts": [
+      {
+        "path": "scratch/native-project-ci-0e0db8a/run.json",
+        "bytes": 3194,
+        "sha256": "294a2cd7bda12467174ed147db065a5df797a66319adf8f7d7b1586ecceaeb6b"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/native-ui-protocol.log",
+        "bytes": 3665,
+        "sha256": "f57610bf5a81fdc284acf916998eb86a6e86b5551064b659abc955a0b32fe3c6"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/native-ui-windows.json",
+        "bytes": 1249,
+        "sha256": "1ea0875909ded26c7880270c27ce24449604e5d6651e09f5dbb56c2aa3aaae41"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/native-workspace-windows.json",
+        "bytes": 1182,
+        "sha256": "9373f107a18fdf3efe269d03e79584ada3f771af8f5db870bd48f2fa56a80d07"
+      },
+      {
+        "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/board-recipe-rust.json",
+        "bytes": 543,
+        "sha256": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65"
+      }
+    ],
+    "scope": "Windows Server 2022 AMD64 hosted fixtures; interactive Windows 10/11 desktop, picker interaction, child survival, device and release qualification remain open.",
+    "releaseQualified": false,
+    "receipt": "native-project-open.json",
+    "postCiFollowup": {
+      "sourceCommit": "6ef749a1f55841359fc380a572265c8323408a15",
+      "change": "Serial-port placeholder caption only: Select serial port.",
+      "strictMsvcAllTargetsClippyPassed": true,
+      "formatCheckPassed": true,
+      "runtimeCiRepeated": false,
+      "runtimeReceiptSource": "0e0db8ac2505db273c4750b2b44fca0502d31ed8"
+    }
   }
 }

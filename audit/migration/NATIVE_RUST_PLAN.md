@@ -54,7 +54,8 @@
 - [x] Prove real native Controls and split panes around separate offline Monaco/xterm fixture views on GTK Linux and Win32 Windows, including editor-only detach/reattach through native ownership.
 - [x] Implement the shared original three-theme palette (39 tokens / 117 exact color values) and Montserrat in native GTK/Win32 toolbar, Controls, source-tab and tool-tab chrome. GTK reuses original action SVGs; Win32 reproduces native brand paths, while its action/tool-tab icons remain unfinished. Hosted CI passes at `e334d7b`; actual Windows 10/11 input and responsive desktop qualification remain open.
 - [x] Add the GTK read-only Rust project-service adapter for an explicit `--project` folder and the native Project picker, opening each chosen folder in an independent process. Verify retained models/dirty state/selection/themes/undo and unchanged owned source bytes with 18 workspace smoke checks; no save or ownership activation is enabled.
-- [x] Share the read-only project adapter with Win32 at `297cae7`, with `--project`, `--theme`, `--workspace-smoke`, exact ordered acknowledgements and known-ID monotonic dirty updates. Three Windows source-state units and old 17 smoke pass; the new workspace fails before assertions at trusted-root path spelling. The local prefix fix awaits Windows rerun. Native Windows Project picker/HICON remain separate pending work.
+- [x] Share the read-only project adapter with Win32 at `297cae7`, with `--project`, `--theme`, `--workspace-smoke`, exact ordered acknowledgements and known-ID monotonic dirty updates. Its new workspace initially fails before assertions at trusted-root path spelling; corrected `0e0db8a` passes Windows 35 GUI. Actual chooser/input/icon/child-survival qualification remains open.
+- [x] Implement Windows native Project selection to an independent current-Rust-executable process with literal OS path/theme arguments, cancel/no-spawn and a 16-child cap; add original-ICO owned small/large HICONs through a bounded shared parser and aligned native-decoder storage. Source/re-review and Windows native units/35 GUI pass at `0e0db8a` in `39426407678`.
 - [ ] Complete the actual workspace, source tabs, saved fonts/static glass/assets, auxiliary screens and live service integration beyond the feasibility controls.
 - [ ] Verify resize/focus/tab order/IME/clipboard at native 100–200%, editor-only detach/reattach, stale response refusal and bounded stream backpressure on each host.
 - [ ] Preserve the Tauri prototype's reusable Rust service/contract proofs; retire only the superseded application web shell after equivalent native evidence exists.
@@ -114,9 +115,10 @@ only; those corrections are included in `297cae7` and are outside the older
 tested checkpoint. `297cae7` shares `workspace_project.rs` between GTK/Win32 for
 explicit read-only projects. Ordered acknowledgements and known-ID monotonic
 dirty updates preserve native ownership of source controls. Manual backend
-actions remain disabled; Windows Project picker/HICON work remains pending.
+backend actions remain disabled. Windows Project picker/HICON source is now in
+`0e0db8a`, with native unit/fixture results passing and actual desktop qualification open.
 
-Current Linux evidence is 14 shared native-unit checks, 35 GUI smoke checks,
+Current Linux evidence is 18 native-unit checks, 35 GUI smoke checks,
 and an additional real 40-tab GTK regression: before the fix the top-level
 window grew to 6412 pixels; after the fix it remains 960 pixels while retaining
 the 6412-pixel scrollable row and all 40 tabs. A 42-source compact 960×540 capture
@@ -141,7 +143,25 @@ and recipe checks pass, but the new workspace fails before assertions because
 canonical `\\?\D:` fixture spelling differs from the plain trusted app root.
 The shared fix recognizes original/canonical trusted-root spellings without
 changing the selected literal path; three local reader checks and GTK 35 pass.
-The full Windows 35-check path awaits native rerun.
+The full Windows 35-check path subsequently passes at `0e0db8a`.
+
+Current code is `6ef749a1f55841359fc380a572265c8323408a15`; its only change from
+CI-tested `0e0db8a` is “Select serial port” (strict MSVC/fmt checks). Combined
+Windows-only run `39426407678` passes at exact `0e0db8a` (one native job); four unchanged
+successful jobs retain their `297cae7` results. Native Project selection uses
+literal OS path/theme arguments to the current Rust executable on a worker,
+with cancel/no-spawn, a 16-child cap and existing parent buffers retained.
+Original ICO parsing has three pure tests; main/detached small/large HICONs own
+their handles. The review's DWORD-alignment P2 is fixed with aligned `Vec<u32>`
+storage and exact payload bytes/length; scoped re-review is clean in
+`scratch/native-ui/windows-picker-icon-review.md`. Cancel/Unicode UTF-16 args,
+HICON/alignment units pass: 16 library/seven Windows binary units, including
+real owned small/large HICONs and deliberately unaligned input, 17/17 detach,
+18/18 workspace and recipe 951 + 11 protocol. Both Unicode/space source files
+pass. Receipts are under `scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/`.
+Actual chooser interaction,
+child survival, Windows 10/11 input and PE Explorer icon/packaging remain open.
+No new Cargo dependency/lockfile or installer/runtime entry changed.
 
 `69d845a` adds pure exact Onehorse/MiniMain recipe policy and brings the default
 Rust suite to 126 tests (119 existing + seven policy tests). The differential

@@ -66,5 +66,17 @@
     "No application compile/upload worker or renderer bridge calls this policy yet",
     "Arduino Q filesystem/hook-selection policy remains a separate Rust task",
     "No application service retired and no hardware action qualified"
-  ]
+  ],
+  "windowsProjectFollowupCi": {
+    "sourceCommit": "0e0db8ac2505db273c4750b2b44fca0502d31ed8",
+    "runId": 39426407678,
+    "conclusion": "success",
+    "comparisonsPassed": 951,
+    "protocolBoundaryChecksPassed": 11,
+    "receipt": {
+      "path": "scratch/native-project-ci-0e0db8a/migration-prototype-windows-2022/audit/migration/logs/board-recipe-rust.json",
+      "bytes": 543,
+      "sha256": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65"
+    }
+  }
 }

@@ -23,8 +23,14 @@ remain embedded components. At `297cae7`, both native hosts read an explicit
 `--project FOLDER` through the shared Rust project service into retained editor
 models; source saves and live project ownership remain disabled. GTK uses the
 existing application icon for its main and detached windows, and a scrollable
-source row keeps many tabs within the compact window. Windows native Project
-picker and application-icon integration remain pending. The original 17-check
+source row keeps many tabs within the compact window. At `0e0db8a`, Windows
+source adds a native Project picker and original-ICO main/detached icons, with
+[Windows-only CI 39426407678](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39426407678)
+passing at that exact source: 16 library/seven Windows units, 17 detach + 18
+workspace GUI, including icons and Unicode/space source paths. Other jobs
+retain their prior source. Current `6ef749a` changes only the “Select serial
+port” caption, with strict MSVC/fmt checks. Actual picker/child/icon desktop
+behavior remains unqualified. The original 17-check
 editor-only detach fixture remains, alongside a new 18-check Linux workspace
 smoke for models, dirty state, selection, themes, undo and unchanged source bytes.
 At `e334d7b`, all five jobs pass in
@@ -34,8 +40,8 @@ including the new workspace smoke. The new shared-reader/recipe-policy
 checkpoint `297cae7` finishes four of five jobs in
 [CI 39421097096](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39421097096);
 both Ubuntu jobs pass, while the new Windows workspace fails before assertions
-at trusted-root path spelling. The local prefix fix awaits Windows rerun, so
-the new Windows workspace checks are not yet qualified. Rust also has pure
+at trusted-root path spelling. The prefix fix then passes focused Windows CI
+at `0e0db8a`; the failed historical receipt remains. Rust also has pure
 exact Onehorse/MiniMain recipe decisions, without installed-metadata reading
 or build integration. Real Windows 10/11 desktops, native input and full
 design parity still need qualification. Full application parity remains
