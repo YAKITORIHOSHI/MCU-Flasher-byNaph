@@ -3,6 +3,7 @@
 use mcu_native_ui_probe::workspace_design::{
     controls_layout, primary_layout, Theme, PRIMARY_ACTIONS, TOOL_TABS,
 };
+use mcu_native_ui_probe::workspace_icon::{icon_image, APPLICATION_ICON};
 use mcu_native_ui_probe::workspace_project::{
     read_project, LoadedProject, CHECK_HEADER, CHECK_SOURCE,
 };
@@ -18,18 +19,24 @@ use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
-    ffi::c_void,
+    ffi::{c_void, OsString},
     num::NonZeroIsize,
+    os::windows::ffi::OsStringExt,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     ptr::null_mut,
     rc::Rc,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows_sys::Win32::{
     Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::*,
     System::{
+        Com::{CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED},
         LibraryLoader::GetModuleHandleW,
         ProcessStatus::{EnumProcessModules, GetModuleFileNameExW},
         Threading::GetCurrentProcess,
@@ -41,6 +48,10 @@ use windows_sys::Win32::{
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         },
         Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture, SetCapture},
+        Shell::{
+            SHBrowseForFolderW, SHGetPathFromIDListEx, BIF_NEWDIALOGSTYLE, BIF_NONEWFOLDERBUTTON,
+            BIF_RETURNONLYFSDIRS, BROWSEINFOW, GPFIDL_DEFAULT,
+        },
         WindowsAndMessaging::*,
     },
 };
@@ -54,6 +65,7 @@ const COMPILE: usize = 102;
 const DETACH: usize = 103;
 const THEME: usize = 104;
 const ACTION: usize = 120;
+const PROJECT: usize = ACTION + 8;
 // Keep all 256 source IDs disjoint from tool/action IDs.
 const SOURCE_TAB: usize = 1000;
 const SOURCE_MORE: usize = 403;
@@ -74,6 +86,151 @@ fn wide(value: &str) -> Vec<u16> {
 }
 fn os_error() -> Box<dyn std::error::Error> {
     std::io::Error::last_os_error().into()
+}
+
+/// The owning UI thread balances both S_OK and S_FALSE initialization counts.
+struct PickerApartment;
+impl PickerApartment {
+    fn initialize() -> Result<Self, String> {
+        // SAFETY: No reserved pointer; the picker lives on this STA UI thread.
+        let result = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+        if result < 0 {
+            Err(format!(
+                "Folder picker COM initialization failed ({result:#x})."
+            ))
+        } else {
+            Ok(Self)
+        }
+    }
+}
+impl Drop for PickerApartment {
+    fn drop(&mut self) {
+        // SAFETY: This guard follows one successful initialization on this thread.
+        unsafe { CoUninitialize() }
+    }
+}
+
+fn pick_project(owner: HWND) -> Result<Option<PathBuf>, String> {
+    let _apartment = PickerApartment::initialize()?;
+    let title = wide("Open sketch project in a new MCU Flasher window");
+    let mut display = [0u16; 260];
+    let info = BROWSEINFOW {
+        hwndOwner: owner,
+        pszDisplayName: display.as_mut_ptr(),
+        lpszTitle: title.as_ptr(),
+        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_NONEWFOLDERBUTTON,
+        ..Default::default()
+    };
+    // SAFETY: Explicit UI action only. Owner, title, display and STA stay live
+    // throughout the modal native call. No callback or renderer path is used.
+    let selected = unsafe { SHBrowseForFolderW(&info) };
+    if selected.is_null() {
+        return Ok(None);
+    }
+    let mut path = vec![0u16; 32768];
+    // SAFETY: Shell returned an owned PIDL; the bounded output is writable.
+    // Release the PIDL on both extraction success and failure before COM ends.
+    let result = unsafe {
+        let result = SHGetPathFromIDListEx(
+            selected,
+            path.as_mut_ptr(),
+            path.len() as u32,
+            GPFIDL_DEFAULT,
+        );
+        CoTaskMemFree(selected.cast());
+        result
+    };
+    if result == 0 {
+        return Err("Selected folder has no supported filesystem path.".into());
+    }
+    let end = path
+        .iter()
+        .position(|unit| *unit == 0)
+        .filter(|end| *end > 0)
+        .ok_or("Selected folder path is empty or exceeds the native limit.")?;
+    Ok(Some(PathBuf::from(OsString::from_wide(&path[..end]))))
+}
+
+fn project_arguments(selected: Option<&Path>, theme: Theme) -> Option<[OsString; 4]> {
+    selected.map(|path| {
+        [
+            "--project".into(),
+            path.as_os_str().to_owned(),
+            "--theme".into(),
+            theme.key().into(),
+        ]
+    })
+}
+
+/// Win32 icon decoding requires DWORD-aligned input; ICO offsets need not align.
+fn aligned_icon_storage(image: &[u8]) -> Vec<u32> {
+    image
+        .chunks(4)
+        .map(|chunk| {
+            let mut word = [0u8; 4];
+            word[..chunk.len()].copy_from_slice(chunk);
+            u32::from_ne_bytes(word)
+        })
+        .collect()
+}
+
+struct ApplicationIcons {
+    large: HICON,
+    small: HICON,
+}
+impl ApplicationIcons {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut icons = Self {
+            large: null_mut(),
+            small: null_mut(),
+        };
+        for (target, size) in [(&mut icons.large, 32), (&mut icons.small, 16)] {
+            let image = icon_image(APPLICATION_ICON, size)?;
+            let storage = aligned_icon_storage(image);
+            // SAFETY: Validated bounded embedded ICO payload and exact byte
+            // length, copied into DWORD-aligned storage that remains alive
+            // throughout this synchronous decode. Only trailing padding lies
+            // beyond the byte count and is not passed as part of the payload;
+            // no LR_SHARED means each returned HICON is exclusively owned.
+            *target = unsafe {
+                CreateIconFromResourceEx(
+                    storage.as_ptr().cast(),
+                    image.len() as u32,
+                    1,
+                    0x00030000,
+                    size as i32,
+                    size as i32,
+                    0,
+                )
+            };
+            if target.is_null() {
+                return Err(os_error());
+            }
+        }
+        Ok(icons)
+    }
+    fn apply(&self, hwnd: HWND) {
+        // SAFETY: This owner retains both icons past every HWND and class using
+        // them. No previous per-window icons were installed by this application.
+        unsafe {
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, self.large as isize);
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, self.small as isize);
+        }
+    }
+}
+impl Drop for ApplicationIcons {
+    fn drop(&mut self) {
+        // SAFETY: Unshared handles are released after class/window destruction,
+        // or immediately on partial initialization before either uses them.
+        unsafe {
+            if !self.large.is_null() {
+                DestroyIcon(self.large);
+            }
+            if !self.small.is_null() {
+                DestroyIcon(self.small);
+            }
+        }
+    }
 }
 
 fn fit_window(hwnd: HWND) {
@@ -478,10 +635,11 @@ struct NativeWindows {
     font_dpi: u32,
     more_actions: HWND,
     options: HWND,
+    icons: ApplicationIcons,
 }
 
 impl NativeWindows {
-    fn new(smoke: bool) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(smoke: bool, workspace_smoke: bool) -> Result<Self, Box<dyn std::error::Error>> {
         // SAFETY: This function runs on the sole UI thread before WebView2
         // creation. All strings outlive their synchronous Win32 calls, every
         // child has a parent at creation, and the Events Box never moves.
@@ -489,11 +647,13 @@ impl NativeWindows {
             SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let instance = GetModuleHandleW(std::ptr::null());
             let class = wide(CLASS);
+            let icons = ApplicationIcons::new()?;
             let definition = WNDCLASSW {
                 lpfnWndProc: Some(window_proc),
                 hInstance: instance,
                 lpszClassName: class.as_ptr(),
                 hCursor: LoadCursorW(null_mut(), IDC_ARROW),
+                hIcon: icons.large,
                 style: CS_HREDRAW | CS_VREDRAW,
                 ..Default::default()
             };
@@ -558,6 +718,7 @@ impl NativeWindows {
                 font_dpi: 0,
                 more_actions: null_mut(),
                 options: null_mut(),
+                icons,
             };
             let font_bytes =
                 include_bytes!("../../../src/fonts/Montserrat/static/Montserrat-SemiBold.ttf");
@@ -577,6 +738,8 @@ impl NativeWindows {
             if windows.detached.is_null() {
                 return Err(os_error());
             }
+            windows.icons.apply(main);
+            windows.icons.apply(windows.detached);
             windows.brand = windows.child(
                 "BUTTON",
                 "MCU Flasher by Naph",
@@ -600,8 +763,12 @@ impl NativeWindows {
                     windows.compile = button;
                 }
                 // Only the original isolated smoke exposes its callback probe.
-                // Backend and picker actions remain gated in manual previews.
-                EnableWindow(button, (smoke && index == 0) as i32);
+                // Only Project has a real manual implementation. Fixtures must
+                // never enter the native chooser or launch independent projects.
+                EnableWindow(
+                    button,
+                    ((smoke && index == 0) || (!smoke && !workspace_smoke && index == 8)) as i32,
+                );
                 windows.actions.push(button);
             }
             windows.detach = windows.child(
@@ -1148,6 +1315,8 @@ struct App {
     project_path: Option<PathBuf>,
     project_worker: Option<(mpsc::Receiver<Result<LoadedProject, String>>, Instant)>,
     project_deadline: Option<Instant>,
+    project_launch: Option<mpsc::Receiver<Result<(), String>>>,
+    project_children: Arc<AtomicUsize>,
     workspace_smoke: bool,
     workspace_phase: u8,
     workspace_waiting: bool,
@@ -1247,6 +1416,94 @@ fn class_name(hwnd: HWND) -> String {
 }
 
 impl App {
+    fn open_project(&mut self) {
+        if self.smoke
+            || self.workspace_smoke
+            || self.project_launch.is_some()
+            || self.native.events.closing.get()
+        {
+            return;
+        }
+        if self.project_children.load(Ordering::Relaxed) >= 16 {
+            self.status("Close an independent project before opening another (16-window limit).");
+            return;
+        }
+        let selected = match pick_project(self.native.main) {
+            Ok(selected) => selected,
+            Err(error) => {
+                self.status(&error);
+                return;
+            }
+        };
+        let Some(arguments) =
+            project_arguments(selected.as_deref(), self.native.events.theme.get())
+        else {
+            return;
+        };
+        // Recheck after the modal picker pumps native close events.
+        if self.native.events.closing.get() {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let children = self.project_children.clone();
+        children.fetch_add(1, Ordering::Relaxed);
+        let worker = std::thread::Builder::new()
+            .name("native-project-window".into())
+            .spawn(move || {
+                // Spawn and wait stay off the GUI thread. Literal OsString arguments
+                // never pass through a shell. Closing the parent never kills this
+                // independent child; this detached worker only reaps its own child.
+                let launched = std::env::current_exe().and_then(|exe| {
+                    Command::new(exe)
+                        .args(arguments)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                });
+                match launched {
+                    Ok(mut child) => {
+                        let _ = sender.send(Ok(()));
+                        let _ = child.wait();
+                    }
+                    Err(error) => {
+                        let _ =
+                            sender.send(Err(format!("Project window could not start: {error}")));
+                    }
+                }
+                children.fetch_sub(1, Ordering::Relaxed);
+            });
+        if worker.is_err() {
+            self.project_children.fetch_sub(1, Ordering::Relaxed);
+            self.status("Project worker could not start.");
+        } else {
+            self.project_launch = Some(receiver);
+            self.status("Opening the selected project in an independent Rust window…");
+        }
+    }
+
+    fn poll_project_launch(&mut self) {
+        let Some(receiver) = &self.project_launch else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(result) => {
+                self.project_launch = None;
+                match result {
+                    Ok(()) => self.status(
+                        "Independent project window started. Current editor buffers are retained.",
+                    ),
+                    Err(error) => self.status(&error),
+                }
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.project_launch = None;
+                self.status("Project worker ended before reporting its launch result.");
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
     fn status(&self, message: &str) {
         // SAFETY: This owned child copies the string synchronously on the UI thread.
         unsafe {
@@ -1820,6 +2077,7 @@ impl App {
         let commands: Vec<_> = self.native.events.commands.borrow_mut().drain(..).collect();
         for command in commands {
             match command {
+                PROJECT => self.open_project(),
                 COMBO => self.evidence.borrow_mut().combo_events += 1,
                 COMPILE if self.smoke => {
                     self.evidence.borrow_mut().compile_events += 1;
@@ -1858,8 +2116,14 @@ impl App {
                     let entries: Vec<_> = PRIMARY_ACTIONS
                         .iter()
                         .enumerate()
-                        .filter(|(index, _)| (2..8).contains(index))
-                        .map(|(index, label)| (ACTION + index, *label, false))
+                        .filter(|(index, _)| (2..=8).contains(index))
+                        .map(|(index, label)| {
+                            (
+                                ACTION + index,
+                                *label,
+                                index == 8 && !self.smoke && !self.workspace_smoke,
+                            )
+                        })
                         .collect();
                     if let Some(id) = popup(self.native.main, self.native.more_actions, &entries) {
                         self.native.events.command(id);
@@ -2203,7 +2467,7 @@ fn run_window(
     workspace_smoke: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
-    let native = NativeWindows::new(smoke)?;
+    let native = NativeWindows::new(smoke, workspace_smoke)?;
     let evidence = Rc::new(RefCell::new(Evidence::default()));
     let mut editor_context = WebContext::new(Some(profile.join("editor")));
     let mut terminal_context = WebContext::new(Some(profile.join("terminal")));
@@ -2249,6 +2513,8 @@ fn run_window(
         project_path: project,
         project_worker: None,
         project_deadline: None,
+        project_launch: None,
+        project_children: Arc::new(AtomicUsize::new(0)),
         workspace_smoke,
         workspace_phase: 0,
         workspace_waiting: false,
@@ -2334,6 +2600,7 @@ fn run_window(
                 app.native.events.command(THEME);
             }
             app.poll_project()?;
+            app.poll_project_launch();
             if !smoke {
                 app.sync_sources()?;
             }
@@ -2453,7 +2720,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::env::remove_var("WEBVIEW2_USER_DATA_FOLDER");
     let result = (|| {
         if workspace_smoke {
-            let root = profile.join("project");
+            let root = profile.join("project café 日本語");
             std::fs::create_dir(&root)?;
             std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE)?;
             std::fs::write(root.join("Config.h"), CHECK_HEADER)?;
@@ -2485,6 +2752,55 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod source_checks {
     use super::*;
+    #[test]
+    fn native_icon_buffer_aligns_unaligned_original_payload_and_preserves_bytes() {
+        for size in [16, 32] {
+            let image = icon_image(APPLICATION_ICON, size).expect("original payload");
+            // Place the original bytes at a deliberately unaligned address,
+            // independently of the compiler's include_bytes placement.
+            let mut backing = vec![0u8; image.len() + 4];
+            let start = (4 - backing.as_ptr() as usize % 4) % 4 + 1;
+            backing[start..start + image.len()].copy_from_slice(image);
+            let unaligned = &backing[start..start + image.len()];
+            assert_eq!(unaligned.as_ptr() as usize % 4, 1);
+            let storage = aligned_icon_storage(unaligned);
+            assert_eq!(storage.as_ptr() as usize % 4, 0);
+            let bytes: Vec<u8> = storage.iter().flat_map(|word| word.to_ne_bytes()).collect();
+            assert_eq!(&bytes[..image.len()], image);
+            assert_eq!(bytes.len(), image.len().div_ceil(4) * 4);
+            assert!(bytes[image.len()..].iter().all(|byte| *byte == 0));
+        }
+    }
+    #[test]
+    fn cancelled_picker_has_no_launch_arguments() {
+        assert!(project_arguments(None, Theme::Glass).is_none());
+    }
+    #[test]
+    fn project_launch_preserves_literal_unicode_and_native_units() {
+        let path = PathBuf::from(r"C:\project café 日本語 & $stuff\");
+        let arguments = project_arguments(Some(&path), Theme::SolarizedDark).expect("selected");
+        assert_eq!(
+            arguments,
+            [
+                OsString::from("--project"),
+                path.into_os_string(),
+                OsString::from("--theme"),
+                OsString::from("solarized_dark")
+            ]
+        );
+        let native = PathBuf::from(OsString::from_wide(&[67, 58, 92, 0xd800, 120]));
+        assert_eq!(
+            project_arguments(Some(&native), Theme::Glass).unwrap()[1],
+            native.as_os_str()
+        );
+    }
+    #[test]
+    fn original_icon_creates_owned_native_small_and_large_handles() {
+        let icons = ApplicationIcons::new().expect("embedded original icon");
+        assert!(!icons.large.is_null());
+        assert!(!icons.small.is_null());
+        assert_ne!(icons.large, icons.small);
+    }
     fn changed(state: &RefCell<Evidence>, id: &str, revision: u64, dirty: bool) {
         receive(state, Island::Editor, &serde_json::json!({"kind":"document_changed", "document_id":id, "edit_revision":revision, "dirty":dirty}).to_string());
     }

@@ -16,16 +16,25 @@ pub const CHECK_SOURCE: &str = "\u{feff}void setup() {}\r\nvoid loop() {}\n";
 pub const CHECK_HEADER: &str = "#pragma once\n// café 日本語\n";
 
 pub fn read_project(selected: &Path) -> Result<LoadedProject, String> {
-    let application = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let application_spelling = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .ok_or("Application root unavailable")?;
+    // Normalize only our trusted application root. Windows canonical paths
+    // have a verbatim prefix, unlike Cargo's path and ordinary folder choices.
+    // Recognize both trusted spellings; ProjectService still validates the
+    // literal selection before resolving it, retaining alias/traversal refusal.
+    let application = application_spelling
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
     // Only read APIs are reachable from the native workspace. Source saves and
     // live-write/ownership activation remain outside this adapter.
-    let mut service = if selected.starts_with(application.join("audit/migration/scratch")) {
-        mcu_core::ProjectService::fixture(application, selected)
+    let mut service = if selected.starts_with(application.join("audit/migration/scratch"))
+        || selected.starts_with(application_spelling.join("audit/migration/scratch"))
+    {
+        mcu_core::ProjectService::fixture(&application, selected)
     } else {
-        mcu_core::ProjectService::new(application)
+        mcu_core::ProjectService::new(&application)
     }
     .map_err(|error| error.message)?;
     let workspace = service
@@ -96,6 +105,24 @@ mod reader_checks {
         assert_eq!(documents[0]["id"].as_str(), Some(entries[0].0.as_str()));
         assert_eq!(
             std::fs::read(root.join("Sketch.ino")).expect("original"),
+            CHECK_SOURCE.as_bytes()
+        );
+        std::fs::remove_dir_all(root).expect("owned fixture cleanup");
+    }
+    #[test]
+    fn canonical_owned_fixture_path_uses_the_same_read_only_service() {
+        let root = fixture();
+        std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE).expect("source");
+        // Native profiles start at checked_scratch_root's canonical checkout.
+        // On Windows this spelling has a verbatim prefix; Cargo's compile-time
+        // manifest path and ordinary user selections usually do not.
+        let selected = root.canonicalize().expect("owned canonical fixture");
+        let (entries, script) = read_project(&selected).expect("canonical native source reader");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1, "Sketch.ino");
+        assert!(script.contains("void setup()"));
+        assert_eq!(
+            std::fs::read(root.join("Sketch.ino")).expect("unchanged source"),
             CHECK_SOURCE.as_bytes()
         );
         std::fs::remove_dir_all(root).expect("owned fixture cleanup");

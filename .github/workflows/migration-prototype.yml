@@ -6,6 +6,11 @@ on:
   pull_request:
     paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', '.github/workflows/migration-prototype.yml']
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Run only the native Windows migration job
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only && '["windows-2022"]' || '["ubuntu-24.04","ubuntu-24.04-arm","windows-2022"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -200,6 +205,7 @@ jobs:
           if-no-files-found: warn
 
   editor-review:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     name: Windows editor review (Python ${{ matrix.python }})
     runs-on: windows-latest
     timeout-minutes: 12
