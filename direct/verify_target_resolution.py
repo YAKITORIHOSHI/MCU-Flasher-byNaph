@@ -564,9 +564,15 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
     with ExitStack() as stack:
         if sys.platform == "win32":
             from main.platforms import windows as windows_host
-            namespace = sandbox / "app"
+            # The real worker needs a short compiler cwd even when CI's NTFS
+            # volume has 8.3 names disabled. Keep that alias namespace in an
+            # independent, short owned temp/ child; canonical packages and
+            # workspaces remain in the caller's original sandbox.
+            namespace_fixture = Path(tempfile.mkdtemp(prefix="t-", dir=ROOT / "temp"))
+            from src.modules.windows_tool_paths import python_install_path
+            namespace = python_install_path(namespace_fixture) / "a"
             if len(str(namespace / "builds" / ("0" * 24)).encode("utf-16-le")) // 2 > 100:
-                raise RuntimeError("The Windows compile fixture needs a shorter temp/ path or NTFS short names.")
+                raise RuntimeError("The Windows compile fixture needs a shorter checkout temp/ path.")
             if os.path.lexists(namespace) and (windows_host._is_windows_reparse_point(namespace)
                                                or not namespace.is_dir()):
                 raise RuntimeError("The fixture compiler namespace is occupied by unrelated material.")
@@ -598,6 +604,11 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
                     if (windows_host._is_windows_reparse_point(alias)
                             and alias.resolve() == canonical):
                         os.rmdir(alias)  # Unlink this verified entry, never its workspace.
+                # Empty-only removal retains unexpected material and keeps the
+                # independent namespace alive with an unfinished build worker.
+                for directory in (namespace / "builds", namespace, namespace_fixture):
+                    if os.path.lexists(directory):
+                        os.rmdir(directory)
 
             stack.enter_context(patch.object(windows_host, "_mcuflasher_app_root", return_value=namespace))
             stack.enter_context(patch.object(windows_host, "_create_compiler_junction", new=create_fixture_junction))

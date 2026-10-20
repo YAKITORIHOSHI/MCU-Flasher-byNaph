@@ -35,11 +35,17 @@ class WindowsBuildPaths(unittest.TestCase):
         self.fixture.name = str(_io_path(self.root))
         self.workspace = self.root / "Cloud" / "BLE_Receiver-Final" / "board"
         self.workspace.mkdir(parents=True)
-        # Keep aliases in this fixture. NTFS short names let the actual GCC
-        # experiment stay under temp/ even when the checkout path is long.
+        # Keep canonical workspaces long, but put the independent alias
+        # namespace directly under owned temp/. Hosted NTFS volumes may disable
+        # 8.3 names; nesting the alias below audit/ can itself exceed the real
+        # production 100-UTF-16-unit compiler limit.
+        namespace_fixture = tempfile.TemporaryDirectory(prefix="w-", dir=ROOT / "temp")
+        self.addCleanup(namespace_fixture.cleanup)
         from src.modules.windows_tool_paths import python_install_path
-        self.short_root = python_install_path(self.root)
-        self.namespace = self.short_root / "app"
+        self.short_root = python_install_path(Path(namespace_fixture.name))
+        self.namespace = self.short_root / "a"
+        alias_units = len(str(self.namespace / "builds" / ("0" * 24)).encode("utf-16-le")) // 2
+        self.assertLessEqual(alias_units, 100, "Use a shorter checkout temp/ path for this native fixture")
         patcher = patch.object(windows, "_mcuflasher_app_root", return_value=self.namespace)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -98,8 +104,6 @@ class WindowsBuildPaths(unittest.TestCase):
         if self.compiler is None and not gcc.is_file():
             self.skipTest("Prepared ESP32 compiler is unavailable")
         self.assertTrue(gcc.is_file(), "Selected fixture compiler is unavailable")
-        if str(self.short_root).startswith("\\\\?\\"):
-            self.skipTest("Fixture volume has no short names; production drive-root alias is covered separately")
         relative = Path(".pio/build/mcu_env/libc62/NimBLE_Arduino-2.5.1/nimble/nimble/transport/esp_ipc_legacy/src/hci_esp_ipc_legacy.c.d")
         self.workspace = self.workspace / ("w" * 32)
         _io_path(self.workspace / relative.parent).mkdir(parents=True)
