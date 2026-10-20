@@ -30,6 +30,9 @@ Read NATIVE_RUST_PLAN.md, native-rust-ui.json and board-compile-campaign.json fi
 Final GUI uses native Rust widgets; retain Monaco/xterm as embedded islands.
 All application backend moves to Rust; private Python remains only firmware tools.
 Do not reinterpret the Tauri web shell as fulfilling this requirement.
+The [toolkit decision](../../docs/native-rust-widget-decision.md) provisionally
+retains GTK3/Win32 with Wry. Official alternatives and dependency classes are
+recorded; measured costs, native input and packaging remain qualification gates.
 
 Code 4b42146: Linux GTK/native owner/editor-only reparent fixture, board-ID fix,
 configured-index inventory/exact mapping and storage-bounded compile helpers.
@@ -49,8 +52,9 @@ Its new FIFO case makes four expected Linux-only skips on Windows. Five release
 source-selection checks pass: current Python release packaging omits the
 developer `desktop/` and `audit/` roots while keeping its strict shipped state
 guard. This does not install a release or rerun all 318 target compiles. Focused
-CI for this newer checkpoint remains pending; record its actual result before
-calling that CI complete. Thirteen campaign guard checks, 46 runtime checks and
+CI for this newer checkpoint passes all five jobs in run 39360040590; actual
+receipts confirm 16 recipe checks (four expected Windows skips) and 17 native
+widget checks on each host. Thirteen campaign guard checks, 46 runtime checks and
 20 responsive checks pass at their recorded source.
 
 The campaign is complete: 318/318 exact targets from all configured indexes
@@ -85,6 +89,17 @@ path 3, native Linux 17 and strict Linux/Windows-target Clippy pass. The default
 Rust services remain 119 tests, and the ledger stays 14 partial/53 pending with
 no Python service retired. Actual CI and artifact receipts are in ci-results.json
 and native-rust-ui.json; pending jobs are never promoted to successful evidence.
+
+## Verified current Python candidate
+
+The [candidate receipt](python-release-candidate.json) records the single ZIP from
+source `fa02376`: 18,142 files verified, including 17,496 private Windows runtime
+files and seven hydrated installer receipts. Archive SHA256 is
+`abe8e2ca894a4ff7e70a46deca18705c2a319d7fc61e7778a6d5d2f7ad3c2652`.
+The Python package intentionally omits developer `desktop/` and `audit/` trees;
+these remain in the repository. About 10.35 GiB remains free after packaging.
+The candidate has not been installed or published; desktop/device/installation
+qualification and the full Rust replacement remain open.
 
 ## Code stages completed in this continuation
 
@@ -181,8 +196,9 @@ Current continuation results retain their actual source:
 - `77e5ccb`: all five migration jobs pass in 39357769519, including 17 native
   smoke checks on Windows and both Linux architectures.
 - `f249c21`: all five focused migration jobs pass in 39359319887.
-- `8dbdb9d`: newer bounded-reader/release-selection focused CI remains pending.
-  Do not promote configured or pending jobs.
+- `8dbdb9d`: bounded-reader/release-selection focused CI passes all five jobs in
+  run 39360040590. Actual artifacts confirm 17 native widget checks per host and
+  16 recipe checks (four expected Linux-only skips on Windows).
 
 Earlier successful matrices remain historical evidence at their actual source:
 

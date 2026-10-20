@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-10-20T02:44:36.945006+00:00",
+  "status": "verified_python_candidate_not_published",
+  "sourceCommit": "fa02376e2ee107ccac6205dcc9b7a6b975d64ad2",
+  "applicationCodeCheckpoint": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+  "archive": {
+    "path": "audit/migration/scratch/board-campaign-20261019/MCU-Flasher-fa02376-Python-candidate.zip",
+    "bytes": 580339144,
+    "sha256": "abe8e2ca894a4ff7e70a46deca18705c2a319d7fc61e7778a6d5d2f7ad3c2652"
+  },
+  "manifest": {
+    "path": "audit/migration/scratch/board-campaign-20261019/release-candidate-fa02376/release-manifest.json",
+    "sha256": "af8026ebb605bfe1d5764d5ee54b6b8b4e22b9dd9ccaad8c9753d1f186a9e646"
+  },
+  "verified": {
+    "everyArchivedFileReadAndSha256Checked": true,
+    "files": 18142,
+    "hydratedInstallerReceipts": 7,
+    "windowsPrivateRuntimeFiles": 17496,
+    "windowsPrivateRuntimeBytes": 1265081823,
+    "runtimeInventoryAndBytesUnchangedAfterPackaging": true,
+    "ubuntuAmd64AndArm64ElfCpuAndExecutablePermissions": true,
+    "windowsLauncherMz": true,
+    "bootstrapDefault": {
+      "skip_updates": false
+    },
+    "productionFirmwareHookAndIconIncluded": true
+  },
+  "omittedDeveloperRoots": {
+    "audit": {
+      "committed_files": 52,
+      "committed_bytes": 4634037
+    },
+    "desktop": {
+      "committed_files": 107,
+      "committed_bytes": 852719
+    }
+  },
+  "workingInputPreservation": {
+    "continuationInputHashesUnchanged": 11,
+    "originalLauncherAndCSourceHashesUnchanged": 4,
+    "preExistingDirtyPathsPreserved": 9
+  },
+  "sourceSelectionChecks": 5,
+  "freeBytesAfter": 11108806656,
+  "readyForUnrestrictedDeployment": false,
+  "scope": "Current Python application source/runtime candidate. Desktop/Rust prototype and audit evidence remain in the repository, outside this archive. Not installed, uploaded or published.",
+  "qualificationPending": [
+    "Actual user desktop fresh installation/upgrade/rollback",
+    "Physical device upload/reset/USB workflows",
+    "Full native Rust GUI/backend parity; zero Python application services retired."
+  ]
+}

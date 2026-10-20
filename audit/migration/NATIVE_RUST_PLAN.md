@@ -49,7 +49,8 @@
 
 **Interfaces:** Native window supplies trusted workspace/window identity; editor/terminal supply only typed requests and consumed-byte acknowledgements. No fixture may activate live workspaces or devices.
 
-- [ ] Compare official toolkit support for actual native controls and child WebViews on all required hosts. Record dependency/bundle costs and Windows/Ubuntu/ARM64 constraints before selecting.
+- [x] Compare official toolkit/control/WebView support on required hosts and record the provisional GTK3/Win32 decision, alternatives and dependency classes in the [toolkit decision](../../docs/native-rust-widget-decision.md).
+- [ ] Measure clean-host prerequisite downloads, installed dependency closure, artifact/assets and process-tree RAM on each architecture before production toolkit/distribution qualification.
 - [x] Prove real native Controls and split panes around separate offline Monaco/xterm fixture views on GTK Linux and Win32 Windows, including editor-only detach/reattach through native ownership.
 - [ ] Complete the actual workspace, source tabs, saved fonts/static glass/assets, auxiliary screens and live service integration beyond the feasibility controls.
 - [ ] Verify resize/focus/tab order/IME/clipboard at native 100–200%, editor-only detach/reattach, stale response refusal and bounded stream backpressure on each host.
@@ -117,8 +118,9 @@ All 25 CI jobs pass at `7da4be0`. The SDK-specific `77e5ccb` correction passes
 all five migration jobs in run 39357769519: Windows Win32/WebView2 and Linux GTK
 AMD64/ARM64 each execute 17 native smoke checks. The follow-up protocol has seven
 checks on Linux and six on Windows. The `f249c21` focused migration run
-39359319887 also passes all five jobs. The subsequent `8dbdb9d` focused CI remains
-pending. These are native fixture proofs; full application/backend,
+39359319887 also passes all five jobs. The subsequent `8dbdb9d` focused CI passes
+all five jobs in run 39360040590, with 17 native widget checks per host and
+16 recipe checks (four expected Windows skips). These are native fixture proofs; full application/backend,
 Windows 10/11 input, Wayland and mixed-monitor qualification remain open.
 
 20 October 2026: both configured index sources produced 37 inventoried package

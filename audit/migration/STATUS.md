@@ -28,6 +28,17 @@ All 25 jobs for that icon checkpoint subsequently passed: compatibility
 `39261359647`, native ARM64 `39261359788`, migration `39261359735` and layout
 `39261359712`. These are exact-source hosted fixtures, not physical GNOME/USB proof.
 
+## Verified current Python candidate
+
+The [candidate receipt](python-release-candidate.json) records the single ZIP from
+source `fa02376`: 18,142 files verified, including 17,496 private Windows runtime
+files and seven hydrated installer receipts. Archive SHA256 is
+`abe8e2ca894a4ff7e70a46deca18705c2a319d7fc61e7778a6d5d2f7ad3c2652`.
+The Python package intentionally omits developer `desktop/` and `audit/` trees;
+these remain in the repository. About 10.35 GiB remains free after packaging.
+The candidate has not been installed or published; desktop/device/installation
+qualification and the full Rust replacement remain open.
+
 ## Current native Rust and compile continuation
 
 The final architecture is **native Rust widgets and Rust application backend**,
@@ -35,6 +46,8 @@ with offline Monaco/xterm embedded and Python only for approved firmware tools.
 The older Tauri web shell remains a reference fixture. See the
 [native Rust plan](NATIVE_RUST_PLAN.md), [native widget receipt](native-rust-ui.json)
 and [compile report](board-compile-campaign.json).
+The [toolkit decision](../../docs/native-rust-widget-decision.md) records the
+provisional GTK3/Win32 direction, official alternatives and dependency gates.
 
 `4b42146` adds real GTK controls around separate Monaco/xterm views. All five
 migration jobs pass; Linux AMD64/ARM64 each pass 17 native widget checks, six Rust
@@ -50,8 +63,8 @@ SDK proof correction `77e5ccb` also passes all five migration jobs in
 Windows Win32 and both Linux GTK hosts each execute 17 native smoke checks.
 The UNO Q hook checkpoint `f249c21` passes all five focused migration jobs in
 [run 39359319887](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39359319887).
-The subsequent metadata-reader/release-selection checkpoint `8dbdb9d` still
-awaits focused CI completion. Exact source/job receipts remain in ci-results.json;
+The subsequent metadata-reader/release-selection checkpoint `8dbdb9d` also passes
+all five jobs in [run 39360040590](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590). Exact source/job receipts remain in ci-results.json;
 pending work is not a pass. Native input, IME, clipboard, accessibility,
 mixed monitors and complete workspace layout
 remain gates on every required desktop.

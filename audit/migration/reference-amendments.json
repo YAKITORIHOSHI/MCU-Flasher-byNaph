@@ -440,7 +440,7 @@
     }
   ],
   "limitations": [
-    "Eleven legacy verifier amendments and six production source amendments require separate review; passing amended checks alone does not establish unchanged-reference equivalence.",
+    "Eleven legacy verifier amendments and eight production source amendments require separate review; passing amended checks alone does not establish unchanged-reference equivalence.",
     "The 133 resource rows include CI. Two CI resource hashes and the original editor HTML changed; this does not change the 22 original assets staged byte-identically to 25 prototype destinations. The added production PNG duplicates existing ICO artwork.",
     "No user sketches, live settings, credentials, deployed Firebase rules, protected caches/journals or hardware were read or changed for this amendment report."
   ],

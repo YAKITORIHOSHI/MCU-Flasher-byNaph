@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "recordedAtUtc": "2026-10-20T02:41:07.053280+00:00",
+  "recordedAtUtc": "2026-10-20T02:45:34.177242+00:00",
   "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e",
   "scope": "Linux GTK and Windows Win32/WebView2 native-widget feasibility fixtures; actual host receipts retain their tested source. Full application/backend/input/release remains unfinished.",
   "requirements": {
@@ -928,211 +928,45 @@
   },
   "currentCheckpointCi": [
     {
-      "matrix": "migration",
-      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
-      "runId": 39356653640,
-      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640",
+      "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+      "runId": 39360040590,
+      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590",
       "status": "completed",
       "conclusion": "success",
       "jobsPassed": 5,
       "jobsTotal": 5,
-      "snapshot": "scratch/board-campaign-20261019/ci-current-migration.json",
-      "snapshotSha256": "32368aa54909d09d3d187670db8a76f3a243ceafd68bc8c44085fc7f50481de3",
+      "snapshot": "scratch/board-campaign-20261019/ci-release-migration.json",
+      "snapshotSha256": "d50efda58f4ba4558a12e01a70dd5215668a86c8f260a0dcf1de0c3418ffab49",
       "jobs": [
         {
-          "name": "native-prototype (windows-2022)",
+          "name": "native-prototype (ubuntu-24.04-arm)",
           "status": "completed",
           "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875705"
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849158"
         },
         {
           "name": "native-prototype (ubuntu-24.04)",
           "status": "completed",
           "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875873"
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849363"
         },
         {
-          "name": "native-prototype (ubuntu-24.04-arm)",
+          "name": "native-prototype (windows-2022)",
           "status": "completed",
           "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875918"
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849422"
         },
         {
           "name": "Windows editor review (Python 3.11)",
           "status": "completed",
           "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875942"
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849436"
         },
         {
           "name": "Windows editor review (Python 3.14)",
           "status": "completed",
           "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875995"
-        }
-      ],
-      "releaseQualified": false
-    },
-    {
-      "matrix": "compatibility",
-      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
-      "runId": 39356653665,
-      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665",
-      "status": "completed",
-      "conclusion": "success",
-      "jobsPassed": 14,
-      "jobsTotal": 14,
-      "snapshot": "scratch/board-campaign-20261019/ci-current-compatibility.json",
-      "snapshotSha256": "fc443b9571ef8e8ebdee3e585a6d996ce1d9333ef8ae2adc5c4c735c00243f61",
-      "jobs": [
-        {
-          "name": "qt-binding-diagnostics (3.12, PySide6>=6.12,<7)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875703"
-        },
-        {
-          "name": "svg-ui-native (windows-latest, 3.14, PySide6>=6.12,<7)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875767"
-        },
-        {
-          "name": "runtime (ubuntu-26.04, 3.14)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875815"
-        },
-        {
-          "name": "ubuntu-first-run (ubuntu-24.04)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875832"
-        },
-        {
-          "name": "runtime (windows-latest, 3.14, true)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875834"
-        },
-        {
-          "name": "ubuntu-first-run (ubuntu-26.04)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875864"
-        },
-        {
-          "name": "developer-access-windows (3.11, PySide6>=6.7,<6.12)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875879"
-        },
-        {
-          "name": "runtime (windows-latest, 3.11)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875882"
-        },
-        {
-          "name": "qt-binding-diagnostics (3.11, PySide6>=6.7,<6.12)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875892"
-        },
-        {
-          "name": "svg-ui-native (ubuntu-24.04, 3.12, PySide6>=6.12,<7)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875917"
-        },
-        {
-          "name": "developer-access-windows (3.14, PySide6>=6.12,<7)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875924"
-        },
-        {
-          "name": "runtime (ubuntu-24.04, 3.11)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875931"
-        },
-        {
-          "name": "runtime (ubuntu-24.04, 3.12)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875975"
-        },
-        {
-          "name": "svg-ui-native (windows-latest, 3.11, PySide6>=6.7,<6.12)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875978"
-        }
-      ],
-      "releaseQualified": false
-    },
-    {
-      "matrix": "arm64",
-      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
-      "runId": 39356653643,
-      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653643",
-      "status": "completed",
-      "conclusion": "success",
-      "jobsPassed": 2,
-      "jobsTotal": 2,
-      "snapshot": "scratch/board-campaign-20261019/ci-current-arm64.json",
-      "snapshotSha256": "f7eeb7f31607888e9d25d1d25124bdb0e59b50b07835e5226d1d13cbecb2c394",
-      "jobs": [
-        {
-          "name": "arm64 (ubuntu-24.04-arm)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653643/job/118412875395"
-        },
-        {
-          "name": "arm64 (ubuntu-26.04-arm)",
-          "status": "completed",
-          "conclusion": "success",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653643/job/118412875616"
-        }
-      ],
-      "releaseQualified": false
-    },
-    {
-      "matrix": "layout",
-      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
-      "runId": 39356653635,
-      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635",
-      "status": "in_progress",
-      "conclusion": "",
-      "jobsPassed": 0,
-      "jobsTotal": 4,
-      "snapshot": "scratch/board-campaign-20261019/ci-current-layout.json",
-      "snapshotSha256": "0f6c905517cef641c35971bb496ac7c27a3863789dd4e59853307e3502732442",
-      "jobs": [
-        {
-          "name": "render (ubuntu-24.04, 3.12, PySide6>=6.12,<7)",
-          "status": "in_progress",
-          "conclusion": "",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875496"
-        },
-        {
-          "name": "render (windows-latest, 3.11, PySide6>=6.7,<6.12)",
-          "status": "in_progress",
-          "conclusion": "",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875624"
-        },
-        {
-          "name": "render (ubuntu-26.04, 3.14, PySide6>=6.12,<7)",
-          "status": "in_progress",
-          "conclusion": "",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875645"
-        },
-        {
-          "name": "render (windows-latest, 3.14, PySide6>=6.12,<7)",
-          "status": "in_progress",
-          "conclusion": "",
-          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875775"
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849491"
         }
       ],
       "releaseQualified": false
@@ -1822,41 +1656,41 @@
     "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
     "runId": 39360040590,
     "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590",
-    "status": "in_progress",
-    "conclusion": "",
-    "jobsPassed": 0,
+    "status": "completed",
+    "conclusion": "success",
+    "jobsPassed": 5,
     "jobsTotal": 5,
     "snapshot": "scratch/board-campaign-20261019/ci-release-migration.json",
-    "snapshotSha256": "0968b7f4af8269362b6ec309b4c300dd0f325026f4a2b8e00f2694fb7643fe2e",
+    "snapshotSha256": "d50efda58f4ba4558a12e01a70dd5215668a86c8f260a0dcf1de0c3418ffab49",
     "jobs": [
       {
         "name": "native-prototype (ubuntu-24.04-arm)",
-        "status": "in_progress",
-        "conclusion": "",
+        "status": "completed",
+        "conclusion": "success",
         "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849158"
       },
       {
         "name": "native-prototype (ubuntu-24.04)",
-        "status": "in_progress",
-        "conclusion": "",
+        "status": "completed",
+        "conclusion": "success",
         "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849363"
       },
       {
         "name": "native-prototype (windows-2022)",
-        "status": "in_progress",
-        "conclusion": "",
+        "status": "completed",
+        "conclusion": "success",
         "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849422"
       },
       {
         "name": "Windows editor review (Python 3.11)",
-        "status": "in_progress",
-        "conclusion": "",
+        "status": "completed",
+        "conclusion": "success",
         "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849436"
       },
       {
         "name": "Windows editor review (Python 3.14)",
-        "status": "in_progress",
-        "conclusion": "",
+        "status": "completed",
+        "conclusion": "success",
         "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39360040590/job/118423849491"
       }
     ],
@@ -2053,8 +1887,445 @@
   ],
   "finalNativeSourceBoundary": {
     "nativeAdapterSourceUnchangedFrom": "7da4be06234bc4badd00810b162717ad9f5cd258",
-    "actualNativeSmokeSource": "f249c210c86569de441fc6b060e2156737515e01",
+    "actualNativeSmokeSource": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
     "latestApplicationHelperSource": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
     "scope": "Native GUI fixtures retain per-host tested commits; production recipe/file-read and packaging changes are separate."
-  }
+  },
+  "finalCodeProofHostedReceipts": [
+    {
+      "host": "amd64",
+      "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+      "runId": 39360040590,
+      "archiveSha256": "1b7b6762586839dabedb624f10802f232b4817a6b5bda559ec193bc0a2728c39",
+      "logs": {
+        "native-ui-protocol.log": {
+          "sha256": "a2d7c11ebea6f3bc64faddd1409ad67ec71ae74b218bd97e15fb397c6cb039c9",
+          "bytes": 2702,
+          "resultTail": "s\ntest checks::accepts_only_the_native_bound_island ... ok\ntest checks::assets_have_a_finite_local_origin_allowlist ... ok\ntest checks::refuses_out_of_range_terminal_geometry ... ok\ntest checks::refuses_oversized_or_unknown_messages ... ok\ntest checks::renderer_cannot_claim_native_ownership ... ok\ntest checks::scratch_root_refuses_selected_directory_symlink_escape ... ok\ntest checks::windows_navigation_accepts_only_the_native_bound_fixed_page ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        },
+        "native-ui-cleanup.log": {
+          "sha256": "0133a6f13ac63cfd5c47404bed610bcb1a22d9fc746e30f11b0169ccf2a1389c",
+          "bytes": 770,
+          "resultTail": "es_not_leave_its_live_child) ... ok\ntest_exited_leader_still_escalates_its_stubborn_child (__main__.CleanupChecks.test_exited_leader_still_escalates_its_stubborn_child) ... ok\ntest_externally_reaped_leader_refuses_group_signaling (__main__.CleanupChecks.test_externally_reaped_leader_refuses_group_signaling) ... ok\ntest_wait_keeps_native_child_identity_until_cleanup (__main__.CleanupChecks.test_wait_keeps_native_child_identity_until_cleanup) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 5.242s\n\nOK\n"
+        },
+        "native-ui-paths.log": {
+          "sha256": "d7942eb39fbb698c1ddb1247d8787f900dc14b627e963ea54cf39b87019fa0f3",
+          "bytes": 469,
+          "resultTail": "test_atomic_replacement_does_not_write_through_hardlink (__main__.PathChecks.test_atomic_replacement_does_not_write_through_hardlink) ... ok\ntest_output_symlink_does_not_change_its_canary (__main__.PathChecks.test_output_symlink_does_not_change_its_canary) ... ok\ntest_symlinked_scratch_root_is_refused (__main__.PathChecks.test_symlinked_scratch_root_is_refused) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.040s\n\nOK\n"
+        },
+        "board-campaign-guards.log": {
+          "sha256": "ba55a0527dcc1cf6459101e8ae0a86c04e8f013331410f1fc309c2184c1f02ca",
+          "bytes": 2060,
+          "resultTail": "k\ntest_shared_variant_or_usb_and_cpu_do_not_certify_a_different_board (__main__.CampaignChecks.test_shared_variant_or_usb_and_cpu_do_not_certify_a_different_board) ... ok\ntest_successful_leader_cleans_its_redirected_descendant (__main__.CampaignChecks.test_successful_leader_cleans_its_redirected_descendant) ... ok\ntest_unqualified_native_hosts_refuse_before_launch (__main__.CampaignChecks.test_unqualified_native_hosts_refuse_before_launch) ... ok\n\n----------------------------------------------------------------------\nRan 13 tests in 3.101s\n\nOK\n"
+        },
+        "board-recipe-compat.log": {
+          "sha256": "43056920782c457b7de461ff3b441f985a3cc2992ac4e3e098fdfc9c1faff91f",
+          "bytes": 2567,
+          "resultTail": "_binds_hook_bytes_and_preserves_unchanged_write (__main__.UnoQChecks.test_unoq_actual_app_ini_binds_hook_bytes_and_preserves_unchanged_write) ... ok\ntest_unoq_is_refused_on_unsupported_hosts_and_unrelated_backend (__main__.UnoQChecks.test_unoq_is_refused_on_unsupported_hosts_and_unrelated_backend) ... ok\ntest_unoq_shared_options_bind_exact_recipe_and_hook_bytes (__main__.UnoQChecks.test_unoq_shared_options_bind_exact_recipe_and_hook_bytes) ... ok\n\n----------------------------------------------------------------------\nRan 16 tests in 0.508s\n\nOK\n"
+        }
+      },
+      "scope": "Actual hosted native fixture; user desktop/input/device/USB qualification remains open.",
+      "recipeChecks": {
+        "total": 16,
+        "passed": 16,
+        "expectedLinuxOnlySkips": 0
+      },
+      "nativeWidgetSmoke": {
+        "schemaVersion": 1,
+        "passed": true,
+        "mode": "isolated_native_widget_fixture",
+        "os": "linux",
+        "architecture": "x86_64",
+        "displayBackend": "GdkX11Display",
+        "webviewVersion": "2.52.6",
+        "widgetTypes": [
+          "GtkWindow",
+          "GtkComboBoxText",
+          "GtkButton",
+          "GtkLabel",
+          "GtkPaned"
+        ],
+        "checks": {
+          "dirty_model_retained": true,
+          "native_button_callback": true,
+          "native_combo_callback": true,
+          "native_gtk_controls": true,
+          "native_owner_retained": true,
+          "no_python_application_service": true,
+          "offline_cpp_chunk": true,
+          "offline_monaco": true,
+          "offline_monaco_worker": true,
+          "offline_xterm_unicode": true,
+          "same_editor_widget": true,
+          "selection_retained": true,
+          "separate_webviews": true,
+          "terminal_widget_retained": true,
+          "three_editor_only_reparents": true,
+          "typed_ipc_refuses_owner_forgery": true,
+          "undo_redo_retained": true
+        },
+        "error": null,
+        "limits": "Linux GTK3 adapter only; 45-second smoke; 16-KiB IPC; embedded fixed assets; no live source/settings/cloud/hardware or firmware compile; no Windows adapter or native IME/mixed-monitor qualification",
+        "controller": "Python developer verification only",
+        "elapsedSeconds": 2.881,
+        "displayMode": "current-native-display"
+      },
+      "receiptSha256": "ff65146bc72be377d14dfffd46bde2a42378f46e587ee760f017b4e2c7cfbd04"
+    },
+    {
+      "host": "arm64",
+      "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+      "runId": 39360040590,
+      "archiveSha256": "042323bdc259fc8afe067d51a96fd7589863ed1871e28a60ffa07a7f9210ef3c",
+      "logs": {
+        "native-ui-protocol.log": {
+          "sha256": "a753066f36fc6be8fa1ad81bf35cb46a11788282cb4f1ec7a87844fd7fce74de",
+          "bytes": 2702,
+          "resultTail": "s\ntest checks::refuses_out_of_range_terminal_geometry ... ok\ntest checks::accepts_only_the_native_bound_island ... ok\ntest checks::assets_have_a_finite_local_origin_allowlist ... ok\ntest checks::refuses_oversized_or_unknown_messages ... ok\ntest checks::renderer_cannot_claim_native_ownership ... ok\ntest checks::windows_navigation_accepts_only_the_native_bound_fixed_page ... ok\ntest checks::scratch_root_refuses_selected_directory_symlink_escape ... ok\n\ntest result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        },
+        "native-ui-cleanup.log": {
+          "sha256": "2d426838e748d736fcf8baa510e0189a49bba8d6d6d105fa5c91f2714aa21de7",
+          "bytes": 770,
+          "resultTail": "es_not_leave_its_live_child) ... ok\ntest_exited_leader_still_escalates_its_stubborn_child (__main__.CleanupChecks.test_exited_leader_still_escalates_its_stubborn_child) ... ok\ntest_externally_reaped_leader_refuses_group_signaling (__main__.CleanupChecks.test_externally_reaped_leader_refuses_group_signaling) ... ok\ntest_wait_keeps_native_child_identity_until_cleanup (__main__.CleanupChecks.test_wait_keeps_native_child_identity_until_cleanup) ... ok\n\n----------------------------------------------------------------------\nRan 5 tests in 5.213s\n\nOK\n"
+        },
+        "native-ui-paths.log": {
+          "sha256": "093ee0c973c72646ea3b6350da9b143fb0134496f9254c80d8b622bca4307597",
+          "bytes": 469,
+          "resultTail": "test_atomic_replacement_does_not_write_through_hardlink (__main__.PathChecks.test_atomic_replacement_does_not_write_through_hardlink) ... ok\ntest_output_symlink_does_not_change_its_canary (__main__.PathChecks.test_output_symlink_does_not_change_its_canary) ... ok\ntest_symlinked_scratch_root_is_refused (__main__.PathChecks.test_symlinked_scratch_root_is_refused) ... ok\n\n----------------------------------------------------------------------\nRan 3 tests in 0.005s\n\nOK\n"
+        },
+        "board-campaign-guards.log": {
+          "sha256": "f38b932d0493958137b8a0b694286c3bdddfda75aeef2318f2491786b4760fa8",
+          "bytes": 2060,
+          "resultTail": "k\ntest_shared_variant_or_usb_and_cpu_do_not_certify_a_different_board (__main__.CampaignChecks.test_shared_variant_or_usb_and_cpu_do_not_certify_a_different_board) ... ok\ntest_successful_leader_cleans_its_redirected_descendant (__main__.CampaignChecks.test_successful_leader_cleans_its_redirected_descendant) ... ok\ntest_unqualified_native_hosts_refuse_before_launch (__main__.CampaignChecks.test_unqualified_native_hosts_refuse_before_launch) ... ok\n\n----------------------------------------------------------------------\nRan 13 tests in 2.818s\n\nOK\n"
+        },
+        "board-recipe-compat.log": {
+          "sha256": "8c14ea94d10dda3d9cd1fa1b1401b118a4a6be36b96712e8bb2dc948f3b00e67",
+          "bytes": 2567,
+          "resultTail": "_binds_hook_bytes_and_preserves_unchanged_write (__main__.UnoQChecks.test_unoq_actual_app_ini_binds_hook_bytes_and_preserves_unchanged_write) ... ok\ntest_unoq_is_refused_on_unsupported_hosts_and_unrelated_backend (__main__.UnoQChecks.test_unoq_is_refused_on_unsupported_hosts_and_unrelated_backend) ... ok\ntest_unoq_shared_options_bind_exact_recipe_and_hook_bytes (__main__.UnoQChecks.test_unoq_shared_options_bind_exact_recipe_and_hook_bytes) ... ok\n\n----------------------------------------------------------------------\nRan 16 tests in 0.549s\n\nOK\n"
+        }
+      },
+      "scope": "Actual hosted native fixture; user desktop/input/device/USB qualification remains open.",
+      "recipeChecks": {
+        "total": 16,
+        "passed": 16,
+        "expectedLinuxOnlySkips": 0
+      },
+      "nativeWidgetSmoke": {
+        "schemaVersion": 1,
+        "passed": true,
+        "mode": "isolated_native_widget_fixture",
+        "os": "linux",
+        "architecture": "aarch64",
+        "displayBackend": "GdkX11Display",
+        "webviewVersion": "2.52.6",
+        "widgetTypes": [
+          "GtkWindow",
+          "GtkComboBoxText",
+          "GtkButton",
+          "GtkLabel",
+          "GtkPaned"
+        ],
+        "checks": {
+          "dirty_model_retained": true,
+          "native_button_callback": true,
+          "native_combo_callback": true,
+          "native_gtk_controls": true,
+          "native_owner_retained": true,
+          "no_python_application_service": true,
+          "offline_cpp_chunk": true,
+          "offline_monaco": true,
+          "offline_monaco_worker": true,
+          "offline_xterm_unicode": true,
+          "same_editor_widget": true,
+          "selection_retained": true,
+          "separate_webviews": true,
+          "terminal_widget_retained": true,
+          "three_editor_only_reparents": true,
+          "typed_ipc_refuses_owner_forgery": true,
+          "undo_redo_retained": true
+        },
+        "error": null,
+        "limits": "Linux GTK3 adapter only; 45-second smoke; 16-KiB IPC; embedded fixed assets; no live source/settings/cloud/hardware or firmware compile; no Windows adapter or native IME/mixed-monitor qualification",
+        "controller": "Python developer verification only",
+        "elapsedSeconds": 3.567,
+        "displayMode": "current-native-display"
+      },
+      "receiptSha256": "58c7a1b4549565b476db0a11334612e378f4dd98debb04d7a5e982d64567f1c6"
+    },
+    {
+      "host": "windows",
+      "sourceCommit": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
+      "runId": 39360040590,
+      "archiveSha256": "0732f0a9b9ae1e6191d14f36355753c6bd10b2204a1eed7c2e8a4cb181194930",
+      "logs": {
+        "native-ui-protocol.log": {
+          "sha256": "4102fd44ad6699c6473d2369174cd1b12746963a4396399952220df1c4cbe11d",
+          "bytes": 1472,
+          "resultTail": "target\\debug\\deps\\mcu_native_ui_probe-8c81fe5eebf00ffd.exe)\n\nrunning 6 tests\ntest checks::assets_have_a_finite_local_origin_allowlist ... ok\ntest checks::refuses_out_of_range_terminal_geometry ... ok\ntest checks::accepts_only_the_native_bound_island ... ok\ntest checks::refuses_oversized_or_unknown_messages ... ok\ntest checks::renderer_cannot_claim_native_ownership ... ok\ntest checks::windows_navigation_accepts_only_the_native_bound_fixed_page ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n"
+        },
+        "board-recipe-compat.log": {
+          "sha256": "6c2ee7c16d2aa4734c52a927a6a314745fe7735d2d17dac6cf0809f406a3ccb8",
+          "bytes": 2798,
+          "resultTail": "reserves_unchanged_write) ... skipped 'The UNO Q toolchain is native Linux only'\r\ntest_unoq_is_refused_on_unsupported_hosts_and_unrelated_backend (__main__.UnoQChecks.test_unoq_is_refused_on_unsupported_hosts_and_unrelated_backend) ... ok\r\ntest_unoq_shared_options_bind_exact_recipe_and_hook_bytes (__main__.UnoQChecks.test_unoq_shared_options_bind_exact_recipe_and_hook_bytes) ... skipped 'The UNO Q toolchain is native Linux only'\r\n\r\n----------------------------------------------------------------------\r\nRan 16 tests in 0.333s\r\n\r\nOK (skipped=4)\r\n"
+        }
+      },
+      "scope": "Actual hosted native fixture; user desktop/input/device/USB qualification remains open.",
+      "recipeChecks": {
+        "total": 16,
+        "passed": 12,
+        "expectedLinuxOnlySkips": 4
+      },
+      "nativeWidgetSmoke": {
+        "schemaVersion": 1,
+        "passed": true,
+        "mode": "isolated_native_widget_fixture",
+        "os": "windows",
+        "architecture": "x86_64",
+        "displayBackend": "Win32",
+        "webviewVersion": "131.0.2903.86",
+        "widgetTypes": [
+          "MCUNativeRustFixture",
+          "ComboBox",
+          "Button",
+          "Static",
+          "MCUNativeRustFixture"
+        ],
+        "checks": {
+          "dirty_model_retained": true,
+          "native_button_callback": true,
+          "native_combo_callback": true,
+          "native_owner_retained": true,
+          "native_win32_controls": true,
+          "no_python_application_service": true,
+          "offline_cpp_chunk": true,
+          "offline_monaco": true,
+          "offline_monaco_worker": true,
+          "offline_xterm_unicode": true,
+          "same_editor_widget": true,
+          "selection_retained": true,
+          "separate_webviews": true,
+          "terminal_widget_retained": true,
+          "three_editor_only_reparents": true,
+          "typed_ipc_refuses_owner_forgery": true,
+          "undo_redo_retained": true
+        },
+        "error": null,
+        "limits": "Win32/WebView2 feasibility fixture; 45-second message-loop deadline; 16-KiB typed IPC; no live app services or hardware. Native Windows execution, IME/clipboard/focus, accessibility and mixed-monitor DPI remain separate qualification gates."
+      },
+      "receiptSha256": "1ea0875909ded26c7880270c27ce24449604e5d6651e09f5dbb56c2aa3aaae41"
+    }
+  ],
+  "lastCompleteFullMatrixCi": [
+    {
+      "matrix": "migration",
+      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
+      "runId": 39356653640,
+      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640",
+      "status": "completed",
+      "conclusion": "success",
+      "jobsPassed": 5,
+      "jobsTotal": 5,
+      "snapshot": "scratch/board-campaign-20261019/ci-current-migration.json",
+      "snapshotSha256": "32368aa54909d09d3d187670db8a76f3a243ceafd68bc8c44085fc7f50481de3",
+      "jobs": [
+        {
+          "name": "native-prototype (windows-2022)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875705"
+        },
+        {
+          "name": "native-prototype (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875873"
+        },
+        {
+          "name": "native-prototype (ubuntu-24.04-arm)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875918"
+        },
+        {
+          "name": "Windows editor review (Python 3.11)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875942"
+        },
+        {
+          "name": "Windows editor review (Python 3.14)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653640/job/118412875995"
+        }
+      ],
+      "releaseQualified": false
+    },
+    {
+      "matrix": "compatibility",
+      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
+      "runId": 39356653665,
+      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665",
+      "status": "completed",
+      "conclusion": "success",
+      "jobsPassed": 14,
+      "jobsTotal": 14,
+      "snapshot": "scratch/board-campaign-20261019/ci-current-compatibility.json",
+      "snapshotSha256": "fc443b9571ef8e8ebdee3e585a6d996ce1d9333ef8ae2adc5c4c735c00243f61",
+      "jobs": [
+        {
+          "name": "qt-binding-diagnostics (3.12, PySide6>=6.12,<7)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875703"
+        },
+        {
+          "name": "svg-ui-native (windows-latest, 3.14, PySide6>=6.12,<7)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875767"
+        },
+        {
+          "name": "runtime (ubuntu-26.04, 3.14)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875815"
+        },
+        {
+          "name": "ubuntu-first-run (ubuntu-24.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875832"
+        },
+        {
+          "name": "runtime (windows-latest, 3.14, true)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875834"
+        },
+        {
+          "name": "ubuntu-first-run (ubuntu-26.04)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875864"
+        },
+        {
+          "name": "developer-access-windows (3.11, PySide6>=6.7,<6.12)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875879"
+        },
+        {
+          "name": "runtime (windows-latest, 3.11)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875882"
+        },
+        {
+          "name": "qt-binding-diagnostics (3.11, PySide6>=6.7,<6.12)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875892"
+        },
+        {
+          "name": "svg-ui-native (ubuntu-24.04, 3.12, PySide6>=6.12,<7)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875917"
+        },
+        {
+          "name": "developer-access-windows (3.14, PySide6>=6.12,<7)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875924"
+        },
+        {
+          "name": "runtime (ubuntu-24.04, 3.11)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875931"
+        },
+        {
+          "name": "runtime (ubuntu-24.04, 3.12)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875975"
+        },
+        {
+          "name": "svg-ui-native (windows-latest, 3.11, PySide6>=6.7,<6.12)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653665/job/118412875978"
+        }
+      ],
+      "releaseQualified": false
+    },
+    {
+      "matrix": "arm64",
+      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
+      "runId": 39356653643,
+      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653643",
+      "status": "completed",
+      "conclusion": "success",
+      "jobsPassed": 2,
+      "jobsTotal": 2,
+      "snapshot": "scratch/board-campaign-20261019/ci-current-arm64.json",
+      "snapshotSha256": "f7eeb7f31607888e9d25d1d25124bdb0e59b50b07835e5226d1d13cbecb2c394",
+      "jobs": [
+        {
+          "name": "arm64 (ubuntu-24.04-arm)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653643/job/118412875395"
+        },
+        {
+          "name": "arm64 (ubuntu-26.04-arm)",
+          "status": "completed",
+          "conclusion": "success",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653643/job/118412875616"
+        }
+      ],
+      "releaseQualified": false
+    },
+    {
+      "matrix": "layout",
+      "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
+      "runId": 39356653635,
+      "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635",
+      "status": "in_progress",
+      "conclusion": "",
+      "jobsPassed": 0,
+      "jobsTotal": 4,
+      "snapshot": "scratch/board-campaign-20261019/ci-current-layout.json",
+      "snapshotSha256": "0f6c905517cef641c35971bb496ac7c27a3863789dd4e59853307e3502732442",
+      "jobs": [
+        {
+          "name": "render (ubuntu-24.04, 3.12, PySide6>=6.12,<7)",
+          "status": "in_progress",
+          "conclusion": "",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875496"
+        },
+        {
+          "name": "render (windows-latest, 3.11, PySide6>=6.7,<6.12)",
+          "status": "in_progress",
+          "conclusion": "",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875624"
+        },
+        {
+          "name": "render (ubuntu-26.04, 3.14, PySide6>=6.12,<7)",
+          "status": "in_progress",
+          "conclusion": "",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875645"
+        },
+        {
+          "name": "render (windows-latest, 3.14, PySide6>=6.12,<7)",
+          "status": "in_progress",
+          "conclusion": "",
+          "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39356653635/job/118412875775"
+        }
+      ],
+      "releaseQualified": false
+    }
+  ],
+  "ciSourceBoundary": "The latest 8dbdb9d source has five actual focused migration jobs. The last complete 25-job matrix remains at 7da4be0, with each original source/job receipt retained. Python package selection and full ZIP validation are local artifact checks."
 }

@@ -36742,6 +36742,6 @@
     "actualFinalUnoQCompileCheckpoint": "f249c210c86569de441fc6b060e2156737515e01",
     "finalHelperCheckpoint": "8dbdb9def32916bb4179f0c68735202ffc82cdc9",
     "perAttemptIdentity": "Every selected compile retains its recorded helper/harness/hook digests and exact installed platform/board hashes.",
-    "finalReaderAmendment": "The final helper adds bounded regular-file descriptor reads; exact recipe pins and output choices are unchanged.16 recipe checks and13 campaign guards pass;318 compiles were not all rerun for this file-read amendment."
+    "finalReaderAmendment": "The final helper adds bounded regular-file descriptor reads; exact recipe pins and output choices are unchanged. 16 recipe checks and 13 campaign guards pass; 318 compiles were not all rerun for this file-read amendment."
   }
 }
