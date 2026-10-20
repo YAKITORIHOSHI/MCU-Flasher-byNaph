@@ -98,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p audit/migration/logs audit/migration/scratch
-          cargo test --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe --lib 2>&1 | tee audit/migration/logs/native-ui-protocol.log
+          cargo test --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe 2>&1 | tee audit/migration/logs/native-ui-protocol.log
           python -B -W error direct/verify_platformio_board_compat.py 2>&1 | tee audit/migration/logs/board-recipe-compat.log
       - name: Native Ubuntu widget controller lifecycle and path checks
         if: runner.os == 'Linux'
@@ -123,6 +123,7 @@ jobs:
           set -euo pipefail
           cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe
           xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display
+          xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display --workspace
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
         timeout-minutes: 2
@@ -171,6 +172,8 @@ jobs:
             audit/migration/logs/native-ui-windows-output.log
             audit/migration/scratch/native-ui/latest-smoke.json
             audit/migration/scratch/native-ui/latest-output.log
+            audit/migration/scratch/native-workspace/latest-smoke.json
+            audit/migration/scratch/native-workspace/latest-output.log
             desktop/ui/public/vendor/manifest.json
           if-no-files-found: warn
 

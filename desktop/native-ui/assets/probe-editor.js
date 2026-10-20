@@ -42,6 +42,104 @@
     const monaco = window.monaco;
     const editor = window.editorInstance;
     const fixture = window.__nativeFixture;
+    if (!fixture.smoke) {
+      const documents = new Map();
+      let current;
+      let currentTheme = 'default';
+      const select = id => {
+        const document = documents.get(id);
+        if (!document) return false;
+        if (current) current.view = editor.saveViewState();
+        current = document;
+        editor.setModel(document.model);
+        if (document.view) editor.restoreViewState(document.view);
+        editor.layout();
+        return true;
+      };
+      window.__mcuOpenDocuments = entries => {
+        if (!Array.isArray(entries) || entries.length > 256) throw new Error('Source tab limit exceeded.');
+        const ids = new Set();
+        let total = 0;
+        for (const entry of entries) {
+          if (!entry || typeof entry.id !== 'string' || !entry.id || entry.id.length > 256 || ids.has(entry.id)
+              || typeof entry.name !== 'string' || typeof entry.content !== 'string'
+              || entry.content.length > 8 * 1024 * 1024) throw new Error('Invalid native source snapshot.');
+          ids.add(entry.id);
+          total += entry.content.length;
+        }
+        if (total > 32 * 1024 * 1024) throw new Error('Source workspace exceeds its byte budget.');
+        // A native Project action opens another workspace. Never discard an
+        // existing dirty document in response to an older source-load result.
+        if ([...documents.values()].some(item => item.model.getValue(undefined, true) !== item.baseline)) {
+          fail('The project load was cancelled. Your unsaved edits are still open.');
+          return false;
+        }
+        editor.setModel(null);
+        current = undefined;
+        for (const item of documents.values()) { item.listener.dispose(); item.model.dispose(); }
+        documents.clear();
+        for (const entry of entries) {
+          const model = monaco.editor.createModel(entry.content, 'cpp', monaco.Uri.parse(`inmemory://native-source/${encodeURIComponent(entry.id)}`));
+          const item = { model, original: entry.content, baseline: model.getValue(undefined, true), view: undefined, revision: 0 };
+          item.listener = model.onDidChangeContent(() => {
+            item.revision += 1;
+            send({ kind: 'document_changed', document_id: entry.id,
+              edit_revision: item.revision, dirty: model.getValue(undefined, true) !== item.baseline });
+          });
+          documents.set(entry.id, item);
+        }
+        if (entries.length) select(entries[0].id);
+        send({ kind: 'documents_opened', documents: entries.map(entry => entry.id) });
+        return true;
+      };
+      window.__mcuSelectDocument = select;
+      window.__mcuApplyTheme = (mode, palette) => {
+        currentTheme = mode;
+        monaco.editor.defineTheme('mcu-native-workspace', {
+          base: mode === 'light' ? 'vs' : 'vs-dark', inherit: true, rules: [],
+          colors: { 'editor.background': palette.background, 'editor.foreground': palette.foreground,
+            'editorLineNumber.foreground': mode === 'light' ? '#57606a' : '#adc0d3',
+            'editorCursor.foreground': palette.accent, 'editor.selectionBackground': palette.selection }
+        });
+        monaco.editor.setTheme('mcu-native-workspace');
+        document.body.style.background = palette.background;
+      };
+      let proof;
+      window.__mcuWorkspaceSnapshot = async phase => {
+        const entries = [...documents.entries()];
+        if (phase === 0) {
+          const [id, first] = entries.find(([, item]) => item.original.startsWith('\ufeff')) ?? entries[0];
+          select(id);
+          editor.pushUndoStop();
+          editor.executeEdits('native-workspace-proof', [{ range: first.model.getFullModelRange(), text: first.model.getValue() + '// retained edit café 日本語\n' }]);
+          editor.pushUndoStop();
+          editor.setSelection(new monaco.Selection(2, 1, 2, 3));
+          proof = { ids: entries.map(([key, item]) => [key, item.model.id]), first: id,
+            changed: first.model.getValue(), history: false };
+        }
+        if (entries.length > 1) select(entries.find(([id]) => id !== proof.first)[0]);
+        select(proof.first);
+        if (phase === 3) {
+          await current.model.undo();
+          const restored = current.model.getValue(undefined, true) === current.baseline && current.model.canRedo();
+          await current.model.redo();
+          proof.history = restored && current.model.getValue() === proof.changed;
+          editor.setSelection(new monaco.Selection(2, 1, 2, 3));
+        }
+        const selection = editor.getSelection();
+        send({ kind: 'workspace_snapshot', phase, documents: entries.length,
+          same_models: proof.ids.every(([id, model]) => documents.get(id)?.model.id === model),
+          dirty_retained: current.model.getValue() === proof.changed && current.model.getValue(undefined, true) !== current.baseline,
+          history_retained: proof.history,
+          selection_retained: selection.startLineNumber === 2 && selection.startColumn === 1 && selection.endColumn === 3,
+          theme: currentTheme, background: document.body.style.backgroundColor });
+      };
+      editor.updateOptions({ automaticLayout: false, minimap: { enabled: false }, fontSize: 14 });
+      new ResizeObserver(() => editor.layout()).observe(document.getElementById('monaco-anchor'));
+      window.__mcuOpenDocuments([{ id: 'untitled', name: 'Untitled.ino', content: fixture.source }]);
+      send({ kind: 'workspace_ready' });
+      return;
+    }
     const model = monaco.editor.createModel(fixture.source, 'cpp', monaco.Uri.parse('inmemory://native-fixture/Fixture.ino'));
     editor.setModel(model);
     editor.updateOptions({ automaticLayout: false, minimap: { enabled: false }, fontSize: 14 });

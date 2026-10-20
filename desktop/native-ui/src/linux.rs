@@ -1,4 +1,6 @@
+use crate::linux_workspace::WorkspaceShell;
 use gtk::{glib, prelude::*};
+use mcu_native_ui_probe::workspace_design::Theme;
 use mcu_native_ui_probe::{
     asset_path, checked_scratch_root, parse_message, Island, RendererMessage, CHANGED_SOURCE,
     SOURCE,
@@ -15,6 +17,7 @@ use std::{
 use wry::{
     http::Response, WebContext, WebView, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix,
 };
+type WorkspaceEvents = Rc<dyn Fn(&RendererMessage)>;
 
 const DEADLINE: Duration = Duration::from_secs(45);
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
@@ -28,6 +31,8 @@ struct ProbeState {
     combo_events: u32,
     compile_events: u32,
     checks: BTreeMap<String, bool>,
+    workspace_ready: bool,
+    workspace_events: Option<WorkspaceEvents>,
 }
 
 struct EditorEvidence {
@@ -107,6 +112,7 @@ fn create_view(
     container: &gtk::Box,
     island: Island,
     state: Rc<RefCell<ProbeState>>,
+    smoke: bool,
 ) -> Result<WebView, Box<dyn std::error::Error>> {
     let page = match island {
         Island::Editor => "editor.html",
@@ -116,7 +122,7 @@ fn create_view(
     let allowed_navigation = url.clone();
     let initialization = format!(
         "window.__nativeFixture = {};",
-        serde_json::json!({"source": SOURCE, "changed": CHANGED_SOURCE})
+        serde_json::json!({"source": SOURCE, "changed": CHANGED_SOURCE, "smoke": smoke})
     );
     Ok(WebViewBuilder::new_with_web_context(context)
         .with_id(match island {
@@ -156,11 +162,42 @@ fn create_view(
 }
 
 fn receive(state: &RefCell<ProbeState>, island: Island, body: &str) {
+    if let Ok(
+        message @ (RendererMessage::Error { .. } | RendererMessage::TerminalSnapshot { .. }),
+    ) = parse_message(island, body)
+    {
+        let handler = state.borrow().workspace_events.clone();
+        if let Some(handler) = handler {
+            handler(&message);
+        }
+    }
+    if let Ok(
+        message @ (RendererMessage::WorkspaceReady {}
+        | RendererMessage::DocumentChanged { .. }
+        | RendererMessage::DocumentsOpened { .. }
+        | RendererMessage::WorkspaceSnapshot { .. }),
+    ) = parse_message(island, body)
+    {
+        let handler = state.borrow().workspace_events.clone();
+        if matches!(message, RendererMessage::WorkspaceReady {}) {
+            state.borrow_mut().workspace_ready = true;
+        }
+        if let Some(handler) = handler {
+            handler(&message);
+        }
+        return;
+    }
     let mut state = state.borrow_mut();
     if state.error.is_some() {
         return;
     }
     match parse_message(island, body) {
+        Ok(
+            RendererMessage::WorkspaceReady {}
+            | RendererMessage::DocumentChanged { .. }
+            | RendererMessage::DocumentsOpened { .. }
+            | RendererMessage::WorkspaceSnapshot { .. },
+        ) => {}
         Err(error) => state.error = Some(error),
         Ok(RendererMessage::Error { message }) => {
             state.error = Some(format!("{island:?}: {message}"))
@@ -233,12 +270,45 @@ fn fixture_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let smoke = match args.as_slice() {
-        [] => false,
-        [flag] if flag == "--smoke" => true,
-        _ => return Err("Usage: mcu-native-ui-probe [--smoke]".into()),
-    };
+    let mut smoke = false;
+    let mut workspace_smoke = false;
+    let mut theme = Theme::Glass;
+    let mut project = None;
+    let mut args = args.iter();
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--smoke" => smoke = true,
+            "--workspace-smoke" => workspace_smoke = true,
+            "--theme" => theme = Theme::parse(args.next().ok_or("--theme requires a value")?),
+            "--project" => {
+                project = Some(PathBuf::from(
+                    args.next().ok_or("--project requires a folder")?,
+                ))
+            }
+            _ => {
+                return Err(
+                    "Usage: mcu-native-ui-probe [--smoke] [--theme NAME] [--project FOLDER]".into(),
+                )
+            }
+        }
+    }
+    if smoke && project.is_some() {
+        return Err("The smoke does not read a user project".into());
+    }
     let profile = fixture_directory()?;
+    if workspace_smoke {
+        if smoke || project.is_some() {
+            return Err("Workspace verification owns its source fixture".into());
+        }
+        let root = profile.join("project");
+        std::fs::create_dir(&root)?;
+        std::fs::write(
+            root.join("Sketch.ino"),
+            crate::linux_workspace::CHECK_SOURCE,
+        )?;
+        std::fs::write(root.join("Config.h"), crate::linux_workspace::CHECK_HEADER)?;
+        project = Some(root);
+    }
     // Process-local GTK/WebKit caches belong to this owned fixture too.
     // No user HOME or shell profile is changed.
     for (name, child) in [
@@ -251,7 +321,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::env::set_var(name, directory);
     }
     std::env::set_var("GIO_USE_VFS", "local");
-    let result = run_window(smoke, &profile);
+    let fonts = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../src/fonts/Montserrat/static")
+        .canonicalize()?;
+    let escaped = fonts
+        .to_string_lossy()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let fontconfig = profile.join("fonts.conf");
+    std::fs::write(&fontconfig, format!("<?xml version=\"1.0\"?><!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\"><fontconfig><include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include><dir>{escaped}</dir></fontconfig>"))?;
+    std::env::set_var("FONTCONFIG_FILE", &fontconfig);
+    let result = run_window(smoke, &profile, theme, project, workspace_smoke);
     // Only this process's atomically created private profile is eligible for removal.
     let cleanup = std::fs::remove_dir_all(&profile);
     result?;
@@ -259,11 +340,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn run_window(
+    smoke: bool,
+    profile: &std::path::Path,
+    theme: Theme,
+    project: Option<PathBuf>,
+    workspace_smoke: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     gtk::init()?;
     let state = Rc::new(RefCell::new(ProbeState::default()));
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
-    window.set_title("MCU Flasher — Native Rust GUI fixture");
+    window.set_title("MCU Flasher by Naph — Rust development workspace");
     window.set_default_size(1100, 740);
     if let Some(monitor) = gtk::gdk::Display::default()
         .and_then(|display| display.primary_monitor().or_else(|| display.monitor(0)))
@@ -273,13 +360,6 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
         window.set_default_size(1100.min(area.width() - 64), 740.min(area.height() - 64));
     }
     let owner = window.as_ptr() as usize;
-    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    controls.set_margin_start(8);
-    controls.set_margin_end(8);
-    controls.set_margin_top(8);
-    controls.set_margin_bottom(8);
-    let label = gtk::Label::new(Some("Controls"));
     let boards = gtk::ComboBoxText::new();
     boards.append_text("Fixture board A");
     boards.append_text("Fixture board B");
@@ -288,22 +368,8 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
     compile.set_tooltip_text(Some("Exercises a native Rust callback. Firmware compilation is not enabled in this GUI feasibility fixture."));
     let detach = gtk::Button::with_label("Detach editor");
     detach.set_sensitive(false);
-    controls.pack_start(&label, false, false, 0);
-    controls.pack_start(&boards, false, false, 0);
-    controls.pack_start(&compile, false, false, 0);
-    controls.pack_end(&detach, false, false, 0);
-    let notice = gtk::Label::new(Some(
-        "Isolated fixture · no hardware, live projects or settings",
-    ));
-    notice.set_xalign(0.0);
-    notice.set_margin_start(8);
-    notice.set_margin_bottom(6);
-    let split = gtk::Paned::new(gtk::Orientation::Vertical);
     let editor_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let terminal_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    split.pack1(&editor_box, true, false);
-    split.pack2(&terminal_box, true, false);
-    split.set_position(460);
     let status = gtk::Label::new(Some("Loading offline editor and terminal…"));
     status.set_xalign(0.0);
     status.set_margin_start(8);
@@ -311,11 +377,24 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
     status.set_margin_top(6);
     status.set_margin_bottom(6);
     status.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    body.pack_start(&controls, false, false, 0);
-    body.pack_start(&notice, false, false, 0);
-    body.pack_start(&split, true, true, 0);
-    body.pack_end(&status, false, false, 0);
-    window.add(&body);
+    let workspace = WorkspaceShell::new(
+        &window,
+        &boards,
+        &compile,
+        &detach,
+        &editor_box,
+        &terminal_box,
+        &status,
+        smoke,
+        theme,
+        project,
+        workspace_smoke,
+    )?;
+    let split = workspace.split.clone();
+    let workspace_events = workspace.clone();
+    state.borrow_mut().workspace_events =
+        Some(Rc::new(move |message| workspace_events.receive(message)));
+    window.add(&workspace.body);
     // Present the native workspace before constructing web engine services.
     window.show_all();
     let mut editor_context = WebContext::new(Some(profile.join("editor")));
@@ -325,13 +404,26 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
         &editor_box,
         Island::Editor,
         state.clone(),
+        smoke,
     )?);
     let terminal = Rc::new(create_view(
         &mut terminal_context,
         &terminal_box,
         Island::Terminal,
         state.clone(),
+        smoke,
     )?);
+    workspace.bind_views(editor.clone(), terminal.clone());
+    if workspace_smoke {
+        let shell = Rc::downgrade(&workspace);
+        glib::timeout_add_local_once(Duration::from_secs(30), move || {
+            if let Some(shell) = shell.upgrade() {
+                if !shell.check_passed() {
+                    gtk::main_quit();
+                }
+            }
+        });
+    }
     let editor_widget = editor.webview();
     let terminal_widget = terminal.webview();
     let editor_pointer = editor_widget.as_ptr() as usize;
@@ -423,6 +515,7 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
         split.type_().name().into(),
     ];
     let timer = {
+        let workspace = workspace.clone();
         let state = state.clone();
         let window = window.clone();
         let editor = editor.clone();
@@ -440,7 +533,11 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
             }
             let ready = {
                 let state = state.borrow();
-                state.editor.is_some() && state.terminal_ready
+                if smoke {
+                    state.editor.is_some() && state.terminal_ready
+                } else {
+                    state.workspace_ready
+                }
             };
             if ready {
                 detach.set_sensitive(true);
@@ -449,10 +546,12 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
                 if let Some(error) = &state.borrow().error {
                     status.set_text(error);
                     detach.set_sensitive(false);
-                } else if ready && state.borrow().compile_events == 0 {
-                    status.set_text(
-                        "Offline fixture ready. Native controls and editor detach are available.",
-                    );
+                } else if ready {
+                    if !workspace.is_loading() {
+                        status.set_text("Native Rust workspace ready. Edits remain in memory.");
+                    }
+                    finished.set(true);
+                    return glib::ControlFlow::Break;
                 }
                 return glib::ControlFlow::Continue;
             }
@@ -540,7 +639,7 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
             let failed = state.borrow().error.is_some();
             if failed || finished.get() {
                 let state = state.borrow();
-                *receipt.borrow_mut() = Some(Receipt { schema_version: 1, passed: !failed, mode: "isolated_native_widget_fixture", os: std::env::consts::OS, architecture: std::env::consts::ARCH, display_backend: display_backend.clone(), webview_version: wry::webview_version().unwrap_or_else(|_| "unavailable".into()), widget_types: widget_types.clone(), checks: state.checks.clone(), error: state.error.clone(), limits: "Linux GTK3 adapter only; 45-second smoke; 16-KiB IPC; embedded fixed assets; no live source/settings/cloud/hardware or firmware compile; no Windows adapter or native IME/mixed-monitor qualification" });
+                *receipt.borrow_mut() = Some(Receipt { schema_version: 1, passed: !failed, mode: "isolated_native_widget_fixture", os: std::env::consts::OS, architecture: std::env::consts::ARCH, display_backend: display_backend.clone(), webview_version: wry::webview_version().unwrap_or_else(|_| "unavailable".into()), widget_types: widget_types.clone(), checks: state.checks.clone(), error: state.error.clone(), limits: "Linux GTK3 receipt; 45-second smoke; 16-KiB IPC; embedded fixed assets; no live source/settings/cloud/hardware or firmware compile; Windows has a separate adapter and receipt; native IME/mixed-monitor qualification remains open" });
                 gtk::main_quit();
                 glib::ControlFlow::Break
             } else {
@@ -554,6 +653,11 @@ fn run_window(smoke: bool, profile: &std::path::Path) -> Result<(), Box<dyn std:
     }
     detached_window.close();
     window.close();
+    workspace.release_views();
+    state.borrow_mut().workspace_events = None;
+    if workspace_smoke && !workspace.check_passed() {
+        return Err("Native workspace/source verification failed".into());
+    }
     if smoke {
         let result = receipt
             .borrow_mut()

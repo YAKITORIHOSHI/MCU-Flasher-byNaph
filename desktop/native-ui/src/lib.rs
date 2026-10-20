@@ -1,6 +1,7 @@
 //! Bounded renderer reports for the native-widget feasibility fixture.
 
 use serde::{Deserialize, Serialize};
+pub mod workspace_design;
 
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 pub const SOURCE: &str = "void setup() {}\nvoid loop() {}\n";
@@ -16,6 +17,25 @@ pub enum Island {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RendererMessage {
+    WorkspaceSnapshot {
+        phase: u8,
+        documents: u16,
+        same_models: bool,
+        dirty_retained: bool,
+        history_retained: bool,
+        selection_retained: bool,
+        theme: String,
+        background: String,
+    },
+    DocumentsOpened {
+        documents: Vec<String>,
+    },
+    WorkspaceReady {},
+    DocumentChanged {
+        document_id: String,
+        edit_revision: u64,
+        dirty: bool,
+    },
     EditorSnapshot {
         phase: u8,
         model_id: String,
@@ -45,6 +65,36 @@ pub fn parse_message(island: Island, body: &str) -> Result<RendererMessage, Stri
     let message: RendererMessage = serde_json::from_str(body)
         .map_err(|_| "Unknown or malformed renderer report.".to_owned())?;
     let valid = match &message {
+        RendererMessage::WorkspaceSnapshot {
+            phase,
+            documents,
+            theme,
+            background,
+            ..
+        } => {
+            island == Island::Editor
+                && *phase <= 3
+                && *documents <= 256
+                && theme.len() <= 32
+                && background.len() <= 64
+        }
+        RendererMessage::DocumentsOpened { documents } => {
+            island == Island::Editor
+                && documents.len() <= 256
+                && documents.iter().all(|id| !id.is_empty() && id.len() <= 256)
+        }
+        RendererMessage::WorkspaceReady {} => island == Island::Editor,
+        RendererMessage::DocumentChanged {
+            document_id,
+            edit_revision,
+            ..
+        } => {
+            island == Island::Editor
+                && !document_id.is_empty()
+                && document_id.len() <= 256
+                && *edit_revision > 0
+                && *edit_revision < (1u64 << 53)
+        }
         RendererMessage::EditorSnapshot {
             phase,
             model_id,
@@ -135,6 +185,32 @@ pub fn checked_scratch_root(repo: &std::path::Path) -> std::io::Result<std::path
 #[cfg(test)]
 mod checks {
     use super::*;
+    #[test]
+    fn native_document_reports_have_no_path_or_owner_authority() {
+        let body = r#"{"kind":"document_changed","document_id":"native-id","edit_revision":1,"dirty":true}"#;
+        assert!(parse_message(Island::Editor, body).is_ok());
+        assert!(parse_message(Island::Terminal, body).is_err());
+        assert!(parse_message(
+            Island::Editor,
+            &body.replace("\"dirty\":true", "\"dirty\":true,\"path\":\"outside.ino\"")
+        )
+        .is_err());
+        assert!(parse_message(
+            Island::Editor,
+            &body.replace("\"dirty\":true", "\"dirty\":true,\"owner\":\"forged\"")
+        )
+        .is_err());
+        for revision in ["0", "9007199254740992"] {
+            assert!(parse_message(
+                Island::Editor,
+                &body.replace(
+                    "\"edit_revision\":1",
+                    &format!("\"edit_revision\":{revision}")
+                )
+            )
+            .is_err());
+        }
+    }
 
     #[test]
     fn accepts_only_the_native_bound_island() {

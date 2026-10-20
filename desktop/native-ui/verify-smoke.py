@@ -25,14 +25,15 @@ REQUIRED = {
 
 
 class OutputDirectory:
-    def __init__(self, root):
+    def __init__(self, root, *, workspace=False):
         root = root.resolve(strict=True)
-        self.path = root / "audit/migration/scratch/native-ui"
+        folder = "native-workspace" if workspace else "native-ui"
+        self.path = root / "audit/migration/scratch" / folder
         self.fd = None
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
         descriptor = os.open(root, flags)
         try:
-            for part in ("audit", "migration", "scratch", "native-ui"):
+            for part in ("audit", "migration", "scratch", folder):
                 try:
                     os.mkdir(part, mode=0o700, dir_fd=descriptor)
                 except FileExistsError:
@@ -219,10 +220,11 @@ def spawn_owned(*args, **kwargs):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--current-display", action="store_true", help="Use the caller's display, including native Wayland; otherwise own an isolated Xvfb.")
+    parser.add_argument("--workspace", action="store_true", help="Verify the native workspace, Rust source reader and retained manual editor models.")
     options = parser.parse_args()
     binary = ROOT / "desktop/target/debug/mcu-native-ui-probe"
     assert binary.is_file(), "Native Rust widget probe is not built."
-    output_directory = OutputDirectory(ROOT)
+    output_directory = OutputDirectory(ROOT, workspace=options.workspace)
     try:
         run_fixture(options, binary, output_directory)
     finally:
@@ -230,6 +232,7 @@ def main():
 
 
 def run_fixture(options, binary, output_directory):
+    workspace = getattr(options, "workspace", False)
     scratch = output_directory.path
     server = None
     started = time.monotonic()
@@ -256,20 +259,26 @@ def run_fixture(options, binary, output_directory):
                     watcher.close()
                 env.update(DISPLAY=":" + display, GDK_BACKEND="x11", LIBGL_ALWAYS_SOFTWARE="1", GALLIUM_DRIVER="llvmpipe", __GLX_VENDOR_LIBRARY_NAME="mesa", WEBKIT_DISABLE_DMABUF_RENDERER="1")
             with output_directory.capture_log() as log:
-                task = spawn_owned(["dbus-run-session", "--", str(binary), "--smoke"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+                task = spawn_owned(["dbus-run-session", "--", str(binary), "--workspace-smoke" if workspace else "--smoke"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
                 try:
                     return_code = task.wait(timeout=70)
                 finally:
                     stop_owned(task)
             output = output_directory.read_log()
-            receipts = [line.removeprefix("MCU_NATIVE_PROBE=") for line in output.splitlines() if line.startswith("MCU_NATIVE_PROBE=")]
+            prefix = "MCU_NATIVE_WORKSPACE=" if workspace else "MCU_NATIVE_PROBE="
+            receipts = [line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)]
             assert len(receipts) == 1, f"Expected one native receipt, got {len(receipts)}. See {scratch / 'latest-output.log'}"
             receipt = json.loads(receipts[0])
             receipt.update(controller="Python developer verification only", elapsedSeconds=round(time.monotonic() - started, 3), displayMode="current-native-display" if options.current_display else "owned-Xvfb-x11-software-rendering")
             output_directory.publish("latest-smoke.json", (json.dumps(receipt, indent=2) + "\n").encode())
             assert return_code == 0 and receipt["passed"], receipt
-            assert {"GtkWindow", "GtkComboBoxText", "GtkButton", "GtkLabel", "GtkPaned"} <= set(receipt["widgetTypes"]), receipt["widgetTypes"]
-            assert REQUIRED <= receipt["checks"].keys(), sorted(REQUIRED - receipt["checks"].keys())
+            if workspace:
+                required = {f"phase_{phase}_{kind}" for phase in range(4) for kind in ("models", "dirty_selection", "theme")}
+                required |= {"undo_redo", "native_tools", "native_source_tabs", "native_owned_source_controls", "no_python_application_service", "source_bytes_unchanged"}
+            else:
+                assert {"GtkWindow", "GtkComboBoxText", "GtkButton", "GtkLabel", "GtkPaned"} <= set(receipt["widgetTypes"]), receipt["widgetTypes"]
+                required = REQUIRED
+            assert required <= receipt["checks"].keys(), sorted(required - receipt["checks"].keys())
             assert all(receipt["checks"].values()), receipt
             print(json.dumps(receipt, indent=2))
         finally:

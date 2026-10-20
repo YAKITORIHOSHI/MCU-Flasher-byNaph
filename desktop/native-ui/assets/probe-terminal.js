@@ -6,6 +6,11 @@
     const fit = new window.FitAddon.FitAddon();
     terminal.loadAddon(fit);
     terminal.open(document.getElementById('terminal'));
+    window.__mcuClearTerminal = () => terminal.clear();
+    window.__mcuApplyTheme = (_mode, palette) => {
+      terminal.options.theme = { background: palette.background, foreground: palette.foreground, cursor: palette.accent };
+      document.body.style.background = palette.background;
+    };
     const resize = () => fit.fit();
     new ResizeObserver(resize).observe(document.getElementById('terminal'));
     resize();

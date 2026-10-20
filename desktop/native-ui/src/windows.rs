@@ -1,5 +1,8 @@
 //! Win32 controls own the fixture; only Monaco and xterm use WebView2 islands.
 //! All HWNDs and COM objects remain on their creating UI thread.
+use mcu_native_ui_probe::workspace_design::{
+    controls_layout, primary_layout, Theme, PRIMARY_ACTIONS, TOOL_TABS,
+};
 use mcu_native_ui_probe::{
     asset_path, checked_scratch_root, parse_message, windows_navigation_allowed, Island,
     RendererMessage, CHANGED_SOURCE, SOURCE,
@@ -20,17 +23,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-    Graphics::Gdi::{
-        GetMonitorInfoW, GetStockObject, MonitorFromWindow, ScreenToClient, COLOR_BTNFACE,
-        DEFAULT_GUI_FONT, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    },
+    Foundation::{HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Graphics::Gdi::*,
     System::{
         LibraryLoader::GetModuleHandleW,
         ProcessStatus::{EnumProcessModules, GetModuleFileNameExW},
         Threading::GetCurrentProcess,
     },
     UI::{
+        Controls::{CB_SETCUEBANNER, DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
         HiDpi::{
             GetDpiForWindow, SetProcessDpiAwarenessContext,
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -47,6 +48,17 @@ use wry::{
 const COMBO: usize = 101;
 const COMPILE: usize = 102;
 const DETACH: usize = 103;
+const THEME: usize = 104;
+const ACTION: usize = 120;
+const SOURCE_TAB: usize = 200;
+const TOOL: usize = 300;
+const CLEAR: usize = 400;
+const HIDE_EDITOR: usize = 401;
+const HIDE_MONITORS: usize = 402;
+const BRAND: usize = 500;
+const MORE_ACTIONS: usize = 450;
+const OPTIONS: usize = 451;
+const THEME_ITEM: usize = 600;
 const TIMER: usize = 1;
 const CLASS: &str = "MCUNativeRustFixture";
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
@@ -56,6 +68,38 @@ fn wide(value: &str) -> Vec<u16> {
 }
 fn os_error() -> Box<dyn std::error::Error> {
     std::io::Error::last_os_error().into()
+}
+
+fn fit_window(hwnd: HWND) {
+    // SAFETY: Read only this owned window's nearest native work area, then fit
+    // its entire physical frame; no toolkit/DPI factor is applied a second time.
+    unsafe {
+        let mut monitor = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let mut frame = RECT::default();
+        if GetMonitorInfoW(
+            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+            &mut monitor,
+        ) != 0
+            && GetWindowRect(hwnd, &mut frame) != 0
+        {
+            let work = monitor.rcWork;
+            let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+            let width = (1100 * dpi / 96).min(work.right - work.left);
+            let height = (740 * dpi / 96).min(work.bottom - work.top);
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                frame.left.clamp(work.left, work.right - width),
+                frame.top.clamp(work.top, work.bottom - height),
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
 }
 
 #[derive(Default)]
@@ -68,7 +112,180 @@ struct Events {
     panic: Cell<bool>,
     dragging: Cell<bool>,
     split_y: Cell<Option<i32>>,
+    theme: Cell<Theme>,
+    surface: Cell<HBRUSH>,
+    tool: Cell<usize>,
     commands: RefCell<VecDeque<usize>>,
+}
+
+fn color(theme: Theme, key: &str) -> u32 {
+    let rgb = u32::from_str_radix(theme.color(key).trim_start_matches('#'), 16).unwrap_or(0);
+    ((rgb >> 16) & 255) | (rgb & 0xff00) | ((rgb & 255) << 16)
+}
+
+// SAFETY: The caller provides a valid paint DC and rectangle for this UI thread.
+// The two stack vertices remain live for the synchronous static gradient fill.
+unsafe fn glass(dc: HDC, rect: RECT, theme: Theme, top: &str, bottom: &str) {
+    unsafe {
+        let vertex = |x, y, key| {
+            let value = theme.rgb(key);
+            TRIVERTEX {
+                x,
+                y,
+                Red: ((value >> 16) as u16 & 255) << 8,
+                Green: ((value >> 8) as u16 & 255) << 8,
+                Blue: (value as u16 & 255) << 8,
+                Alpha: 0,
+            }
+        };
+        let vertices = [
+            vertex(rect.left, rect.top, top),
+            vertex(rect.right, rect.bottom, bottom),
+        ];
+        let mesh = GRADIENT_RECT {
+            UpperLeft: 0,
+            LowerRight: 1,
+        };
+        GradientFill(
+            dc,
+            vertices.as_ptr(),
+            2,
+            (&mesh as *const GRADIENT_RECT).cast(),
+            1,
+            GRADIENT_FILL_RECT_V,
+        );
+    }
+}
+
+// SAFETY: WM_DRAWITEM supplies a borrowed DRAWITEMSTRUCT and a live child HWND.
+// GDI selections are restored before all temporary native objects are deleted.
+unsafe fn draw_button(item: &DRAWITEMSTRUCT, events: &Events) {
+    unsafe {
+        let theme = events.theme.get();
+        let id = item.CtlID as usize;
+        let selected = id == SOURCE_TAB || id == TOOL + events.tool.get();
+        let key = "BG_MID";
+        let background = if item.itemState & ODS_SELECTED != 0 {
+            "BG_DARKEST"
+        } else if selected {
+            "BG_LIGHT"
+        } else {
+            key
+        };
+        glass(item.hDC, item.rcItem, theme, "BG_LIGHT", background);
+        if id != BRAND {
+            let rim = CreatePen(
+                PS_SOLID,
+                1,
+                color(theme, if selected { "CYAN" } else { "BORDER" }),
+            );
+            let previous_pen = SelectObject(item.hDC, rim);
+            let previous_brush = SelectObject(item.hDC, GetStockObject(HOLLOW_BRUSH));
+            RoundRect(
+                item.hDC,
+                item.rcItem.left,
+                item.rcItem.top,
+                item.rcItem.right,
+                item.rcItem.bottom,
+                6,
+                6,
+            );
+            SelectObject(item.hDC, previous_brush);
+            SelectObject(item.hDC, previous_pen);
+            DeleteObject(rim);
+        }
+        let old = SelectObject(item.hDC, SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as _);
+        SetBkMode(item.hDC, TRANSPARENT as i32);
+        let foreground = if id == BRAND {
+            "CYAN"
+        } else if item.itemState & ODS_DISABLED != 0 {
+            "TEXT_DIM"
+        } else if selected {
+            "CYAN"
+        } else {
+            match id {
+                COMPILE | 124 => "GREEN",
+                121 | 125 => "BLUE",
+                122 => "RED",
+                127 => "CYAN",
+                _ => "TEXT_BRIGHT",
+            }
+        };
+        SetTextColor(item.hDC, color(theme, foreground));
+        let mut text = [0_u16; 128];
+        let length = GetWindowTextW(item.hwndItem, text.as_mut_ptr(), text.len() as i32);
+        let mut bounds = item.rcItem;
+        if id == BRAND {
+            // Original actions/brand.svg linear circuit-chip paths, rendered
+            // with native GDI so the application chrome stays native.
+            let scale = GetDpiForWindow(item.hwndItem).max(96) as i32;
+            let unit = |value| value * scale / 96;
+            let pen = CreatePen(PS_SOLID, unit(2).max(1), color(theme, "CYAN"));
+            let previous = SelectObject(item.hDC, pen);
+            for path in [
+                &[
+                    (7, 4),
+                    (17, 4),
+                    (20, 7),
+                    (20, 17),
+                    (17, 20),
+                    (7, 20),
+                    (4, 17),
+                    (4, 7),
+                    (7, 4),
+                ][..],
+                &[
+                    (13, 7),
+                    (8, 13),
+                    (12, 13),
+                    (11, 17),
+                    (17, 10),
+                    (13, 10),
+                    (14, 7),
+                ][..],
+                &[(8, 1), (8, 4)][..],
+                &[(12, 1), (12, 4)][..],
+                &[(16, 1), (16, 4)][..],
+                &[(8, 20), (8, 23)][..],
+                &[(12, 20), (12, 23)][..],
+                &[(16, 20), (16, 23)][..],
+                &[(1, 8), (4, 8)][..],
+                &[(1, 12), (4, 12)][..],
+                &[(1, 16), (4, 16)][..],
+                &[(20, 8), (23, 8)][..],
+                &[(20, 12), (23, 12)][..],
+                &[(20, 16), (23, 16)][..],
+            ] {
+                MoveToEx(
+                    item.hDC,
+                    unit(path[0].0 + 3),
+                    unit(path[0].1 + 3),
+                    null_mut(),
+                );
+                for &(x, y) in &path[1..] {
+                    LineTo(item.hDC, unit(x + 3), unit(y + 3));
+                }
+            }
+            SelectObject(item.hDC, previous);
+            DeleteObject(pen);
+            bounds.left += unit(31);
+        }
+        DrawTextW(
+            item.hDC,
+            text.as_ptr(),
+            length,
+            &mut bounds,
+            (if id == BRAND { DT_LEFT } else { DT_CENTER })
+                | DT_VCENTER
+                | DT_SINGLELINE
+                | DT_END_ELLIPSIS,
+        );
+        if item.itemState & ODS_FOCUS != 0 {
+            InflateRect(&mut bounds, -3, -3);
+            DrawFocusRect(item.hDC, &bounds);
+        }
+        SelectObject(item.hDC, old);
+    }
 }
 
 impl Events {
@@ -115,6 +332,21 @@ unsafe fn dispatch_window_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         let events = &*pointer;
         match msg {
+            WM_ERASEBKGND => {
+                let mut bounds = RECT::default();
+                GetClientRect(hwnd, &mut bounds);
+                glass(w as HDC, bounds, events.theme.get(), "BG_MID", "BG_DARKEST");
+                1
+            }
+            WM_DRAWITEM if l != 0 => {
+                draw_button(&*(l as *const DRAWITEMSTRUCT), events);
+                1
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+                SetTextColor(w as HDC, color(events.theme.get(), "TEXT"));
+                SetBkColor(w as HDC, color(events.theme.get(), "BG_DARKEST"));
+                events.surface.get() as LRESULT
+            }
             WM_SIZE => {
                 events.layout.set(true);
                 0
@@ -126,8 +358,8 @@ unsafe fn dispatch_window_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             WM_COMMAND => {
                 let id = w & 0xffff;
                 let notification = (w >> 16) & 0xffff;
-                if (id == COMBO && notification == CBN_SELCHANGE as usize)
-                    || (matches!(id, COMPILE | DETACH) && notification == BN_CLICKED as usize)
+                if (matches!(id, COMBO | THEME) && notification == CBN_SELCHANGE as usize)
+                    || (notification == BN_CLICKED as usize && id >= COMPILE)
                 {
                     events.command(id);
                 }
@@ -169,7 +401,11 @@ unsafe fn dispatch_window_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 {
                     let limits = &mut *(l as *mut MINMAXINFO);
                     limits.ptMinTrackSize.x = (monitor.rcWork.right - monitor.rcWork.left) / 2;
-                    limits.ptMinTrackSize.y = 320;
+                    let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                    let logical_half_width = limits.ptMinTrackSize.x * 96 / dpi;
+                    let minimum = if logical_half_width < 520 { 420 } else { 320 };
+                    limits.ptMinTrackSize.y =
+                        (minimum * dpi / 96).min(monitor.rcWork.bottom - monitor.rcWork.top);
                 }
                 0
             }
@@ -219,10 +455,25 @@ struct NativeWindows {
     editor_host: HWND,
     terminal_host: HWND,
     detached_host: HWND,
+    brand: HWND,
+    actions: Vec<HWND>,
+    captions: Vec<HWND>,
+    selectors: Vec<HWND>,
+    workspace: Vec<HWND>,
+    source_tab: HWND,
+    tools: Vec<HWND>,
+    tool_heading: HWND,
+    tool_output: HWND,
+    clear: HWND,
+    font: HFONT,
+    font_resource: HANDLE,
+    font_dpi: u32,
+    more_actions: HWND,
+    options: HWND,
 }
 
 impl NativeWindows {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(smoke: bool) -> Result<Self, Box<dyn std::error::Error>> {
         // SAFETY: This function runs on the sole UI thread before WebView2
         // creation. All strings outlive their synchronous Win32 calls, every
         // child has a parent at creation, and the Events Box never moves.
@@ -235,7 +486,6 @@ impl NativeWindows {
                 hInstance: instance,
                 lpszClassName: class.as_ptr(),
                 hCursor: LoadCursorW(null_mut(), IDC_ARROW),
-                hbrBackground: (COLOR_BTNFACE + 1) as _,
                 style: CS_HREDRAW | CS_VREDRAW,
                 ..Default::default()
             };
@@ -243,6 +493,7 @@ impl NativeWindows {
                 return Err(os_error());
             }
             let events = Box::<Events>::default();
+            events.tool.set(if smoke { 5 } else { 0 });
             let pointer = (&*events as *const Events).cast::<c_void>();
             let create = |title: &str, parent: HWND| {
                 CreateWindowExW(
@@ -260,7 +511,10 @@ impl NativeWindows {
                     pointer,
                 )
             };
-            let main = create("MCU Flasher — Native Rust GUI fixture", null_mut());
+            let main = create(
+                "MCU Flasher by Naph — Native Rust workspace preview",
+                null_mut(),
+            );
             if main.is_null() {
                 UnregisterClassW(class.as_ptr(), instance);
                 return Err(os_error());
@@ -280,12 +534,48 @@ impl NativeWindows {
                 editor_host: null_mut(),
                 terminal_host: null_mut(),
                 detached_host: null_mut(),
+                brand: null_mut(),
+                actions: Vec::new(),
+                captions: Vec::new(),
+                selectors: Vec::new(),
+                workspace: Vec::new(),
+                source_tab: null_mut(),
+                tools: Vec::new(),
+                tool_heading: null_mut(),
+                tool_output: null_mut(),
+                clear: null_mut(),
+                font: null_mut(),
+                font_resource: null_mut(),
+                font_dpi: 0,
+                more_actions: null_mut(),
+                options: null_mut(),
             };
-            windows.detached = create("Fixture editor — native Rust", main);
+            let font_bytes =
+                include_bytes!("../../../src/fonts/Montserrat/static/Montserrat-SemiBold.ttf");
+            let mut count = 0;
+            windows.font_resource = AddFontMemResourceEx(
+                font_bytes.as_ptr().cast(),
+                font_bytes.len() as u32,
+                std::ptr::null(),
+                &raw mut count,
+            );
+            windows.refresh_font();
+            windows
+                .events
+                .surface
+                .set(CreateSolidBrush(color(Theme::Glass, "BG_DARKEST")));
+            windows.detached = create("Code Editor — MCU Flasher by Naph", main);
             if windows.detached.is_null() {
                 return Err(os_error());
             }
-            windows.label = windows.child("STATIC", "Controls", 0, 0, main)?;
+            windows.brand = windows.child(
+                "BUTTON",
+                "MCU Flasher by Naph",
+                BS_OWNERDRAW as u32,
+                BRAND,
+                main,
+            )?;
+            windows.label = windows.child("STATIC", "Board", 0, 0, main)?;
             windows.combo = windows.child(
                 "COMBOBOX",
                 "",
@@ -293,9 +583,126 @@ impl NativeWindows {
                 COMBO,
                 main,
             )?;
-            windows.compile =
-                windows.child("BUTTON", "Compile fixture", WS_TABSTOP, COMPILE, main)?;
-            windows.detach = windows.child("BUTTON", "Detach editor", WS_TABSTOP, DETACH, main)?;
+            for (index, label) in PRIMARY_ACTIONS.iter().enumerate() {
+                let id = if index == 0 { COMPILE } else { ACTION + index };
+                let button =
+                    windows.child("BUTTON", label, WS_TABSTOP | BS_OWNERDRAW as u32, id, main)?;
+                if index == 0 {
+                    windows.compile = button;
+                }
+                windows.actions.push(button);
+            }
+            windows.detach = windows.child(
+                "BUTTON",
+                "Detach Editor",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                DETACH,
+                main,
+            )?;
+            windows.more_actions = windows.child(
+                "BUTTON",
+                "Actions",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                MORE_ACTIONS,
+                main,
+            )?;
+            windows.options = windows.child(
+                "BUTTON",
+                "Options",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                OPTIONS,
+                main,
+            )?;
+            for label in ["Serial port", "Upload speed", "Workspace", "Theme"] {
+                windows
+                    .captions
+                    .push(windows.child("STATIC", label, 0, 0, main)?);
+            }
+            for (index, choices) in [
+                vec!["No device connected"],
+                vec!["115200", "230400", "460800", "512000", "921600"],
+                vec!["Glass", "Frosted Light", "Solarized Dark"],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let selector = windows.child(
+                    "COMBOBOX",
+                    "",
+                    CBS_DROPDOWNLIST as u32 | WS_TABSTOP,
+                    if index == 2 { THEME } else { 110 + index },
+                    main,
+                )?;
+                for choice in choices {
+                    SendMessageW(selector, CB_ADDSTRING, 0, wide(choice).as_ptr() as isize);
+                }
+                SendMessageW(selector, CB_SETCURSEL, if index == 1 { 2 } else { 0 }, 0);
+                windows.selectors.push(selector);
+            }
+            for (index, label) in [
+                "Timestamps",
+                "Skip Compile",
+                "Hide Editor",
+                "Hide Monitors",
+                "Settings",
+                "AI Assistant",
+            ]
+            .iter()
+            .enumerate()
+            {
+                let id = match index {
+                    2 => HIDE_EDITOR,
+                    3 => HIDE_MONITORS,
+                    _ => 410 + index,
+                };
+                let style = if index < 2 {
+                    BS_AUTOCHECKBOX as u32
+                } else {
+                    BS_OWNERDRAW as u32
+                };
+                windows.workspace.push(windows.child(
+                    "BUTTON",
+                    label,
+                    style | WS_TABSTOP,
+                    id,
+                    main,
+                )?);
+            }
+            windows.source_tab = windows.child(
+                "BUTTON",
+                if smoke {
+                    "fixture.ino  •"
+                } else {
+                    "Untitled.ino"
+                },
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                SOURCE_TAB,
+                main,
+            )?;
+            for (index, label) in TOOL_TABS.iter().enumerate() {
+                windows.tools.push(windows.child(
+                    "BUTTON",
+                    label,
+                    WS_TABSTOP | BS_OWNERDRAW as u32,
+                    TOOL + index,
+                    main,
+                )?);
+            }
+            windows.tool_heading = windows.child(
+                "STATIC",
+                if smoke { "Terminal" } else { "Build Console" },
+                0,
+                0,
+                main,
+            )?;
+            windows.tool_output = windows.child("EDIT", "Native Rust workspace preview\r\n\r\nSelect a tool tab to inspect its isolated preview.\r\nNo live project, device, settings or cloud operation is enabled.", ES_MULTILINE as u32 | ES_READONLY as u32 | WS_VSCROLL, 0, main)?;
+            windows.clear = windows.child(
+                "BUTTON",
+                "Clear",
+                WS_TABSTOP | BS_OWNERDRAW as u32,
+                CLEAR,
+                main,
+            )?;
             windows.notice = windows.child(
                 "STATIC",
                 "Isolated fixture · no hardware, live projects or settings",
@@ -319,12 +726,25 @@ impl NativeWindows {
                     wide(board).as_ptr() as isize,
                 );
             }
-            SendMessageW(windows.combo, CB_SETCURSEL, 0, 0);
+            SendMessageW(
+                windows.combo,
+                CB_SETCURSEL,
+                if smoke { 0 } else { usize::MAX },
+                0,
+            );
             EnableWindow(windows.detach, 0);
+            SendMessageW(
+                windows.combo,
+                CB_SETCUEBANNER,
+                0,
+                wide("Select Board").as_ptr() as isize,
+            );
             if SetTimer(main, TIMER, 50, None) == 0 {
                 return Err(os_error());
             }
             windows.events.layout.set(true);
+            fit_window(main);
+            fit_window(windows.detached);
             ShowWindow(main, SW_SHOW);
             Ok(windows)
         }
@@ -359,13 +779,59 @@ impl NativeWindows {
             if hwnd.is_null() {
                 return Err(os_error());
             }
-            SendMessageW(
-                hwnd,
-                WM_SETFONT,
-                GetStockObject(DEFAULT_GUI_FONT) as usize,
-                1,
-            );
+            SendMessageW(hwnd, WM_SETFONT, self.font as usize, 1);
             Ok(hwnd)
+        }
+    }
+
+    fn refresh_font(&mut self) {
+        // SAFETY: The embedded font is process-private. New fonts replace the
+        // old selection in all live child controls before the old HFONT is freed.
+        unsafe {
+            let dpi = GetDpiForWindow(self.main).max(96);
+            if self.font_dpi == dpi {
+                return;
+            }
+            let size = -(12 * dpi as i32 / 96);
+            let font = CreateFontW(
+                size,
+                0,
+                0,
+                0,
+                600,
+                0,
+                0,
+                0,
+                DEFAULT_CHARSET as u32,
+                0,
+                0,
+                CLEARTYPE_QUALITY as u32,
+                0,
+                wide(if self.font_resource.is_null() {
+                    "Segoe UI"
+                } else {
+                    "Montserrat SemiBold"
+                })
+                .as_ptr(),
+            );
+            if font.is_null() {
+                return;
+            }
+            for parent in [self.main, self.detached] {
+                if parent.is_null() {
+                    continue;
+                }
+                let mut child = GetWindow(parent, GW_CHILD);
+                while !child.is_null() {
+                    SendMessageW(child, WM_SETFONT, font as usize, 1);
+                    child = GetWindow(child, GW_HWNDNEXT);
+                }
+            }
+            if !self.font.is_null() {
+                DeleteObject(self.font);
+            }
+            self.font = font;
+            self.font_dpi = dpi;
         }
     }
 }
@@ -383,6 +849,11 @@ impl Drop for NativeWindows {
             }
             if !self.main.is_null() {
                 DestroyWindow(self.main);
+            }
+            DeleteObject(self.events.surface.get());
+            DeleteObject(self.font);
+            if !self.font_resource.is_null() {
+                RemoveFontMemResourceEx(self.font_resource);
             }
             UnregisterClassW(wide(CLASS).as_ptr(), GetModuleHandleW(std::ptr::null()));
         }
@@ -410,6 +881,9 @@ struct Evidence {
     combo_events: u32,
     compile_events: u32,
     checks: BTreeMap<String, bool>,
+    workspace_ready: bool,
+    document_dirty: bool,
+    document_revision: u64,
 }
 fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
     let mut state = state.borrow_mut();
@@ -417,6 +891,19 @@ fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
         return;
     }
     match parse_message(island, body) {
+        Ok(RendererMessage::DocumentsOpened { .. }) => {}
+        Ok(RendererMessage::WorkspaceSnapshot { .. }) => {}
+        Ok(RendererMessage::WorkspaceReady {}) => state.workspace_ready = true,
+        Ok(RendererMessage::DocumentChanged {
+            document_id,
+            edit_revision,
+            dirty,
+        }) => {
+            if document_id == "untitled" && edit_revision > state.document_revision {
+                state.document_revision = edit_revision;
+                state.document_dirty = dirty;
+            }
+        }
         Err(error) => state.error = Some(error),
         Ok(RendererMessage::Error { message }) => {
             state.error = Some(format!("{island:?}: {message}"))
@@ -523,6 +1010,7 @@ fn create_view(
     host: HWND,
     island: Island,
     state: Rc<RefCell<Evidence>>,
+    smoke: bool,
 ) -> Result<WebView, Box<dyn std::error::Error>> {
     let page = if island == Island::Editor {
         "editor.html"
@@ -531,7 +1019,7 @@ fn create_view(
     };
     let initialization = format!(
         "window.__nativeFixture = {};",
-        serde_json::json!({"source":SOURCE,"changed":CHANGED_SOURCE})
+        serde_json::json!({"source":SOURCE,"changed":CHANGED_SOURCE,"smoke":smoke})
     );
     Ok(WebViewBuilder::new_with_web_context(context)
         .with_id(if island == Island::Editor {
@@ -577,6 +1065,11 @@ struct App {
     terminal_hwnd: HWND,
     split_ratio: f64,
     body_top: i32,
+    editor_visible: bool,
+    monitors_visible: bool,
+    workspace_initialized: bool,
+    terminal_initialized: bool,
+    source_dirty: bool,
 }
 
 fn client(hwnd: HWND) -> Result<RECT, Box<dyn std::error::Error>> {
@@ -591,6 +1084,67 @@ fn place(hwnd: HWND, x: i32, y: i32, width: i32, height: i32) {
     // SAFETY: UI-thread owned children; dimensions are nonnegative physical pixels.
     unsafe {
         MoveWindow(hwnd, x, y, width.max(1), height.max(1), 1);
+    }
+}
+fn show(hwnd: HWND, visible: bool) {
+    // SAFETY: Callers provide owned, live native child windows on the UI thread.
+    unsafe {
+        ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
+    }
+}
+fn text_width(owner: HWND, font: HFONT, text: &str) -> i32 {
+    // SAFETY: The temporary DC belongs to this window; selected font and DC are
+    // restored/released before returning the native physical text measurement.
+    unsafe {
+        let dc = GetDC(owner);
+        let previous = SelectObject(dc, font);
+        let mut bounds = RECT::default();
+        let text = wide(text);
+        DrawTextW(
+            dc,
+            text.as_ptr(),
+            text.len() as i32 - 1,
+            &mut bounds,
+            DT_CALCRECT | DT_SINGLELINE,
+        );
+        SelectObject(dc, previous);
+        ReleaseDC(owner, dc);
+        bounds.right - bounds.left
+    }
+}
+
+fn popup(owner: HWND, anchor: HWND, entries: &[(usize, &str, bool)]) -> Option<usize> {
+    // SAFETY: The temporary menu owns copied strings. Only the explicit user
+    // action enters its native modal loop, and it is destroyed before returning.
+    unsafe {
+        let menu = CreatePopupMenu();
+        if menu.is_null() {
+            return None;
+        }
+        for (id, label, enabled) in entries {
+            AppendMenuW(
+                menu,
+                if *enabled {
+                    MF_STRING
+                } else {
+                    MF_STRING | MF_GRAYED
+                },
+                *id,
+                wide(label).as_ptr(),
+            );
+        }
+        let mut frame = RECT::default();
+        GetWindowRect(anchor, &mut frame);
+        let selected = TrackPopupMenuEx(
+            menu,
+            TPM_RETURNCMD | TPM_NONOTIFY,
+            frame.left,
+            frame.bottom,
+            owner,
+            std::ptr::null(),
+        );
+        DestroyMenu(menu);
+        (selected != 0).then_some(selected as usize)
     }
 }
 fn view_bounds(view: &WebView, host: HWND) -> Result<(), Box<dyn std::error::Error>> {
@@ -611,6 +1165,7 @@ fn class_name(hwnd: HWND) -> String {
 
 impl App {
     fn layout(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.native.refresh_font();
         let n = &self.native;
         let rect = client(n.main)?;
         // Win32 client/work-area values are physical; scale only logical constants.
@@ -618,53 +1173,217 @@ impl App {
         let px = |value: i32| (value as f64 * scale).round() as i32;
         let width = rect.right.max(1);
         let height = rect.bottom.max(1);
-        let compact = width < px(720);
-        let row = px(34);
-        place(n.label, px(8), px(12), px(70), px(24));
-        place(
-            n.combo,
-            px(84),
-            px(8),
-            (width - px(100)).min(px(240)),
-            px(260),
-        );
-        let action_y = if compact { row + px(8) } else { px(8) };
-        place(
-            n.compile,
-            if compact { px(8) } else { px(340) },
-            action_y,
-            px(142),
-            px(28),
-        );
-        place(
-            n.detach,
-            if compact { px(160) } else { width - px(174) },
-            action_y,
-            px(166),
-            px(28),
-        );
-        let notice_y = if compact { row * 2 } else { row } + px(8);
-        place(n.notice, px(8), notice_y, width - px(16), px(22));
-        self.body_top = notice_y + px(26);
-        let available = (height - self.body_top - px(32)).max(2);
+        let logical_width = (width as f64 / scale) as u32;
+        let logical_height = (height as f64 / scale) as u32;
+        let primary = primary_layout(logical_width, 226, 880);
+        let controls = controls_layout(logical_width, logical_height, [232, 195, 120, 100], 232);
+        let short = height < px(620);
+        let compact_controls = controls.compact_actions || short;
+        let compact_actions = primary.compact || short;
+        let brand_width = text_width(n.main, n.font, primary.logo) + px(42);
+        // SAFETY: This only changes the native caption; source models stay live.
+        unsafe {
+            SetWindowTextW(n.brand, wide(primary.logo).as_ptr());
+        }
+        let (mut x, mut y) = (brand_width + px(12), px(7));
+        place(n.brand, px(8), y, brand_width, px(29));
+        let mut actions = Vec::new();
+        for (index, (button, label)) in n.actions.iter().zip(PRIMARY_ACTIONS).enumerate() {
+            let visible = !compact_actions || !(2..8).contains(&index);
+            show(*button, visible);
+            if visible {
+                actions.push((*button, *label));
+            }
+        }
+        show(n.more_actions, compact_actions);
+        if compact_actions {
+            actions.insert(2, (n.more_actions, "Actions"));
+        }
+        for (button, label) in actions {
+            let size = (text_width(n.main, n.font, label) + px(22)).max(px(62));
+            if x + size > width - px(8) {
+                x = px(8);
+                y += px(34);
+            }
+            place(button, x, y, size, px(29));
+            x += size + px(4);
+        }
+        y += px(38);
+        x = px(8);
+        let small = ((logical_width as i32 - 260) / 2).max(140);
+        let board_width = if compact_controls {
+            small.clamp(controls.board_min_width as i32, 232)
+        } else {
+            232
+        };
+        let port_width = if compact_controls {
+            small.clamp(controls.port_min_width as i32, 232)
+        } else {
+            195
+        };
+        let labels = controls.show_labels.iter().any(|value| *value);
+        let caption_height = if labels { px(18) } else { 0 };
+        let controls_row = caption_height + px(32);
+        let mut groups = vec![
+            (n.label, n.combo, board_width),
+            (n.captions[0], n.selectors[0], port_width),
+            (n.captions[1], n.selectors[1], 120),
+        ];
+        show(n.captions[3], !compact_controls);
+        show(n.selectors[2], !compact_controls);
+        if !compact_controls {
+            groups.push((n.captions[3], n.selectors[2], 170));
+        }
+        for (caption, selector, size) in groups {
+            if x + px(size) > width - px(8) {
+                x = px(8);
+                y += controls_row;
+            }
+            show(caption, labels);
+            place(caption, x, y, px(size), px(18));
+            place(selector, x, y + caption_height, px(size), px(260));
+            x += px(size + 8);
+        }
+        for button in n.workspace.iter().chain([&n.detach]) {
+            show(*button, !compact_controls);
+        }
+        show(n.options, compact_controls);
+        show(n.captions[2], labels);
+        if compact_controls {
+            if x + px(100) > width - px(8) {
+                x = px(8);
+                y += controls_row;
+            }
+            place(n.captions[2], x, y, px(100), px(18));
+            place(n.options, x, y + caption_height, px(100), px(27));
+            y += controls_row;
+        } else {
+            y += controls_row;
+            x = px(8);
+            place(n.captions[2], x, y, px(90), px(18));
+            y += px(18);
+            for (button, size) in [
+                (n.workspace[0], 112),
+                (n.workspace[1], 120),
+                (n.detach, 140),
+                (n.workspace[2], 115),
+                (n.workspace[3], 135),
+                (n.workspace[4], 84),
+                (n.workspace[5], 120),
+            ] {
+                if x + px(size) > width - px(8) {
+                    x = px(8);
+                    y += px(31);
+                }
+                place(button, x, y, px(size), px(27));
+                x += px(size + 4);
+            }
+            y += px(34);
+        }
+        place(n.source_tab, 0, y, px(174), px(29));
+        self.body_top = y + px(29);
+        let footer = px(if short { 24 } else { 46 });
+        let available = (height - self.body_top - footer).max(2);
+        let tool_widths: Vec<_> = TOOL_TABS
+            .iter()
+            .map(|label| text_width(n.main, n.font, label) + px(26))
+            .collect();
+        let (mut tool_rows, mut tab_x) = (1, 0);
+        for size in &tool_widths {
+            if tab_x + size > width {
+                tool_rows += 1;
+                tab_x = 0;
+            }
+            tab_x += size + px(2);
+        }
+        // Reserve every wrapped native tab row and active panel control before
+        // allocating the editor. Scrollable output yields its space last.
+        let tool_controls = px(tool_rows * 29 + 44);
         if let Some(y) = n.events.split_y.take() {
             self.split_ratio = ((y - self.body_top) as f64 / available as f64).clamp(0.2, 0.8);
         }
-        let editor_height = if self.detached {
+        let editor_height = if self.detached || !self.editor_visible {
             0
+        } else if !self.monitors_visible {
+            available
         } else {
-            (available as f64 * self.split_ratio) as i32
+            ((available as f64 * self.split_ratio) as i32)
+                .min((available - tool_controls - px(24)).max(0))
         };
         place(n.editor_host, 0, self.body_top, width, editor_height);
         place(n.splitter, 0, self.body_top + editor_height, width, px(6));
+        x = 0;
+        y = self.body_top + editor_height + px(6);
+        for (button, size) in n.tools.iter().zip(tool_widths) {
+            if x + size > width {
+                x = 0;
+                y += px(29);
+            }
+            place(*button, x, y, size, px(29));
+            x += size + px(2);
+        }
+        y += px(35);
+        place(n.tool_heading, px(9), y + px(4), width - px(110), px(22));
+        place(n.clear, width - px(83), y, px(73), px(27));
+        y += px(32);
+        let output_height = (height - y - footer).max(1);
+        place(n.terminal_host, 0, y, width, output_height);
         place(
-            n.terminal_host,
-            0,
-            self.body_top + editor_height + px(6),
-            width,
-            available - editor_height - px(6),
+            n.tool_output,
+            px(10),
+            y + px(4),
+            width - px(20),
+            output_height - px(8),
         );
-        place(n.status, px(8), height - px(26), width - px(16), px(22));
+        place(n.notice, px(8), height - px(42), width - px(16), px(18));
+        show(n.notice, !short);
+        place(n.status, px(8), height - px(23), width - px(16), px(20));
+        // SAFETY: Visibility changes keep the native widgets and component
+        // sessions alive; model and terminal ownership never move with tabs.
+        unsafe {
+            ShowWindow(
+                n.editor_host,
+                if !self.detached && self.editor_visible {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+            ShowWindow(
+                n.splitter,
+                if self.monitors_visible {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+            for child in n.tools.iter().chain([&n.tool_heading, &n.clear]) {
+                ShowWindow(
+                    *child,
+                    if self.monitors_visible {
+                        SW_SHOW
+                    } else {
+                        SW_HIDE
+                    },
+                );
+            }
+            ShowWindow(
+                n.terminal_host,
+                if self.monitors_visible && n.events.tool.get() == 5 {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+            ShowWindow(
+                n.tool_output,
+                if self.monitors_visible && n.events.tool.get() != 5 {
+                    SW_SHOW
+                } else {
+                    SW_HIDE
+                },
+            );
+        }
         let detached = client(n.detached)?;
         place(n.detached_host, 0, 0, detached.right, detached.bottom);
         view_bounds(
@@ -723,7 +1442,185 @@ impl App {
                         SetWindowTextW(self.native.status, wide("Rust callback passed. Firmware compilation remains a separate migration gate.").as_ptr());
                     }
                 }
-                DETACH if self.evidence.borrow().editor.is_some() => self.toggle_editor()?,
+                DETACH
+                    if self.evidence.borrow().editor.is_some()
+                        || self.evidence.borrow().workspace_ready =>
+                {
+                    self.toggle_editor()?
+                }
+                MORE_ACTIONS => {
+                    let entries: Vec<_> = PRIMARY_ACTIONS
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| (2..8).contains(index))
+                        .map(|(index, label)| (ACTION + index, *label, true))
+                        .collect();
+                    if let Some(id) = popup(self.native.main, self.native.more_actions, &entries) {
+                        self.native.events.command(id);
+                    }
+                }
+                OPTIONS => {
+                    // Native menus preserve compact access without creating an
+                    // independent application window or exposing service writes.
+                    let ready = self.evidence.borrow().editor.is_some()
+                        || self.evidence.borrow().workspace_ready;
+                    let entries = [
+                        (
+                            DETACH,
+                            if self.detached {
+                                "Reattach Editor"
+                            } else {
+                                "Detach Editor"
+                            },
+                            ready,
+                        ),
+                        (
+                            HIDE_EDITOR,
+                            if self.editor_visible {
+                                "Hide Editor"
+                            } else {
+                                "Show Editor"
+                            },
+                            true,
+                        ),
+                        (
+                            HIDE_MONITORS,
+                            if self.monitors_visible {
+                                "Hide Monitors"
+                            } else {
+                                "Show Monitors"
+                            },
+                            true,
+                        ),
+                        (410, "Timestamps", false),
+                        (411, "Skip Compile", false),
+                        (414, "Settings", false),
+                        (415, "AI Assistant", false),
+                        (THEME_ITEM, "Glass", true),
+                        (THEME_ITEM + 1, "Frosted Light", true),
+                        (THEME_ITEM + 2, "Solarized Dark", true),
+                    ];
+                    if let Some(id) = popup(self.native.main, self.native.options, &entries) {
+                        self.native.events.command(id);
+                    }
+                }
+                id if (THEME_ITEM..THEME_ITEM + 3).contains(&id) => {
+                    // SAFETY: Choose only an existing theme in the owned combo.
+                    unsafe {
+                        SendMessageW(self.native.selectors[2], CB_SETCURSEL, id - THEME_ITEM, 0);
+                    }
+                    self.native.events.command(THEME);
+                }
+                THEME => {
+                    // SAFETY: Read a selection only from this owned combo. The
+                    // replacement brush remains alive until every repaint ends.
+                    unsafe {
+                        let theme = match SendMessageW(self.native.selectors[2], CB_GETCURSEL, 0, 0)
+                        {
+                            1 => Theme::FrostedLight,
+                            2 => Theme::SolarizedDark,
+                            _ => Theme::Glass,
+                        };
+                        self.native.events.theme.set(theme);
+                        let brush = CreateSolidBrush(color(theme, "BG_DARKEST"));
+                        if !brush.is_null() {
+                            DeleteObject(self.native.events.surface.replace(brush));
+                        }
+                        InvalidateRect(self.native.main, std::ptr::null(), 1);
+                        InvalidateRect(self.native.detached, std::ptr::null(), 1);
+                        for button in self
+                            .native
+                            .actions
+                            .iter()
+                            .chain(&self.native.tools)
+                            .chain(&self.native.workspace)
+                            .chain([
+                                &self.native.source_tab,
+                                &self.native.detach,
+                                &self.native.more_actions,
+                                &self.native.options,
+                                &self.native.brand,
+                            ])
+                        {
+                            InvalidateRect(*button, std::ptr::null(), 1);
+                        }
+                        let palette = serde_json::json!({"background":theme.color("BG_DARKEST"),"foreground":theme.color("TEXT"),"accent":theme.color("CYAN"),"selection":theme.color("BG_LIGHT")});
+                        let script = format!(
+                            "window.__mcuApplyTheme?.({}, {});",
+                            serde_json::to_string(theme.key())?,
+                            serde_json::to_string(&palette)?
+                        );
+                        self.editor.evaluate_script(&script)?;
+                        self.terminal.evaluate_script(&script)?;
+                    }
+                }
+                HIDE_EDITOR | HIDE_MONITORS => {
+                    let (visible, label, button) = if command == HIDE_EDITOR {
+                        (&mut self.editor_visible, "Editor", self.native.workspace[2])
+                    } else {
+                        (
+                            &mut self.monitors_visible,
+                            "Monitors",
+                            self.native.workspace[3],
+                        )
+                    };
+                    *visible = !*visible;
+                    // SAFETY: The native button copies its new caption.
+                    unsafe {
+                        SetWindowTextW(
+                            button,
+                            wide(&format!(
+                                "{} {label}",
+                                if *visible { "Hide" } else { "Show" }
+                            ))
+                            .as_ptr(),
+                        );
+                    }
+                    self.layout()?;
+                }
+                CLEAR => {
+                    // SAFETY: Display-only clear never affects subprocesses,
+                    // serial writes, editor buffers or terminal command history.
+                    unsafe {
+                        SetWindowTextW(self.native.tool_output, wide("").as_ptr());
+                    }
+                    if self.native.events.tool.get() == 5 {
+                        self.terminal
+                            .evaluate_script("window.__mcuClearTerminal?.();")?;
+                    }
+                }
+                id if (TOOL..TOOL + TOOL_TABS.len()).contains(&id) => {
+                    let index = id - TOOL;
+                    self.native.events.tool.set(index);
+                    let text = match index {
+                        0 => "Build output appears here when the Rust build service is qualified.",
+                        1 => "No device connected. Serial Send is unavailable in this preview.",
+                        2 => "No board selected. Device discovery is unavailable in this preview.",
+                        3 => "No notifications in this isolated workspace.",
+                        4 => "Syntax diagnostics are unavailable in this preview.",
+                        5 => "The embedded terminal retains its session while switching tools.",
+                        _ => "No AI changes in this isolated workspace.",
+                    };
+                    // SAFETY: These bounded fixture strings are copied by native
+                    // controls. Changing tabs grants no service authority.
+                    unsafe {
+                        SetWindowTextW(self.native.tool_heading, wide(TOOL_TABS[index]).as_ptr());
+                        SetWindowTextW(self.native.tool_output, wide(text).as_ptr());
+                        for tab in &self.native.tools {
+                            InvalidateRect(*tab, std::ptr::null(), 1);
+                        }
+                    }
+                    self.layout()?;
+                }
+                id if (ACTION..ACTION + PRIMARY_ACTIONS.len()).contains(&id)
+                    || (410..416).contains(&id) =>
+                {
+                    // SAFETY: Preview actions report a service gate; they never
+                    // write files, settings, devices or accounts.
+                    unsafe {
+                        SetWindowTextW(self.native.status, wide("This action is unavailable in the isolated native workspace preview.").as_ptr());
+                    }
+                }
                 _ => {}
             }
         }
@@ -893,7 +1790,7 @@ struct Receipt {
 
 fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
-    let native = NativeWindows::new()?;
+    let native = NativeWindows::new(smoke)?;
     let evidence = Rc::new(RefCell::new(Evidence::default()));
     let mut editor_context = WebContext::new(Some(profile.join("editor")));
     let mut terminal_context = WebContext::new(Some(profile.join("terminal")));
@@ -902,12 +1799,14 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
         native.editor_host,
         Island::Editor,
         evidence.clone(),
+        smoke,
     )?;
     let terminal = create_view(
         &mut terminal_context,
         native.terminal_host,
         Island::Terminal,
         evidence.clone(),
+        smoke,
     )?;
     let editor_hwnd = editor.hwnd().0;
     let terminal_hwnd = terminal.hwnd().0;
@@ -924,6 +1823,11 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
         terminal_hwnd,
         split_ratio: 0.65,
         body_top: 0,
+        editor_visible: true,
+        monitors_visible: true,
+        workspace_initialized: false,
+        terminal_initialized: false,
+        source_dirty: false,
     };
     app.layout()?;
     let mut done = false;
@@ -939,6 +1843,13 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
             break;
         }
         unsafe {
+            // Native controls retain standard Tab/Shift+Tab navigation. WebView
+            // child messages bypass dialog traversal so Monaco owns its keys.
+            if GetParent(message.hwnd) == app.native.main
+                && IsDialogMessageW(app.native.main, &message) != 0
+            {
+                continue;
+            }
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
@@ -953,8 +1864,50 @@ fn run_window(smoke: bool, profile: &Path) -> Result<(), Box<dyn std::error::Err
         if app.native.events.tick.replace(false) {
             let ready = {
                 let e = app.evidence.borrow();
-                e.editor.is_some() && e.terminal_ready
+                e.editor.is_some() || e.workspace_ready
             };
+            let workspace_ready = {
+                let e = app.evidence.borrow();
+                e.workspace_ready && e.terminal_ready && e.error.is_none()
+            };
+            if !smoke
+                && workspace_ready
+                && (!app.workspace_initialized || !app.terminal_initialized)
+            {
+                // SAFETY: Both components reported readiness; update this live
+                // label once without claiming firmware or service availability.
+                unsafe {
+                    SetWindowTextW(
+                        app.native.status,
+                        wide("Native Rust workspace ready. Edits stay in memory.").as_ptr(),
+                    );
+                }
+            }
+            if app.evidence.borrow().workspace_ready && !app.workspace_initialized {
+                app.workspace_initialized = true;
+                app.native.events.command(THEME);
+            }
+            if app.evidence.borrow().terminal_ready && !app.terminal_initialized {
+                app.terminal_initialized = true;
+                app.native.events.command(THEME);
+            }
+            let dirty = app.evidence.borrow().document_dirty;
+            if !smoke && dirty != app.source_dirty {
+                app.source_dirty = dirty;
+                // SAFETY: A renderer dirty report changes a native tab caption
+                // only; it never authorizes a source path, write or project owner.
+                unsafe {
+                    SetWindowTextW(
+                        app.native.source_tab,
+                        wide(if dirty {
+                            "Untitled.ino  •"
+                        } else {
+                            "Untitled.ino"
+                        })
+                        .as_ptr(),
+                    );
+                }
+            }
             // SAFETY: Enabling an owned child does not transfer its ownership.
             unsafe {
                 EnableWindow(app.native.detach, ready as i32);
