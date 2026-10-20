@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "recordedAtUtc": "2026-10-20T14:58:44.809712+00:00",
+  "recordedAtUtc": "2026-10-20T15:27:37.742728+00:00",
   "sourceCommit": "4b42146452c007b5bd54d50ad2981d5149443e3e",
   "scope": "Linux GTK and Windows Win32/WebView2 native-widget feasibility fixtures; actual host receipts retain their tested source. Full application/backend/input/release remains unfinished.",
   "requirements": {
@@ -393,7 +393,7 @@
     "Full notices, launchers/packages, upgrade/rollback and supported desktop/device/USB/performance qualification."
   ],
   "releaseQualified": false,
-  "latestCodeCheckpoint": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+  "latestCodeCheckpoint": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
   "windowsAdapterFollowup": {
     "sourceCommit": "7da4be06234bc4badd00810b162717ad9f5cd258",
     "nativeWidgets": "Win32 window, combo, buttons, labels, splitter and owned editor/terminal hosts; Wry/WebView2 child views",
@@ -2457,6 +2457,62 @@
         "path": "desktop/crates/host/src/bin/board_compatibility_probe.rs",
         "sha256": "c43bb3ceb134d382848965796cea775393b211573d504c4172293880a616dae8"
       }
+    },
+    "releaseQualified": false,
+    "pythonApplicationServicesRetired": 0
+  },
+  "recipeGenerationCheckpoint": {
+    "sourceCommit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+    "runtimeSourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+    "receipt": "rust-recipe-generation.json",
+    "hostedNativeHostsPassed": 3,
+    "fullMatrixAtOneSource": false,
+    "hosts": [
+      {
+        "host": "ubuntu-24.04",
+        "sourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+        "runId": 39447542929,
+        "unitsPassed": 148,
+        "generationChecksPassed": 31,
+        "compatibilityDecisionsPassed": 987,
+        "conclusion": "success"
+      },
+      {
+        "host": "ubuntu-24.04-arm",
+        "sourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+        "runId": 39447542929,
+        "unitsPassed": 148,
+        "generationChecksPassed": 31,
+        "compatibilityDecisionsPassed": 987,
+        "conclusion": "success"
+      },
+      {
+        "host": "windows-2022",
+        "sourceCommit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+        "runId": 39448048718,
+        "unitsPassed": 144,
+        "generationChecksPassed": 23,
+        "compatibilityDecisionsPassed": 979,
+        "conclusion": "success"
+      }
+    ],
+    "controllerOnlyCorrection": {
+      "sourceCommit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+      "runtimeSourceUnchangedFrom": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+      "onlyChangedPath": "desktop/scripts/verify-recipe-generation.py",
+      "cause": "Windows refused direct overwrite of a retained open file in the mutation controller.",
+      "fix": "Rename original aside, install distinct same-byte replacement, assert unchanged bytes and a different native file identity; mirrors the already-passing Rust unit.",
+      "localPortableReceipt": {
+        "path": "scratch/native-ui/recipe-generation-local-portable.json",
+        "bytes": 2201,
+        "sha256": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978"
+      },
+      "failureLog": {
+        "path": "scratch/native-ui/recipe-generation-windows-failure.log",
+        "bytes": 6303,
+        "sha256": "688eec8fb7fb2581a2ac5e4cbbf5fc6639cec70f15d951ced69ddd5c03a21729"
+      },
+      "sourceSha256": "4f209f25d59b12c7852621b22a730c5bfa2b2ed6fb00f54ff2ec8112766c1c1b"
     },
     "releaseQualified": false,
     "pythonApplicationServicesRetired": 0

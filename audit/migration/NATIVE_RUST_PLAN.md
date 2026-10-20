@@ -68,6 +68,8 @@
 
 - [x] Port the pure exact Onehorse/MiniMain recipe decisions at `69d845a`: seven new unit tests and 951 differential decisions (16 positive / 935 empty) plus 11 protocol checks. This subset performs no installed-metadata reading, Arduino Q hook selection or actual Rust compilation and does not complete BLD-01 or retire a service.
 - [x] Add fixture-only bounded native descriptor snapshots and exact Linux Arduino Q policy at `26c7675`; preserve wider JSON/path refusals as explicit limits. Both Ubuntu hosts pass 136 backend tests/987 decisions, and Windows passes 132 tests/979 decisions after the literal-parent fixture-only correction (`39443653534`); parser/path differences remain separately counted. This is a dependency milestone, not production package/build authority.
+- [x] Add fixture-only native recipe-generation observation/revalidation at `30d99af`: retained ancestor/file identities, raw byte digests, exact selection/host/options, bounded opaque observations and refusal invalidation. Ubuntu AMD64/ARM64 pass 148 backend tests/31 process checks; Windows passes 144/23 after controller-only `002cc95`. This does not freeze packages, close final-use races, enable build dispatch or retire a service.
+- [ ] Implement exact prepared-target plus multi-file source/config/tool-provenance staging in a create-new owned native compile scope; keep subprocess dispatch unavailable until admitted tool inputs and lifetime are qualified.
 - [ ] Complete exact target/catalog and build-input policy, source-save transactions/identity races/recovery, coexistence leases and activation/release.
 - [ ] Integrate Rust serial reader/Send worker and PTY/process ownership with finite deadlines and no replay/retry of hardware writes.
 - [ ] Port settings, cloud/auth/vault, downloader/package/setup/repair and native maintenance orchestration under the 67-capability ledger.
@@ -263,3 +265,32 @@ receipts; the default five migration jobs remain intact. These snapshots grant
 no future build authority. Live package/ancestor/content races, wider JSON and
 non-UTF8 path parity, production reader/build integration and full BLD-01 remain
 open. See [compatibility evidence](rust-board-compatibility.json).
+
+The native recipe-generation checkpoint `30d99af` now pins observed root,
+ancestor and file identities, binds exact native selection/host/rule/options,
+and rereads every consulted raw input before accepting revalidation. Stale,
+foreign, incomplete, empty or changed observations refuse. Both Ubuntu hosts
+pass 148 backend tests and 31 process checks in CI `39447542929`. Its Windows
+Rust suite passes all 144 tests; a controller overwrite of an open retained file
+fails before revalidation. Controller-only `002cc95` mirrors the passing native
+rename-aside fixture, asserts new leaf identity/same bytes, and passes all 23
+Windows process checks plus 144 tests in `39448048718`. Prior 987/979 compatibility
+and 951 recipe comparisons remain passing. No Rust runtime source changes in
+that follow-up; preserve both exact sources and the initial controller failure.
+Opaque fixture observations grant no execution permission or immutable package
+identity. Active ABA, non-atomic reads and final check/use remain gates. See
+[recipe-generation evidence](rust-recipe-generation.json).
+
+Next implementation follows the existing Task 3 authority boundary: use
+`compile_inputs.rs` for typed exact prepared targets/deterministic input plans,
+then `compile_fixture.rs` for create-new owned byte staging and revalidation.
+Bind the full root-source inventory, exact config and admitted runtime/tool-tree
+provenance; reject aliases, partial capture and stale selection before any spawn.
+The current Python offline PlatformIO wrapper reads application settings through
+`offline_mode`; a replacement tool-only entry must receive native policy and
+must not import Python application configuration. A later finite native process
+owner may run one literal already-prepared C++/Arduino sample, with installed-only
+dependencies and unchanged storage/CPU/process cleanup bounds. Valid native
+recipes with no compatibility override need verified-target evidence separately
+from the generation service's intentional `NoRecipe` refusal. Cooperative leases
+alone do not prove immutable tool inputs or close final check/use races.

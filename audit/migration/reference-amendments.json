@@ -2,7 +2,7 @@
   "schema_version": 1,
   "date": "2026-10-20",
   "legacy_reference_commit": "1d00ff0bfdac7d158dde3df84b07741c5b1df6d4",
-  "current_checkpoint_commit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+  "current_checkpoint_commit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
   "baseline_inventory": "source-inventory.json",
   "method": "Inventory SHA-256 values capture the original checkout bytes; committed Git blob hashes are separate. Checkout line-ending variants include LF, CRLF, mixed and doubled CRLF. Baseline hashes are preserved, not regenerated. Current hashes explain only intentional migration-owned amendments; unrelated installer/catalog/bootstrap changes are excluded.",
   "scope": "Reference amendments, not proof of full feature parity or production migration approval.",
@@ -363,8 +363,8 @@
       "path": ".github/workflows/migration-prototype.yml",
       "kind": "migration-ci",
       "original_sha256": null,
-      "current_sha256": "61018991566197d192126605f4cf9ca6052a240575b0a9c11e98debc7066b561",
-      "current_bytes": 15980,
+      "current_sha256": "9e38475fed910dd8e557222531a07308c53b704d09cc8aa7031fca914f624277",
+      "current_bytes": 16388,
       "reason": "Separate fixture-only native prototype matrix on Ubuntu 24.04 AMD64/ARM64 and Windows Server 2022, plus both Windows legacy-editor binding ranges at 100%/200%; not Windows 10/11 desktop or USB qualification. Checkpoint 4b42146 additionally requests Linux native-widget Rust/controller/path/smoke checks and portable Windows protocol checks; current runs are unqualified until actual results arrive.",
       "historical_versions": [
         {

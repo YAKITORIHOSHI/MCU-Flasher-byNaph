@@ -47,7 +47,10 @@ and Arduino Q policy milestone is recorded in
 [compatibility evidence](audit/migration/rust-board-compatibility.json); live
 package reading and build integration remain unfinished. The focused backend
 checks pass on Ubuntu AMD64/ARM64 (136 tests/987 decisions) and Windows
-(132 tests/979 decisions), with explicit platform/parser limits. Real Windows 10/11 desktops, native input and full
+(132 tests/979 decisions), with explicit platform/parser limits. Native package-change
+observations now also pass on both Ubuntu architectures (148 backend tests/31
+process checks) and Windows (144/23); see
+[recipe-generation evidence](audit/migration/rust-recipe-generation.json). Real Windows 10/11 desktops, native input and full
 design parity still need qualification. Full application parity remains
 unfinished: all 67 ledger entries
 remain 14 partial fixture subsets and 53 pending, with no Python application

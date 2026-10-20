@@ -1,0 +1,498 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+  "recordedAtUtc": "2026-10-20T15:27:37.742728+00:00",
+  "scope": "Reusable native host module and fixed framed probe for owned fixture recipe observations; no production package/build authority.",
+  "implementation": {
+    "reader": "Extract the existing descriptor reader and four units into recipe_snapshot; reuse borrowed-File native identity helper through crate-private visibility.",
+    "authority": "Pin native root/absolute-prefix identities; bind one monotonic current generation to native authority instance, exact selection/backend/manifest, host, rule/options and complete consulted-input inventory.",
+    "observation": "Opaque nonserializable receipt retains directory/file handles, exact raw SHA-256/length and private native paths. Capture/revalidation reread all consulted bytes and recompute original policy.",
+    "refusals": "Stale/foreign/changed/partial/empty decisions refuse; failed capture or revalidation invalidates the current generation. NoRecipe never grants a valid generation.",
+    "limits": {
+      "directoriesPerObservation": 48,
+      "filesPerObservation": 8,
+      "authorityPrefixHandles": 48,
+      "metadataBytesPerFile": 65536,
+      "consultedBytesPerObservation": 524288,
+      "scalarSelectionBytes": 1024,
+      "manifestOsStringBytes": 4096,
+      "captureAttemptsPerAuthority": 64,
+      "probeFrameBytes": 8192,
+      "probeCommands": 64,
+      "probeIdleSeconds": 10
+    },
+    "lifecycle": "Probe retains one receipt. Trusted native library callers own each receipt until Drop; invalidating a token does not drop caller-held handles. No global caller-owned memory/handle cap is claimed.",
+    "remainingRaceBoundary": "Observable identity/content differences are refused. Active ABA, non-atomic concurrent reads, filesystem-driver/output stalls and the final check/use gap remain unqualified."
+  },
+  "localVerification": {
+    "defaultBackendTestsPassed": 148,
+    "nativeModuleUnitsPassed": 14,
+    "newUnitsWithinModule": 10,
+    "existingUnitsMoved": 4,
+    "newProbeUnitsPassed": 2,
+    "strictLinuxAndMsvcAllTargetsClippy": true,
+    "formatCheckPassed": true,
+    "generationController": {
+      "passed": true,
+      "checks": [
+        "onehorse:stable-monotonic-stale-foreign-target-clear-read-only",
+        "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+        "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32-esp32-libs/package.json",
+        "onehorse:same-size-mtime:core/platforms/espressif32/boards/onehorse32dev.json",
+        "onehorse:same-size-mtime:core/platforms/espressif32/platform.json",
+        "onehorse:same-policy-same-size-mtime-different-bytes",
+        "onehorse:same-bytes-new-leaf",
+        "onehorse:same-leaf-new-ancestor",
+        "minimain:stable-monotonic-stale-foreign-target-clear-read-only",
+        "minimain:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+        "minimain:same-size-mtime:core/packages/framework-arduinoespressif32-esp32s2-libs/package.json",
+        "minimain:same-size-mtime:core/platforms/espressif32/boards/minimain_esp32s2.json",
+        "minimain:same-size-mtime:core/platforms/espressif32/platform.json",
+        "minimain:same-policy-same-size-mtime-different-bytes",
+        "minimain:same-bytes-new-leaf",
+        "minimain:same-leaf-new-ancestor",
+        "q:stable-monotonic-stale-foreign-target-clear-read-only",
+        "q:same-size-mtime:core/packages/framework-arduino-zephyr/package.json",
+        "q:same-size-mtime:core/platforms/arduinoq/boards/uno_q.json",
+        "q:same-size-mtime:core/platforms/arduinoq/builder/artifacts/zephyr-llext.py",
+        "q:same-size-mtime:core/platforms/arduinoq/platform.json",
+        "q:same-size-mtime:application/src/modules/arduinoq_link_paths.py",
+        "q:same-policy-same-size-mtime-different-bytes",
+        "q:same-bytes-new-leaf",
+        "q:same-leaf-new-ancestor",
+        "same-root-new-fixture-ancestor",
+        "failed-capture-invalidates-older-observation",
+        "invalid-request-cannot-reuse-older-observation",
+        "invalid-utf8-json-frame-and-command-bounds",
+        "idle-input-deadline-releases-process",
+        "checkout-and-scratch-parent-cannot-be-adopted"
+      ],
+      "checksPassed": 31,
+      "framedExchanges": 144,
+      "platform": "linux",
+      "architecture": "x86_64",
+      "fixtureOnly": true,
+      "exactRawFixtureHashes": true,
+      "nativeSourceWrites": false,
+      "controllerMutatesOwnedFixtures": true,
+      "livePackageAccess": false,
+      "hardwareAccess": false,
+      "buildAuthority": false,
+      "finalUseRaceQualified": false,
+      "pythonApplicationServicesRetired": 0
+    },
+    "compatibilityDifferential": {
+      "reference": "main/core/platformio_board_compat.py",
+      "equivalentComparisons": 987,
+      "positiveDecisions": 29,
+      "emptyDecisions": 958,
+      "typedRefusals": 149,
+      "noReadChecks": 870,
+      "structuralRefusals": 3,
+      "protocolBoundaryChecks": 32,
+      "platformSkips": 0,
+      "referenceExceptions": 4,
+      "strictParserRefusals": 21,
+      "passed": true,
+      "platform": "linux",
+      "architecture": "x86_64",
+      "nativeDescriptorSnapshots": true,
+      "exactRawFixtureHashes": true,
+      "fixtureOnly": true,
+      "productionImports": false,
+      "hardwareAccess": false,
+      "livePackageAccess": false,
+      "packageWrites": false,
+      "buildAuthority": false,
+      "packageRaceQualification": false,
+      "pythonServicesRetired": 0
+    },
+    "receipts": [
+      {
+        "path": "scratch/recipe-generation-native-LCltpT/default-tests.log",
+        "bytes": 18409,
+        "sha256": "fe754e642b770c6af591126e828a15614d89424842c0f420985aa5b06c97dbee"
+      },
+      {
+        "path": "scratch/recipe-generation-native-LCltpT/clippy-linux.log",
+        "bytes": 180,
+        "sha256": "02e8b52d4a3b1cbac8bd2170866e623cc618f18c03125f9b80a97339cb324d64"
+      },
+      {
+        "path": "scratch/recipe-generation-native-LCltpT/clippy-msvc.log",
+        "bytes": 180,
+        "sha256": "d10fffcfdd1eaec12746cab8384efb4b1806da35ce781e6482a8c548012bf67a"
+      },
+      {
+        "path": "scratch/recipe-generation-native-LCltpT/fmt.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "scratch/native-ui/recipe-generation-local.json",
+        "bytes": 2201,
+        "sha256": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978"
+      },
+      {
+        "path": "scratch/native-ui/recipe-generation-compatibility-local.json",
+        "bytes": 647,
+        "sha256": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688"
+      }
+    ]
+  },
+  "review": {
+    "report": {
+      "path": "scratch/native-ui/recipe-generation-review.md",
+      "bytes": 13903,
+      "sha256": "277ab8a7af5c96e6e925cdfb6df756a23567e55b5334186c6ec315c5c13ff966"
+    },
+    "verdict": "No actionable runtime finding in frozen source; Windows fixture-construction concern corrected and rereviewed.",
+    "independentTestRunsClaimed": false,
+    "implementationReport": {
+      "path": "scratch/recipe-generation-native-LCltpT/implementation-report.md",
+      "bytes": 4304,
+      "sha256": "a6a85797fe0620b7034cdc9cabdf9b8c42d7452321a0229aa9b848d9f29c9a9d"
+    },
+    "controllerCorrectionRereview": "Clean scoped independent rereview; no Rust source or full-review rerun."
+  },
+  "ci": {
+    "runId": 39447542929,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39447542929",
+    "sourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+    "backendOnly": true,
+    "status": "completed",
+    "conclusion": "failure",
+    "nativeHostResultsClaimed": true,
+    "jobsPassed": 2,
+    "jobsExecuted": 3,
+    "windowsFailure": "All144 Rust units/strict checks and951/979 differentials passed; controller os.replace failed with WinError5 on an intentionally retained open file before revalidation."
+  },
+  "sourceFiles": [
+    {
+      "path": ".github/workflows/migration-prototype.yml",
+      "bytes": 16388,
+      "sha256": "9e38475fed910dd8e557222531a07308c53b704d09cc8aa7031fca914f624277"
+    },
+    {
+      "path": "desktop/crates/host/src/lib.rs",
+      "bytes": 23384,
+      "sha256": "15362f4f2a56b6431b5d1613b0498d9a1ba84fc3995635a04703562d1753d84a"
+    },
+    {
+      "path": "desktop/crates/host/src/file_identity.rs",
+      "bytes": 29848,
+      "sha256": "313d4caf371295755624b0c47831579b31f25cd1194ed805c87574b3b48b1126"
+    },
+    {
+      "path": "desktop/crates/host/src/bin/board_compatibility_probe.rs",
+      "bytes": 3283,
+      "sha256": "ab19474761d3abec6518dc11f5ef37a79eba27a915fdf0d32fda1f450ab0c7b8"
+    },
+    {
+      "path": "desktop/crates/host/src/recipe_snapshot.rs",
+      "bytes": 40258,
+      "sha256": "8a22ca8ba2123efcb01d30cd03c866db82fecf43e0b8e9cf72643fbb02494a5d"
+    },
+    {
+      "path": "desktop/crates/host/src/bin/recipe_generation_probe.rs",
+      "bytes": 9593,
+      "sha256": "446a3b3815c93a84ed8e3d767c58586da234e0dc219c2f324912c821b43adf58"
+    },
+    {
+      "path": "desktop/scripts/verify-recipe-generation.py",
+      "bytes": 18179,
+      "sha256": "2df6ff66edd7844f9d1c3f6bec0f9919b315e604baca1684cfcf723889f311eb"
+    }
+  ],
+  "remaining": [
+    "Production exact-target/catalog and source-save/staging orchestration.",
+    "Immutable package/tool generation or coordinated package lease and final-use binding before tool dispatch.",
+    "Original wider JSON/non-UTF8 path parity; native device/desktop/input/package/install/rollback qualification.",
+    "Remaining Rust GUI/backend services and full BLD-01."
+  ],
+  "ledger": {
+    "capabilities": 67,
+    "partial": 14,
+    "pending": 53
+  },
+  "pythonApplicationServicesRetired": 0,
+  "releaseQualified": false,
+  "latestCodeCheckpoint": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+  "followupCi": {
+    "sourceCommit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+    "runId": 39448048718,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39448048718",
+    "status": "completed",
+    "conclusion": "success",
+    "backendOnly": true,
+    "windowsOnly": true,
+    "jobsPassed": 1,
+    "defaultBackendTestsPassed": 144,
+    "generationChecksPassed": 23,
+    "compatibilityDecisionsPassed": 979,
+    "releaseQualified": false
+  },
+  "hostedVerification": [
+    {
+      "host": "ubuntu-24.04",
+      "sourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+      "runId": 39447542929,
+      "conclusion": "success",
+      "defaultBackendTestsPassed": 148,
+      "generation": {
+        "passed": true,
+        "checks": [
+          "onehorse:stable-monotonic-stale-foreign-target-clear-read-only",
+          "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+          "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32-esp32-libs/package.json",
+          "onehorse:same-size-mtime:core/platforms/espressif32/boards/onehorse32dev.json",
+          "onehorse:same-size-mtime:core/platforms/espressif32/platform.json",
+          "onehorse:same-policy-same-size-mtime-different-bytes",
+          "onehorse:same-bytes-new-leaf",
+          "onehorse:same-leaf-new-ancestor",
+          "minimain:stable-monotonic-stale-foreign-target-clear-read-only",
+          "minimain:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+          "minimain:same-size-mtime:core/packages/framework-arduinoespressif32-esp32s2-libs/package.json",
+          "minimain:same-size-mtime:core/platforms/espressif32/boards/minimain_esp32s2.json",
+          "minimain:same-size-mtime:core/platforms/espressif32/platform.json",
+          "minimain:same-policy-same-size-mtime-different-bytes",
+          "minimain:same-bytes-new-leaf",
+          "minimain:same-leaf-new-ancestor",
+          "q:stable-monotonic-stale-foreign-target-clear-read-only",
+          "q:same-size-mtime:core/packages/framework-arduino-zephyr/package.json",
+          "q:same-size-mtime:core/platforms/arduinoq/boards/uno_q.json",
+          "q:same-size-mtime:core/platforms/arduinoq/builder/artifacts/zephyr-llext.py",
+          "q:same-size-mtime:core/platforms/arduinoq/platform.json",
+          "q:same-size-mtime:application/src/modules/arduinoq_link_paths.py",
+          "q:same-policy-same-size-mtime-different-bytes",
+          "q:same-bytes-new-leaf",
+          "q:same-leaf-new-ancestor",
+          "same-root-new-fixture-ancestor",
+          "failed-capture-invalidates-older-observation",
+          "invalid-request-cannot-reuse-older-observation",
+          "invalid-utf8-json-frame-and-command-bounds",
+          "idle-input-deadline-releases-process",
+          "checkout-and-scratch-parent-cannot-be-adopted"
+        ],
+        "checksPassed": 31,
+        "framedExchanges": 144,
+        "platform": "linux",
+        "architecture": "x86_64",
+        "fixtureOnly": true,
+        "exactRawFixtureHashes": true,
+        "nativeSourceWrites": false,
+        "controllerMutatesOwnedFixtures": true,
+        "livePackageAccess": false,
+        "hardwareAccess": false,
+        "buildAuthority": false,
+        "finalUseRaceQualified": false,
+        "pythonApplicationServicesRetired": 0
+      },
+      "compatibilityDecisionsPassed": 987,
+      "compatibilityProtocolChecksPassed": 32,
+      "earlierRecipeDecisionsPassed": 951,
+      "earlierRecipeProtocolChecksPassed": 11,
+      "receipts": [
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04/backend-unit.log",
+          "bytes": 20733,
+          "sha256": "0ab22aea0891d1e3982b3325fec482f749b701d8181c0532cceb9a9b1a5f7f5d"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04/recipe-generation-rust.json",
+          "bytes": 2201,
+          "sha256": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04/board-compatibility-rust.json",
+          "bytes": 647,
+          "sha256": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04/board-recipe-rust.json",
+          "bytes": 541,
+          "sha256": "4334c0b34f145b92f17cbdcd99acc309ef5f9e5decd7ac5c42fe5a0ae518d6e6"
+        }
+      ]
+    },
+    {
+      "host": "ubuntu-24.04-arm",
+      "sourceCommit": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+      "runId": 39447542929,
+      "conclusion": "success",
+      "defaultBackendTestsPassed": 148,
+      "generation": {
+        "passed": true,
+        "checks": [
+          "onehorse:stable-monotonic-stale-foreign-target-clear-read-only",
+          "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+          "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32-esp32-libs/package.json",
+          "onehorse:same-size-mtime:core/platforms/espressif32/boards/onehorse32dev.json",
+          "onehorse:same-size-mtime:core/platforms/espressif32/platform.json",
+          "onehorse:same-policy-same-size-mtime-different-bytes",
+          "onehorse:same-bytes-new-leaf",
+          "onehorse:same-leaf-new-ancestor",
+          "minimain:stable-monotonic-stale-foreign-target-clear-read-only",
+          "minimain:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+          "minimain:same-size-mtime:core/packages/framework-arduinoespressif32-esp32s2-libs/package.json",
+          "minimain:same-size-mtime:core/platforms/espressif32/boards/minimain_esp32s2.json",
+          "minimain:same-size-mtime:core/platforms/espressif32/platform.json",
+          "minimain:same-policy-same-size-mtime-different-bytes",
+          "minimain:same-bytes-new-leaf",
+          "minimain:same-leaf-new-ancestor",
+          "q:stable-monotonic-stale-foreign-target-clear-read-only",
+          "q:same-size-mtime:core/packages/framework-arduino-zephyr/package.json",
+          "q:same-size-mtime:core/platforms/arduinoq/boards/uno_q.json",
+          "q:same-size-mtime:core/platforms/arduinoq/builder/artifacts/zephyr-llext.py",
+          "q:same-size-mtime:core/platforms/arduinoq/platform.json",
+          "q:same-size-mtime:application/src/modules/arduinoq_link_paths.py",
+          "q:same-policy-same-size-mtime-different-bytes",
+          "q:same-bytes-new-leaf",
+          "q:same-leaf-new-ancestor",
+          "same-root-new-fixture-ancestor",
+          "failed-capture-invalidates-older-observation",
+          "invalid-request-cannot-reuse-older-observation",
+          "invalid-utf8-json-frame-and-command-bounds",
+          "idle-input-deadline-releases-process",
+          "checkout-and-scratch-parent-cannot-be-adopted"
+        ],
+        "checksPassed": 31,
+        "framedExchanges": 144,
+        "platform": "linux",
+        "architecture": "aarch64",
+        "fixtureOnly": true,
+        "exactRawFixtureHashes": true,
+        "nativeSourceWrites": false,
+        "controllerMutatesOwnedFixtures": true,
+        "livePackageAccess": false,
+        "hardwareAccess": false,
+        "buildAuthority": false,
+        "finalUseRaceQualified": false,
+        "pythonApplicationServicesRetired": 0
+      },
+      "compatibilityDecisionsPassed": 987,
+      "compatibilityProtocolChecksPassed": 32,
+      "earlierRecipeDecisionsPassed": 951,
+      "earlierRecipeProtocolChecksPassed": 11,
+      "receipts": [
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04-arm/backend-unit.log",
+          "bytes": 20733,
+          "sha256": "674eefb204fb569eb4a8adf99d604a8742bd91fb6f9364f312d6e5f8d3946868"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04-arm/recipe-generation-rust.json",
+          "bytes": 2202,
+          "sha256": "ec5fcbebff973d5bf605c5ddff95b01c29e9642dbf5abf9be0b450b018e935bf"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04-arm/board-compatibility-rust.json",
+          "bytes": 648,
+          "sha256": "9b17d3275ab74d359a422f2f929e7af89eb9e2a11b1c3aedc61db83e54f6e646"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-30d99af/migration-backend-ubuntu-24.04-arm/board-recipe-rust.json",
+          "bytes": 542,
+          "sha256": "5cde2f19f7b49e92c3841cd3e713717fa050eca80321aedd196af2ea0f3a88fe"
+        }
+      ]
+    },
+    {
+      "host": "windows-2022",
+      "sourceCommit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+      "runId": 39448048718,
+      "conclusion": "success",
+      "defaultBackendTestsPassed": 144,
+      "generation": {
+        "passed": true,
+        "checks": [
+          "onehorse:stable-monotonic-stale-foreign-target-clear-read-only",
+          "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+          "onehorse:same-size-mtime:core/packages/framework-arduinoespressif32-esp32-libs/package.json",
+          "onehorse:same-size-mtime:core/platforms/espressif32/boards/onehorse32dev.json",
+          "onehorse:same-size-mtime:core/platforms/espressif32/platform.json",
+          "onehorse:same-policy-same-size-mtime-different-bytes",
+          "onehorse:same-bytes-new-leaf",
+          "onehorse:same-leaf-new-ancestor",
+          "minimain:stable-monotonic-stale-foreign-target-clear-read-only",
+          "minimain:same-size-mtime:core/packages/framework-arduinoespressif32/package.json",
+          "minimain:same-size-mtime:core/packages/framework-arduinoespressif32-esp32s2-libs/package.json",
+          "minimain:same-size-mtime:core/platforms/espressif32/boards/minimain_esp32s2.json",
+          "minimain:same-size-mtime:core/platforms/espressif32/platform.json",
+          "minimain:same-policy-same-size-mtime-different-bytes",
+          "minimain:same-bytes-new-leaf",
+          "minimain:same-leaf-new-ancestor",
+          "same-root-new-fixture-ancestor",
+          "failed-capture-invalidates-older-observation",
+          "invalid-request-cannot-reuse-older-observation",
+          "non-linux-q-never-produces-generation",
+          "invalid-utf8-json-frame-and-command-bounds",
+          "idle-input-deadline-releases-process",
+          "checkout-and-scratch-parent-cannot-be-adopted"
+        ],
+        "checksPassed": 23,
+        "framedExchanges": 104,
+        "platform": "win32",
+        "architecture": "AMD64",
+        "fixtureOnly": true,
+        "exactRawFixtureHashes": true,
+        "nativeSourceWrites": false,
+        "controllerMutatesOwnedFixtures": true,
+        "livePackageAccess": false,
+        "hardwareAccess": false,
+        "buildAuthority": false,
+        "finalUseRaceQualified": false,
+        "pythonApplicationServicesRetired": 0
+      },
+      "compatibilityDecisionsPassed": 979,
+      "compatibilityProtocolChecksPassed": 32,
+      "earlierRecipeDecisionsPassed": 951,
+      "earlierRecipeProtocolChecksPassed": 11,
+      "receipts": [
+        {
+          "path": "scratch/recipe-generation-ci-002cc95/migration-backend-windows-2022/backend-unit.log",
+          "bytes": 20909,
+          "sha256": "8af4fccdc9708926e606daec2d41be408cf072a40a43a5c70e65e637f2d762ce"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-002cc95/migration-backend-windows-2022/recipe-generation-rust.json",
+          "bytes": 1739,
+          "sha256": "655094e2932d14c4417e65f695e523fa20a462d0c2594b6330d76643ea630d17"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-002cc95/migration-backend-windows-2022/board-compatibility-rust.json",
+          "bytes": 650,
+          "sha256": "cb38cb9be1731b8a0b93efc47a5902deaf1f24fd3d86edcfcc48d817355ee49c"
+        },
+        {
+          "path": "scratch/recipe-generation-ci-002cc95/migration-backend-windows-2022/board-recipe-rust.json",
+          "bytes": 543,
+          "sha256": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65"
+        }
+      ]
+    }
+  ],
+  "controllerCorrection": {
+    "sourceCommit": "002cc95da9aec9a39f2ba9743123cf9c1c5bb867",
+    "runtimeSourceUnchangedFrom": "30d99af7ef85526873b97e3bf6b89856c1c010fd",
+    "onlyChangedPath": "desktop/scripts/verify-recipe-generation.py",
+    "cause": "Windows refused direct overwrite of a retained open file in the mutation controller.",
+    "fix": "Rename original aside, install distinct same-byte replacement, assert unchanged bytes and a different native file identity; mirrors the already-passing Rust unit.",
+    "localPortableReceipt": {
+      "path": "scratch/native-ui/recipe-generation-local-portable.json",
+      "bytes": 2201,
+      "sha256": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978"
+    },
+    "failureLog": {
+      "path": "scratch/native-ui/recipe-generation-windows-failure.log",
+      "bytes": 6303,
+      "sha256": "688eec8fb7fb2581a2ac5e4cbbf5fc6639cec70f15d951ced69ddd5c03a21729"
+    },
+    "sourceSha256": "4f209f25d59b12c7852621b22a730c5bfa2b2ed6fb00f54ff2ec8112766c1c1b"
+  },
+  "nextBuildInvestigation": {
+    "path": "scratch/native-ui/next-rust-build-slice.md",
+    "bytes": 11870,
+    "sha256": "cbbf78a01bae8f2acd5e2ac12f4541aa7bbd33456b684d6d626dbf1f4c3a46e6"
+  }
+}

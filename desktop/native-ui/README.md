@@ -303,3 +303,10 @@ The separate Rust compatibility backend milestone is recorded in
 It adds bounded owned-fixture metadata reads and Linux Arduino Q policy, with
 no native GUI/build dispatch or production package authority. Use the existing
 migration workflow’s `backend_only` option for focused native backend checks.
+
+The native recipe observation service is now a reusable fixture-only host module:
+[recipe-generation evidence](../../audit/migration/rust-recipe-generation.json).
+It checks retained ancestor/file identity and all raw consulted bytes, including
+same-size/restored-timestamp changes. Ubuntu passes 148 backend tests/31 process
+checks; Windows passes 144/23. It adds no live GUI Compile or package authority;
+active ABA and final check/use races remain explicit qualification limits.

@@ -100,6 +100,15 @@ or package-generation authority. Keep ordinary differential matches separate
 from original exceptions and stricter JSON/path refusals. The `backend_only`
 workflow input runs native backend checks without GUI/editor dependencies.
 
+`FixtureRecipeAuthority` in `host/recipe_snapshot.rs` pins native ancestors and
+consulted files, binds native selection/host/options, and rereads raw bytes.
+See `audit/migration/rust-recipe-generation.json` and run
+`desktop/scripts/verify-recipe-generation.py` for owned mutation/protocol checks.
+Receipts remain opaque worker observations; stale/failed/empty results refuse.
+Their per-observation limits do not freeze packages or close active ABA/final-use
+races. The current Python offline wrapper imports app settings, so a later Rust
+compile worker needs an explicit tool-only policy/runtime boundary before spawn.
+
 For explicitly requested configured-index board qualification, use
 `direct/BOARD_COMPILE_CAMPAIGN.md`. Keep inventories, package stores and real
 sample builds isolated in owned scratch, record every unresolved/ambiguous

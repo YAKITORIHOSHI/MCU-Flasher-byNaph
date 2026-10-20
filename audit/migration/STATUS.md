@@ -1,5 +1,21 @@
 # Migration status
 
+The native recipe-generation checkpoint `30d99af` now pins observed root,
+ancestor and file identities, binds exact native selection/host/rule/options,
+and rereads every consulted raw input before accepting revalidation. Stale,
+foreign, incomplete, empty or changed observations refuse. Both Ubuntu hosts
+pass 148 backend tests and 31 process checks in CI `39447542929`. Its Windows
+Rust suite passes all 144 tests; a controller overwrite of an open retained file
+fails before revalidation. Controller-only `002cc95` mirrors the passing native
+rename-aside fixture, asserts new leaf identity/same bytes, and passes all 23
+Windows process checks plus 144 tests in `39448048718`. Prior 987/979 compatibility
+and 951 recipe comparisons remain passing. No Rust runtime source changes in
+that follow-up; preserve both exact sources and the initial controller failure.
+Opaque fixture observations grant no execution permission or immutable package
+identity. Active ABA, non-atomic reads and final check/use remain gates. See
+[recipe-generation evidence](rust-recipe-generation.json).
+
+
 At `26c7675`, Rust adds development-only descriptor snapshots and exact
 Arduino Q compatibility selection, reusing the unchanged Onehorse/MiniMain
 policy. Native probe reads use bounded regular-file handles and native identity;
