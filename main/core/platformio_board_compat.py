@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 
@@ -50,15 +51,31 @@ def onehorse_recipe_options(platform_name, board_id, framework, *, board, platfo
     return {"board_build.boot": "dio", "board_build.arduino.memory_type": "dio_qspi"}
 
 
-def _read_metadata(path, boundary):
-    """Read one regular, bounded selected metadata file without writing a store."""
+def _read_recipe_bytes(path, boundary):
+    """Read a bounded regular file; never block on a replaced pipe or device."""
     path = Path(path)
-    if not stat.S_ISREG(path.lstat().st_mode) or not path.resolve(strict=True).is_relative_to(boundary):
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or not path.resolve(strict=True).is_relative_to(boundary):
         raise ValueError("Compatibility metadata must be a regular file inside the selected core")
-    with path.open("rb") as source:
-        raw = source.read(65537)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        selected = os.fstat(descriptor)
+        if (not stat.S_ISREG(selected.st_mode)
+                or (selected.st_dev, selected.st_ino) != (before.st_dev, before.st_ino)):
+            raise ValueError("Compatibility input changed before its bounded read")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            raw = source.read(65537)
+    finally:
+        os.close(descriptor)
     if len(raw) > 65536:
         raise ValueError("Compatibility metadata exceeds 64 KiB")
+    return raw
+
+
+def _read_metadata(path, boundary):
+    """Read one regular, bounded selected metadata file without writing a store."""
+    raw = _read_recipe_bytes(path, boundary)
     value = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(value, dict):
         raise ValueError("Compatibility metadata must be a JSON object")
@@ -169,19 +186,17 @@ def _arduinoq_options(info, core_dir):
         board_raw, _ = _read_metadata(manifest, platforms.resolve())
         platform_raw, _ = _read_metadata(manifest.parent.parent / "platform.json", platforms.resolve())
         linker = manifest.parent.parent / "builder/artifacts/zephyr-llext.py"
-        if linker.is_symlink() or not linker.resolve(strict=True).is_relative_to(platforms.resolve()) or linker.stat().st_size > 65536:
-            return {}
+        linker_raw = _read_recipe_bytes(linker, platforms.resolve())
         if (hashlib.sha256(board_raw).hexdigest() != _UNOQ_BOARD_SHA256
                 or hashlib.sha256(platform_raw).hexdigest() != _UNOQ_PLATFORM_SHA256
-                or hashlib.sha256(linker.read_bytes()).hexdigest() != _UNOQ_LINKER_SHA256):
+                or hashlib.sha256(linker_raw).hexdigest() != _UNOQ_LINKER_SHA256):
             return {}
         _, framework = _read_metadata(packages / "framework-arduino-zephyr/package.json", packages.resolve(strict=True))
         if (framework.get("name"), framework.get("version")) != ("framework-arduino-zephyr", "0.56.0-leelabskku+unoq"):
             return {}
         hook = Path(__file__).resolve().parents[2] / "src/modules/arduinoq_link_paths.py"
-        with hook.open("rb") as source:
-            raw = source.read(65537)
-        if hook.is_symlink() or len(raw) > 65536 or any(ord(char) < 32 for char in str(hook)):
+        raw = _read_recipe_bytes(hook, Path(__file__).resolve().parents[2])
+        if any(ord(char) < 32 for char in str(hook)):
             return {}
         return {"extra_scripts": "post:" + hook.as_posix(),
                 "custom_mcu_arduinoq_hook_sha256": hashlib.sha256(raw).hexdigest()}

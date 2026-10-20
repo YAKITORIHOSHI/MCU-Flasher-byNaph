@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -230,6 +231,42 @@ class UnoQChecks(unittest.TestCase):
         self.assertIn("extra_scripts = post:",text)
         (root/"builder/artifacts/zephyr-llext.py").write_bytes(b"Changed future builder")
         self.assertEqual(compat.board_compatibility_options(info,self.core),{})
+
+    @unittest.skipUnless(sys.platform == "linux", "FIFO refusal exercises native Linux file reads")
+    def test_recipe_reader_refuses_fifo_oversize_and_file_replacement_without_blocking(self):
+        # A separate bounded process makes a regression fail instead of hanging
+        # the verifier itself. It owns every fixture and starts no descendants.
+        code = '''
+import os
+from unittest import mock
+from direct.verify_platformio_board_compat import UnoQChecks, compat
+case = UnoQChecks()
+case.setUp()
+try:
+    root, info = case.prepare_unoq()
+    linker = root / "builder/artifacts/zephyr-llext.py"
+    linker.unlink()
+    os.mkfifo(linker)
+    assert compat.board_compatibility_options(info, case.core) == {}
+    linker.unlink()
+    linker.write_bytes(b"x" * 65537)
+    assert compat.board_compatibility_options(info, case.core) == {}
+    root, info = case.prepare_unoq()
+    manifest = root / "boards/uno_q.json"
+    original_open = os.open
+    def replace_before_open(path, flags):
+        if path == manifest:
+            path.unlink()
+            os.mkfifo(path)
+        return original_open(path, flags)
+    with mock.patch.object(compat.os, "open", replace_before_open):
+        assert compat.board_compatibility_options(info, case.core) == {}
+finally:
+    case.doCleanups()
+'''
+        result = subprocess.run([sys.executable, "-W", "error", "-c", code], cwd=ROOT,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(sys.platform == "linux", "The UNO Q toolchain is native Linux only")
     def test_unoq_actual_app_ini_binds_hook_bytes_and_preserves_unchanged_write(self):

@@ -26,6 +26,9 @@ EXCLUDED = {'.git', '.venv-linux', '.venv', 'env', '_python', '.ubuntu-tools',
 STATE_NAMES = {'.mcu_gui_config.json', 'gui_config.json', 'dbs_notif.json',
                'arduino_browser_settings.json', 'arduino_cli_path.txt',
                '.owner_config.json', '.owner_tickets.json', '.mcu_cloud_link.json'}
+# The current Python application is the shipping product. The Rust prototype
+# and its audit evidence remain available in the repository, outside its ZIP.
+DEVELOPER_ROOTS = frozenset({'desktop', 'audit'})
 REQUIRED_RUNTIME = ('python.exe', 'pythonw.exe', 'python3.dll', 'python314.dll',
                     'vcruntime140.dll', 'vcruntime140_1.dll', 'Lib/os.py',
                     'Lib/encodings/__init__.py', 'Lib/site.py',
@@ -48,6 +51,20 @@ def plain_path(path):
     if stat.S_ISLNK(attributes.st_mode) or getattr(attributes, 'st_reparse_tag', 0):
         raise RuntimeError(f'Redirected release input refused: {path}')
     return attributes
+
+
+def include_committed_source(name):
+    """Classify archive entries without silently hiding accidental user state."""
+    path = PurePosixPath(name)
+    if path.is_absolute() or '..' in path.parts:
+        raise RuntimeError(f'Unsafe source entry: {path}')
+    if path.parts and path.parts[0] in DEVELOPER_ROOTS:
+        return False
+    if any(part in EXCLUDED for part in path.parts):
+        raise RuntimeError(f'Generated or protected source entry: {path}')
+    if path.name in STATE_NAMES or path.suffix in ('.pyc', '.pyo'):
+        raise RuntimeError(f'Personal state in committed sources: {path}')
+    return True
 
 
 def windows_runtime_files():
@@ -94,6 +111,8 @@ def build(output, report_dir):
         raise FileExistsError(f'Release output already exists: {output}')
     report_dir.mkdir(parents=True, exist_ok=True)
     entries, installers, normalizations, seen = [], [], [], set()
+    omissions = {name: {'committed_files': 0, 'committed_bytes': 0}
+                 for name in sorted(DEVELOPER_ROOTS)}
 
     def info_for(name, mode):
         if name.casefold() in seen:
@@ -134,10 +153,11 @@ def build(output, report_dir):
                     temporary, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
                 for member in archive:
                     path = PurePosixPath(member.name)
-                    if path.is_absolute() or '..' in path.parts or any(p in EXCLUDED for p in path.parts):
-                        raise RuntimeError(f'Generated, protected or unsafe source entry: {path}')
-                    if path.name in STATE_NAMES or path.suffix in ('.pyc', '.pyo'):
-                        raise RuntimeError(f'Personal state in committed sources: {path}')
+                    if not include_committed_source(member.name):
+                        if member.isfile():
+                            omissions[path.parts[0]]['committed_files'] += 1
+                            omissions[path.parts[0]]['committed_bytes'] += member.size
+                        continue
                     if member.isdir():
                         continue
                     if not member.isfile():
@@ -221,6 +241,7 @@ def build(output, report_dir):
                 'windows_private_runtime_files': len(runtime_files),
                 'windows_private_runtime_bytes': sum(item['size'] for item in runtime_entries.values()),
                 'verified_lfs_installers': installers, 'windows_crlf_entries': normalizations,
+                'omitted_developer_roots': omissions,
                 'ubuntu_launcher_cpu_and_permissions_verified': True,
                 'bootstrap_default': {'skip_updates': False}, 'entries': entries}
     (report_dir / 'release-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
