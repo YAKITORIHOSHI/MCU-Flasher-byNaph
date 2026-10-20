@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "recordedAtUtc": "2026-10-20T13:09:42.881630+00:00",
-  "latestCodeCheckpoint": "6ef749a1f55841359fc380a572265c8323408a15",
+  "recordedAtUtc": "2026-10-20T14:58:44.809712+00:00",
+  "latestCodeCheckpoint": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
   "scope": "Exact source runner fixtures only; not Windows 10/11 desktop or physical USB/installer qualification",
   "runs": {
     "latestPrototype": {
@@ -2383,5 +2383,60 @@
       "runtimeCiRepeated": false,
       "runtimeReceiptSource": "0e0db8ac2505db273c4750b2b44fca0502d31ed8"
     }
+  },
+  "boardCompatibilityCheckpoint": {
+    "sourceCommit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+    "initialCodeCheckpoint": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+    "receipt": "rust-board-compatibility.json",
+    "hostedNativeHostsPassed": 3,
+    "fullMatrixAtOneSource": false,
+    "hosts": [
+      {
+        "host": "ubuntu-24.04",
+        "sourceCommit": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+        "runId": 39443196583,
+        "unitsPassed": 136,
+        "compatibilityDecisionsPassed": 987,
+        "protocolChecksPassed": 32,
+        "conclusion": "success"
+      },
+      {
+        "host": "ubuntu-24.04-arm",
+        "sourceCommit": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+        "runId": 39443196583,
+        "unitsPassed": 136,
+        "compatibilityDecisionsPassed": 987,
+        "protocolChecksPassed": 32,
+        "conclusion": "success"
+      },
+      {
+        "host": "windows-2022",
+        "sourceCommit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+        "runId": 39443653534,
+        "unitsPassed": 132,
+        "compatibilityDecisionsPassed": 979,
+        "protocolChecksPassed": 32,
+        "conclusion": "success"
+      }
+    ],
+    "windowsCorrection": {
+      "sourceCommit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+      "runtimeReaderUnchangedFrom": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+      "changedPaths": [
+        "desktop/crates/host/src/bin/board_compatibility_probe.rs"
+      ],
+      "cause": "PathBuf::join normalizes parent segments when appending to a Windows canonical verbatim prefix; the test did not pass the literal alias it intended.",
+      "fix": "Construct literal native path units through OsString; assert parent segment survived, then exercise the same refusal guard.",
+      "reference": "https://doc.rust-lang.org/std/path/struct.PathBuf.html#method.push",
+      "initialFailureRetained": "scratch/board-compatibility-ci-26c7675/migration-backend-windows-2022/backend-unit.log",
+      "localFourNativeTestsAndMsvcClippyPassed": true,
+      "actualWindowsExecutionPassed": true,
+      "currentProbe": {
+        "path": "desktop/crates/host/src/bin/board_compatibility_probe.rs",
+        "sha256": "c43bb3ceb134d382848965796cea775393b211573d504c4172293880a616dae8"
+      }
+    },
+    "releaseQualified": false,
+    "pythonApplicationServicesRetired": 0
   }
 }

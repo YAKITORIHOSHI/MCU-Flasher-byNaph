@@ -67,6 +67,7 @@
 **Interfaces:** Trusted native window/service registry owns workspace revisions, leases and process/device observations. Existing pure ports and metadata-only identity APIs keep their current scope until explicit transactional write/recovery tests pass.
 
 - [x] Port the pure exact Onehorse/MiniMain recipe decisions at `69d845a`: seven new unit tests and 951 differential decisions (16 positive / 935 empty) plus 11 protocol checks. This subset performs no installed-metadata reading, Arduino Q hook selection or actual Rust compilation and does not complete BLD-01 or retire a service.
+- [x] Add fixture-only bounded native descriptor snapshots and exact Linux Arduino Q policy at `26c7675`; preserve wider JSON/path refusals as explicit limits. Both Ubuntu hosts pass 136 backend tests/987 decisions, and Windows passes 132 tests/979 decisions after the literal-parent fixture-only correction (`39443653534`); parser/path differences remain separately counted. This is a dependency milestone, not production package/build authority.
 - [ ] Complete exact target/catalog and build-input policy, source-save transactions/identity races/recovery, coexistence leases and activation/release.
 - [ ] Integrate Rust serial reader/Send worker and PTY/process ownership with finite deadlines and no replay/retry of hardware writes.
 - [ ] Port settings, cloud/auth/vault, downloader/package/setup/repair and native maintenance orchestration under the 67-capability ledger.
@@ -145,7 +146,7 @@ The shared fix recognizes original/canonical trusted-root spellings without
 changing the selected literal path; three local reader checks and GTK 35 pass.
 The full Windows 35-check path subsequently passes at `0e0db8a`.
 
-Current code is `6ef749a1f55841359fc380a572265c8323408a15`; its only change from
+The native-UI caption checkpoint is `6ef749a1f55841359fc380a572265c8323408a15`; its only change from
 CI-tested `0e0db8a` is “Select serial port” (strict MSVC/fmt checks). Combined
 Windows-only run `39426407678` passes at exact `0e0db8a` (one native job); four unchanged
 successful jobs retain their `297cae7` results. Native Project selection uses
@@ -240,3 +241,25 @@ The user explicitly authorized continuation. Continue remaining native applicati
 and Rust backend work without restarting the completed campaign. No new approval
 checkpoint is required for reversible implementation within these boundaries.
 Final deployment remains a separate concrete release decision.
+
+At `26c7675`, Rust adds development-only descriptor snapshots and exact
+Arduino Q compatibility selection, reusing the unchanged Onehorse/MiniMain
+policy. Native probe reads use bounded regular-file handles and native identity;
+fixed owned fixtures contain package metadata and a replica application hook.
+All 136 local backend tests pass. The Linux differential covers 987 matching
+decisions, with four Python exceptions, three stricter path refusals and 21
+parser refusals counted separately; 870 no-read and 32 protocol checks also pass.
+Both Ubuntu architectures pass backend CI `39443196583`: 136 backend tests,
+987 compatibility decisions and 32 protocol checks per host. Windows initially
+finds a test-construction issue: joining `..` onto a canonical verbatim prefix
+normalizes away the intended alias. `cc6a6d7` preserves literal OS units in that
+test only; runtime reader/core policy stay unchanged. Its Windows-only rerun
+`39443653534` passes 132 backend tests, 979 compatibility decisions and 32 protocol
+checks, with ten Linux-only cases skipped and 18 parser refusals recorded
+separately. Preserve the Ubuntu evidence at `26c7675`; no new combined full
+GUI/editor matrix is claimed.
+The new `backend_only` dispatch avoids GUI dependencies and retains compact
+receipts; the default five migration jobs remain intact. These snapshots grant
+no future build authority. Live package/ancestor/content races, wider JSON and
+non-UTF8 path parity, production reader/build integration and full BLD-01 remain
+open. See [compatibility evidence](rust-board-compatibility.json).

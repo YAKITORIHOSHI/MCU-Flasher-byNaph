@@ -15,7 +15,7 @@ tools. Support Ubuntu 24.04+ AMD64/ARM64 and Windows 10/11 AMD64. Preserve curre
 compact workflow/static glass, offline Monaco/xterm, fixed Firebase deployment,
 prepared offline tools, independent projects and editor/terminal/AI state.
 
-Latest recorded committed checkpoint is
+The earlier native-UI caption checkpoint is
 `6ef749a1f55841359fc380a572265c8323408a15` on
 `codex/rust-tauri-migration`. Only the “Select serial port” caption differs from
 tested `0e0db8a`; strict all-target MSVC Clippy/fmt pass and no Escape behavior
@@ -38,6 +38,31 @@ is no retirement approval. Do not restart, reduce scope to implemented probes or
 physical boards, regenerate baseline hashes, or publish an incomplete replacement.
 
 ## Current continuation
+
+Latest source is `cc6a6d7f5c482def023976f32e3759dfba1a4415`; documentation commits may advance HEAD. Codex Security and Firebase tools are installed and available; no scan or cloud action was started.
+
+At `26c7675`, Rust adds development-only descriptor snapshots and exact
+Arduino Q compatibility selection, reusing the unchanged Onehorse/MiniMain
+policy. Native probe reads use bounded regular-file handles and native identity;
+fixed owned fixtures contain package metadata and a replica application hook.
+All 136 local backend tests pass. The Linux differential covers 987 matching
+decisions, with four Python exceptions, three stricter path refusals and 21
+parser refusals counted separately; 870 no-read and 32 protocol checks also pass.
+Both Ubuntu architectures pass backend CI `39443196583`: 136 backend tests,
+987 compatibility decisions and 32 protocol checks per host. Windows initially
+finds a test-construction issue: joining `..` onto a canonical verbatim prefix
+normalizes away the intended alias. `cc6a6d7` preserves literal OS units in that
+test only; runtime reader/core policy stay unchanged. Its Windows-only rerun
+`39443653534` passes 132 backend tests, 979 compatibility decisions and 32 protocol
+checks, with ten Linux-only cases skipped and 18 parser refusals recorded
+separately. Preserve the Ubuntu evidence at `26c7675`; no new combined full
+GUI/editor matrix is claimed.
+The new `backend_only` dispatch avoids GUI dependencies and retains compact
+receipts; the default five migration jobs remain intact. These snapshots grant
+no future build authority. Live package/ancestor/content races, wider JSON and
+non-UTF8 path parity, production reader/build integration and full BLD-01 remain
+open. See [compatibility evidence](rust-board-compatibility.json).
+
 
 Read NATIVE_RUST_PLAN.md, native-rust-ui.json and board-compile-campaign.json first.
 Final GUI uses native Rust widgets; retain Monaco/xterm as embedded islands.

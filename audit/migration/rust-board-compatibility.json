@@ -1,0 +1,346 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+  "recordedAtUtc": "2026-10-20T14:58:44.809712+00:00",
+  "scope": "Development-only descriptor snapshots and exact recipe decisions. No production installed-package service, GUI build dispatch or script execution authority.",
+  "implementation": {
+    "core": "FixtureCompatibilityScope fixes an owned scratch root; typed native selection, host and reader trait orchestrate bounded snapshots.",
+    "nativeProbe": "Only probe implements Linux nonblocking/no-follow and Windows reparse-aware descriptor opens with native object identity and observable leaf replacement checks.",
+    "policy": "Reuse unchanged Onehorse/MiniMain decisions; select Arduino Q only on Linux with exact raw board/platform/linker hashes, framework identity and fixed owned hook replica.",
+    "limits": {
+      "metadataBytes": 65536,
+      "inputBytes": 1000000,
+      "cases": 256,
+      "outputBytes": 4000000
+    },
+    "readerLocation": "Development probe only; not a reusable live host service.",
+    "noReadRefusals": "Unknown exact target, Arduino CLI and Arduino Q on non-Linux perform no content reads."
+  },
+  "localVerification": {
+    "defaultBackendTestsPassed": 136,
+    "newCoreUnitsPassed": 6,
+    "newNativeReaderUnitsPassed": 4,
+    "strictLinuxAndMsvcAllTargetsClippy": true,
+    "formatCheckPassed": true,
+    "differential": {
+      "reference": "main/core/platformio_board_compat.py",
+      "equivalentComparisons": 987,
+      "positiveDecisions": 29,
+      "emptyDecisions": 958,
+      "typedRefusals": 149,
+      "noReadChecks": 870,
+      "structuralRefusals": 3,
+      "protocolBoundaryChecks": 32,
+      "platformSkips": 0,
+      "referenceExceptions": 4,
+      "strictParserRefusals": 21,
+      "passed": true,
+      "platform": "linux",
+      "architecture": "x86_64",
+      "nativeDescriptorSnapshots": true,
+      "exactRawFixtureHashes": true,
+      "fixtureOnly": true,
+      "productionImports": false,
+      "hardwareAccess": false,
+      "livePackageAccess": false,
+      "packageWrites": false,
+      "buildAuthority": false,
+      "packageRaceQualification": false,
+      "pythonServicesRetired": 0
+    },
+    "receipts": [
+      {
+        "path": "scratch/native-ui/board-compatibility-local.json",
+        "sha256": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688",
+        "bytes": 647
+      },
+      {
+        "path": "scratch/native-ui/board-compatibility-backend-tests.log",
+        "sha256": "06eac2cf33ee0484543fbdc2e9b49e11f1ce58e859c098219734e18924092bfb",
+        "bytes": 17165
+      },
+      {
+        "path": "scratch/native-ui/backend-linux-clippy.log",
+        "sha256": "a358689e0072a3a55c444a43ae85f90a32185e3b607c8d2678f1b8c753e0ae07",
+        "bytes": 180
+      },
+      {
+        "path": "scratch/native-ui/backend-msvc-clippy.log",
+        "sha256": "cd985cbd0d66c71be4739577c9671e8cc351db768658ad698510038078d373a2",
+        "bytes": 180
+      }
+    ]
+  },
+  "review": {
+    "report": "scratch/native-ui/board-compatibility-review.md",
+    "independentInterimFindingsAddressed": 2,
+    "independentFinalDifferentialPassed": true,
+    "finalIndependentReportInterrupted": "Account usage limit after final clean scoped message and independent differential rerun; owner recorded disposition and final source hashes.",
+    "ownerFinalVerificationPassed": true,
+    "workflowReport": "scratch/native-ui/backend-workflow-review.md",
+    "workflowActionableFindings": 0
+  },
+  "ci": {
+    "runId": 39443196583,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39443196583",
+    "sourceCommit": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+    "status": "completed",
+    "conclusion": "failure",
+    "backendOnly": true,
+    "jobs": [
+      {
+        "name": "backend-fixtures (ubuntu-24.04)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "name": "backend-fixtures (windows-2022)",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "name": "backend-fixtures (ubuntu-24.04-arm)",
+        "status": "completed",
+        "conclusion": "success"
+      },
+      {
+        "name": "Windows editor review (Python ${{ matrix.python }})",
+        "status": "completed",
+        "conclusion": "skipped"
+      },
+      {
+        "name": "native-prototype",
+        "status": "completed",
+        "conclusion": "skipped"
+      }
+    ]
+  },
+  "sourceFiles": [
+    {
+      "path": "desktop/crates/core/src/lib.rs",
+      "bytes": 36220,
+      "sha256": "f9c89169bd19c95201af4d72ea7fa11361c0d7d67af854081a79f79792244101"
+    },
+    {
+      "path": "desktop/crates/core/src/board_compatibility.rs",
+      "bytes": 17071,
+      "sha256": "b5f8704636791f466243b03cf7d5b508e22d4ea9405aa931730c9e5b3f1878f0"
+    },
+    {
+      "path": "desktop/crates/host/src/bin/board_compatibility_probe.rs",
+      "bytes": 15683,
+      "sha256": "c84fa3cf5e0eb2c0c978839720ceeaac126f8abe0e8d348083f9928aa6e97806"
+    },
+    {
+      "path": "desktop/scripts/verify-board-compatibility.py",
+      "bytes": 13142,
+      "sha256": "185f1d5a9808ae7dddc000795bd8ed596216f11a413853f983bb7cc96ff0ff4c"
+    },
+    {
+      "path": ".github/workflows/migration-prototype.yml",
+      "bytes": 15980,
+      "sha256": "61018991566197d192126605f4cf9ca6052a240575b0a9c11e98debc7066b561"
+    }
+  ],
+  "remaining": [
+    "Complete live native package identity, ancestor/content races and build-time revalidation.",
+    "Non-UTF8 paths and wider original Python JSON acceptance remain explicit fixture refusal limits.",
+    "Real Rust build/compile/upload dispatch, source save/leases and remaining native UI/backend services.",
+    "Supported desktop/device/input/package/install/rollback qualification."
+  ],
+  "releaseQualified": false,
+  "pythonApplicationServicesRetired": 0,
+  "ledger": {
+    "capabilities": 67,
+    "partial": 14,
+    "pending": 53
+  },
+  "latestCodeCheckpoint": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+  "hostedVerification": [
+    {
+      "host": "ubuntu-24.04",
+      "sourceCommit": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+      "runId": 39443196583,
+      "conclusion": "success",
+      "defaultBackendTestsPassed": 136,
+      "compatibility": {
+        "reference": "main/core/platformio_board_compat.py",
+        "equivalentComparisons": 987,
+        "positiveDecisions": 29,
+        "emptyDecisions": 958,
+        "typedRefusals": 149,
+        "noReadChecks": 870,
+        "structuralRefusals": 3,
+        "protocolBoundaryChecks": 32,
+        "platformSkips": 0,
+        "referenceExceptions": 4,
+        "strictParserRefusals": 21,
+        "passed": true,
+        "platform": "linux",
+        "architecture": "x86_64",
+        "nativeDescriptorSnapshots": true,
+        "exactRawFixtureHashes": true,
+        "fixtureOnly": true,
+        "productionImports": false,
+        "hardwareAccess": false,
+        "livePackageAccess": false,
+        "packageWrites": false,
+        "buildAuthority": false,
+        "packageRaceQualification": false,
+        "pythonServicesRetired": 0
+      },
+      "earlierRecipeComparisonsPassed": 951,
+      "earlierRecipeProtocolChecksPassed": 11,
+      "receipts": [
+        {
+          "path": "scratch/board-compatibility-ci-26c7675/migration-backend-ubuntu-24.04/backend-unit.log",
+          "bytes": 19369,
+          "sha256": "9b0b9dbceb3e6a444b4e8e3acc41e65a79c05fd8224edcaa97835d3ace2f04dd"
+        },
+        {
+          "path": "scratch/board-compatibility-ci-26c7675/migration-backend-ubuntu-24.04/board-compatibility-rust.json",
+          "bytes": 647,
+          "sha256": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688"
+        },
+        {
+          "path": "scratch/board-compatibility-ci-26c7675/migration-backend-ubuntu-24.04/board-recipe-rust.json",
+          "bytes": 541,
+          "sha256": "4334c0b34f145b92f17cbdcd99acc309ef5f9e5decd7ac5c42fe5a0ae518d6e6"
+        }
+      ]
+    },
+    {
+      "host": "ubuntu-24.04-arm",
+      "sourceCommit": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+      "runId": 39443196583,
+      "conclusion": "success",
+      "defaultBackendTestsPassed": 136,
+      "compatibility": {
+        "reference": "main/core/platformio_board_compat.py",
+        "equivalentComparisons": 987,
+        "positiveDecisions": 29,
+        "emptyDecisions": 958,
+        "typedRefusals": 149,
+        "noReadChecks": 870,
+        "structuralRefusals": 3,
+        "protocolBoundaryChecks": 32,
+        "platformSkips": 0,
+        "referenceExceptions": 4,
+        "strictParserRefusals": 21,
+        "passed": true,
+        "platform": "linux",
+        "architecture": "aarch64",
+        "nativeDescriptorSnapshots": true,
+        "exactRawFixtureHashes": true,
+        "fixtureOnly": true,
+        "productionImports": false,
+        "hardwareAccess": false,
+        "livePackageAccess": false,
+        "packageWrites": false,
+        "buildAuthority": false,
+        "packageRaceQualification": false,
+        "pythonServicesRetired": 0
+      },
+      "earlierRecipeComparisonsPassed": 951,
+      "earlierRecipeProtocolChecksPassed": 11,
+      "receipts": [
+        {
+          "path": "scratch/board-compatibility-ci-26c7675/migration-backend-ubuntu-24.04-arm/backend-unit.log",
+          "bytes": 19369,
+          "sha256": "237f443ca58003a3416a9926ef0470583323b7ce8124a507b32be2f9938dc797"
+        },
+        {
+          "path": "scratch/board-compatibility-ci-26c7675/migration-backend-ubuntu-24.04-arm/board-compatibility-rust.json",
+          "bytes": 648,
+          "sha256": "9b17d3275ab74d359a422f2f929e7af89eb9e2a11b1c3aedc61db83e54f6e646"
+        },
+        {
+          "path": "scratch/board-compatibility-ci-26c7675/migration-backend-ubuntu-24.04-arm/board-recipe-rust.json",
+          "bytes": 542,
+          "sha256": "5cde2f19f7b49e92c3841cd3e713717fa050eca80321aedd196af2ea0f3a88fe"
+        }
+      ]
+    },
+    {
+      "host": "windows-2022",
+      "sourceCommit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+      "runId": 39443653534,
+      "conclusion": "success",
+      "defaultBackendTestsPassed": 132,
+      "compatibility": {
+        "reference": "main\\core\\platformio_board_compat.py",
+        "equivalentComparisons": 979,
+        "positiveDecisions": 20,
+        "emptyDecisions": 959,
+        "typedRefusals": 118,
+        "noReadChecks": 870,
+        "structuralRefusals": 0,
+        "protocolBoundaryChecks": 32,
+        "platformSkips": 10,
+        "referenceExceptions": 4,
+        "strictParserRefusals": 18,
+        "passed": true,
+        "platform": "win32",
+        "architecture": "AMD64",
+        "nativeDescriptorSnapshots": true,
+        "exactRawFixtureHashes": true,
+        "fixtureOnly": true,
+        "productionImports": false,
+        "hardwareAccess": false,
+        "livePackageAccess": false,
+        "packageWrites": false,
+        "buildAuthority": false,
+        "packageRaceQualification": false,
+        "pythonServicesRetired": 0
+      },
+      "earlierRecipeComparisonsPassed": 951,
+      "earlierRecipeProtocolChecksPassed": 11,
+      "receipts": [
+        {
+          "path": "scratch/board-compatibility-ci-cc6a6d7/migration-backend-windows-2022/backend-unit.log",
+          "bytes": 19558,
+          "sha256": "8bda51109db09a6dd592721a1a6b0e69e4e228a6e399f3cb016b55f9004122bb"
+        },
+        {
+          "path": "scratch/board-compatibility-ci-cc6a6d7/migration-backend-windows-2022/board-compatibility-rust.json",
+          "bytes": 650,
+          "sha256": "cb38cb9be1731b8a0b93efc47a5902deaf1f24fd3d86edcfcc48d817355ee49c"
+        },
+        {
+          "path": "scratch/board-compatibility-ci-cc6a6d7/migration-backend-windows-2022/board-recipe-rust.json",
+          "bytes": 543,
+          "sha256": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65"
+        }
+      ]
+    }
+  ],
+  "followupCi": {
+    "runId": 39443653534,
+    "sourceCommit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39443653534",
+    "status": "completed",
+    "conclusion": "success",
+    "windowsOnly": true,
+    "jobsPassed": 1,
+    "backendOnly": true,
+    "summary": "Windows 132 units, 979 decisions, 32 protocol; Linux-only cases skipped explicitly.",
+    "scope": "Hosted Windows Server 2022 fixtures only; no desktop/device/release qualification."
+  },
+  "windowsFixtureCorrection": {
+    "sourceCommit": "cc6a6d7f5c482def023976f32e3759dfba1a4415",
+    "runtimeReaderUnchangedFrom": "26c7675029ead5f968d3063c7ccf0e7872a6618a",
+    "changedPaths": [
+      "desktop/crates/host/src/bin/board_compatibility_probe.rs"
+    ],
+    "cause": "PathBuf::join normalizes parent segments when appending to a Windows canonical verbatim prefix; the test did not pass the literal alias it intended.",
+    "fix": "Construct literal native path units through OsString; assert parent segment survived, then exercise the same refusal guard.",
+    "reference": "https://doc.rust-lang.org/std/path/struct.PathBuf.html#method.push",
+    "initialFailureRetained": "scratch/board-compatibility-ci-26c7675/migration-backend-windows-2022/backend-unit.log",
+    "localFourNativeTestsAndMsvcClippyPassed": true,
+    "actualWindowsExecutionPassed": true,
+    "currentProbe": {
+      "path": "desktop/crates/host/src/bin/board_compatibility_probe.rs",
+      "sha256": "c43bb3ceb134d382848965796cea775393b211573d504c4172293880a616dae8"
+    }
+  }
+}

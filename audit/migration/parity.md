@@ -1,6 +1,29 @@
 # Migration parity ledger
 
-Latest committed code: `6ef749a`; only “Select serial port” differs from tested
+At `26c7675`, Rust adds development-only descriptor snapshots and exact
+Arduino Q compatibility selection, reusing the unchanged Onehorse/MiniMain
+policy. Native probe reads use bounded regular-file handles and native identity;
+fixed owned fixtures contain package metadata and a replica application hook.
+All 136 local backend tests pass. The Linux differential covers 987 matching
+decisions, with four Python exceptions, three stricter path refusals and 21
+parser refusals counted separately; 870 no-read and 32 protocol checks also pass.
+Both Ubuntu architectures pass backend CI `39443196583`: 136 backend tests,
+987 compatibility decisions and 32 protocol checks per host. Windows initially
+finds a test-construction issue: joining `..` onto a canonical verbatim prefix
+normalizes away the intended alias. `cc6a6d7` preserves literal OS units in that
+test only; runtime reader/core policy stay unchanged. Its Windows-only rerun
+`39443653534` passes 132 backend tests, 979 compatibility decisions and 32 protocol
+checks, with ten Linux-only cases skipped and 18 parser refusals recorded
+separately. Preserve the Ubuntu evidence at `26c7675`; no new combined full
+GUI/editor matrix is claimed.
+The new `backend_only` dispatch avoids GUI dependencies and retains compact
+receipts; the default five migration jobs remain intact. These snapshots grant
+no future build authority. Live package/ancestor/content races, wider JSON and
+non-UTF8 path parity, production reader/build integration and full BLD-01 remain
+open. See [compatibility evidence](rust-board-compatibility.json).
+
+
+Native-UI caption checkpoint: `6ef749a`; only “Select serial port” differs from tested
 `0e0db8a`, with strict MSVC/fmt checks. Windows CI `39426407678` passes its native job at exact `0e0db8a`.
 Four unchanged successful jobs retain their prior source. At `297cae7`, CI `39421097096` finishes 4/5;
 Windows passes old smoke/source-state/recipe checks but its new workspace fails
@@ -34,7 +57,7 @@ close and unchanged explicit-source bytes. Hosted `e334d7b` CI passes 17 native
 Windows Server checks and 35 GTK checks on each Ubuntu AMD64/ARM64 host,
 including Win32 short-height/DPI corrections. Subsequent logo/action-ink
 corrections and the shared reader are now in `297cae7`; both Ubuntu jobs pass
-35 GUI, the wide-tab regression and recipe checks. Windows new 18 workspace is
+35 GUI, the wide-tab regression and recipe checks. Windows new 18 workspace
 subsequently passes at `0e0db8a` after the retained path-spelling failure.
 Actual Windows 10/11 desktop input remains
 unqualified. Settings, menus, auxiliary screens, tool-tab icons and live toolbar

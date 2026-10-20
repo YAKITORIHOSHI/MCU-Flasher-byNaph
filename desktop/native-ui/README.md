@@ -4,7 +4,7 @@ This is a native-widget development preview for the requested Rust GUI. It is
 separate from the existing Tauri web-shell fixture and the production Python
 application. It does not change either entry point.
 
-Current `6ef749a` differs from CI-tested `0e0db8a` only by the “Select serial
+Native-UI caption checkpoint `6ef749a` differs from CI-tested `0e0db8a` only by the “Select serial
 port” caption (strict MSVC/fmt checks). The preview has real GTK3 and Win32 toolbar/Controls, source-tab
 and seven-tool-tab chrome around two retained embedded editor/terminal views.
 The shared Rust design module copies the original 39 palette tokens across
@@ -297,3 +297,9 @@ Primary integration references:
 [GTK reparent API](https://docs.rs/wry/0.57.0/wry/trait.WebViewExtUnix.html),
 [WebView2 parent/focus/bounds](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller),
 [Rust GTK3 bindings](https://docs.rs/gtk/0.18.2/gtk/).
+
+The separate Rust compatibility backend milestone is recorded in
+[compatibility evidence](../../audit/migration/rust-board-compatibility.json).
+It adds bounded owned-fixture metadata reads and Linux Arduino Q policy, with
+no native GUI/build dispatch or production package authority. Use the existing
+migration workflow’s `backend_only` option for focused native backend checks.

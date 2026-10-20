@@ -28,8 +28,8 @@ source adds a native Project picker and original-ICO main/detached icons, with
 [Windows-only CI 39426407678](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39426407678)
 passing at that exact source: 16 library/seven Windows units, 17 detach + 18
 workspace GUI, including icons and Unicode/space source paths. Other jobs
-retain their prior source. Current `6ef749a` changes only the “Select serial
-port” caption, with strict MSVC/fmt checks. Actual picker/child/icon desktop
+retain their prior source. The `6ef749a` native-UI follow-up changes only the
+“Select serial port” caption, with strict MSVC/fmt checks. Actual picker/child/icon desktop
 behavior remains unqualified. The original 17-check
 editor-only detach fixture remains, alongside a new 18-check Linux workspace
 smoke for models, dirty state, selection, themes, undo and unchanged source bytes.
@@ -42,8 +42,12 @@ checkpoint `297cae7` finishes four of five jobs in
 both Ubuntu jobs pass, while the new Windows workspace fails before assertions
 at trusted-root path spelling. The prefix fix then passes focused Windows CI
 at `0e0db8a`; the failed historical receipt remains. Rust also has pure
-exact Onehorse/MiniMain recipe decisions, without installed-metadata reading
-or build integration. Real Windows 10/11 desktops, native input and full
+exact Onehorse/MiniMain recipe decisions. A later development-only reader
+and Arduino Q policy milestone is recorded in
+[compatibility evidence](audit/migration/rust-board-compatibility.json); live
+package reading and build integration remain unfinished. The focused backend
+checks pass on Ubuntu AMD64/ARM64 (136 tests/987 decisions) and Windows
+(132 tests/979 decisions), with explicit platform/parser limits. Real Windows 10/11 desktops, native input and full
 design parity still need qualification. Full application parity remains
 unfinished: all 67 ledger entries
 remain 14 partial fixture subsets and 53 pending, with no Python application

@@ -72,7 +72,7 @@ root path spelling. The shared prefix fix preserves the selected literal path;
 three local reader checks/GTK 35 pass, then Windows 35 passes at `0e0db8a`.
 The GTK row must scroll all sources without growing the
 window (GREEN window 960 / row 6412 / 40 retained tabs; 42-source capture 960×540).
-Pure Onehorse/MiniMain policy has 126 default tests (119+7), 951 differential
+The earlier pure Onehorse/MiniMain checkpoint has 126 default tests (119+7), 951 differential
 decisions (16 positive / 935 empty) and 11 protocol checks. It has no trusted
 installed-metadata reader, Arduino Q hook selection or real Rust build caller.
 BLD-01 remains pending; bounded source/policy reviews do not retire a service.
@@ -80,8 +80,8 @@ The combined `0e0db8a` Windows-only CI `39426407678` passes its native job:
 16 library/seven Windows binary units, 17/17 detach, 18/18 workspace, recipe
 951 + 11 protocol checks. Real owned small/large HICON, deliberately unaligned
 buffer and Unicode/space source fixtures pass. Preserve the four prior jobs at
-their `297cae7` source; no new full-matrix execution is implied. Current
-`6ef749a` differs only by “Select serial port” (strict MSVC/fmt checks), with no
+their `297cae7` source; no new full-matrix execution is implied. Native-UI
+caption checkpoint `6ef749a` differs only by “Select serial port” (strict MSVC/fmt checks), with no
 popup Escape change. Actual chooser/child survival, Windows 10/11 input/IME and PE Explorer icon/
 packaging need separate evidence. No new dependency/lockfile/runtime entry.
 Native profile cleanup is scoped to owned audit scratch. WebKit helpers can
@@ -92,6 +92,13 @@ and full service integration gated independently. Prior checkpoint CI never
 automatically qualifies working-tree changes. The ledger stays 14 partial/53 pending and zero
 Python application services retired until their actual full contracts pass.
 See `desktop/native-ui/README.md` for current host-specific preview flags.
+
+For compatibility-backend work, use `audit/migration/rust-board-compatibility.json`
+and `desktop/scripts/verify-board-compatibility.py`. The development scope fixes
+owned package/hook replicas; bounded native descriptor snapshots confer no build
+or package-generation authority. Keep ordinary differential matches separate
+from original exceptions and stricter JSON/path refusals. The `backend_only`
+workflow input runs native backend checks without GUI/editor dependencies.
 
 For explicitly requested configured-index board qualification, use
 `direct/BOARD_COMPILE_CAMPAIGN.md`. Keep inventories, package stores and real
