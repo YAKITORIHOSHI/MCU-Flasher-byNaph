@@ -72,6 +72,8 @@ def board_compatibility_options(info, core_dir):
     renderer-supplied option map. Call it from compile/upload workers, never a
     GUI callback. Unknown or redirected metadata leaves the native recipe alone.
     """
+    if isinstance(info, dict) and info.get("backend") != "arduino-cli" and (info.get("platform"), info.get("board"), info.get("framework")) == ("arduinoq", "uno_q", "arduino"):
+        return _arduinoq_options(info, core_dir)
     if (not isinstance(info, dict) or info.get("backend") == "arduino-cli"
             or (info.get("platform"), info.get("framework")) != ("espressif32", "arduino") or info.get("board") not in {"onehorse32dev", "minimain_esp32s2"}):
         return {}
@@ -142,4 +144,46 @@ def minimain_recipe_options(platform_name, board_id, framework, *, board, platfo
 
 
 def compatibility_rule(options):
-    return MINIMAIN_RULE if "board_build.extra_flags" in options else ONEHORSE_RULE
+    return ARDUINOQ_RULE if "extra_scripts" in options else MINIMAIN_RULE if "board_build.extra_flags" in options else ONEHORSE_RULE
+
+
+ARDUINOQ_RULE = "arduinoq-rc4-zephyr-0.56-linker-paths"
+_UNOQ_PLATFORM_SHA256 = "2ae4b31c96c795424f3b38579530b62aa0251004d1f2b28ed10f1ddcc7e7c8c0"
+_UNOQ_BOARD_SHA256 = "8cbeb02c478524a13cb79267212ae4a768fc4afdf5ae9b7ad5e1084ed5943832"
+_UNOQ_LINKER_SHA256 = "d5547a1d22fa78a5c84a44ec2d53e1dade6d29d37f56c999299b1de789437ee1"
+
+
+def _arduinoq_options(info, core_dir):
+    import sys
+    if sys.platform != "linux":
+        return {}
+    try:
+        core = Path(core_dir).resolve(strict=True)
+        platforms, packages = core / "platforms", core / "packages"
+        if platforms.resolve(strict=True).parent != core or packages.resolve(strict=True).parent != core:
+            return {}
+        manifest = Path(info.get("pio_manifest") or "")
+        if (manifest.name != "uno_q.json" or manifest.parent.name != "boards"
+                or manifest.parent.parent.parent.resolve(strict=True) != platforms.resolve(strict=True)):
+            return {}
+        board_raw, _ = _read_metadata(manifest, platforms.resolve())
+        platform_raw, _ = _read_metadata(manifest.parent.parent / "platform.json", platforms.resolve())
+        linker = manifest.parent.parent / "builder/artifacts/zephyr-llext.py"
+        if linker.is_symlink() or not linker.resolve(strict=True).is_relative_to(platforms.resolve()) or linker.stat().st_size > 65536:
+            return {}
+        if (hashlib.sha256(board_raw).hexdigest() != _UNOQ_BOARD_SHA256
+                or hashlib.sha256(platform_raw).hexdigest() != _UNOQ_PLATFORM_SHA256
+                or hashlib.sha256(linker.read_bytes()).hexdigest() != _UNOQ_LINKER_SHA256):
+            return {}
+        _, framework = _read_metadata(packages / "framework-arduino-zephyr/package.json", packages.resolve(strict=True))
+        if (framework.get("name"), framework.get("version")) != ("framework-arduino-zephyr", "0.56.0-leelabskku+unoq"):
+            return {}
+        hook = Path(__file__).resolve().parents[2] / "src/modules/arduinoq_link_paths.py"
+        with hook.open("rb") as source:
+            raw = source.read(65537)
+        if hook.is_symlink() or len(raw) > 65536 or any(ord(char) < 32 for char in str(hook)):
+            return {}
+        return {"extra_scripts": "post:" + hook.as_posix(),
+                "custom_mcu_arduinoq_hook_sha256": hashlib.sha256(raw).hexdigest()}
+    except (OSError, ValueError, TypeError, UnicodeError):
+        return {}

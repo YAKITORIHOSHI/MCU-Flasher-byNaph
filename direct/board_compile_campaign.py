@@ -487,6 +487,7 @@ def _campaign(arguments, scratch, targets, manifest_hash, document):
     context = {"schema": RESULT_SCHEMA, "manifest_sha256": manifest_hash,
                "harness_sha256": digest_file(__file__), "host": host_identity(),
                "board_compatibility_sha256": digest_file(ROOT / "main/core/platformio_board_compat.py"),
+               "firmware_tool_hook_sha256": digest_file(ROOT / "src/modules/arduinoq_link_paths.py"),
                "sample_sha256": digest_bytes(ARDUINO_SAMPLE.encode())}
     batches = OrderedDict()
     for target in targets:
