@@ -223,6 +223,23 @@ class CustomIndexChecks(unittest.TestCase):
         self.assertEqual(catalog[0]["platform_spec"], "platformio/futureplatform")
         self.assertEqual(catalog[0]["manifest"], "")
 
+    def test_registered_catalog_accepts_literal_plus_board_ids_without_relaxing_other_fields(self):
+        from main.core.target_profile import target_problem
+        raw = [{"id": "STC89C516RD+", "name": "Generic STC89C516RD+", "platform": "intel_mcs51",
+                "mcu": "STC89C516RD+", "frameworks": []}]
+        with patch.object(targets.subprocess, "run", return_value=Mock(stdout=json.dumps(raw))):
+            catalog = targets.fetch_preparation_catalog(self.core)
+        self.assertEqual(catalog[0]["id"], "STC89C516RD+")
+        self.assertEqual(target_problem({"platform": "intel_mcs51", "board": "STC89C516RD+", "framework": "arduino"}), "")
+        config = {"platform": "platformio/intel_mcs51", "board_ids": {"stc": "STC89C516RD+"}}
+        self.assertEqual(targets.normalize_platformio_configuration(config), config)
+        for value in ("../board", "-flag", "board\nextra=1", "board;command", "board/child", "board\\child"):
+            with self.subTest(value=value):
+                self.assertTrue(target_problem({"platform": "intel_mcs51", "board": value, "framework": "arduino"}))
+        for field in ("platform", "framework"):
+            info = {"platform": "intel_mcs51", "board": "STC89C516RD+", "framework": "arduino", field: "invalid+field"}
+            self.assertTrue(target_problem(info))
+
     def test_workspace_role_cannot_query_registered_targets(self):
         with patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "1"}), \
                 patch.object(targets.subprocess, "run") as run, self.assertRaises(RuntimeError):

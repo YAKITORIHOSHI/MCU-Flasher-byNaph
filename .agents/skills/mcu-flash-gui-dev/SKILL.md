@@ -10,7 +10,24 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 For explicitly requested assistant delegation, use the local
 [`agy-delegation`](../agy-delegation/SKILL.md) workflow for bounded investigation.
 
-## Rust/Tauri migration
+## Native Rust migration
+
+The final application uses native Rust GUI widgets with Monaco and xterm as
+embedded components, and Rust application backend services. Private Python may
+remain only for approved firmware tools. The older Tauri application web shell
+is a reference prototype. Read `audit/migration/NATIVE_RUST_PLAN.md` for this
+requirement amendment and `desktop/native-ui/README.md` for the Linux-only GTK
+feasibility fixture and its Windows/Wayland/input gates. Never promote fixture
+callbacks or library-mapping checks into full backend migration claims.
+
+For explicitly requested configured-index board qualification, use
+`direct/BOARD_COMPILE_CAMPAIGN.md`. Keep inventories, package stores and real
+sample builds isolated in owned scratch, record every unresolved/ambiguous
+declaration, require exact ID/name evidence and pin platform/board manifests.
+The runner is Linux-only pending Windows lifecycle qualification. Retain its
+5 GiB reserve and 6 GiB owned-growth cap; partition large ESP32 families and
+never delete user/global stores. Compile-only evidence does not qualify upload,
+reset, application integration or physical USB hardware.
 
 The parallel prototype lives in `desktop/`; the Python application remains the
 behavior reference and release entry point. Read `audit/migration/STATUS.md`,

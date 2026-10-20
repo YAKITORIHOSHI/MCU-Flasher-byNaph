@@ -1,5 +1,12 @@
 # Rust/Tauri migration prototype
 
+The final UI requirement changed on 20 October 2026: native Rust widgets with
+Monaco and xterm embedded, plus a Rust application backend. This Tauri web shell
+is retained as a prototype and service/contract reference; it does not fulfill
+the final native widget requirement. Follow
+[`NATIVE_RUST_PLAN.md`](../audit/migration/NATIVE_RUST_PLAN.md). Private Python is
+limited to approved firmware tools in the eventual replacement.
+
 This is the parallel, fixture-only migration workspace. The Python launchers
 still start the production application. Full feature parity is required before
 replacement; the current preview has no firmware build/upload, real serial,

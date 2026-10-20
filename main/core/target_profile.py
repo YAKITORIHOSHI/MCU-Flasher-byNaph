@@ -6,6 +6,12 @@ from typing import Mapping
 from main.core.constants import MAX_BAUD_RATE
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_BOARD_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,159}$")
+
+
+def valid_platformio_board_id(value: object) -> bool:
+    """Board manifest stems can include a literal plus (e.g. STC89C516RD+)."""
+    return isinstance(value, str) and _BOARD_IDENTIFIER.fullmatch(value) is not None
 
 
 def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
@@ -47,7 +53,7 @@ def target_problem(info: Mapping, *, arduino_sketch: bool = False) -> str:
         return "No verified PlatformIO definition for this board. Install its platform package and select the exact board."
     for key in ("platform", "board"):
         value = str(info.get(key) or "").strip()
-        if not _IDENTIFIER.fullmatch(value):
+        if not (valid_platformio_board_id(value) if key == "board" else _IDENTIFIER.fullmatch(value)):
             return f"The board definition has no valid {key}. Install the correct platform package and select the board again."
     framework = str(info.get("framework") or "").strip()
     if not framework or not all(_IDENTIFIER.fullmatch(f.strip()) for f in framework.split(",")):

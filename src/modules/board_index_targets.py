@@ -28,6 +28,8 @@ def normalize_platformio_configuration(value):
     ``board_ids`` maps Arduino declaration IDs to installed manifest IDs. Empty
     configuration enables automatic exact matching against the registry.
     """
+    from main.core.target_profile import valid_platformio_board_id
+
     if value in (None, "", {}):
         return {}
     if not isinstance(value, dict):
@@ -51,7 +53,7 @@ def normalize_platformio_configuration(value):
     for arduino_id, board_id in mappings.items():
         if not isinstance(arduino_id, str) or not _IDENTIFIER.fullmatch(arduino_id):
             raise ValueError("Invalid Arduino declaration ID in PlatformIO board mapping")
-        if not isinstance(board_id, str) or not _IDENTIFIER.fullmatch(board_id):
+        if not valid_platformio_board_id(board_id):
             raise ValueError("Invalid PlatformIO board ID in board mapping")
         result[arduino_id] = board_id
     if result and not specification:
@@ -149,6 +151,8 @@ def fetch_preparation_catalog(core):
     PlatformIO also returns installed entries; callers retain their own local
     manifests first. This operation never installs a development platform.
     """
+    from main.core.target_profile import valid_platformio_board_id
+
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Online board discovery belongs to explicit preparation outside the workspace")
     from src.modules.offline_bootstrap import clean_bootstrap_environment
@@ -175,7 +179,7 @@ def fetch_preparation_catalog(core):
         platform, board_id = value.get("platform"), value.get("id")
         if not isinstance(platform, str) or not _IDENTIFIER.fullmatch(platform):
             raise ValueError("PlatformIO returned an invalid platform identity")
-        if not isinstance(board_id, str) or not _IDENTIFIER.fullmatch(board_id):
+        if not valid_platformio_board_id(board_id):
             raise ValueError("PlatformIO returned an invalid board identity")
         frameworks = value.get("frameworks") or []
         if not isinstance(frameworks, (list, tuple)) or not all(isinstance(f, str) for f in frameworks):

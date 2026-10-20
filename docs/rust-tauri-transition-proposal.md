@@ -1,5 +1,13 @@
 # MCU Flasher: Rust and Tauri transition proposal
 
+> **20 October 2026 requirement amendment:** The user requires a native Rust
+> widget GUI and a Rust application backend, retaining Monaco and xterm as
+> embedded components. This supersedes the TypeScript application-shell design
+> below. Preserve the existing Rust core/host/contracts and prototype evidence;
+> qualify a native widget/child-WebView shell before toolkit commitment. Python
+> remains only for approved private firmware tools, never the replacement GUI
+> or application backend. See [the native Rust execution plan](../audit/migration/NATIVE_RUST_PLAN.md).
+
 Date: 18 October 2026; checkpoint updated 19 October 2026
 Status: Implementation in progress at `4cf730b`; fixture prototype, narrow core ports and isolated native registration proofs.
 Reference implementation: commit `1d00ff0`, plus an inventory of any subsequent approved fixes.

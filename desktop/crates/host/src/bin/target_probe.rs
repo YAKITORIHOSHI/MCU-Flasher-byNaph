@@ -24,6 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Too many target-transport cases".into());
     }
     let output: Vec<_> = cases.iter().map(|[info, requested, port]| serde_json::json!({
+        "valid_platformio_board_id":target_transport::valid_platformio_board_id(info.get("board").unwrap_or(&Value::Null)),
         "requires_upload_port":value(target_transport::requires_upload_port(info)),
         "serial_upload_speed":value(target_transport::serial_upload_speed(info, requested)),
         "upload_configuration":value(target_transport::upload_configuration(info, requested)),

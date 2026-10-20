@@ -1,0 +1,3 @@
+html, body, #monaco-anchor, #terminal { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { background: #17212b; color: #e5edf5; }
+#terminal { box-sizing: border-box; padding: 8px; }

@@ -10,9 +10,13 @@
 
 [v10 release notes and verification limits](RELEASE_NOTES.md)
 
-The Rust/Tauri 2 migration is being developed alongside this Python release in
-[`desktop/`](desktop/). It currently provides a fixture-only Monaco/xterm native
-prototype and several tested Rust services. It does not yet replace the application.
+The Rust migration is being developed alongside this Python release in
+[`desktop/`](desktop/). Its final GUI will use native Rust widgets with Monaco
+and xterm embedded; application backend logic will also run in Rust. Python will
+remain only for approved firmware tools. The existing Tauri web shell is a
+reference prototype. A separate Linux native-widget fixture now exercises the
+embedded components and editor-only detach, while Windows integration and full
+application parity remain unfinished. See the [native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
 Native metadata fixtures retain original root/source identities and refuse
 Windows device-name and junction aliases. The pure serial-send queue now preserves
 active-plus-pending limits, captured connection identity, one-attempt writes and
@@ -27,6 +31,12 @@ See the durable [migration status](audit/migration/STATUS.md),
 [restart handoff](audit/migration/HANDOFF.md) for implemented work, evidence and
 remaining gates. Migration logs and disposable projects stay under `audit/`,
 outside `temp/`. Full feature and native-host parity is required before replacement.
+
+Current Python release qualification also includes an isolated
+[configured-index compile campaign](direct/BOARD_COMPILE_CAMPAIGN.md). It builds
+one Arduino sample per uniquely matched exact PlatformIO target, records skipped
+declarations, and stops within its storage reserve. Compile results do not
+qualify upload/reset behavior or the unfinished Rust replacement.
 
 Downloader dialog fitting now avoids repeated geometry/minimum writes when the
 observed window and work area have not changed. This stops a Configure feedback

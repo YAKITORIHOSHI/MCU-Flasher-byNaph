@@ -1,7 +1,8 @@
-//! Pure transport-selection parity with four target_profile.py helpers.
+//! Pure transport-selection and board-ID syntax parity with target_profile.py.
 //!
-//! This does not validate target identity, installed toolchain preparation,
-//! Arduino CLI proof or INI safety. Production must retain those separate gates.
+//! The board-ID predicate checks only manifest-stem syntax. Full target identity,
+//! installed toolchain preparation, Arduino CLI proof and INI safety remain
+//! separate production gates.
 
 use serde_json::{Map, Value};
 use std::fmt;
@@ -22,6 +23,19 @@ impl fmt::Display for TargetTransportError {
 }
 
 impl std::error::Error for TargetTransportError {}
+
+/// PlatformIO board manifest stems permit literal `+`, including STC89C516RD+.
+/// This predicate applies only to board IDs, never platform/framework/protocol.
+pub fn valid_platformio_board_id(value: &Value) -> bool {
+    value.as_str().is_some_and(|value| {
+        !value.is_empty()
+            && value.len() <= 160
+            && value.as_bytes()[0].is_ascii_alphanumeric()
+            && value.bytes().skip(1).all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'+' | b'-')
+            })
+    })
+}
 
 pub fn requires_upload_port(info: &Value) -> Result<bool, TargetTransportError> {
     let info = object(info)?;
@@ -184,6 +198,55 @@ fn baud_value(value: &Value) -> Option<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn literal_plus_board_ids_preserve_ascii_and_length_boundaries() {
+        for board in ["STC89C516RD+", "board++", "Board._-+42", "0", "1+plus"] {
+            assert!(valid_platformio_board_id(&json!(board)), "{board}");
+        }
+        assert!(valid_platformio_board_id(&json!(format!(
+            "A{}",
+            "+".repeat(159)
+        ))));
+        assert!(!valid_platformio_board_id(&json!(format!(
+            "A{}",
+            "+".repeat(160)
+        ))));
+        for board in [json!(null), json!(false), json!(1), json!([]), json!({})] {
+            assert!(!valid_platformio_board_id(&board), "{board}");
+        }
+    }
+
+    #[test]
+    fn board_ids_refuse_path_ini_control_flag_and_non_ascii_inputs() {
+        for board in [
+            "",
+            "+board",
+            "-board",
+            "_board",
+            ".board",
+            "../board",
+            "a/board",
+            "a\\board",
+            "C:\\board",
+            "board\nplatform = injected",
+            "board\r\n[env:other]",
+            "board\n",
+            "board=other",
+            "board;option",
+            "board#comment",
+            "board${section}",
+            "board --option",
+            " board",
+            "board ",
+            "böard",
+            "ＳＴＣ",
+            "\0board",
+            "board\0",
+        ] {
+            assert!(!valid_platformio_board_id(&json!(board)), "{board:?}");
+        }
+    }
 
     #[test]
     fn programmer_transports_and_dynamic_overrides_are_preserved() {
