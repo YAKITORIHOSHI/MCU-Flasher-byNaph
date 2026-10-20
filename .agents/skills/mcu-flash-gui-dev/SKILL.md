@@ -28,6 +28,13 @@ The runner is Linux-only pending Windows lifecycle qualification. Retain its
 5 GiB reserve and 6 GiB owned-growth cap; partition large ESP32 families and
 never delete user/global stores. Compile-only evidence does not qualify upload,
 reset, application integration or physical USB hardware.
+The shared `main/core/platformio_board_compat.py` applies only exact, versioned
+Onehorse DIO boot/SDK and MiniMain S2 native-USB recipe repairs after reading
+bounded installed metadata on compile/upload workers. Require exact board bytes,
+platform dispatch and package identities; preserve explicit/new recipes and never
+rewrite installed packages. Run `direct/verify_platformio_board_compat.py` in
+isolated fixtures. Its cold campaign retry is build-only and retains both
+attempts; never extend that policy to upload/reset or hardware writes.
 
 The parallel prototype lives in `desktop/`; the Python application remains the
 behavior reference and release entry point. Read `audit/migration/STATUS.md`,

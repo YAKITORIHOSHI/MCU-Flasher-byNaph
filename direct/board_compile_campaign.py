@@ -29,6 +29,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from main.core.platformio_board_compat import board_compatibility_options, compatibility_rule
 GIB = 1024 ** 3
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,159}$")
 FRAMEWORK_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}$")
@@ -389,6 +390,7 @@ def installed_identity(core, board):
                 raise ValueError("Installed platform or board manifest escaped the owned core")
             metadata = json.loads(manifest.read_text(encoding="utf-8-sig"))
             candidates.append({"name": metadata.get("name"), "version": metadata.get("version"),
+                               "manifest_path": str(definition),
                                "platform_manifest_sha256": digest_file(manifest),
                                "platform_receipt_sha256": digest_file(directory / ".piopm") if (directory / ".piopm").is_file() else None,
                                "board_manifest_sha256": digest_file(definition),
@@ -460,6 +462,16 @@ def previous_results(path):
     return results
 
 
+def project_configuration(target, identity, core):
+    """Use the application's reviewed recipe while preserving the exact target."""
+    info = {"platform": identity["name"], "board": target["board"], "framework": target["framework"],
+            "pio_manifest": identity.get("manifest_path", "")}
+    options = board_compatibility_options(info, core)
+    text = (f"[env:campaign]\nplatform = {target['platform_spec']}\nboard = {target['board']}\n"
+            f"framework = {target['framework']}\n")
+    return text + "".join(f"{key} = {value}\n" for key, value in options.items()), options
+
+
 def campaign(arguments):
     targets, manifest_hash, document = load_manifest(arguments.manifest)
     scratch = owned_root(arguments.scratch, arguments.resume)
@@ -474,6 +486,7 @@ def _campaign(arguments, scratch, targets, manifest_hash, document):
     prior = previous_results(results_path) if arguments.resume else {}
     context = {"schema": RESULT_SCHEMA, "manifest_sha256": manifest_hash,
                "harness_sha256": digest_file(__file__), "host": host_identity(),
+               "board_compatibility_sha256": digest_file(ROOT / "main/core/platformio_board_compat.py"),
                "sample_sha256": digest_bytes(ARDUINO_SAMPLE.encode())}
     batches = OrderedDict()
     for target in targets:
@@ -530,9 +543,11 @@ def _campaign(arguments, scratch, targets, manifest_hash, document):
                     else:
                         (project / "src").mkdir()
                         (project / "src/main.cpp").write_text(ARDUINO_SAMPLE, encoding="utf-8")
-                        (project / "platformio.ini").write_text(
-                            f"[env:campaign]\nplatform = {spec}\nboard = {target['board']}\nframework = {target['framework']}\n",
-                            encoding="utf-8")
+                        configuration, compatibility = project_configuration(target, identity, core)
+                        (project / "platformio.ini").write_text(configuration, encoding="utf-8")
+                        if compatibility:
+                            receipt["board_compatibility"] = {"rule": compatibility_rule(compatibility), "options": compatibility,
+                                                              "helper_sha256": context["board_compatibility_sha256"]}
                         packages_before = package_identity(core)
                         binding = digest_bytes(canonical({"context": context, "target": target,
                                                           "platform": receipt["installed_platform"], "packages": packages_before}))
@@ -548,6 +563,21 @@ def _campaign(arguments, scratch, targets, manifest_hash, document):
                             compiled = run_child(command, environment=environment, cwd=work,
                                                  log_path=scratch / "logs" / f"{sequence:06d}-{target['board']}-{time.time_ns()}.log.gz",
                                                  timeout=arguments.timeout, **common)
+                            # A cold first build may install the exact packages
+                            # needed to prove a reviewed compatibility recipe.
+                            # Permit one build-only retry only when that proof
+                            # appears; preserve the original failure receipt.
+                            if not compatibility and compiled["status"] == "failed":
+                                repaired_configuration, repaired = project_configuration(target, identity, core)
+                                if repaired:
+                                    receipt["compatibility_preparation_compile"] = compiled
+                                    compatibility = repaired
+                                    receipt["board_compatibility"] = {"rule": compatibility_rule(repaired), "options": repaired,
+                                                                      "helper_sha256": context["board_compatibility_sha256"]}
+                                    (project / "platformio.ini").write_text(repaired_configuration, encoding="utf-8")
+                                    compiled = run_child(command, environment=environment, cwd=work,
+                                                         log_path=scratch / "logs" / f"{sequence:06d}-{target['board']}-compat-{time.time_ns()}.log.gz",
+                                                         timeout=arguments.timeout, **common)
                             receipt["compile"] = compiled
                             receipt["packages"] = package_identity(core)
                             receipt["binding"] = digest_bytes(canonical({"context": context, "target": target,

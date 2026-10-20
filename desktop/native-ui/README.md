@@ -1,8 +1,15 @@
 # Native Rust widget feasibility fixture
 
-This is an isolated Linux prototype for the requested native Rust GUI. It is
+This is an isolated native-widget prototype for the requested Rust GUI. It is
 separate from the existing Tauri web-shell fixture and the production Python
 application. It does not change either entry point.
+
+The Windows adapter now constructs real Win32 controls and two child WebView2
+islands. It preserves the native owner and moves only the retained editor view.
+The Linux adapter and its previously recorded results are unchanged. Windows
+cross-target strict Clippy passes; actual Windows execution is requested by CI
+and remains unqualified until its receipt succeeds. A hosted Windows Server
+fixture does not qualify Windows 10/11 desktop input, IME or mixed-monitor DPI.
 
 The window, Controls label, fixture-board combo box, Compile fixture button,
 status label, splitter and detach action are real GTK3 widgets constructed by
@@ -139,9 +146,9 @@ does not duplicate or activate their live-write capabilities.
 1. Build and execute this Linux adapter on native Ubuntu 24.04+ AMD64 and ARM64,
    under both Wayland and X11. Wry's supported Wayland route uses GTK containers;
    a raw winit handle with `build_as_child` supports Linux X11 only.
-2. Implement the authentic Windows native-widget/WebView2 adapter. The current
-   non-Linux binary exits with code 78 and names the missing adapter; it never
-   falls back to the Tauri HTML shell or claims native Windows support.
+2. Execute and review the Windows native-widget/WebView2 adapter on its native
+   runner, then qualify actual Windows 10/11 desktop workflows. Unsupported
+   hosts exit with code 78; no adapter falls back to the Tauri application shell.
 3. Prove actual keyboard focus, IME, clipboard, accessibility, editor tab order,
    resizing, 100–200% and fractional DPI, maximize/restore, mixed monitors and
    native editor-only detach. Current smoke proves model history through Monaco

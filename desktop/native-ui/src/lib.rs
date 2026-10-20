@@ -94,6 +94,21 @@ pub fn asset_path(uri: &str) -> Option<&'static str> {
     }
 }
 
+/// WebView2 maps the custom scheme to this fixed HTTPS origin. Navigation is
+/// bound to the native island and never accepts another page or a remote URL.
+pub fn windows_navigation_allowed(island: Island, uri: &str) -> bool {
+    match island {
+        Island::Editor => matches!(
+            uri,
+            "mcu-probe://localhost/editor.html" | "https://mcu-probe.localhost/editor.html"
+        ),
+        Island::Terminal => matches!(
+            uri,
+            "mcu-probe://localhost/terminal.html" | "https://mcu-probe.localhost/terminal.html"
+        ),
+    }
+}
+
 pub fn checked_scratch_root(repo: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
     let canonical_repo = repo.canonicalize()?;
     let mut candidate = canonical_repo.clone();
@@ -171,6 +186,32 @@ mod checks {
             "mcu-probe://localhost/bundle.js?path=../secret",
         ] {
             assert_eq!(asset_path(uri), None, "{uri}");
+        }
+    }
+
+    #[test]
+    fn windows_navigation_accepts_only_the_native_bound_fixed_page() {
+        assert!(windows_navigation_allowed(
+            Island::Editor,
+            "mcu-probe://localhost/editor.html"
+        ));
+        assert!(windows_navigation_allowed(
+            Island::Editor,
+            "https://mcu-probe.localhost/editor.html"
+        ));
+        assert!(windows_navigation_allowed(
+            Island::Terminal,
+            "https://mcu-probe.localhost/terminal.html"
+        ));
+        for uri in [
+            "http://mcu-probe.localhost/editor.html",
+            "https://mcu-probe.localhost/terminal.html",
+            "https://evil/editor.html",
+            "https://mcu-probe.localhost/editor.html?path=/etc/passwd",
+            "https://mcu-probe.localhost/%65ditor.html",
+            "mcu-probe://evil/editor.html",
+        ] {
+            assert!(!windows_navigation_allowed(Island::Editor, uri), "{uri}");
         }
     }
 

@@ -6449,7 +6449,11 @@ class MCUWebBackendAPI:
         from main.core.target_profile import upload_configuration
         upload_options = upload_configuration(binfo, getattr(self, "upload_speed", "") or str(DEFAULT_UPLOAD_SPEED))
 
-        offline_libraries = Path(_get_safe_platformio_core_dir(SCRIPT_DIR)) / "lib"
+        platformio_core = Path(_get_safe_platformio_core_dir(SCRIPT_DIR))
+        from main.core.platformio_board_compat import board_compatibility_options
+        compatibility = board_compatibility_options(binfo, platformio_core)
+        compatibility_options = "".join(f"{key} = {value}\n" for key, value in compatibility.items())
+        offline_libraries = platformio_core / "lib"
         extra_dirs = [offline_libraries.as_posix()] if offline_libraries.is_dir() else []
         app_lib_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src" / "Libs"
         if app_lib_dir.is_dir():
@@ -6504,6 +6508,7 @@ class MCUWebBackendAPI:
             f"framework = {framework}\n"
             f"monitor_speed = {safe_monitor_baud}\n"
             f"{upload_options}"
+            f"{compatibility_options}"
             f"{lib_extra}"
             f"{lib_deps_str}"
         )

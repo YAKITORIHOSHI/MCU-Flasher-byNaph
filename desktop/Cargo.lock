@@ -1813,8 +1813,10 @@ name = "mcu-native-ui-probe"
 version = "0.1.0"
 dependencies = [
  "gtk",
+ "raw-window-handle",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
  "wry",
 ]
 

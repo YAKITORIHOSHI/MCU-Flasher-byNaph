@@ -58,6 +58,18 @@ logs survive cleanup. Timeout, storage deferral, interruption and compiler
 failure remain separate outcomes. Resume requires matching recorded inputs and
 tool identity; resumed passes are counted separately from new compiles.
 
+Two narrowly versioned repairs cover defective Espressif32 8.0.0 recipes with
+Arduino 3.3.12. Onehorse retains DOUT flash mode and its variant while selecting
+the upstream DIO bootloader/SDK. MiniMain ESP32-S2 retains CDC-on-boot and its
+other flags while selecting native TinyUSB instead of unsupported hardware
+USB/JTAG CDC. The shared application/campaign helper requires exact board
+bytes, platform dispatch, package owner and versions. Changed or explicitly
+fixed definitions receive no override; installed package files remain untouched.
+A cold compile can install the packages needed to establish that proof. Only
+then may the campaign perform one build-only retry with newly verified options;
+it retains the original failed attempt and the helper hash. These rules never
+retry an upload or hardware write.
+
 The campaign isolates PlatformIO stores, HOME, XDG directories and temporary
 files under its marked scratch directory. Completed project/build outputs and
 platform batches are removed only through owned cleanup boundaries.

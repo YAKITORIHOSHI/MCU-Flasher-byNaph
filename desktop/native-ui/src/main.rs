@@ -1,5 +1,7 @@
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "windows")]
+mod windows;
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -7,9 +9,14 @@ fn main() {
         eprintln!("Native Rust GUI fixture failed: {error}");
         std::process::exit(1);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    if let Err(error) = windows::run() {
+        eprintln!("Native Rust GUI fixture failed: {error}");
+        std::process::exit(1);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
-        eprintln!("Native Rust GUI fixture: this milestone implements only the Linux GTK3 adapter. A native Windows Win32/WebView2 adapter and desktop qualification remain required.");
+        eprintln!("Native Rust GUI fixture: this host has no native adapter.");
         std::process::exit(78);
     }
 }

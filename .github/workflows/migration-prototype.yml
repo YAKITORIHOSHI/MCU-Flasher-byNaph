@@ -108,6 +108,7 @@ jobs:
           python -B -W error desktop/native-ui/verify-cleanup.py 2>&1 | tee audit/migration/logs/native-ui-cleanup.log
           python -B -W error desktop/native-ui/verify-paths.py 2>&1 | tee audit/migration/logs/native-ui-paths.log
           python -B -W error direct/verify_board_compile_campaign.py 2>&1 | tee audit/migration/logs/board-campaign-guards.log
+          python -B -W error direct/verify_platformio_board_compat.py 2>&1 | tee audit/migration/logs/board-recipe-compat.log
       - name: Native Ubuntu Rust widget and embedded editor verification
         if: runner.os == 'Linux'
         timeout-minutes: 3
@@ -136,6 +137,22 @@ jobs:
         run: |
           & desktop/target/debug/mcu-desktop-prototype.exe --verify-prototype
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native Windows Rust controls and embedded editor verification
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          cargo build --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $capture = @(& desktop/target/debug/mcu-native-ui-probe.exe --smoke 2>&1)
+          $nativeExit = $LASTEXITCODE
+          $capture | Set-Content -Encoding utf8 audit/migration/logs/native-ui-windows-output.log
+          $receipts = @($capture | Where-Object { "$_".StartsWith('MCU_NATIVE_PROBE=') })
+          if ($receipts.Count -ne 1) { throw 'Expected one native Win32 fixture receipt.' }
+          $receipt = "$($receipts[0])".Substring('MCU_NATIVE_PROBE='.Length) | ConvertFrom-Json
+          $receipt | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 audit/migration/logs/native-ui-windows.json
+          if ($nativeExit -ne 0 -or !$receipt.passed -or $receipt.displayBackend -ne 'Win32') { throw 'Native Win32 widget fixture failed.' }
+          if (@($receipt.checks.PSObject.Properties).Count -ne 17 -or @($receipt.checks.PSObject.Properties | Where-Object { !$_.Value }).Count) { throw 'Incomplete native Win32 checks.' }
       - name: Collect native fixture evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -149,6 +166,9 @@ jobs:
             audit/migration/logs/native-ui-cleanup.log
             audit/migration/logs/native-ui-paths.log
             audit/migration/logs/board-campaign-guards.log
+            audit/migration/logs/board-recipe-compat.log
+            audit/migration/logs/native-ui-windows.json
+            audit/migration/logs/native-ui-windows-output.log
             audit/migration/scratch/native-ui/latest-smoke.json
             audit/migration/scratch/native-ui/latest-output.log
             desktop/ui/public/vendor/manifest.json
@@ -201,5 +221,6 @@ jobs:
 # These jobs prove only the fixture prototype on their exact runners. Windows
 # Server is not Windows 10/11 desktop qualification; no job opens serial ports,
 # uploads firmware, mutates cloud records, or replaces the Python release.
-# Native widget execution is Linux-only. Windows runs five portable protocol
-# checks; its native Win32/WebView2 widget adapter remains an explicit gate.
+# Native widget execution covers Linux GTK and Windows Win32/WebView2 fixture
+# adapters. Hosted Windows Server still does not qualify Windows 10/11 desktops,
+# physical input/IME, mixed-monitor behavior or complete application parity.
