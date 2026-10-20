@@ -39,6 +39,12 @@ physical boards, regenerate baseline hashes, or publish an incomplete replacemen
 
 ## Current continuation
 
+The user requested a new continuation chat and approved the usable Rust beta
+delivery order in NATIVE_RUST_PLAN.md. Preserve the existing layout/design;
+retain glassmorphism if reliable, otherwise implement ordinary Light, Dark and
+`system_default` (OS-following) themes. This explicit preference overrides older
+glass-surface mandates and must not stall the functional Rust migration.
+
 The native recipe-generation checkpoint `30d99af` now pins observed root,
 ancestor and file identities, binds exact native selection/host/rule/options,
 and rereads every consulted raw input before accepting revalidation. Stale,

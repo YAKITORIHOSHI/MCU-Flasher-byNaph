@@ -16,7 +16,8 @@
 - All application backend logic and authority move to Rust. No Python GUI, Python application server, or hidden Python service in the replacement release.
 - Python may remain only in the private firmware tool runtime, including PlatformIO/builder compatibility code that belongs to those tools. Development reference tests may still use Python.
 - Require Windows 10/11 AMD64 and native Ubuntu 24.04+ AMD64/ARM64; qualify actual native desktops separately from hosted builds.
-- Preserve all 67 parity contracts, compact/static glass workflow, source bytes, editor buffers, focus, independent projects, terminal/serial backpressure, fixed Firebase deployment and account compatibility.
+- Preserve all 67 parity contracts, compact layout/workflow, source bytes, editor buffers, focus, independent projects, terminal/serial backpressure, fixed Firebase deployment and account compatibility.
+- Theme preference approved for the continuation chat: retain glassmorphism if it works reliably with the native toolkit. If it is incompatible, unreliable or harms responsiveness, proceed with ordinary Light, Dark and `system_default` themes; `system_default` follows OS appearance. Preserve layout, controls, branding and editor state. Decorative effects must not block the functional migration. This preference takes precedence over earlier requirements to retain glass surfaces exactly.
 - Preserve protected cache/journal boundaries and all user sketches/settings. Existing Python application remains production until replacement parity, native qualification and rollback gates pass.
 - Current Python release qualification includes a real sample compile for every uniquely matched PlatformIO board from all configured indexes. No Arduino CLI fallback or generic-family substitution in this campaign.
 - Use all 12 logical cores within a controlled compile budget; retain at least 5 GiB free disk and cap campaign-owned growth at 6 GiB on the current host. Only owned scratch outputs may be cleaned.
@@ -28,6 +29,17 @@
 - Unexpected package/catalog identity or ambiguous board matching must produce an explicit unresolved/skip result, never a substitute board or a pass.
 - Interruption/storage pressure must leave user state untouched and preserve resumable receipts; incomplete work must not appear as a successful compile.
 - Release packaging must reject an application that starts Python to provide GUI/backend behavior, while allowing explicit firmware tool subprocesses.
+
+## Accepted delivery order
+
+The user approved organizing the remaining work around a usable Rust beta:
+
+1. Integrate the everyday native workspace: persistent project ownership, Open/Edit/Save, exact board selection, settings and retained editor state.
+2. Complete a real Rust-controlled Compile workflow, starting with verified target/source/config/tool staging and a tool-only Python boundary. Prove one prepared sample on Windows/Ubuntu, then expand through the configured board inventory.
+3. Complete device/serial/terminal services, libraries, downloads, setup/repair and Firebase/account services in Rust; retire each corresponding Python application service only after end-to-end qualification.
+4. Package Windows and Ubuntu beta executables with correct icons; qualify installation, native input/layout, recovery and hardware workflows before switching the production launcher.
+
+Run independent GUI/backend/Windows work in parallel where it helps. Measure progress by working end-to-end features and retired Python services, with tests as supporting evidence. Retain completed campaign/CI receipts and storage budgets; do not restart passed work. The detailed tasks below remain the dependency and qualification ledger.
 
 ## Task 1: Complete current Python release compile qualification
 

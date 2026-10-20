@@ -24,6 +24,12 @@ requirement amendment and `desktop/native-ui/README.md` for the GTK and Win32
 feasibility adapters and their desktop/Wayland/input gates. Never promote fixture
 callbacks or library-mapping checks into full backend migration claims.
 
+Continuation preference: keep the existing layout/design and glassmorphism when
+reliable. If glass is incompatible, unreliable or harms responsiveness, use
+ordinary Light, Dark and `system_default` themes (follow OS appearance). This
+user-approved fallback overrides earlier glass-surface requirements; it does not
+change shipping Python behavior until the native replacement is qualified.
+
 The current native workspace milestone shares the original 39 palette tokens
 across three themes (117 exact color values) and Montserrat between GTK and
 Win32 chrome. GTK loads original action SVGs; Win32 reproduces native brand

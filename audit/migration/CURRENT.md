@@ -7,6 +7,10 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 - Goal: native Rust GUI and application backend, embedded Monaco/xterm, private
   Python only for firmware tools. Shipping entry still uses Python.
+- User approved a usable Rust beta milestone: Open/Edit/Save/Compile, then
+  remaining device/services and packaging. Preserve the design/layout; retain
+  glassmorphism if reliable. Otherwise use ordinary Light/Dark/system_default
+  (follow OS appearance). This explicit fallback overrides older glass mandates.
 - Current source: `002cc95da9aec9a39f2ba9743123cf9c1c5bb867` on
   `codex/rust-tauri-migration`. Runtime service checkpoint `30d99af` adds native
   recipe-generation observation/revalidation. Follow-up `002cc95` changes only
@@ -60,6 +64,8 @@ needed for the next slice. Preserve historical failures and exact tested sources
   offline wrapper imports app settings; a tool-only boundary must accept Rust
   policy explicitly. A verified native recipe with no override is separate from
   this positive-only service's NoRecipe refusal. See Task 3 in [the plan](NATIVE_RUST_PLAN.md).
+- Continue this work in the newly requested chat using the accepted delivery
+  order in the plan; integrate usable features instead of stopping at probes.
 - Source-save leases/recovery, catalog/build integration, serial/PTY, settings/
   packages/setup/cloud/vault, complete screens and release/device gates remain.
 
