@@ -127,7 +127,7 @@ class OnehorseChecks(unittest.TestCase):
                               _resolve_board_info=lambda *args: dict(self.info), _scan_includes_for_libs=lambda: [], emit=lambda *args: None)
         target = self.root / "generated"
         target.mkdir()
-        with mock.patch.dict(os.environ, {"HOME": str(self.root / "home")}), mock.patch.object(Path, "expanduser", lambda path: path):
+        with mock.patch.dict(os.environ, {"HOME": str(self.root / "home")}), mock.patch.object(os.path, "expanduser", lambda value: str(self.root / "home") if value == "~" else value):
             namespace["_generate_platformio_ini"](api, target)
             ini = target / "platformio.ini"
             text, stamp = ini.read_text(), ini.stat().st_mtime_ns
@@ -155,7 +155,13 @@ class OnehorseChecks(unittest.TestCase):
 
 
 class MiniMainChecks(unittest.TestCase):
-    setUp = OnehorseChecks.setUp
+    def setUp(self):
+        OnehorseChecks.setUp(self)
+        self.platform["packages"].pop("framework-arduinoespressif32-esp32-libs")
+        self.platform["packages"]["framework-arduinoespressif32-esp32s2-libs"] = {"owner":"platformio"}
+        self.sdk = {"name":"framework-arduinoespressif32-esp32s2-libs","version":"3.3.12"}
+        self.write_metadata(self.manifest.parent.parent / "platform.json", self.platform)
+        self.write_metadata(self.core / "packages" / self.sdk["name"] / "package.json", self.sdk)
     write_metadata = staticmethod(OnehorseChecks.write_metadata)
 
     def test_minimain_only_changes_unsupported_usb_mode(self):
@@ -174,7 +180,7 @@ class MiniMainChecks(unittest.TestCase):
         board = json.loads(MINIMAIN_BYTES)
         evidence = dict(board=board, platform=self.platform, framework_package=self.framework,
                         sdk_package=self.sdk, board_sha256=hashlib.sha256(MINIMAIN_BYTES).hexdigest())
-        for updates in ({"board_sha256":"0"*64}, {"sdk_package":{**self.sdk,"version":"3.3.13"}},
+        for updates in ({"sdk_package": {**self.sdk,"name":"framework-arduinoespressif32-esp32-libs"}}, {"board_sha256":"0"*64}, {"sdk_package":{**self.sdk,"version":"3.3.13"}},
                         {"platform":{**self.platform,"frameworks":[]}}):
             with self.subTest(updates=updates):
                 self.assertEqual(compat.minimain_recipe_options("espressif32", "minimain_esp32s2", "arduino", **{**evidence, **updates}), {})

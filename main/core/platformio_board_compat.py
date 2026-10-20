@@ -10,6 +10,7 @@ ONEHORSE_RULE = "onehorse32dev-espressif32-8-arduino-3.3.12-dout"
 _ONEHORSE_BOARD_SHA256 = "483741724c41624f1be320ef09ec3396fc0f34d7d0bc633b092e257cd621990b"
 _ARDUINO_PACKAGE = "framework-arduinoespressif32"
 _SDK_PACKAGE = "framework-arduinoespressif32-esp32-libs"
+_S2_SDK_PACKAGE = "framework-arduinoespressif32-esp32s2-libs"
 
 
 def onehorse_recipe_options(platform_name, board_id, framework, *, board, platform,
@@ -87,7 +88,8 @@ def board_compatibility_options(info, core_dir):
         raw, board = _read_metadata(manifest, platforms)
         _, platform = _read_metadata(manifest.parent.parent / "platform.json", platforms)
         _, framework = _read_metadata(packages / _ARDUINO_PACKAGE / "package.json", packages)
-        _, sdk = _read_metadata(packages / _SDK_PACKAGE / "package.json", packages)
+        sdk_name = _SDK_PACKAGE if info["board"] == "onehorse32dev" else _S2_SDK_PACKAGE
+        _, sdk = _read_metadata(packages / sdk_name / "package.json", packages)
         decide = onehorse_recipe_options if info["board"] == "onehorse32dev" else minimain_recipe_options
         return decide("espressif32", info["board"], "arduino", board=board,
                                        platform=platform, framework_package=framework, sdk_package=sdk,
@@ -117,14 +119,14 @@ def minimain_recipe_options(platform_name, board_id, framework, *, board, platfo
             or platform.get("version") != "8.0.0"
             or framework_package.get("name") != _ARDUINO_PACKAGE
             or framework_package.get("version") != "4.30312.261016"
-            or sdk_package.get("name") != _SDK_PACKAGE or sdk_package.get("version") != "3.3.12"):
+            or sdk_package.get("name") != _S2_SDK_PACKAGE or sdk_package.get("version") != "3.3.12"):
         return {}
     frameworks, packages = platform.get("frameworks"), platform.get("packages")
     dispatch = frameworks.get("arduino") if isinstance(frameworks, dict) else None
     if (not isinstance(dispatch, dict) or dispatch.get("package") != _ARDUINO_PACKAGE
             or dispatch.get("script") != "builder/frameworks/arduino.py" or not isinstance(packages, dict)
             or any(not isinstance(packages.get(name), dict) or packages[name].get("owner") != "platformio"
-                   for name in (_ARDUINO_PACKAGE, _SDK_PACKAGE))):
+                   for name in (_ARDUINO_PACKAGE, _S2_SDK_PACKAGE))):
         return {}
     build = board.get("build")
     if (not isinstance(build, dict) or build.get("mcu") != "esp32s2"
