@@ -25,6 +25,14 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+if sys.platform == "win32":
+    # Redirected private-runtime output can retain the Windows ANSI codec.
+    # Preserve the real Unicode build diagnostic instead of masking it while
+    # printing a failed fixture's already-saved UTF-8 log.
+    for output in (sys.stdout, sys.stderr):
+        if hasattr(output, "reconfigure"):
+            output.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -559,6 +567,11 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
     original_popen = subprocess.Popen
     original_expanduser = os.path.expanduser
     def launch(*args, **kwargs):
+        # The same subprocess module also launches Windows junction helpers,
+        # whose Popen calls legitimately inherit their environment. Preserve
+        # an explicit empty environment while handling omitted/None values.
+        environment = kwargs.get("env")
+        kwargs["env"] = dict(os.environ if environment is None else environment)
         kwargs["env"]["PYTHONDONTWRITEBYTECODE"] = "1"
         return original_popen(*args, **kwargs)
     with ExitStack() as stack:
