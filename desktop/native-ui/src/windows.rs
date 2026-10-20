@@ -798,7 +798,7 @@ impl NativeWindows {
                     .push(windows.child("STATIC", label, 0, 0, main)?);
             }
             for (index, choices) in [
-                vec!["No device connected"],
+                vec!["Select serial port"],
                 vec!["115200", "230400", "460800", "512000", "921600"],
                 vec!["Glass", "Frosted Light", "Solarized Dark"],
             ]
