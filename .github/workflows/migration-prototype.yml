@@ -184,12 +184,12 @@ jobs:
           if ($workspaceReceipts.Count -ne 1) { throw 'Expected one native Win32 workspace receipt.' }
           $workspace = "$($workspaceReceipts[0])".Substring('MCU_NATIVE_WORKSPACE='.Length) | ConvertFrom-Json
           $workspace | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 audit/migration/logs/native-workspace-windows.json
-          $required = @('undo_redo', 'native_tools', 'native_source_tabs', 'native_owned_source_controls', 'no_python_application_service', 'source_bytes_unchanged')
+          $required = @('undo_redo', 'native_tools', 'native_source_tabs', 'native_project_session', 'native_owned_source_controls', 'no_python_application_service', 'source_bytes_unchanged')
           foreach ($phase in 0..3) {
             foreach ($kind in @('models', 'dirty_selection', 'theme')) { $required += "phase_${phase}_${kind}" }
           }
           if ($workspaceExit -ne 0 -or !$workspace.passed) { throw 'Native Win32 workspace fixture failed.' }
-          if (@($workspace.checks.PSObject.Properties).Count -ne 18) { throw 'Incomplete native Win32 workspace checks.' }
+          if (@($workspace.checks.PSObject.Properties).Count -ne 19) { throw 'Incomplete native Win32 workspace checks.' }
           foreach ($name in $required) {
             if ($workspace.checks.$name -ne $true) { throw "Missing native Win32 workspace check: $name" }
           }
