@@ -93,14 +93,17 @@ in main/detached windows; all five captures verify 256×256 `_NET_WM_ICON`.
 
 After building `mcu-native-ui-probe`, run
 `.venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --workspace` for the
-18-check owned GTK workspace fixture, separately from the original 17-check
+19-check owned GTK workspace fixture, separately from the original 17-check
 detach smoke without `--workspace`. The workspace fixture proves retained
 models, dirty state/selection, themes, undo and unchanged source bytes; its
-receipt lives under `audit/migration/scratch/native-workspace/`. Current Linux
-native units total 18,
-alongside GTK 35 GUI and strict Linux/MSVC-target Clippy. Retain the five
-controller lifecycle, three path and the separate 17 detach checks (35 GTK GUI
-checks total). Original-size three-theme captures live in ignored
+default receipt lives under `audit/migration/scratch/native-workspace/`. Put
+continuation captures/receipts in `temp/` by supplying the developer controller
+an `OutputDirectory` rooted in an owned temp folder. Current Linux native units
+total 23, alongside GTK 36 GUI and strict Linux/MSVC-target Clippy. Full CI
+`39539221917` at `49ab312` also passes Windows 28 native units/36 GUI and both
+Windows Python editor jobs. Runtime source equals `eb9d13c`; the follow-up changes
+only the workflow's expected workspace contract. Retain the five controller
+lifecycle and three path checks. Historical original-size three-theme captures live in ignored
 `audit/migration/captures/native-workspace/`, alongside reviewed compact 960×540
 and `GDK_SCALE=2` captures (measured 1792×1062 on 1920×1080). Native reading spans
 and active controls remain visible; normal close/source-byte preservation pass.

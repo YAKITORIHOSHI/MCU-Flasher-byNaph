@@ -1,5 +1,22 @@
 # Migration parity ledger
 
+The 21 October continuation adds exact owned AVR archive preparation and
+retained native project read sessions. [Preparation evidence](rust-avr-preparation.json)
+records 2,758 regular files / 240,449,534 bytes from the exact Linux x86_64
+archives and backend CI `39537857175` at `9a27b78`: Ubuntu AMD64/ARM64 220 tests,
+Windows 212, with 49 fake-tool checks on all three. Synthetic host cases do not
+qualify actual Windows/ARM64 payloads or a private runtime/compiler dispatch.
+[Session evidence](native-project-sessions.json) records one native read service
+and original document baselines retained per GTK/Win32 window, exact ordered
+acknowledgements and pending cancellation without a source write. Local evidence
+is 23 library tests and 19 workspace/17 detach checks. Complete native CI
+`39539221917` at `49ab312` passes all five jobs: 23 native units on both Ubuntu
+architectures, 28 on Windows, 19 workspace/17 detach checks on all three hosts
+and both Windows Python editor jobs. Runtime source equals `eb9d13c`; the
+follow-up fixes only the workflow's required 19-check workspace contract.
+Save, live/coexistence ownership, real Compile and service retirement remain
+open. The capability totals stay **14 partial / 53 pending / 0 retired**.
+
 The native recipe-generation checkpoint `30d99af` now pins observed root,
 ancestor and file identities, binds exact native selection/host/rule/options,
 and rereads every consulted raw input before accepting revalidation. Stale,

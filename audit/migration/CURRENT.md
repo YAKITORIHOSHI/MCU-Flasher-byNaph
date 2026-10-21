@@ -5,6 +5,13 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- Current code checkpoint: `49ab312` on `codex/rust-tauri-migration`.
+  [Complete native CI 39539221917](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39539221917)
+  passes all five jobs: native Ubuntu AMD64/ARM64 and Windows plus both Windows
+  editor jobs. Each native host passes 19 workspace/17 detach checks, including
+  the retained native project session; native units are 23 per Ubuntu host and
+  28 on Windows. Runtime source is `eb9d13c`; `49ab312` changes only the Windows
+  workflow's expected workspace contract from 18 to 19 checks.
 - Goal: native Rust GUI and application backend, embedded Monaco/xterm, private
   Python only for firmware tools. Shipping entry still uses Python.
 - User approved a usable Rust beta milestone: Open/Edit/Save/Compile, then
@@ -131,7 +138,19 @@ needed for the next slice. Preserve historical failures and exact tested sources
   retaining native state borrows across IPC. Source saves and live/coexistence
   ownership remain disabled. Local evidence: 23 native library tests, 19 workspace
   plus 17 detach checks, strict Linux/MSVC-target linting and formatting. See
-  [session evidence](native-project-sessions.json); native CI is pending.
+  [session evidence](native-project-sessions.json); the complete matrix above
+  now passes. Intermediate runs `39538717552` and `39539003082` were canceled
+  by subsequent branch dispatches, not counted as runtime failures or passes.
+- Static PlatformIO 6.2.0 inspection confirmed that archive-only fallback
+  metadata has no registry owner and cannot satisfy explicit `platformio/...`
+  installed lookup. Verified registry identities and the `.piopm` format are
+  recorded in `temp/audit/native-compile-inputs/owned-package-metadata-next.md`.
+  Add deterministic native metadata only in a newly owned generation after
+  full revalidation; keep incoming archive metadata refused and include generated
+  files in the declared inventory. No metadata is currently generated.
+  The named OS interpreter's static loader/required-library records are in
+  `runtime-loader-profile.json` in the same temp folder. Complete native loader
+  and private runtime admission remains unqualified; no dependency was copied.
 - Continue this work using the accepted delivery
   order in the plan; integrate usable features instead of stopping at probes.
 - Source-save leases/recovery, catalog/build integration, serial/PTY, settings/

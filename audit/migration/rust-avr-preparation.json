@@ -280,7 +280,20 @@
     "candidate_is_qualified": false,
     "startup_hooks_or_os_aliases_copied": false,
     "native_loader_closure_measured": false,
-    "staging_limit_change": false
+    "staging_limit_change": false,
+    "additional_static_interpreter_inspection": {
+      "profile_path": "temp/audit/native-compile-inputs/runtime-loader-profile.json",
+      "profile_sha256": "02f26834a18ab35db266c5840b58e82f73b6912695406949b01dabee58e05312",
+      "interpreter_sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
+      "dt_needed": [
+        "libm.so.6",
+        "libz.so.1",
+        "libexpat.so.1",
+        "libc.so.6"
+      ],
+      "complete_loader_closure": false,
+      "dependencies_opened_or_copied": false
+    }
   },
   "remaining_gates": [
     "complete independent archive review; native cross-host synthetic verification now passed",
@@ -302,5 +315,41 @@
     "windows_path_creation_race_free": false,
     "active_aba_or_final_use_race_qualified": false,
     "synchronous_storage_stalls_bounded": false
+  },
+  "package_metadata_followup": {
+    "notes_path": "temp/audit/native-compile-inputs/owned-package-metadata-next.md",
+    "notes_sha256": "64a5b9295a31d5000df5236628d0016957b196fff6cd0f5ff1d63812531d3a94",
+    "registry_identities": [
+      {
+        "name": "atmelavr",
+        "id": 8006,
+        "type": "platform",
+        "owner": "platformio",
+        "metadata_sha256": "2b36c5fda10b00dbb5f2c73ac09e52b8252f8e3270279a587ac3d94d02d2cb71"
+      },
+      {
+        "name": "framework-arduino-avr",
+        "id": 8039,
+        "type": "tool",
+        "owner": "platformio",
+        "metadata_sha256": "f33f115c8949f637f9b2d2d96aeb69d142093232a3724638c6a147cc181a6c2f"
+      },
+      {
+        "name": "tool-scons",
+        "id": 8192,
+        "type": "tool",
+        "owner": "platformio",
+        "metadata_sha256": "0c06261da79f842cc655761bd6839dd86500f57e2e30b0721cb5299c16358195"
+      },
+      {
+        "name": "toolchain-atmelavr",
+        "id": 8203,
+        "type": "tool",
+        "owner": "platformio",
+        "metadata_sha256": "f6e99353c2007b32bc742250e342701a06153152e82643586e621d3e7df9a6bb"
+      }
+    ],
+    "metadata_generated": false,
+    "archive_only_preparation_satisfies_explicit_owner_lookup": false
   }
 }

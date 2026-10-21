@@ -386,4 +386,12 @@ calls, and no session borrow crosses reentrant IPC. Errors/timeouts release
 pending state. Local evidence: 23 native library tests, 19 workspace/17 detach
 checks and strict Linux/MSVC-target linting/formatting. This is a direct native
 workspace foundation for Save, not a live/coexistence write lease or source-save
-implementation. See `native-project-sessions.json`; native CI remains pending.
+implementation. See `native-project-sessions.json`.
+
+Complete native CI `39539221917` at `49ab312` now passes all five jobs. Runtime
+source equals `eb9d13c`; the follow-up changes only the Windows workflow contract
+to require 19 workspace checks and the retained-session assertion. Each Ubuntu
+host passes 23 native units, Windows passes 28, and all three pass 19 workspace
+plus 17 detach checks. Both Windows Python editor jobs pass. Intermediate runs
+were canceled by subsequent branch dispatches and do not qualify native runtime.
+Full independent session/archive reviews and actual desktop/device gates remain.

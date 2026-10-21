@@ -51,6 +51,11 @@ checks (including a retained native project session) and the separate 17-check
 detach fixture. Strict Linux and Windows-target linting and formatting pass.
 These results are separate from the historical checkpoints below; exact sources
 and remaining gates are in [session evidence](../../audit/migration/native-project-sessions.json).
+Complete [native CI 39539221917](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39539221917)
+at `49ab312` passes all five jobs. Both Ubuntu architectures pass 23 native
+units, Windows passes 28, and all three pass 19 workspace/17 detach checks.
+Both Windows Python editor jobs pass. Runtime source equals `eb9d13c`; the
+follow-up changes only the workflow's required workspace contract.
 
 The earlier GTK workspace checkpoint passed 18 checks for retained models,
 dirty content/selection, all three themes, undo/redo, native source controls and

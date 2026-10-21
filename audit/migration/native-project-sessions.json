@@ -135,12 +135,112 @@
     "independent_review_complete": false
   },
   "ci": {
-    "status": "not_yet_run_for_this_source",
-    "archive_checkpoint_run": 39537857175,
-    "archive_ci_is_not_current_native_session_evidence": true
+    "status": "success",
+    "run_id": 39539221917,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39539221917",
+    "source_commit": "49ab31249c890716ea93e3b85b6c914b07aae620",
+    "runtime_equal_to": "eb9d13cb291f3d443b2a63d9839e54dd4210088e",
+    "followup_scope": "workflow-only Windows workspace contract requires19 checks and native_project_session",
+    "hosts": {
+      "migration-prototype-ubuntu-24.04": {
+        "native_unit_tests": 23,
+        "workspace_checks": 19,
+        "retained_native_session": true,
+        "detach_checks": 17,
+        "fake_tool_checks": 49,
+        "artifact_file_sha256": {
+          "audit/migration/logs/board-campaign-guards.log": "75991a6d08ba87f6abfc4f5259e40d2972d79c8df43456b8601a86937c418493",
+          "audit/migration/logs/board-compatibility-rust.json": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688",
+          "audit/migration/logs/board-recipe-compat.log": "eaadcc1665417f3f990c254cd951da1efcff351d9a25ed00abf0b5bf30a49b7e",
+          "audit/migration/logs/board-recipe-rust.json": "4334c0b34f145b92f17cbdcd99acc309ef5f9e5decd7ac5c42fe5a0ae518d6e6",
+          "audit/migration/logs/compile-process.json": "ab0f84cf12373c2c2a64e533b2b51401047d67ecd5f3a9baa29593d1afe28ed1",
+          "audit/migration/logs/file-identity.json": "1f113882d36d8b6fbadece9012c2ae20a9cac86f35abd13071d1dc3a5f67393c",
+          "audit/migration/logs/native-ui-cleanup.log": "172ffcfd59d0057ab1426f97d6d15d1d45e8a52e9bf93917dff3c5b7167015aa",
+          "audit/migration/logs/native-ui-paths.log": "a21f915f4ef89bb73524b0abec40d9c5f43f64ca7809b044fd4d131bb7ec57ea",
+          "audit/migration/logs/native-ui-protocol.log": "226039c9202c1829b59e3f59a46a03ce39f9abd447b1212ac8586192a95f5d14",
+          "audit/migration/logs/recipe-generation-rust.json": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978",
+          "audit/migration/logs/serial-send.json": "ce18de5888709354f89954fc4bd175d8257e96fd883b693e070c048221114f4b",
+          "audit/migration/native-webview.json": "0a243f0edd697a71a4d8167176e54ce57121aaf563c624ae66bdba2a1d412af3",
+          "audit/migration/scratch/native-ui/latest-output.log": "4d8221ae7feafbc47e0c26d6a70061bea4eb9ef45abd657f52c490431a376fb2",
+          "audit/migration/scratch/native-ui/latest-smoke.json": "9acb397c25ca276d45dd3ee610293f2705700916f7c5fabd6b2658cd23d03b1a",
+          "audit/migration/scratch/native-workspace/latest-output.log": "137a6054e4437b0eb06e6037611dee6a859a8331d294912f0061b8440aa6b918",
+          "audit/migration/scratch/native-workspace/latest-smoke.json": "8c3e16c3a28c29e8abd6ff61cfa165850a38fb3d1ca5e5423e564676c785a857",
+          "desktop/ui/public/vendor/manifest.json": "3474aa84a1a4ca779ecfbff933f2bbcdb01b98ad04d46ebc9a256aeb15b4d760",
+          "temp/audit/native-compile-inputs/tool-only-entry.json": "6960aff8f426ed777c0a02819072aacb10132ffdfa76342ee8c79290d91fec3f"
+        }
+      },
+      "migration-prototype-ubuntu-24.04-arm": {
+        "native_unit_tests": 23,
+        "workspace_checks": 19,
+        "retained_native_session": true,
+        "detach_checks": 17,
+        "fake_tool_checks": 49,
+        "artifact_file_sha256": {
+          "audit/migration/logs/board-campaign-guards.log": "696efb4c4673b3e55a5e040c707be07a8ef14776981496bef244b9d15b777746",
+          "audit/migration/logs/board-compatibility-rust.json": "9b17d3275ab74d359a422f2f929e7af89eb9e2a11b1c3aedc61db83e54f6e646",
+          "audit/migration/logs/board-recipe-compat.log": "2607eb0677567db201ed99359a01545761068e0da01cfb0e8e1817c83d98a93e",
+          "audit/migration/logs/board-recipe-rust.json": "5cde2f19f7b49e92c3841cd3e713717fa050eca80321aedd196af2ea0f3a88fe",
+          "audit/migration/logs/compile-process.json": "782a0d6ac5bec3c8ff1f5d657159b7d672f3fdd1d0133400c2b4d4a8738d2a7d",
+          "audit/migration/logs/file-identity.json": "0bed872838ad33aeca691811fecf04d509e290f65744557a63028a6514ffac85",
+          "audit/migration/logs/native-ui-cleanup.log": "a22a2d7ec6b7c688be7414122c70172714ce2c37babf833209de801703fd86a2",
+          "audit/migration/logs/native-ui-paths.log": "4023711fe2d16419fd928c10b6a301a51606c242530f1601739747a92f0540b1",
+          "audit/migration/logs/native-ui-protocol.log": "8c788c1bbe2c11dc7efb63fc511fe7ce5b2b1908d86f2b585fb3fbed878abbf6",
+          "audit/migration/logs/recipe-generation-rust.json": "ec5fcbebff973d5bf605c5ddff95b01c29e9642dbf5abf9be0b450b018e935bf",
+          "audit/migration/logs/serial-send.json": "ce18de5888709354f89954fc4bd175d8257e96fd883b693e070c048221114f4b",
+          "audit/migration/native-webview.json": "cfb597130bc80ba4cea5d102a99c80d258032afcf4aaaf221257c7d0b22d8abf",
+          "audit/migration/scratch/native-ui/latest-output.log": "d813660135d2256b0289f26c468d2b65b73def0ac410a146a11cac92284eac6e",
+          "audit/migration/scratch/native-ui/latest-smoke.json": "efa77421e0abeaa8f9f93d68099f9e8ce3873eaa0abed74ae623d3efe9123921",
+          "audit/migration/scratch/native-workspace/latest-output.log": "0999c6700c10d717068bdff68587f66253e8f7b6e047c40668f07add0a6301b7",
+          "audit/migration/scratch/native-workspace/latest-smoke.json": "41c6b7b7a5a4b2244c0a132f1377640714a2648ee84ea4aa0eb5f5bc5901bfc9",
+          "desktop/ui/public/vendor/manifest.json": "3474aa84a1a4ca779ecfbff933f2bbcdb01b98ad04d46ebc9a256aeb15b4d760",
+          "temp/audit/native-compile-inputs/tool-only-entry.json": "6960aff8f426ed777c0a02819072aacb10132ffdfa76342ee8c79290d91fec3f"
+        }
+      },
+      "migration-prototype-windows-2022": {
+        "native_unit_tests": 28,
+        "workspace_checks": 19,
+        "retained_native_session": true,
+        "detach_checks": 17,
+        "fake_tool_checks": 49,
+        "artifact_file_sha256": {
+          "audit/migration/logs/board-compatibility-rust.json": "cb38cb9be1731b8a0b93efc47a5902deaf1f24fd3d86edcfcc48d817355ee49c",
+          "audit/migration/logs/board-recipe-compat.log": "64abfe0f3eeb417414715fd732f45ad2934ae6bf77121d4848a519191a7558b3",
+          "audit/migration/logs/board-recipe-rust.json": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65",
+          "audit/migration/logs/compile-process.json": "0f619278eed889831306aeb21c6a1db4fcef05eb3eabb78f1e4b519345b4683a",
+          "audit/migration/logs/file-identity.json": "062a9bc728dcb2fef4cec673076d86df494253ad6421e287eb7afc3c7d6a99a8",
+          "audit/migration/logs/native-ui-protocol.log": "3391db1d406c510600e46311308805a18c7c819e9d0cda492dc3d156981336cb",
+          "audit/migration/logs/native-ui-windows-output.log": "8bc433f5f4c6c66172390253abd9fd1f931b2a6f7d3036a38c6083510174a945",
+          "audit/migration/logs/native-ui-windows.json": "1ea0875909ded26c7880270c27ce24449604e5d6651e09f5dbb56c2aa3aaae41",
+          "audit/migration/logs/native-workspace-windows-output.log": "9ba98e095a318213d75a9b3bf99083fa0c4bcdcd366e6ad9a9f35a1e3e7eb359",
+          "audit/migration/logs/native-workspace-windows.json": "e4e95c9c68be26f78ffd5a2ed104456c0bc5d577d29d414687c2cb5043fdbe20",
+          "audit/migration/logs/recipe-generation-rust.json": "655094e2932d14c4417e65f695e523fa20a462d0c2594b6330d76643ea630d17",
+          "audit/migration/logs/serial-send.json": "ea26ae6d3972732af70e18a791931145296b89dc3cc2b67e0088fafcee094458",
+          "audit/migration/native-webview.json": "c42ebc3c888f5dd253a5cd1206b47b270dcccf5424b31f27ccbe0ce67ba90dcd",
+          "desktop/ui/public/vendor/manifest.json": "3474aa84a1a4ca779ecfbff933f2bbcdb01b98ad04d46ebc9a256aeb15b4d760",
+          "temp/audit/native-compile-inputs/tool-only-entry.json": "cf0d06c394354d846261985c8a8424ba98997154f709d9f8872ba372dd0b91a2"
+        }
+      }
+    },
+    "windows_editor_jobs": {
+      "Python3.11": "success",
+      "Python3.14": "success"
+    },
+    "intermediate_runs": [
+      {
+        "id": 39538717552,
+        "source": "eb9d13cb291f3d443b2a63d9839e54dd4210088e",
+        "conclusion": "cancelled by subsequent branch dispatch; two Windows editor jobs had passed"
+      },
+      {
+        "id": 39539003082,
+        "source": "49ab31249c890716ea93e3b85b6c914b07aae620",
+        "conclusion": "cancelled by complete corrected matrix dispatch"
+      }
+    ],
+    "actual_user_desktop_device_qualification": false
   },
   "remaining_gates": [
-    "independent session review and native cross-host GUI verification",
+    "complete independent session review; native cross-host GUI verification now passed",
     "qualified native source-write transactions, directory identities and coexistence leases",
     "save bridge acknowledgement of current edit revisions, conflict/recovery and original-byte semantics",
     "exact target/settings/build integration",
@@ -154,5 +254,6 @@
     "shipping_entry_changed": false,
     "python_application_services_retired": 0,
     "root_sketch_settings_protected_caches_touched": false
-  }
+  },
+  "runtime_source_commit": "eb9d13cb291f3d443b2a63d9839e54dd4210088e"
 }
