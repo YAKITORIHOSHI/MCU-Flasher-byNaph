@@ -1,0 +1,257 @@
+{
+  "schema": 1,
+  "updated": "2026-10-21 Asia/Manila",
+  "scope": "development-only owned exact Uno AVR archive preparation; no tool dispatch or live workspace authority",
+  "continuation_base": "43355f031776af422ac34a5e770b1df6b8c1ee0a",
+  "source_sha256": {
+    "desktop/crates/host/src/prepare_avr_fixture.rs": "946cbd55bbda467858afc7e309313c0b0529aec4b204033ccb70fcf9a46075f5",
+    "desktop/crates/host/src/bin/prepare_avr_probe.rs": "cae863d0a643497641e391edca19ace5e183a917030bd708a4ea76c4dd6a7a3e",
+    "desktop/crates/host/src/lib.rs": "f6180938fd9dc23c2e1d6767b10f9afa1cd65ad3cb8943e59f000c0db5eab2f7",
+    "desktop/crates/host/Cargo.toml": "e81ebbc4ea64be5c183f28d89ec3cd94b6929130eeb5a8caee124a788e591901",
+    "desktop/Cargo.lock": "3624f7f25849d4e284737fbb291f03cf186557ccd6d831e42be92b0412edbbb5",
+    "desktop/firmware-tools/platformio_compile.py": "c474a636c5847ccd6cdcdd9df0954fee39875b4188a4e7492b12fdaa8aaf71b9",
+    "desktop/scripts/verify-tool-only-entry.py": "a657668d533054bd6821bfff9a24e50c26f621eb226505dc4ca2bde95e354001"
+  },
+  "source_tree_sha256": "ac9d6db72f131b8b6252ba2bef2d9e71e76a96ed58234908b24d0f31ea066f43",
+  "source_tree_encoding": "sorted UTF-8 relative path NUL sha256 LF; source hashes identify this slice independently of later documentation commits",
+  "target": {
+    "board": "uno",
+    "framework": "arduino",
+    "platform": "platformio/atmelavr@5.3.0"
+  },
+  "archives": [
+    {
+      "package": "atmelavr",
+      "version": "5.3.0",
+      "path": "avr-archives/atmelavr-5.3.0.tar.gz",
+      "status": "reused_exact",
+      "bytes": 41655,
+      "sha256": "370a482b8cd980b8954c03cec3e856f50758cac695491e6b6c8327f5e60079ac",
+      "url": "https://dl.registry.platformio.org/download/platformio/platform/atmelavr/5.3.0/atmelavr-5.3.0.tar.gz"
+    },
+    {
+      "package": "framework-arduino-avr",
+      "version": "5.4.0",
+      "path": "avr-archives/framework-arduino-avr-5.4.0.tar.gz",
+      "status": "reused_exact",
+      "bytes": 565720,
+      "sha256": "bf85bcca114bad389fec51fecbf9b66821a233b366bd3f85cdb1cdcba6a28659",
+      "url": "https://dl.registry.platformio.org/download/platformio/tool/framework-arduino-avr/5.4.0/framework-arduino-avr-5.4.0.tar.gz",
+      "final_url_without_query": "https://release-assets.githubusercontent.com/github-production-release-asset/276735248/0fcb43ed-1be7-477c-9b17-d1855c42db34",
+      "redirect_chain": [
+        {
+          "status": 302,
+          "url_without_query": "https://github.com/ivankravets/pioreg-ci-mirror/releases/download/framework-arduino-avr/0c9213a-framework-arduino-avr-5.4.0.tar.gz"
+        },
+        {
+          "status": 302,
+          "url_without_query": "https://release-assets.githubusercontent.com/github-production-release-asset/276735248/0fcb43ed-1be7-477c-9b17-d1855c42db34"
+        }
+      ]
+    },
+    {
+      "package": "tool-scons",
+      "version": "4.41101.0",
+      "path": "avr-archives/tool-scons-4.41101.0.tar.gz",
+      "status": "reused_exact",
+      "bytes": 523448,
+      "sha256": "e405de1fcd3307fa80d624f0290c7cd30fbb47f67e135a9f56d7e46b6b895311",
+      "url": "https://dl.registry.platformio.org/download/platformio/tool/tool-scons/4.41101.0/tool-scons-4.41101.0.tar.gz",
+      "final_url_without_query": "https://release-assets.githubusercontent.com/github-production-release-asset/276735248/15fbde06-5377-46ea-999d-3579f3ec9167",
+      "redirect_chain": [
+        {
+          "status": 302,
+          "url_without_query": "https://github.com/ivankravets/pioreg-ci-mirror/releases/download/tool-scons/14073c2-tool-scons-4.41101.0.tar.gz"
+        },
+        {
+          "status": 302,
+          "url_without_query": "https://release-assets.githubusercontent.com/github-production-release-asset/276735248/15fbde06-5377-46ea-999d-3579f3ec9167"
+        }
+      ]
+    },
+    {
+      "package": "toolchain-atmelavr",
+      "version": "1.70300.191015",
+      "path": "avr-archives/toolchain-atmelavr-linux_x86_64-1.70300.191015.tar.gz",
+      "status": "reused_exact",
+      "bytes": 52965047,
+      "sha256": "664f0b7b08a15e8d6362b87e2fdb5a4dcfd5959ebc5b19d938e7dff6f12f0524",
+      "url": "https://dl.registry.platformio.org/download/platformio/tool/toolchain-atmelavr/1.70300.191015/toolchain-atmelavr-linux_x86_64-1.70300.191015.tar.gz",
+      "final_url_without_query": "https://sin1.contabostorage.com/fd833e6c4db04192b0ad7e561907b935:pioregmirrorsg/tools/cc/65/b2cd783a42ebb8d5148b287e67982efd054049001234afd0de29d0917297/toolchain-atmelavr-linux_x86_64-1.70300.191015.tar.gz",
+      "redirect_chain": [
+        {
+          "status": 302,
+          "url_without_query": "https://sin1.contabostorage.com/fd833e6c4db04192b0ad7e561907b935:pioregmirrorsg/tools/cc/65/b2cd783a42ebb8d5148b287e67982efd054049001234afd0de29d0917297/toolchain-atmelavr-linux_x86_64-1.70300.191015.tar.gz"
+        }
+      ]
+    }
+  ],
+  "archive_evidence": {
+    "path": "temp/audit/native-compile-inputs/avr-archive-acquisition.json",
+    "sha256": "3f3595a73c53082deb9d771c259a686270dfaf49cd6e50cdf72e9f960b8d171e",
+    "compressed_bytes": 54095870,
+    "regular_expanded_bytes_before_link_copies": 239672248,
+    "actual_payload_host": "linux_x86_64",
+    "archive_payloads_or_contents_executed": false
+  },
+  "native_preparation": {
+    "architecture": "x86_64",
+    "archiveBytesPreserved": true,
+    "compiler": {
+      "bytes": 949248,
+      "format": "ELF64 little-endian ET_EXEC x86_64",
+      "sha256": "8b9885fe307984cb8b5802a652567c9d01d2d91649a66ea8ee93b9b88cfce804"
+    },
+    "fileListEncoding": "sorted UTF-8 path NUL decimal-size NUL sha256 NUL octal-mode LF",
+    "fileListSha256": "5afff446889ffa0fbad05024be11f1225eee97299e6ddfc1d2d4341bc40c4631",
+    "files": 2758,
+    "fixtureOnly": true,
+    "host": "linux",
+    "immutableInputLifetime": false,
+    "installedPackageReadiness": false,
+    "liveStoreOrHardwareAccess": false,
+    "logicalBytes": 240449534,
+    "materializedArchiveLinks": [
+      {
+        "bytes": 57926,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so",
+        "sha256": "0f70f21126857e5448c789396ac45de26385a081d18d194c21e940749f702132",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 57926,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so.0",
+        "sha256": "0f70f21126857e5448c789396ac45de26385a081d18d194c21e940749f702132",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 124598,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so",
+        "sha256": "448f8e23f469a7ca7e8788680d4cd8aa934d5c428270545bc8148510f3c6c2c2",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 124598,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so.0",
+        "sha256": "448f8e23f469a7ca7e8788680d4cd8aa934d5c428270545bc8148510f3c6c2c2",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 116044,
+        "path": "core/packages/toolchain-atmelavr/lib/libcc1.so",
+        "sha256": "ee94f49678064279b22c414c0f748c05cba610803e76ad573ac8a245d85fed1c",
+        "target": "core/packages/toolchain-atmelavr/lib/libcc1.so.0.0.0"
+      },
+      {
+        "bytes": 116044,
+        "path": "core/packages/toolchain-atmelavr/lib/libcc1.so.0",
+        "sha256": "ee94f49678064279b22c414c0f748c05cba610803e76ad573ac8a245d85fed1c",
+        "target": "core/packages/toolchain-atmelavr/lib/libcc1.so.0.0.0"
+      },
+      {
+        "bytes": 90075,
+        "path": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so",
+        "sha256": "aff84cb9933d11a1588a8da881417a4679162914ad6fd3b6dfdf0887f1bbe243",
+        "target": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so.0.0.0"
+      },
+      {
+        "bytes": 90075,
+        "path": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so.0",
+        "sha256": "aff84cb9933d11a1588a8da881417a4679162914ad6fd3b6dfdf0887f1bbe243",
+        "target": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so.0.0.0"
+      }
+    ],
+    "preparedRoot": "temp/audit/native-compile-inputs/prepared-avr-linux-27543-1792552523111761924",
+    "privateRuntimeAdmitted": false,
+    "regularFileRereadMatched": true,
+    "schemaVersion": 1,
+    "target": {
+      "board": "uno",
+      "framework": "arduino",
+      "platform": "platformio/atmelavr@5.3.0"
+    },
+    "toolOrCompilerExecution": false
+  },
+  "limits": {
+    "archives": 4,
+    "compressed_bytes_per_archive": 268435456,
+    "payload_bytes_per_file": 67108864,
+    "payload_bytes_total_including_link_copies": 536870912,
+    "files_including_link_copies": 16384,
+    "directories_including_root": 4096,
+    "archive_path_bytes": 1024,
+    "path_components": 24,
+    "extension_bytes": 8192,
+    "extension_keys": 64,
+    "headers_per_archive": 65536,
+    "decoded_tar_bytes_per_archive": "min(compressed_size * 200 + 65536, 570425344)",
+    "create_new_only": true,
+    "refused_partial_trees_retained": true
+  },
+  "local": {
+    "host": "Ubuntu 26.04.1 LTS x86_64",
+    "default_rust_tests": 220,
+    "archive_fixture_tests": 23,
+    "fake_tool_checks": 49,
+    "strict_linux_clippy": true,
+    "strict_windows_msvc_target_clippy": true,
+    "format": true,
+    "private_python_runtime_tests": 46,
+    "isolated_qt_recovery": "passed; offscreen warnings retained",
+    "probe_receipt_sha256": "1deb77909db3e10116dad0a32f22aed70ec24fff6a0f5d4c5ddfeaf1eddb7759",
+    "log_sha256": {
+      "avr-backend-tests.log": "027b083c72963bcf620aa10b47875c700b714c85511640d58485f564e45ad145",
+      "avr-linux-clippy.log": "77e7e4186c3e9aa55da3bca20a286832a2313faf779cd14551dec2460665f9b9",
+      "avr-msvc-clippy.log": "b3dcb2e336cba8325c0183b40f40615e034adb71e9be8a8bdcb96b613ec2d295",
+      "avr-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "avr-probe-build.log": "848715e0219d53ddac383fbde8b71d66170da222773b1157cde2e0033d1753ae",
+      "avr-tool-entry.log": "54d71efd23b48cd32da75bdfac8a22f7f1e6abced831db3575bfe2e0fba6671e",
+      "avr-shipping-runtime.log": "8417c7011d8a37a48d0ac17b3f83c0685c29d20c91821712ab0980c300f867fe"
+    }
+  },
+  "ci": {
+    "status": "not_yet_run_for_this_source",
+    "historical_compile_boundary_run": 39534638853,
+    "historical_run_is_not_current_archive_evidence": true
+  },
+  "review": {
+    "status": "author review completed; independent review interrupted by account usage limit",
+    "completed_independent_scope": "root probe and 5.3 tool delta reviewed with no concrete findings; archive reviewer confirmed prehash/bounds/inventory/link policy before interruption",
+    "full_independent_archive_review_complete": false,
+    "root_fixes": "complete output inventory added after a failing regression; one test array construction fixed; current strict lint form applied"
+  },
+  "runtime_measurement": {
+    "source_profile_path": "temp/audit/native-compile-inputs/private-runtime-inputs.json",
+    "source_profile_sha256": "766c5a6b5da87ca458efac6b1fcfc8ecd1ad91412ffcca9e54de3e3b996c0019",
+    "declared_distribution_count": 22,
+    "selected_site_files": 1239,
+    "selected_site_bytes": 11780878,
+    "candidate_runtime_files": 1835,
+    "candidate_runtime_bytes": 33071077,
+    "candidate_is_qualified": false,
+    "startup_hooks_or_os_aliases_copied": false,
+    "native_loader_closure_measured": false,
+    "staging_limit_change": false
+  },
+  "remaining_gates": [
+    "complete independent archive review and native cross-host synthetic verification",
+    "Windows and ARM64 actual archive preparation and binary architecture checks",
+    "owned interpreter/stdlib/site/native loader closure and nested Python startup",
+    "immutable admitted input lifetime and finite external tool process ownership",
+    "installed package metadata/readiness without package-manager mutation",
+    "real native-controlled sample compile and artifacts",
+    "native project persistence/save/coexistence and complete build integration"
+  ],
+  "boundaries": {
+    "shipping_python_entry_unchanged": true,
+    "python_application_services_retired": 0,
+    "private_runtime_admitted": false,
+    "live_cache_settings_sketches_hardware_cloud_touched": false,
+    "compile_dispatch_enabled": false,
+    "registry_digest_is_not_execution_authority": true,
+    "scope_is_owned_single_writer_fixture": true,
+    "windows_path_creation_race_free": false,
+    "active_aba_or_final_use_race_qualified": false,
+    "synchronous_storage_stalls_bounded": false
+  }
+}

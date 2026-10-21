@@ -4,6 +4,7 @@ pub mod compile_process_fixture;
 pub mod file_identity;
 pub mod fixture_lock;
 pub mod fixture_registry;
+pub mod prepare_avr_fixture;
 pub mod process_identity;
 pub mod recipe_snapshot;
 pub mod stream_ack;

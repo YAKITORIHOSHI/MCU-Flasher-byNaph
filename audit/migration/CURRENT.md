@@ -101,6 +101,25 @@ needed for the next slice. Preserve historical failures and exact tested sources
   archives, without restarting the campaign or adopting a live store. Runtime
   closure remains absent; `.venv-linux` uses an external interpreter link and
   app/setuptools `.pth` startup files. Do not call it an admitted staged runtime.
+- Exact owned Linux x86_64 archive preparation now passes locally: four pinned
+  archives (54,095,870 compressed bytes) produce 2,758 independent regular files
+  / 240,449,534 bytes. Eight reviewed local toolchain library links become
+  explicitly recorded regular copies only for that exact archive digest.
+  All other links/specials refuse; complete output inventories and raw archive
+  hashes are revalidated. See [separate preparation evidence](rust-avr-preparation.json).
+  Local checks: 220 default Rust tests, including 23 archive checks; 49 fake-tool
+  checks; strict Linux/MSVC-target linting and formatting; existing 46-test
+  private runtime and isolated Qt recovery pass. Full independent archive
+  review was interrupted by the helper account usage limit; author review is
+  recorded and cross-host verification of this source is still pending.
+- The uninvoked development tool entry now deliberately requires 5.3.0 and
+  refuses the earlier 5.1.0 target/config. Historical `dbf92f0` receipts remain
+  unchanged. A read-only runtime profile measured 22 declared distributions and
+  an unqualified 33,071,077-byte runtime candidate. No interpreter was copied,
+  startup hook followed, package metadata synthesized or compiler executed.
+  Native loader closure, nested startup and tool lifetime remain gates. The
+  complete candidate exceeds existing compile-fixture file/byte limits; those
+  limits have not been relaxed before actual runtime admission.
 - Continue this work in the newly requested chat using the accepted delivery
   order in the plan; integrate usable features instead of stopping at probes.
 - Source-save leases/recovery, catalog/build integration, serial/PTY, settings/

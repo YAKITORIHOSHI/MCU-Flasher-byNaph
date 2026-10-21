@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / "desktop/firmware-tools/platformio_compile.py"
 OUTPUT = ROOT / "temp/audit/native-compile-inputs"
 CONFIG = (b"[platformio]\nsrc_dir = sources\ninclude_dir = sources\n\n"
-          b"[env:native_compile]\nplatform = platformio/atmelavr@5.1.0\n"
+          b"[env:native_compile]\nplatform = platformio/atmelavr@5.3.0\n"
           b"board = uno\nframework = arduino\n")
 CHECKS = []
 
@@ -250,7 +250,7 @@ def verify():
             "--project-root": str(project), "--core-root": str(core),
             "--packages-root": str(packages), "--platforms-root": str(platforms),
             "--site-packages-root": str(site), "--output-root": str(output), "--jobs": "1",
-            "--platform": "platformio/atmelavr@5.1.0", "--board": "uno", "--framework": "arduino",
+            "--platform": "platformio/atmelavr@5.3.0", "--board": "uno", "--framework": "arduino",
         }
         base = [sys.executable, "-I", "-S", "-B", str(entry)]
 
@@ -313,6 +313,12 @@ def verify():
             if reason:
                 assert reason in child.stderr, (label, child.stderr)
             CHECKS.append(label)
+
+        (project / "platformio.ini").write_bytes(CONFIG.replace(b"@5.3.0", b"@5.1.0"))
+        refused("old-5.1-target-and-matching-config-refused",
+                {"--platform": "platformio/atmelavr@5.1.0"}, reason="pinned AVR sample")
+        refused("old-5.1-config-with-5.3-target-refused", reason="config differs")
+        (project / "platformio.ini").write_bytes(CONFIG)
 
         for jobs in ("0", "7", "-1", "1.0", "01", ""):
             refused("invalid-jobs-" + repr(jobs), {"--jobs": jobs})

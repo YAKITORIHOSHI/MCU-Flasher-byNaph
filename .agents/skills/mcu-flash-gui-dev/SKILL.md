@@ -50,6 +50,17 @@ the GUI. Windows starts suspended and assigns its private job before resume;
 pre-pin running-image identity is still unproven. It cannot consume a staged
 tool receipt or execute a compiler. Retain this distinction in CI/audit claims.
 
+`host::prepare_avr_fixture` is a separate owned archive preparer for exact
+atmelavr 5.3.0/Uno inputs. Its native caller supplies all four archive digests,
+sizes and host classifications. Do not resolve versions from a live store or
+reuse the earlier uninvoked 5.1.0 tool-entry policy. The development entry now
+requires 5.3.0. Preparation retains refused partial trees and grants no installed
+readiness or execution authority. Only the eight recorded local library links
+in the exact Linux x86_64 toolchain digest may become independent regular copies;
+all other link/special entries refuse. `prepare_avr_probe` consumes only fixed
+owned archive paths and performs no tool launch. Keep its local payload evidence
+separate from cross-host synthetic archive tests and historical compile receipts.
+
 The current native workspace milestone shares the original 39 palette tokens
 across three themes (117 exact color values) and Montserrat between GTK and
 Win32 chrome. GTK loads original action SVGs; Win32 reproduces native brand

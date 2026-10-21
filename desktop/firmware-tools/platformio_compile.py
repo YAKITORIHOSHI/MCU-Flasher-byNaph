@@ -192,7 +192,7 @@ def main(argv=None):
         if policy.jobs not in {str(value) for value in range(1, 7)}:
             raise ToolBoundaryError("Native compiler jobs must be one literal integer from 1 to 6.")
         target = (policy.platform, policy.board, policy.framework)
-        if target != ("platformio/atmelavr@5.1.0", "uno", "arduino"):
+        if target != ("platformio/atmelavr@5.3.0", "uno", "arduino"):
             raise ToolBoundaryError("Only the explicitly supplied pinned AVR sample is admitted.")
         project, core, packages, platforms, site, output = (
             _directory(getattr(policy, name.replace("-", "_"))) for name in names[:6])

@@ -352,3 +352,22 @@ explicit owned sample supersedes the earlier uninvoked 5.1.0 proposal only when
 its preparer/tool-entry changes are integrated. Reacquire just the exact missing
 archives, verify official record hashes and bounded owned extraction, then admit
 the complete private runtime before any tool dispatch. No campaign restart.
+
+The exact owned Linux x86_64 four-archive preparer now produces 2,758 regular
+files / 240,449,534 bytes, with a closed output inventory and independent probe
+rereads. Eight same-directory library links from the one reviewed toolchain
+digest become recorded independent regular copies; other links/special entries
+refuse. All archives are hashed before output reservation and after decoding,
+with bounded raw GNU/PAX handling, gzip CRC/EOF checks and create-new files.
+Local evidence is 220 default Rust tests (23 archive checks), 49 fake-tool checks,
+strict Linux/MSVC-target linting and formatting, and the unchanged 46-test private
+runtime/isolated Qt recovery. See `rust-avr-preparation.json`. Independent full
+archive review and native cross-host verification remain pending after helper
+usage limits interrupted review. This does not close BLD-01 or retire a service.
+
+The development entry now requires the deliberately selected 5.3.0 tuple and
+refuses old 5.1.0 target/config. Runtime profiling measured 22 declared Python
+distributions; a smaller 33,071,077-byte candidate excludes startup hooks,
+GUI/development categories and aliases. It is not a qualified import/native
+loader closure or owned interpreter. Admit those inputs and nested startup
+before extending staging bounds or enabling external compiler dispatch.

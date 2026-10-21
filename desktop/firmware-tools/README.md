@@ -5,6 +5,32 @@ prepared AVR sample. It has no native build caller and does not replace the
 shipping Python wrapper or retire an application service. No real firmware
 build has been qualified through this entry.
 
+The explicit tuple is `platformio/atmelavr@5.3.0`, `uno`, `arduino`, chosen from
+the retained successful Uno campaign receipt at
+`audit/migration/scratch/board-campaign-20261019/avr-campaign/results.jsonl:14`
+and `audit/migration/BOARD_COMPILE_REPORT.md`. Owned archive acquisition or
+preparation is development input work; it grants no execution or readiness
+authority. Historical native staging receipts retain their original sources.
+
+The native `mcu-host::prepare_avr_fixture` prepares four explicitly supplied,
+hashed archives into a create-new fixture below
+`temp/audit/native-compile-inputs`. It fixes platform/framework/SCons/toolchain
+names, versions and destination roots, checks every archive before extracting
+any, validates package identities and the paired Uno descriptors, and retains
+partial output on refusal. It does not synthesize `.piopm` or readiness records.
+The standalone `prepare_avr_probe --prepare-linux-x86_64` uses fixed official
+archive identities and independently rereads the resulting files. It never
+launches a tool or discovers a package store.
+
+The exact Linux x86_64 toolchain archive has eight same-directory library
+symlinks. Only that archive digest and those eight path/target pairs permit
+adaptation to independent regular copies of admitted regular targets. The
+returned manifest records each copy; all other links and special entries refuse.
+No emitted symlink is traversed or retained. Archive preparation does not admit
+the private Python/runtime dependency closure or grant immutable execution
+authority. See [preparation evidence](../../audit/migration/rust-avr-preparation.json)
+for the exact verified scope.
+
 The entry imports standard-library code and explicitly admitted PlatformIO
 modules. It never imports MCU Flasher settings, GUI/backend modules,
 `offline_mode`, `offline_runtime`, platform adapters or per-user store discovery.
@@ -27,7 +53,7 @@ dispatch a real tool before the remaining gates below pass.
   --site-packages-root "$ADMITTED_SITE_PACKAGES" \
   --output-root "$OWNED_OUTPUT" \
   --jobs 1 \
-  --platform platformio/atmelavr@5.1.0 \
+  --platform platformio/atmelavr@5.3.0 \
   --board uno \
   --framework arduino
 ```
@@ -55,7 +81,7 @@ src_dir = sources
 include_dir = sources
 
 [env:native_compile]
-platform = platformio/atmelavr@5.1.0
+platform = platformio/atmelavr@5.3.0
 board = uno
 framework = arduino
 ```
@@ -107,11 +133,13 @@ Run the dependency-free source-isolated verifier with standard Python:
 python -I -S -B -W error desktop/scripts/verify-tool-only-entry.py
 ```
 
-Current local result: **47 checks**, including an exact fake BasePackageManager
+Current local result: **49 checks**, including an exact fake BasePackageManager
 base ordering, platform override, public/private package refusals, fixed argv,
 UTF-8 streams, owned temporary allocation and denied-allocation behavior,
 unchanged input bytes/inventory, protected paths, roots/jobs/config and startup
-flag refusals. It copies the entry and builds fake PlatformIO modules only under
+flag refusals. The former 5.1.0 target with its matching config is refused, as is
+5.1.0 config supplied with the admitted 5.3.0 target. It copies the entry and
+builds fake PlatformIO modules only under
 `temp/audit/native-compile-inputs`; it never imports installed PlatformIO or
 dispatches a compiler, installer or hardware operation. Negative startup flags
 are simulated after safe `-I -S -B` process startup so missing `-S` cannot execute

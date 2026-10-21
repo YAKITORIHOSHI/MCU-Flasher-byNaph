@@ -64,6 +64,10 @@ selection. It remains confined to explicit disposable fixtures; `.ino`
 conversion, live project saves, complete tool readiness and real Compile dispatch
 are still pending. See [compile-input evidence](audit/migration/rust-compile-inputs.json)
 and the development-only [firmware-tool boundary](desktop/firmware-tools/README.md).
+The following slice prepares exact owned Uno/AVR archives in Rust, with bounded
+extraction and explicit copies for eight known Linux toolchain links. Its
+[preparation evidence](audit/migration/rust-avr-preparation.json) remains separate
+from runtime admission and real Compile integration.
 Native metadata fixtures retain original root/source identities and refuse
 Windows device-name and junction aliases. The pure serial-send queue now preserves
 active-plus-pending limits, captured connection identity, one-attempt writes and
@@ -76,8 +80,9 @@ Hosted runners do not qualify Windows 10/11 desktops or physical USB hardware.
 See the durable [migration status](audit/migration/STATUS.md),
 [feature ledger](audit/migration/parity.md), and
 [restart handoff](audit/migration/HANDOFF.md) for implemented work, evidence and
-remaining gates. Migration logs and disposable projects stay under `audit/`,
-outside `temp/`. Full feature and native-host parity is required before replacement.
+remaining gates. Durable reports stay under `audit/migration/`; continuation
+captures and disposable preparation inputs stay under `temp/audit/`. Full feature
+and native-host parity is required before replacement.
 
 Current Python release qualification also includes an isolated
 [configured-index compile campaign](direct/BOARD_COMPILE_CAMPAIGN.md). It builds
