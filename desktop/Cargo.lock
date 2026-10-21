@@ -1826,6 +1826,7 @@ name = "mcu-native-ui-probe"
 version = "0.1.0"
 dependencies = [
  "gtk",
+ "mcu-contracts",
  "mcu-core",
  "raw-window-handle",
  "serde",

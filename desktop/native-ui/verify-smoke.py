@@ -274,7 +274,7 @@ def run_fixture(options, binary, output_directory):
             assert return_code == 0 and receipt["passed"], receipt
             if workspace:
                 required = {f"phase_{phase}_{kind}" for phase in range(4) for kind in ("models", "dirty_selection", "theme")}
-                required |= {"undo_redo", "native_tools", "native_source_tabs", "native_owned_source_controls", "no_python_application_service", "source_bytes_unchanged"}
+                required |= {"undo_redo", "native_tools", "native_source_tabs", "native_project_session", "native_owned_source_controls", "no_python_application_service", "source_bytes_unchanged"}
             else:
                 assert {"GtkWindow", "GtkComboBoxText", "GtkButton", "GtkLabel", "GtkPaned"} <= set(receipt["widgetTypes"]), receipt["widgetTypes"]
                 required = REQUIRED

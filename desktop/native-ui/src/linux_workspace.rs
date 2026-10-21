@@ -14,7 +14,7 @@ use std::{
 };
 use wry::WebView;
 
-use mcu_native_ui_probe::workspace_project::read_project;
+use mcu_native_ui_probe::workspace_project::{read_project, ProjectSessions};
 pub use mcu_native_ui_probe::workspace_project::{CHECK_HEADER, CHECK_SOURCE};
 type TabStates = BTreeMap<String, (gtk::Label, String, u64, gtk::Button)>;
 
@@ -32,7 +32,7 @@ pub struct WorkspaceShell {
     project: gtk::Button,
     project_path: Option<PathBuf>,
     loading: Cell<bool>,
-    pending_tabs: RefCell<Option<Vec<(String, String)>>>,
+    projects: RefCell<ProjectSessions>,
     self_check: bool,
     check_phase: Cell<u8>,
     check_result: Cell<Option<bool>>,
@@ -308,7 +308,7 @@ impl WorkspaceShell {
             project,
             project_path,
             loading: Cell::new(false),
-            pending_tabs: RefCell::new(None),
+            projects: RefCell::new(ProjectSessions::default()),
             self_check,
             check_phase: Cell::new(0),
             check_result: Cell::new(None),
@@ -413,27 +413,33 @@ impl WorkspaceShell {
             }
             RendererMessage::Error { message } => {
                 self.loading.set(false);
-                self.pending_tabs.borrow_mut().take();
+                self.projects.borrow_mut().cancel_pending();
                 self.status.set_text(message);
                 if self.self_check {
                     self.finish_check(false);
                 }
             }
             RendererMessage::DocumentsOpened { documents } => {
-                let matches =
-                    self.pending_tabs.borrow().as_ref().is_some_and(|entries| {
-                        entries.iter().map(|(id, _)| id).eq(documents.iter())
-                    });
-                if matches {
-                    if let Some(entries) = self.pending_tabs.borrow_mut().take() {
+                let acknowledged = self.projects.borrow_mut().acknowledge(documents);
+                match acknowledged {
+                    Ok(Some(entries)) => {
                         self.set_tabs(&entries);
+                        self.loading.set(false);
+                        self.status.set_text(
+                            "Project opened. Source files are unchanged; edits stay in memory.",
+                        );
+                        if self.self_check {
+                            self.request_snapshot(0);
+                        }
                     }
-                    self.loading.set(false);
-                    self.status.set_text(
-                        "Project opened. Source files are unchanged; edits stay in memory.",
-                    );
-                    if self.self_check {
-                        self.request_snapshot(0);
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.projects.borrow_mut().cancel_pending();
+                        self.loading.set(false);
+                        self.status.set_text(&error);
+                        if self.self_check {
+                            self.finish_check(false);
+                        }
                     }
                 }
             }
@@ -579,6 +585,12 @@ impl WorkspaceShell {
         checks.insert("native_tools".into(), self.tools.n_pages() == 7);
         checks.insert("native_source_tabs".into(), self.tabs.borrow().len() == 2);
         checks.insert(
+            "native_project_session".into(),
+            self.projects.borrow().active().is_some_and(|project| {
+                !project.workspace_id().is_empty() && project.documents().len() == 2
+            }),
+        );
+        checks.insert(
             "native_owned_source_controls".into(),
             self.tabs
                 .borrow()
@@ -620,7 +632,7 @@ impl WorkspaceShell {
         glib::timeout_add_local_once(Duration::from_secs(25), move || {
             if let Some(shell) = acknowledgement.upgrade() {
                 if shell.loading.replace(false) {
-                    shell.pending_tabs.borrow_mut().take();
+                    shell.projects.borrow_mut().cancel_pending();
                     shell.status.set_text("The editor did not acknowledge the project load. Existing buffers are unchanged.");
                     if shell.self_check {
                         shell.finish_check(false);
@@ -634,7 +646,7 @@ impl WorkspaceShell {
             };
             if started.elapsed() > Duration::from_secs(20) {
                 shell.loading.set(false);
-                shell.pending_tabs.borrow_mut().take();
+                shell.projects.borrow_mut().cancel_pending();
                 shell
                     .status
                     .set_text("The project read timed out. Existing editor buffers are unchanged.");
@@ -644,14 +656,29 @@ impl WorkspaceShell {
                 return glib::ControlFlow::Break;
             }
             match receiver.try_recv() {
-                Ok(Ok((entries, script))) => {
+                Ok(Ok(project)) => {
                     if let Some(editor) = shell.editor.borrow().as_ref() {
-                        *shell.pending_tabs.borrow_mut() = Some(entries);
-                        if let Err(error) = editor.evaluate_script(&script) {
-                            shell.pending_tabs.borrow_mut().take();
+                        let staged = shell.projects.borrow_mut().stage(project);
+                        let result = staged.and_then(|()| {
+                            let script = shell
+                                .projects
+                                .borrow_mut()
+                                .take_pending_script()
+                                .ok_or("The pending project script was already dispatched.")?;
+                            editor
+                                .evaluate_script(&script)
+                                .map_err(|error| error.to_string())
+                        });
+                        if let Err(error) = result {
+                            shell.projects.borrow_mut().cancel_pending();
                             shell.loading.set(false);
-                            shell.status.set_text(&error.to_string());
+                            shell.status.set_text(&error);
                         }
+                    } else {
+                        shell.loading.set(false);
+                        shell
+                            .status
+                            .set_text("The editor is unavailable; the project read was released.");
                     }
                     glib::ControlFlow::Break
                 }

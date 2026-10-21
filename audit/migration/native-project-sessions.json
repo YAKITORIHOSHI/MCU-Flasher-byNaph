@@ -1,0 +1,158 @@
+{
+  "schema": 1,
+  "updated": "2026-10-21 Asia/Manila",
+  "scope": "shared retained process-local read sessions integrated into GTK/Win32 workspace; no live ownership or source-save authority",
+  "continuation_base": "9a27b78842e90e2c12ca4d9ddd9c0e6f50a28d18",
+  "source_sha256": {
+    "desktop/native-ui/src/workspace_project.rs": "96e0a80db89b75a75167b8d18760ec299dde8d1d5a079b94ff5262dac461d804",
+    "desktop/native-ui/src/linux_workspace.rs": "e55a15225255df943067993717c788503610fec489850402c16f8818a902dace",
+    "desktop/native-ui/src/windows.rs": "e4175bbb4316a1eacb783af3b629e4a62775bf015fce79f01015c98cd7023e4e",
+    "desktop/native-ui/Cargo.toml": "ab56b5348ff86bbe626074a8409191a934a0b8aa1c7eb04219f44cc13bbfd0c5",
+    "desktop/native-ui/verify-smoke.py": "5b8404ddb158c3945f72c7f019991ebf4f1b8590a8cc1a534bb7779bf0e3605e",
+    "desktop/Cargo.lock": "a8a85a840dc7cd5c0ad9326696f319f4147efea71b6669b81a1b86706ac51b57",
+    "desktop/crates/core/src/lib.rs": "d0e2bfed4476570d8d481b94ace3d6f9cf9c9d82db14e58751197c7399b9cbcf"
+  },
+  "source_tree_sha256": "c44fa4d8ed985b8f863a003bc3ef2b6a4e3f025e9f7ed1860d470cf6ca6d4d20",
+  "source_tree_encoding": "sorted UTF-8 relative path NUL sha256 LF",
+  "implementation": {
+    "session_retains": [
+      "native ProjectService",
+      "native workspace ID",
+      "ordered DocumentSnapshot baselines with original content, revisions and digests"
+    ],
+    "window_capacity": "one pending or one active project read; no replacement within the window",
+    "native_project_selection": "independent existing Rust process, unchanged",
+    "worker": "existing one-shot read worker; service and snapshots move to the window; no new worker or filesystem call for acknowledgements",
+    "acknowledgement": "exact ordered native document IDs; foreign/reordered/duplicate/partial refused; absent/repeated acknowledgement ignored",
+    "pending_failures": "editor refusal, dispatch error, timeout and cancellation discard pending state; existing accepted state is retained",
+    "dispatch": "one owned renderer script is moved out before browser calls; no session/Evidence borrow crosses reentrant IPC",
+    "mutable_service_accessor": false,
+    "external_dependencies_added": false,
+    "internal_dependency_added": "mcu-contracts"
+  },
+  "bounds": {
+    "inherited_source_files": 256,
+    "inherited_source_bytes_per_file": 8388608,
+    "inherited_source_bytes_total": 33554432,
+    "one_native_session_per_window": true,
+    "retained_baselines_are_original_not_current_disk_proof": true,
+    "no_process_global_window_or_reader_cap_added": true,
+    "synchronous_filesystem_stalls_qualified": false
+  },
+  "local": {
+    "host": "Ubuntu 26.04.1 LTS x86_64",
+    "native_library_tests": 23,
+    "new_session_tests": 5,
+    "existing_reader_tests": 3,
+    "strict_linux_clippy": true,
+    "strict_msvc_target_clippy": true,
+    "format": true,
+    "workspace": {
+      "checks": {
+        "native_owned_source_controls": true,
+        "native_project_session": true,
+        "native_source_tabs": true,
+        "native_tools": true,
+        "no_python_application_service": true,
+        "phase_0_dirty_selection": true,
+        "phase_0_models": true,
+        "phase_0_theme": true,
+        "phase_1_dirty_selection": true,
+        "phase_1_models": true,
+        "phase_1_theme": true,
+        "phase_2_dirty_selection": true,
+        "phase_2_models": true,
+        "phase_2_theme": true,
+        "phase_3_dirty_selection": true,
+        "phase_3_models": true,
+        "phase_3_theme": true,
+        "source_bytes_unchanged": true,
+        "undo_redo": true
+      },
+      "passed": true,
+      "scope": "Native GTK workspace and Rust source reader; owned files only; no save/device/settings operations",
+      "controller": "Python developer verification only",
+      "elapsedSeconds": 1.529,
+      "displayMode": "owned-Xvfb-x11-software-rendering"
+    },
+    "detach": {
+      "schemaVersion": 1,
+      "passed": true,
+      "mode": "isolated_native_widget_fixture",
+      "os": "linux",
+      "architecture": "x86_64",
+      "displayBackend": "GdkX11Display",
+      "webviewVersion": "2.52.6",
+      "widgetTypes": [
+        "GtkWindow",
+        "GtkComboBoxText",
+        "GtkButton",
+        "GtkLabel",
+        "GtkPaned"
+      ],
+      "checks": {
+        "dirty_model_retained": true,
+        "native_button_callback": true,
+        "native_combo_callback": true,
+        "native_gtk_controls": true,
+        "native_owner_retained": true,
+        "no_python_application_service": true,
+        "offline_cpp_chunk": true,
+        "offline_monaco": true,
+        "offline_monaco_worker": true,
+        "offline_xterm_unicode": true,
+        "same_editor_widget": true,
+        "selection_retained": true,
+        "separate_webviews": true,
+        "terminal_widget_retained": true,
+        "three_editor_only_reparents": true,
+        "typed_ipc_refuses_owner_forgery": true,
+        "undo_redo_retained": true
+      },
+      "error": null,
+      "limits": "Linux GTK3 receipt; 45-second smoke; 16-KiB IPC; embedded fixed assets; no live source/settings/cloud/hardware or firmware compile; Windows has a separate adapter and receipt; native IME/mixed-monitor qualification remains open",
+      "controller": "Python developer verification only",
+      "elapsedSeconds": 1.744,
+      "displayMode": "owned-Xvfb-x11-software-rendering"
+    },
+    "responsive_python_app_tests": 20,
+    "controller": "private Python stdlib developer controller with owned Xvfb; captures and log receipts under temp",
+    "log_sha256": {
+      "native-session-red.log": "f10553442272468ee145651edf9477760f82fc744cd6f9674fd925d62e7425d6",
+      "native-session-dispatch-red.log": "d2285db6e7de8fd1ced1e6f48770861d55be31baefbdcecd46ba0145404cf786",
+      "native-session-tests.log": "c7af0b57d0ab119e044f6dda4b10abd36d3e7d82c55d596da48b9470bc2dec94",
+      "native-session-linux-clippy.log": "b68234eaa20f71763b5a7b79210edcaf002c1fdb6627fd74b5f00391accd8e09",
+      "native-session-msvc-clippy.log": "ac357bc4264bafbae1cdc9ba0c0892d0ecba93f830a7c0def31b6b14eb535416",
+      "native-session-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native-session-build.log": "2fb2520b86f52c935bd086db4ada20fce9a6c7739594f9cd1126332351708e1f",
+      "native-session-responsive.log": "3315017a0aa68a8b2ae13e60f289a7a4c5115600462163ca3e49b2b7ce50f4d9",
+      "native-session-gui.log": "a205b2bcbfdad7016ed342ff9d1e9fbda5bb6aab963fc03b0e1c41db1e6b96e3"
+    }
+  },
+  "review": {
+    "status": "author self-review; independent helpers unavailable after account usage-limit failures",
+    "finding_fixed": "move renderer script out before browser dispatch to avoid holding session/Evidence RefCell borrows across potentially reentrant IPC; dedicated RED-to-GREEN ownership regression",
+    "independent_review_complete": false
+  },
+  "ci": {
+    "status": "not_yet_run_for_this_source",
+    "archive_checkpoint_run": 39537857175,
+    "archive_ci_is_not_current_native_session_evidence": true
+  },
+  "remaining_gates": [
+    "independent session review and native cross-host GUI verification",
+    "qualified native source-write transactions, directory identities and coexistence leases",
+    "save bridge acknowledgement of current edit revisions, conflict/recovery and original-byte semantics",
+    "exact target/settings/build integration",
+    "actual native Windows10/11 and Ubuntu desktop input, IME, chooser, focus and mixed-monitor qualification"
+  ],
+  "boundaries": {
+    "source_save_enabled": false,
+    "live_registry_or_activation_enabled": false,
+    "metadata_generation_enabled": false,
+    "build_or_device_dispatch_enabled": false,
+    "shipping_entry_changed": false,
+    "python_application_services_retired": 0,
+    "root_sketch_settings_protected_caches_touched": false
+  }
+}

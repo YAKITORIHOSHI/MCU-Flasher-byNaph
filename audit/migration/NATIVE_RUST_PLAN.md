@@ -362,8 +362,9 @@ with bounded raw GNU/PAX handling, gzip CRC/EOF checks and create-new files.
 Local evidence is 220 default Rust tests (23 archive checks), 49 fake-tool checks,
 strict Linux/MSVC-target linting and formatting, and the unchanged 46-test private
 runtime/isolated Qt recovery. See `rust-avr-preparation.json`. Independent full
-archive review and native cross-host verification remain pending after helper
-usage limits interrupted review. This does not close BLD-01 or retire a service.
+archive review remains pending after helper usage limits interrupted review.
+Subsequent cross-host results follow below. This does not close BLD-01 or retire
+a service.
 
 The development entry now requires the deliberately selected 5.3.0 tuple and
 refuses old 5.1.0 target/config. Runtime profiling measured 22 declared Python
@@ -371,3 +372,18 @@ distributions; a smaller 33,071,077-byte candidate excludes startup hooks,
 GUI/development categories and aliases. It is not a qualified import/native
 loader closure or owned interpreter. Admit those inputs and nested startup
 before extending staging bounds or enabling external compiler dispatch.
+
+Backend CI `39537857175` at `9a27b78` now passes Ubuntu AMD64/ARM64 220 tests
+(23 archive checks) and Windows 212 (22), with 49 fake-tool checks on all three.
+These are synthetic archive cases; actual payload preparation remains local
+Linux x86_64 evidence. Full independent archive review is still incomplete.
+
+The native project-session continuation integrates one retained read service,
+workspace ID and original document baselines per GTK/Win32 window. Exact ordered
+editor acknowledgements commit pending state; native Project still opens an
+independent window. Script dispatch moves its owned payload out before browser
+calls, and no session borrow crosses reentrant IPC. Errors/timeouts release
+pending state. Local evidence: 23 native library tests, 19 workspace/17 detach
+checks and strict Linux/MSVC-target linting/formatting. This is a direct native
+workspace foundation for Save, not a live/coexistence write lease or source-save
+implementation. See `native-project-sessions.json`; native CI remains pending.

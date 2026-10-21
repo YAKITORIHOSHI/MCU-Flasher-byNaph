@@ -23,6 +23,16 @@ worker. Exact ordered document acknowledgements bind native source controls;
 dirty updates accept only known document IDs and newer revisions. Native source
 tabs select retained Monaco models. On GTK, the native Project picker opens
 the chosen folder in a new process, preserving the current window's buffers.
+The session continuation retains the native ProjectService, workspace ID and
+original document snapshots after that worker returns. One pending or active
+read belongs to a window; only exact ordered IDs commit it, and another project
+must open independently. Failed dispatch, editor refusal or acknowledgement
+timeout releases pending read state. An accepted session stays through themes,
+resizing and editor detach/reattach. Renderer scripts move out before browser
+dispatch so native session borrows cannot cross reentrant IPC. Baselines remain
+the original snapshots, including revisions/digests/content; they are not proof
+that the disk is still unchanged. Native session methods expose no writes or
+mutable service access. This adds only an internal `mcu-contracts` dependency.
 This is a read-only filesystem adapter: edits stay in editor memory, Save/Save
 All are disabled, and no live ownership registration or activation runs.
 Windows accepts `--project`, `--theme` and `--workspace-smoke`. Its new native
@@ -36,7 +46,13 @@ the existing `mcu_icon.png` as their native icon. Unavailable backend actions
 remain disabled in manual previews, including the old Windows Compile fixture
 action and compact-menu backend entries.
 
-The current local GTK workspace smoke passes 18 checks for retained models,
+The session continuation locally passes 23 native library tests, 19 workspace
+checks (including a retained native project session) and the separate 17-check
+detach fixture. Strict Linux and Windows-target linting and formatting pass.
+These results are separate from the historical checkpoints below; exact sources
+and remaining gates are in [session evidence](../../audit/migration/native-project-sessions.json).
+
+The earlier GTK workspace checkpoint passed 18 checks for retained models,
 dirty content/selection, all three themes, undo/redo, native source controls and
 unchanged owned source bytes. Eighteen local native-unit checks pass on Linux,
 alongside the separate 17-check detach smoke,
@@ -70,7 +86,7 @@ review found no new actionable issue after the overflow/manual-action fixes;
 the report is `scratch/native-ui/windows-reader-review.md` under the migration
 audit. The new picker/icon scoped re-review is clean in
 `scratch/native-ui/windows-picker-icon-review.md` after the alignment correction.
-There are no new Cargo dependencies or lockfile changes, only minimal existing
+Those picker/icon changes added no Cargo dependencies or lockfile entries, only minimal existing
 Windows COM/Shell features. Settings, menus, auxiliary screens, tool-tab
 icons and live toolbar/service behavior still need exact design parity.
 

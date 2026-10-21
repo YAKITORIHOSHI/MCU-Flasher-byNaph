@@ -111,7 +111,11 @@ needed for the next slice. Preserve historical failures and exact tested sources
   checks; strict Linux/MSVC-target linting and formatting; existing 46-test
   private runtime and isolated Qt recovery pass. Full independent archive
   review was interrupted by the helper account usage limit; author review is
-  recorded and cross-host verification of this source is still pending.
+  recorded. [Backend CI 39537857175](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39537857175)
+  at `9a27b78` passes Ubuntu AMD64/ARM64 220 tests (23 archive checks) and
+  Windows 212 (22 archive checks); all three pass 49 fake-tool checks.
+  These are synthetic archive fixtures; actual payload preparation remains
+  qualified locally on Linux x86_64 only.
 - The uninvoked development tool entry now deliberately requires 5.3.0 and
   refuses the earlier 5.1.0 target/config. Historical `dbf92f0` receipts remain
   unchanged. A read-only runtime profile measured 22 declared distributions and
@@ -120,7 +124,15 @@ needed for the next slice. Preserve historical failures and exact tested sources
   Native loader closure, nested startup and tool lifetime remain gates. The
   complete candidate exceeds existing compile-fixture file/byte limits; those
   limits have not been relaxed before actual runtime admission.
-- Continue this work in the newly requested chat using the accepted delivery
+- Native workspace continuation now retains one process-local project service,
+  workspace ID and original document snapshots per window. Exact ordered editor
+  IDs commit pending state; refusal/timeout/dispatch errors discard pending state
+  without a source write. Scripts move out before browser calls to avoid
+  retaining native state borrows across IPC. Source saves and live/coexistence
+  ownership remain disabled. Local evidence: 23 native library tests, 19 workspace
+  plus 17 detach checks, strict Linux/MSVC-target linting and formatting. See
+  [session evidence](native-project-sessions.json); native CI is pending.
+- Continue this work using the accepted delivery
   order in the plan; integrate usable features instead of stopping at probes.
 - Source-save leases/recovery, catalog/build integration, serial/PTY, settings/
   packages/setup/cloud/vault, complete screens and release/device gates remain.

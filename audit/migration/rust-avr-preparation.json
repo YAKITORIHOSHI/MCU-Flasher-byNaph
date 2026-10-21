@@ -210,9 +210,58 @@
     }
   },
   "ci": {
-    "status": "not_yet_run_for_this_source",
-    "historical_compile_boundary_run": 39534638853,
-    "historical_run_is_not_current_archive_evidence": true
+    "status": "success",
+    "run_id": 39537857175,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39537857175",
+    "source_commit": "9a27b78842e90e2c12ca4d9ddd9c0e6f50a28d18",
+    "hosts": {
+      "migration-backend-ubuntu-24.04": {
+        "rust_default_tests": 220,
+        "archive_fixture_tests": 23,
+        "fake_tool_checks": 49,
+        "fixed_process_checks": 15,
+        "actual_archive_payload_preparation": false,
+        "artifact_file_sha256": {
+          "backend-unit.log": "d7a3e80ce212cc21f37a219cb01ed64dc938b4f57e23e879a3e791debf50a4ae",
+          "board-compatibility-rust.json": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688",
+          "board-recipe-rust.json": "4334c0b34f145b92f17cbdcd99acc309ef5f9e5decd7ac5c42fe5a0ae518d6e6",
+          "compile-process.json": "ab0f84cf12373c2c2a64e533b2b51401047d67ecd5f3a9baa29593d1afe28ed1",
+          "recipe-generation-rust.json": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978",
+          "tool-only-entry.json": "6960aff8f426ed777c0a02819072aacb10132ffdfa76342ee8c79290d91fec3f"
+        }
+      },
+      "migration-backend-ubuntu-24.04-arm": {
+        "rust_default_tests": 220,
+        "archive_fixture_tests": 23,
+        "fake_tool_checks": 49,
+        "fixed_process_checks": 15,
+        "actual_archive_payload_preparation": false,
+        "artifact_file_sha256": {
+          "backend-unit.log": "e6fac2acf9618965a6967aceebc5942882b05120dbc12d46484a40e2d9326271",
+          "board-compatibility-rust.json": "9b17d3275ab74d359a422f2f929e7af89eb9e2a11b1c3aedc61db83e54f6e646",
+          "board-recipe-rust.json": "5cde2f19f7b49e92c3841cd3e713717fa050eca80321aedd196af2ea0f3a88fe",
+          "compile-process.json": "782a0d6ac5bec3c8ff1f5d657159b7d672f3fdd1d0133400c2b4d4a8738d2a7d",
+          "recipe-generation-rust.json": "ec5fcbebff973d5bf605c5ddff95b01c29e9642dbf5abf9be0b450b018e935bf",
+          "tool-only-entry.json": "6960aff8f426ed777c0a02819072aacb10132ffdfa76342ee8c79290d91fec3f"
+        }
+      },
+      "migration-backend-windows-2022": {
+        "rust_default_tests": 212,
+        "archive_fixture_tests": 22,
+        "fake_tool_checks": 49,
+        "fixed_process_checks": 12,
+        "actual_archive_payload_preparation": false,
+        "artifact_file_sha256": {
+          "backend-unit.log": "ef0ae7b992ad044b4ae1327b5fb0cdcb2ec0f12c43e2610c28d1d24bfd9aaf34",
+          "board-compatibility-rust.json": "cb38cb9be1731b8a0b93efc47a5902deaf1f24fd3d86edcfcc48d817355ee49c",
+          "board-recipe-rust.json": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65",
+          "compile-process.json": "0f619278eed889831306aeb21c6a1db4fcef05eb3eabb78f1e4b519345b4683a",
+          "recipe-generation-rust.json": "655094e2932d14c4417e65f695e523fa20a462d0c2594b6330d76643ea630d17",
+          "tool-only-entry.json": "cf0d06c394354d846261985c8a8424ba98997154f709d9f8872ba372dd0b91a2"
+        }
+      }
+    },
+    "scope": "synthetic archive units and backend fixtures; actual archive payload run remains local Linux x86_64 only"
   },
   "review": {
     "status": "author review completed; independent review interrupted by account usage limit",
@@ -234,7 +283,7 @@
     "staging_limit_change": false
   },
   "remaining_gates": [
-    "complete independent archive review and native cross-host synthetic verification",
+    "complete independent archive review; native cross-host synthetic verification now passed",
     "Windows and ARM64 actual archive preparation and binary architecture checks",
     "owned interpreter/stdlib/site/native loader closure and nested Python startup",
     "immutable admitted input lifetime and finite external tool process ownership",

@@ -5,7 +5,7 @@ use mcu_native_ui_probe::workspace_design::{
 };
 use mcu_native_ui_probe::workspace_icon::{icon_image, APPLICATION_ICON};
 use mcu_native_ui_probe::workspace_project::{
-    read_project, LoadedProject, CHECK_HEADER, CHECK_SOURCE,
+    read_project, LoadedProject, ProjectSessions, CHECK_HEADER, CHECK_SOURCE,
 };
 use mcu_native_ui_probe::{
     asset_path, checked_scratch_root, parse_message, windows_navigation_allowed, Island,
@@ -1094,25 +1094,25 @@ struct Evidence {
     workspace_ready: bool,
     sources: Vec<SourceTab>,
     source_generation: u64,
-    pending_tabs: Option<Vec<(String, String)>>,
+    projects: ProjectSessions,
     workspace_snapshot: Option<RendererMessage>,
 }
 fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
     let mut state = state.borrow_mut();
     match parse_message(island, body) {
         Ok(RendererMessage::DocumentsOpened { documents }) => {
-            if let Some(entries) = state.pending_tabs.take() {
-                if entries.iter().map(|(id, _)| id).eq(documents.iter()) {
+            match state.projects.acknowledge(&documents) {
+                Ok(Some(entries)) => {
                     state.sources = entries
                         .into_iter()
                         .map(|(id, name)| SourceTab::new(id, name))
                         .collect();
                     state.source_generation += 1;
-                } else {
-                    state.error = Some(
-                        "The editor did not acknowledge the exact ordered native source IDs."
-                            .into(),
-                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    state.projects.cancel_pending();
+                    state.error = Some(error);
                 }
             }
         }
@@ -1191,7 +1191,7 @@ fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
         }
     }
     if state.error.is_some() {
-        state.pending_tabs = None;
+        state.projects.cancel_pending();
     }
 }
 
@@ -1605,8 +1605,8 @@ impl App {
             return;
         }
         let (sender, receiver) = mpsc::sync_channel(1);
-        // Only owned snapshot data crosses threads. No HWND, COM object or
-        // live service/ownership handle leaves the native UI thread.
+        // Only owned read-state data crosses threads. No HWND, COM object or
+        // live-write/registry ownership handle leaves the native UI thread.
         std::thread::spawn(move || {
             let _ = sender.send(read_project(&selected));
         });
@@ -1630,12 +1630,23 @@ impl App {
             Some(Ok(result)) => {
                 self.project_worker = None;
                 match result {
-                    Ok((entries, script)) => {
-                        self.evidence.borrow_mut().pending_tabs = Some(entries);
-                        if let Err(error) = self.editor.evaluate_script(&script) {
-                            self.evidence.borrow_mut().pending_tabs = None;
+                    Ok(project) => {
+                        let staged = self.evidence.borrow_mut().projects.stage(project);
+                        let result = staged.and_then(|()| {
+                            let script = self
+                                .evidence
+                                .borrow_mut()
+                                .projects
+                                .take_pending_script()
+                                .ok_or("The pending project script was already dispatched.")?;
+                            self.editor
+                                .evaluate_script(&script)
+                                .map_err(|error| error.to_string())
+                        });
+                        if let Err(error) = result {
+                            self.evidence.borrow_mut().projects.cancel_pending();
                             self.project_deadline = None;
-                            self.evidence.borrow_mut().error = Some(error.to_string());
+                            self.evidence.borrow_mut().error = Some(error);
                         }
                     }
                     Err(error) => {
@@ -1657,14 +1668,14 @@ impl App {
             .is_some_and(|started| started.elapsed() > Duration::from_secs(25))
         {
             self.project_deadline = None;
-            self.evidence.borrow_mut().pending_tabs = None;
+            self.evidence.borrow_mut().projects.cancel_pending();
             self.evidence.borrow_mut().error = Some(
                 "The editor did not acknowledge the project load. Existing buffers are retained."
                     .into(),
             );
         }
         if self.evidence.borrow().error.is_some() {
-            self.evidence.borrow_mut().pending_tabs = None;
+            self.evidence.borrow_mut().projects.cancel_pending();
             self.project_worker = None;
             self.project_deadline = None;
             if !self.smoke && !self.workspace_smoke {
@@ -1740,6 +1751,16 @@ impl App {
                 self.workspace_checks.insert(
                     "native_source_tabs".into(),
                     self.native.source_tabs.len() == 2,
+                );
+                self.workspace_checks.insert(
+                    "native_project_session".into(),
+                    self.evidence
+                        .borrow()
+                        .projects
+                        .active()
+                        .is_some_and(|project| {
+                            !project.workspace_id().is_empty() && project.documents().len() == 2
+                        }),
                 );
                 // SAFETY: Read only owned native children, never renderer HWNDs.
                 let owned = unsafe {
@@ -2636,7 +2657,7 @@ fn run_window(
         });
         let passed = done
             && error.is_none()
-            && app.workspace_checks.len() == 18
+            && app.workspace_checks.len() == 19
             && app.workspace_checks.values().all(|value| *value);
         let receipt = Receipt {
             schema_version: 1, passed, mode: "isolated_native_workspace_fixture", os: "windows",
@@ -2806,39 +2827,67 @@ mod source_checks {
     }
     #[test]
     fn only_exact_ordered_ack_commits_native_source_names() {
+        let application = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let root = checked_scratch_root(&application).unwrap().join(format!(
+            "native-session-win-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE).unwrap();
+        std::fs::write(root.join("Config.h"), CHECK_HEADER).unwrap();
         let state = RefCell::new(Evidence::default());
         receive(&state, Island::Editor, r#"{"kind":"workspace_ready"}"#);
-        state.borrow_mut().pending_tabs = Some(vec![
-            ("a".into(), "Sketch.ino".into()),
-            ("b".into(), "Config.h".into()),
-        ]);
+        let loaded = read_project(&root).unwrap();
+        let mut ids = loaded
+            .entries()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        ids.reverse();
+        state.borrow_mut().projects.stage(loaded).unwrap();
         receive(
             &state,
             Island::Editor,
-            r#"{"kind":"documents_opened","documents":["b","a"]}"#,
+            &serde_json::json!({"kind":"documents_opened","documents":ids}).to_string(),
         );
-        assert!(state.borrow().pending_tabs.is_none());
+        assert!(state.borrow().projects.pending_script().is_none());
+        assert!(state.borrow().projects.active().is_none());
         assert_eq!(state.borrow().sources[0].id, "untitled");
         state.borrow_mut().error = None;
-        state.borrow_mut().pending_tabs = Some(vec![
-            ("a".into(), "Sketch.ino".into()),
-            ("b".into(), "Config.h".into()),
-        ]);
+        let loaded = read_project(&root).unwrap();
+        let ids = loaded
+            .entries()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        state.borrow_mut().projects.stage(loaded).unwrap();
         receive(
             &state,
             Island::Editor,
-            r#"{"kind":"documents_opened","documents":["a","b"]}"#,
+            &serde_json::json!({"kind":"documents_opened","documents":ids}).to_string(),
         );
         assert_eq!(
             state
                 .borrow()
                 .sources
                 .iter()
-                .map(|tab| tab.id.as_str())
+                .map(|tab| tab.id.clone())
                 .collect::<Vec<_>>(),
-            ["a", "b"]
+            ids
         );
-        assert!(state.borrow().pending_tabs.is_none());
+        assert!(state.borrow().projects.pending_script().is_none());
+        assert_eq!(
+            state.borrow().projects.active().unwrap().documents().len(),
+            2
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn native_dirty_labels_accept_only_known_ids_and_newer_revisions() {
@@ -2855,17 +2904,37 @@ mod source_checks {
     }
     #[test]
     fn editor_refusal_clears_pending_and_retains_native_tabs_and_dirty_state() {
+        let application = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let root = checked_scratch_root(&application).unwrap().join(format!(
+            "native-session-win-refusal-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE).unwrap();
         let state = RefCell::new(Evidence::default());
         receive(&state, Island::Editor, r#"{"kind":"workspace_ready"}"#);
         changed(&state, "untitled", 1, true);
-        state.borrow_mut().pending_tabs = Some(vec![("a".into(), "Sketch.ino".into())]);
+        state
+            .borrow_mut()
+            .projects
+            .stage(read_project(&root).unwrap())
+            .unwrap();
         receive(
             &state,
             Island::Editor,
             r#"{"kind":"error","message":"unsaved edits are still open"}"#,
         );
-        assert!(state.borrow().pending_tabs.is_none());
+        assert!(state.borrow().projects.pending_script().is_none());
+        assert!(state.borrow().projects.active().is_none());
         assert_eq!(state.borrow().sources[0].id, "untitled");
         assert!(state.borrow().sources[0].dirty);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

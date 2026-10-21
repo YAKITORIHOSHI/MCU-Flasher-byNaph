@@ -72,6 +72,15 @@ accept `--project`, `--theme` and `--workspace-smoke`; shared `workspace_project
 uses `mcu_core::ProjectService` on a worker. Exact ordered acknowledgements and
 known-ID newer dirty revisions govern native controls. GTK's Project picker
 opens an independent process and preserves existing buffers.
+The shared `ProjectSessions` state retains that service, workspace ID and
+original `DocumentSnapshot` baselines after the read worker completes. One
+pending or active read belongs to each native window; another project must open
+independently. Exact ordered IDs commit the pending session. Failure/timeouts
+cancel pending state, while accepted state remains through themes/resize/detach.
+Move the pending renderer script out before browser dispatch; never retain a
+session/Evidence borrow across a call that can reenter IPC. The API exposes no
+mutable service or source-write method. Original baselines are not current disk
+identity or a live/coexistence write lease. See `native-project-sessions.json`.
 This is read-only: no live activation/registration, metadata generation, source
 save, settings/cloud/device write or build/package service is enabled. Windows
 native Project picker/HICON are implemented in `0e0db8a` with passing native units/GUI.

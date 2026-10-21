@@ -56,7 +56,11 @@ unfinished: all 67 ledger entries
 remain 14 partial fixture subsets and 53 pending, with no Python application
 service retired. See the [preview commands](desktop/native-ui/README.md) and
 [native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
-The next native backend slice adds owned compile-input preflight: exact pinned
+The native project-session continuation now retains the Rust project service
+and original document baselines in each opened window. Exact editor
+acknowledgements commit one project per window; pending failures release their
+read state. See [session evidence](audit/migration/native-project-sessions.json).
+The native backend now includes owned compile-input preflight: exact pinned
 targets, paired platform/board descriptors, complete root C/C++ source snapshots,
 deterministic config and declared prepared-tool byte copies in fresh files.
 Its opaque receipts refuse changed identities, bytes, inventories or native
