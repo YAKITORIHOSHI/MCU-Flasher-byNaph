@@ -19,7 +19,9 @@ open. The capability totals stay **14 partial / 53 pending / 0 retired**.
 The subsequent [native package record slice](rust-avr-package-metadata.json)
 adds four exact owned lookup records and preserves every original prepared
 package byte. Local 226 backend tests and exact Linux payload checks pass;
-actual PlatformIO lookup/runtime admission and compile integration stay open.
+backend CI `39541599780` at `29ec2b0` passes Ubuntu AMD64/ARM64 226 tests and
+Windows 218, with 49 fake-tool checks on all three.
+Actual PlatformIO lookup/runtime admission and compile integration stay open.
 
 The native recipe-generation checkpoint `30d99af` now pins observed root,
 ancestor and file identities, binds exact native selection/host/rule/options,

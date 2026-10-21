@@ -187,9 +187,62 @@
     }
   },
   "ci": {
-    "status": "not_yet_run_for_this_source",
-    "native_ui_full_ci_remains_at": 39539221917,
-    "prior_runtime_is_not_current_package_metadata_evidence": true
+    "status": "success",
+    "run_id": 39541599780,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39541599780",
+    "source_commit": "29ec2b0fed1c3aedd4a8f145dc963afce0226676",
+    "hosts": {
+      "migration-backend-ubuntu-24.04": {
+        "rust_default_tests": 226,
+        "archive_and_metadata_tests": 29,
+        "fake_tool_checks": 49,
+        "fixed_process_checks": 15,
+        "actual_archive_payload": false,
+        "artifact_file_sha256": {
+          "audit/migration/logs/backend-unit.log": "acb532ac9d4debb0ebfb37de72cac02df30ba417c68f4dfdee7a78c340e071bd",
+          "audit/migration/logs/board-compatibility-rust.json": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688",
+          "audit/migration/logs/board-recipe-rust.json": "4334c0b34f145b92f17cbdcd99acc309ef5f9e5decd7ac5c42fe5a0ae518d6e6",
+          "audit/migration/logs/compile-process.json": "ab0f84cf12373c2c2a64e533b2b51401047d67ecd5f3a9baa29593d1afe28ed1",
+          "audit/migration/logs/recipe-generation-rust.json": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978",
+          "temp/audit/native-compile-inputs/tool-only-entry.json": "6960aff8f426ed777c0a02819072aacb10132ffdfa76342ee8c79290d91fec3f"
+        }
+      },
+      "migration-backend-ubuntu-24.04-arm": {
+        "rust_default_tests": 226,
+        "archive_and_metadata_tests": 29,
+        "fake_tool_checks": 49,
+        "fixed_process_checks": 15,
+        "actual_archive_payload": false,
+        "artifact_file_sha256": {
+          "audit/migration/logs/backend-unit.log": "92415fcb142f5ad3b5814e2f80dd2674e69666f9a0d49c3477133e684ea24d01",
+          "audit/migration/logs/board-compatibility-rust.json": "9b17d3275ab74d359a422f2f929e7af89eb9e2a11b1c3aedc61db83e54f6e646",
+          "audit/migration/logs/board-recipe-rust.json": "5cde2f19f7b49e92c3841cd3e713717fa050eca80321aedd196af2ea0f3a88fe",
+          "audit/migration/logs/compile-process.json": "782a0d6ac5bec3c8ff1f5d657159b7d672f3fdd1d0133400c2b4d4a8738d2a7d",
+          "audit/migration/logs/recipe-generation-rust.json": "ec5fcbebff973d5bf605c5ddff95b01c29e9642dbf5abf9be0b450b018e935bf",
+          "temp/audit/native-compile-inputs/tool-only-entry.json": "6960aff8f426ed777c0a02819072aacb10132ffdfa76342ee8c79290d91fec3f"
+        }
+      },
+      "migration-backend-windows-2022": {
+        "rust_default_tests": 218,
+        "archive_and_metadata_tests": 28,
+        "fake_tool_checks": 49,
+        "fixed_process_checks": 12,
+        "actual_archive_payload": false,
+        "artifact_file_sha256": {
+          "audit/migration/logs/backend-unit.log": "3c1a44dc99368bfdf867ff5293bbad0ea9a945c202d0ab27624371fd15ab9f20",
+          "audit/migration/logs/board-compatibility-rust.json": "cb38cb9be1731b8a0b93efc47a5902deaf1f24fd3d86edcfcc48d817355ee49c",
+          "audit/migration/logs/board-recipe-rust.json": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65",
+          "audit/migration/logs/compile-process.json": "0f619278eed889831306aeb21c6a1db4fcef05eb3eabb78f1e4b519345b4683a",
+          "audit/migration/logs/recipe-generation-rust.json": "655094e2932d14c4417e65f695e523fa20a462d0c2594b6330d76643ea630d17",
+          "temp/audit/native-compile-inputs/tool-only-entry.json": "cf0d06c394354d846261985c8a8424ba98997154f709d9f8872ba372dd0b91a2"
+        }
+      }
+    },
+    "scope": "synthetic archive/native metadata fixtures and existing backend checks; exact real payload remains local Linux x86_64 only",
+    "native_ui_source_unchanged_from": {
+      "source": "49ab31249c890716ea93e3b85b6c914b07aae620",
+      "full_run_id": 39539221917
+    }
   },
   "review": {
     "status": "author review; independent helper review unavailable after account usage-limit failures",
@@ -205,7 +258,7 @@
     ]
   },
   "remaining_gates": [
-    "independent review and native cross-host metadata fixtures",
+    "independent review; native cross-host metadata fixtures now passed",
     "actual Windows/ARM64 package payload qualification",
     "complete owned private runtime/loader/site admission and nested startup",
     "immutable input lifetime and finite external process ownership",
@@ -222,5 +275,6 @@
     "shipping_entry_changed": false,
     "active_aba_final_use_or_windows_path_races_closed": false,
     "metadata_is_not_a_durable_ready_marker": true
-  }
+  },
+  "source_commit": "29ec2b0fed1c3aedd4a8f145dc963afce0226676"
 }

@@ -46,6 +46,9 @@ and the verified PlatformIO 6.2.0 metadata format. It produces 2,762 files /
 2,758 prepared files retain their earlier aggregate digest. This does not qualify
 actual PlatformIO lookup, a complete installed dependency closure or tool launch;
 see [package metadata evidence](../../audit/migration/rust-avr-package-metadata.json).
+Backend CI `39541599780` at `29ec2b0` passes Ubuntu AMD64/ARM64 226 tests and
+Windows 218, including the synthetic native metadata cases and 49 fake-tool
+checks per host. Actual package payload preparation remains Linux x86_64 only.
 
 The entry imports standard-library code and explicitly admitted PlatformIO
 modules. It never imports MCU Flasher settings, GUI/backend modules,

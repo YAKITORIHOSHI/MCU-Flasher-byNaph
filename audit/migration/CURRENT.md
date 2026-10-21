@@ -5,6 +5,12 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- Current backend code checkpoint: `29ec2b0`.
+  [Backend CI 39541599780](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39541599780)
+  passes Ubuntu AMD64/ARM64 226 tests and Windows 218, with 49 fake-tool checks
+  on all three. The owned package metadata slice has separate exact-source
+  evidence in `rust-avr-package-metadata.json`; actual package payload preparation
+  remains local Linux x86_64 only. Native UI sources retain the checkpoint below.
 - Native UI code checkpoint: `49ab312` on `codex/rust-tauri-migration`.
   [Complete native CI 39539221917](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39539221917)
   passes all five jobs: native Ubuntu AMD64/ARM64 and Windows plus both Windows
@@ -153,7 +159,9 @@ needed for the next slice. Preserve historical failures and exact tested sources
   original 2,758-file aggregate matches the prior checkpoint exactly. Local
   checks: 226 backend tests (29 archive/metadata checks), strict Linux/MSVC
   linting and formatting. See [new metadata evidence](rust-avr-package-metadata.json);
-  backend CI for this source is pending. Native UI sources remain unchanged.
+  backend CI `39541599780` at `29ec2b0` now passes all three hosts, with 29
+  archive/metadata checks per Ubuntu host and 28 on Windows. Native UI sources
+  remain unchanged from their passing full matrix.
   The named OS interpreter's static loader/required-library records are in
   `runtime-loader-profile.json` in the same temp folder. Complete native loader
   and private runtime admission remains unqualified; no dependency was copied.

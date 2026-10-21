@@ -405,7 +405,9 @@ Local exact Linux x86_64 preparation produces 2,762 files / 240,450,165 bytes,
 including 631 metadata bytes; the original 2,758-file aggregate remains identical
 to the prior archive-only checkpoint. Local checks: 226 backend tests (29 archive
 and metadata cases), strict Linux/MSVC-target linting and formatting. Backend CI
-for this source is pending. Native UI source remains unchanged at its passing
-checkpoint. Full private runtime/loader/nested-startup admission, immutable tool
+`39541599780` at `29ec2b0` now passes all three hosts: 226 tests on both Ubuntu
+architectures, 218 on Windows, with 49 fake-tool checks everywhere. Native UI
+source remains unchanged at its passing checkpoint. Full private
+runtime/loader/nested-startup admission, immutable tool
 lifetime, actual installed lookup and real compiler dispatch remain gates. See
 `rust-avr-package-metadata.json`; package records are not a ready marker.
