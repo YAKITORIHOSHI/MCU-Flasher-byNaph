@@ -124,6 +124,16 @@ End Class
 
 
 class ArtifactChecks(unittest.TestCase):
+    def test_git_preserves_executable_launcher_entries_for_archive_export(self):
+        # core.filemode=false can silently stage new 0755 files as 0644.
+        # A working-tree mode alone cannot prove portable release permissions.
+        result = subprocess.run(["git", "ls-files", "--stage", "-z", "--", "LAUNCHER"],
+                                cwd=ROOT, capture_output=True, text=True, timeout=10, check=True)
+        modes = {entry.split("\t", 1)[1]: entry.split(" ", 1)[0]
+                 for entry in result.stdout.split("\0") if entry}
+        for name in EXPECTED - {"WINDOWS.vbs", "README.md"}:
+            self.assertEqual(modes.get("LAUNCHER/" + name), "100755", name)
+
     def test_named_entries_and_executable_modes(self):
         self.assertEqual({path.name for path in LAUNCHERS.iterdir()}, EXPECTED)
         for name in EXPECTED:
