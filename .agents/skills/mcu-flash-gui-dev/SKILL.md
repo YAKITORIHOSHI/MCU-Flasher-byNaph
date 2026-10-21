@@ -24,6 +24,20 @@ requirement amendment and `desktop/native-ui/README.md` for the GTK and Win32
 feasibility adapters and their desktop/Wayland/input gates. Never promote fixture
 callbacks or library-mapping checks into full backend migration claims.
 
+The user's 21 October platform expansion requires the replacement to cover
+Windows 10/11 AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple
+Silicon, Fedora x86_64/aarch64 and Linux Mint AMD64. Read
+[`PLATFORM_SUPPORT.md`](../../../audit/migration/PLATFORM_SUPPORT.md) for the
+architecture assumptions, source gaps, baselines and per-host release gates.
+This supersedes the earlier Windows AMD64 / Ubuntu-only migration scope, not
+the shipping application's actual support. Keep GTK/Win32 and add native AppKit
+with WKWebView for macOS; choose/review bindings before adding dependencies.
+Do not claim ARM64 from an x64 build or emulated run, Fedora/Mint from Ubuntu
+evidence, or Ubuntu 26.04 Rust coverage from Python CI. Never loosen current
+release/tool-host guards as a shortcut: implement and qualify per-host policies,
+matching runtimes, drivers, native ownership and setup/repair first. Preserve
+unknown/malformed OS refusal and all live cache/journal/sketch boundaries.
+
 Continuation preference: keep the existing layout/design and glassmorphism when
 reliable. If glass is incompatible, unreliable or harms responsiveness, use
 ordinary Light, Dark and `system_default` themes (follow OS appearance). This

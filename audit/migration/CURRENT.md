@@ -5,6 +5,16 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- User expanded replacement platform requirements on 21 October: Windows 10/11
+  AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
+  Fedora x86_64/aarch64 and Linux Mint AMD64. See [required platform coverage](PLATFORM_SUPPORT.md)
+  for assumptions, concrete source gaps and per-host release gates. This overrides
+  the earlier Windows AMD64 / Ubuntu-only migration scope without changing shipping
+  support. macOS has no native adapter; Windows ARM64 has no native run and is
+  refused by the current AVR host policy; Fedora/Mint still need distribution
+  admission/setup. No new host execution or runtime support is claimed by this
+  documentation amendment. Keep the accepted usable-beta order while beginning
+  these host adapters before final packaging; retain all existing exact receipts.
 - Current backend code checkpoint: `29ec2b0`.
   [Backend CI 39541599780](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39541599780)
   passes Ubuntu AMD64/ARM64 226 tests and Windows 218, with 49 fake-tool checks

@@ -10,6 +10,12 @@
 
 [v10 release notes and verification limits](RELEASE_NOTES.md)
 
+The Rust replacement's required platform coverage now includes Windows 10/11
+AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
+Fedora x86_64/aarch64 and Linux Mint AMD64. These are migration requirements;
+the current Python release and Rust preview have not been qualified on that
+whole matrix. See [required platforms, current evidence and release gates](audit/migration/PLATFORM_SUPPORT.md).
+
 The Rust migration is being developed alongside this Python release in
 [`desktop/`](desktop/). Its final GUI will use native Rust widgets with Monaco
 and xterm embedded; application backend logic will also run in Rust. Python will

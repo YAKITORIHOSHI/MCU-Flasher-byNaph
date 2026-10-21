@@ -4,6 +4,16 @@ This is a native-widget development preview for the requested Rust GUI. It is
 separate from the existing Tauri web-shell fixture and the production Python
 application. It does not change either entry point.
 
+The [required replacement platform matrix](../../audit/migration/PLATFORM_SUPPORT.md)
+now includes Windows 10/11 AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64,
+macOS Intel/Apple Silicon, Fedora x86_64/aarch64 and Linux Mint AMD64.
+The current preview has only GTK/Linux and Win32 adapters; macOS exits with
+an unsupported-host diagnostic. Windows ARM64, Fedora and Mint have no recorded
+native execution here. Existing Windows Server AMD64 / Ubuntu 24.04 hosted
+checks and local Ubuntu 26.04.1 AMD64 checks remain their exact evidence.
+New host adapters, matching firmware tools, desktop/device qualification and
+packaging are required before a support claim or production launcher switch.
+
 Native-UI caption checkpoint `6ef749a` differs from CI-tested `0e0db8a` only by the “Select serial
 port” caption (strict MSVC/fmt checks). The preview has real GTK3 and Win32 toolbar/Controls, source-tab
 and seven-tool-tab chrome around two retained embedded editor/terminal views.

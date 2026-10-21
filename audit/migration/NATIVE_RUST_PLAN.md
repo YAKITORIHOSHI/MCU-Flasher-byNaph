@@ -6,16 +6,16 @@
 
 **Architecture:** A native Rust widget shell owns windows, focus, layout and commands. Existing GUI-independent Rust core/host services remain the foundation. Embedded editor/terminal components use a bounded typed bridge to Rust; they cannot own filesystem, serial, cloud, credentials or process authority. The Tauri web shell remains a tested prototype while native widget/WebView integration is qualified.
 
-**Tech Stack:** Rust core/host/contracts; GTK3 on Linux and Win32 on Windows for the current native-widget feasibility adapters; existing Monaco/xterm assets embedded through the host browser engine; certified PlatformIO/private Python and native firmware utilities as subprocess tools. Full desktop and release qualification remains open.
+**Tech Stack:** Rust core/host/contracts; GTK3 on Linux and Win32 on Windows for the current native-widget feasibility adapters, with an AppKit/WKWebView adapter required for macOS; existing Monaco/xterm assets embedded through the host browser engine; certified PlatformIO/private Python and native firmware utilities as subprocess tools. Full desktop and release qualification remains open.
 
-**Spec:** User clarification, 20 October 2026 (Asia/Manila), and `docs/rust-tauri-transition-proposal.md` with this amendment taking precedence over its earlier TypeScript application-shell design.
+**Spec:** User clarification, 20 October 2026 (Asia/Manila), the 21 October [platform expansion](PLATFORM_SUPPORT.md), and `docs/rust-tauri-transition-proposal.md` with these amendments taking precedence over its earlier TypeScript application-shell design and narrower host scope.
 
 ## Global constraints
 
 - Native Rust GUI widgets; keep Monaco and xterm embedded.
 - All application backend logic and authority move to Rust. No Python GUI, Python application server, or hidden Python service in the replacement release.
 - Python may remain only in the private firmware tool runtime, including PlatformIO/builder compatibility code that belongs to those tools. Development reference tests may still use Python.
-- Require Windows 10/11 AMD64 and native Ubuntu 24.04+ AMD64/ARM64; qualify actual native desktops separately from hosted builds.
+- Required replacement hosts now include Windows 10/11 AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon, Fedora x86_64/aarch64 and Linux Mint AMD64. The user's 21 October expansion takes precedence over the earlier Windows AMD64 / Ubuntu-only scope. Use the [platform matrix and remaining gates](PLATFORM_SUPPORT.md); native desktops, emulation, hosted builds and device evidence remain separate.
 - Preserve all 67 parity contracts, compact layout/workflow, source bytes, editor buffers, focus, independent projects, terminal/serial backpressure, fixed Firebase deployment and account compatibility.
 - Theme preference approved for the continuation chat: retain glassmorphism if it works reliably with the native toolkit. If it is incompatible, unreliable or harms responsiveness, proceed with ordinary Light, Dark and `system_default` themes; `system_default` follows OS appearance. Preserve layout, controls, branding and editor state. Decorative effects must not block the functional migration. This preference takes precedence over earlier requirements to retain glass surfaces exactly.
 - Preserve protected cache/journal boundaries and all user sketches/settings. Existing Python application remains production until replacement parity, native qualification and rollback gates pass.
@@ -37,7 +37,7 @@ The user approved organizing the remaining work around a usable Rust beta:
 1. Integrate the everyday native workspace: persistent project ownership, Open/Edit/Save, exact board selection, settings and retained editor state.
 2. Complete a real Rust-controlled Compile workflow, starting with verified target/source/config/tool staging and a tool-only Python boundary. Prove one prepared sample on Windows/Ubuntu, then expand through the configured board inventory.
 3. Complete device/serial/terminal services, libraries, downloads, setup/repair and Firebase/account services in Rust; retire each corresponding Python application service only after end-to-end qualification.
-4. Package Windows and Ubuntu beta executables with correct icons; qualify installation, native input/layout, recovery and hardware workflows before switching the production launcher.
+4. Package beta artifacts for the [required host matrix](PLATFORM_SUPPORT.md) with correct icons; qualify installation, native input/layout, recovery and hardware workflows per host before switching the production launcher. Windows/Ubuntu remain the initial vertical slice, while macOS, Windows ARM64, Fedora and Mint porting must start before final packaging and cannot be omitted from replacement acceptance.
 
 Run independent GUI/backend/Windows work in parallel where it helps. Measure progress by working end-to-end features and retired Python services, with tests as supporting evidence. Retain completed campaign/CI receipts and storage budgets; do not restart passed work. The detailed tasks below remain the dependency and qualification ledger.
 
@@ -71,6 +71,7 @@ Run independent GUI/backend/Windows work in parallel where it helps. Measure pro
 - [ ] Complete the actual workspace, source tabs, saved fonts/static glass/assets, auxiliary screens and live service integration beyond the feasibility controls.
 - [ ] Verify resize/focus/tab order/IME/clipboard at native 100–200%, editor-only detach/reattach, stale response refusal and bounded stream backpressure on each host.
 - [ ] Preserve the Tauri prototype's reusable Rust service/contract proofs; retire only the superseded application web shell after equivalent native evidence exists.
+- [ ] Add the native AppKit/WKWebView adapter for macOS Intel/Apple Silicon; qualify the shared Win32 adapter on native Windows ARM64 and the GTK adapter on Ubuntu 26.04, Fedora and Mint. Follow the expanded matrix; no existing hosted result closes these host-specific gates.
 
 ## Task 3: Finish Rust application service ownership
 
@@ -93,6 +94,7 @@ Run independent GUI/backend/Windows work in parallel where it helps. Measure pro
 - [ ] Complete exact target/catalog and build-input policy, source-save transactions/identity races/recovery, coexistence leases and activation/release.
 - [ ] Integrate Rust serial reader/Send worker and PTY/process ownership with finite deadlines and no replay/retry of hardware writes.
 - [ ] Port settings, cloud/auth/vault, downloader/package/setup/repair and native maintenance orchestration under the 67-capability ledger.
+- [ ] Implement Darwin identity/process/PTY/keychain adapters and per-distribution Linux release/dependency/setup policies; qualify native ARM64 GUI/backend and USB-driver closures. Record and separately qualify any emulated firmware-tool/runtime mode without bypassing existing host checks.
 - [ ] For each service: compare original Python outputs/failures, run native fixtures, integrate native UI, then classify/remove its Python application adapter. Keep tool-integrated Python only with an explicit tool classification.
 
 ## Task 4: Package and qualify the replacement
@@ -100,7 +102,8 @@ Run independent GUI/backend/Windows work in parallel where it helps. Measure pro
 **Files:** Native launchers/build manifests/release verifiers, OS-specific CI and parity/removal ledgers.
 
 - [ ] Enforce an allowlist of Python firmware-tool subprocess entry points and reject Python GUI/backend imports, servers or callbacks in replacement artifacts.
-- [ ] Package native Windows and Ubuntu artifacts from their supported baselines; preserve offline tools, signatures/notices, icon integration and standard-user execution.
+- [ ] Package native Windows AMD64/ARM64, Ubuntu AMD64/ARM64, macOS Intel/Apple Silicon, Fedora x86_64/aarch64 and Mint AMD64 artifacts from their qualified baselines; preserve offline tools, signatures/notices, icon integration and standard-user execution. Include macOS app-bundle signing/notarization and Fedora/Mint-specific dependency/desktop integration.
+- [ ] Expand native CI and actual desktop/device evidence across every required platform row. Current Ubuntu 24.04 and Windows Server AMD64 fixtures remain only their recorded evidence; do not label cross-builds, containers or emulation as unperformed native desktop qualification.
 - [ ] Run native complete workflow/device/USB, interruption/recovery, performance and rollback qualification; compile success alone does not qualify upload/reset behavior.
 - [ ] Replace the production entry point only after every required parity/release gate passes; otherwise retain the working Python release and report the remaining gates.
 

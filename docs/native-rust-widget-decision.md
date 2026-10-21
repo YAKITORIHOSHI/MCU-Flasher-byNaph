@@ -1,5 +1,14 @@
 # Native Rust widget decision
 
+**21 October platform amendment:** the replacement must also cover native
+Windows ARM64, Ubuntu 26.04 LTS, macOS Intel/Apple Silicon, Fedora and Mint.
+See the [required matrix](../audit/migration/PLATFORM_SUPPORT.md) for the full
+OS/architecture scope, existing evidence and unqualified hosts. Retain GTK on
+Linux and Win32 on Windows; add native AppKit controls with WKWebView islands
+on macOS, subject to binding/dependency and desktop qualification. The original
+two-adapter comparison below records the earlier narrower requirement and does
+not establish macOS, Fedora, Mint or Windows ARM64 compatibility.
+
 20 October 2026. **Provisional selection: retain GTK3 on Linux and Win32 on
 Windows, with Wry hosting only offline Monaco and xterm.** Application commands,
 ownership and backend services belong to Rust; Python remains limited to approved
