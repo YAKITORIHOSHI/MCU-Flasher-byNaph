@@ -15,6 +15,10 @@ on:
         description: Run Rust backend fixtures without GUI or editor setup
         type: boolean
         default: false
+      browser_performance_only:
+        description: Run isolated current-app browser and resource checks only
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,8 +28,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  browser-performance:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.browser_performance_only }}
+    uses: ./.github/workflows/browser-performance.yml
+
   native-prototype:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.backend_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.backend_only && !inputs.browser_performance_only) }}
     strategy:
       fail-fast: false
       matrix:
@@ -224,7 +232,7 @@ jobs:
           if-no-files-found: warn
 
   editor-review:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only && !inputs.browser_performance_only) }}
     name: Windows editor review (Python ${{ matrix.python }})
     runs-on: windows-latest
     timeout-minutes: 12
@@ -276,7 +284,7 @@ jobs:
 # physical input/IME, mixed-monitor behavior or complete application parity.
 
   backend-fixtures:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_only && !inputs.browser_performance_only }}
     strategy:
       fail-fast: false
       matrix:

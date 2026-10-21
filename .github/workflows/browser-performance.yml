@@ -44,6 +44,7 @@ on:
       - direct/verify_performance.py
       - direct/verify_ubuntu_download_manager.py
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
