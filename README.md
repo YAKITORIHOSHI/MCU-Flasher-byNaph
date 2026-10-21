@@ -56,6 +56,14 @@ unfinished: all 67 ledger entries
 remain 14 partial fixture subsets and 53 pending, with no Python application
 service retired. See the [preview commands](desktop/native-ui/README.md) and
 [native Rust plan](audit/migration/NATIVE_RUST_PLAN.md).
+The next native backend slice adds owned compile-input preflight: exact pinned
+targets, paired platform/board descriptors, complete root C/C++ source snapshots,
+deterministic config and declared prepared-tool byte copies in fresh files.
+Its opaque receipts refuse changed identities, bytes, inventories or native
+selection. It remains confined to explicit disposable fixtures; `.ino`
+conversion, live project saves, complete tool readiness and real Compile dispatch
+are still pending. See [compile-input evidence](audit/migration/rust-compile-inputs.json)
+and the development-only [firmware-tool boundary](desktop/firmware-tools/README.md).
 Native metadata fixtures retain original root/source identities and refuse
 Windows device-name and junction aliases. The pure serial-send queue now preserves
 active-plus-pending limits, captured connection identity, one-attempt writes and

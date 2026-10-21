@@ -74,6 +74,25 @@ and interprocess ownership work has resolved them.
 
 ## Pure service ports
 
+`compile_inputs` plans only explicit pinned registry targets and the initial
+Arduino C/C++ source subset. It preserves source bytes, requires literal
+`main.cpp`, sorts portable root names, refuses aliases/collisions and emits fixed
+`sources/` config without caller hooks, commands or overrides. Limits are 128
+files, 2 MiB/file and 16 MiB total. `.ino` conversion and library discovery are
+outside this first slice. `prepared_target` checks matching bounded platform and
+board JSON descriptors, including decoded duplicate keys, exact version/path and
+explicit framework declarations. These pure checks do not establish registry
+owner, installed dependency closure or executable readiness.
+
+The host's `compile_fixture` stages these inputs only below the explicit
+`temp/audit/native-compile-inputs` sandbox. Native host inputs supply every
+prepared file's role and expected digest; an incomplete or mismatched tree
+refuses. Create-new byte copies retain no source hardlinks. An opaque receipt
+binds owner, native selection generation, original/staged inventories, identities,
+bytes and config; any failed revalidation revokes it. It grants no source-save,
+package-store, compiler, upload or reset authority. Synchronous filesystem stalls,
+active ABA, non-atomic capture and final-use races remain unqualified.
+
 `preferences::merge_changes` ports the snapshot algorithm from
 `main/core/config_store.py::merge_changes`: apply explicitly changed/deleted keys
 while retaining another window's changes to unedited keys. Nested groups merge

@@ -15,8 +15,10 @@ use mcu_contracts::{
 };
 pub mod board_compatibility;
 pub mod board_recipe;
+pub mod compile_inputs;
 pub mod ownership;
 pub mod preferences;
+pub mod prepared_target;
 pub mod resource_budget;
 pub mod serial_send;
 pub mod serial_text;

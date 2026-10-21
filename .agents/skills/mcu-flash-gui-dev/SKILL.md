@@ -30,6 +30,26 @@ ordinary Light, Dark and `system_default` themes (follow OS appearance). This
 user-approved fallback overrides earlier glass-surface requirements; it does not
 change shipping Python behavior until the native replacement is qualified.
 
+Native compile-input continuation: `core::compile_inputs` and `prepared_target`
+provide pinned literal target/config and exact bounded descriptor checks.
+`host::compile_fixture` owns create-new staging below the explicit
+`temp/audit/native-compile-inputs` fixture sandbox, preserving root C/C++ bytes
+and binding the complete declared prepared tree to opaque revocable receipts.
+Initial support requires literal `main.cpp`; `.ino` conversion and live project
+save/build integration remain pending. Do not treat role labels, descriptor
+matches or hashes as complete runtime readiness or immutable execution authority.
+The development-only `desktop/firmware-tools` entry is separate from the shipping
+Python wrapper; its fake-PlatformIO verifier does not qualify real compiler
+execution. Keep nested Python startup, admitted runtime closure, finite native
+child lifetime and final-use gaps explicit. See `rust-compile-inputs.json` and
+the tool directory README for exact source/test scope.
+`compile_process_probe --self-check` exercises only its fixed self-child roles:
+independent bounded stdout/stderr, cancellation/deadlines and owned descendant
+cleanup. Linux's processwide subreaper belongs in that standalone fixture, never
+the GUI. Windows starts suspended and assigns its private job before resume;
+pre-pin running-image identity is still unproven. It cannot consume a staged
+tool receipt or execute a compiler. Retain this distinction in CI/audit claims.
+
 The current native workspace milestone shares the original 39 palette tokens
 across three themes (117 exact color values) and Montserrat between GTK and
 Win32 chrome. GTK loads original action SVGs; Win32 reproduces native brand

@@ -253,6 +253,39 @@ pub(crate) fn native_identity(file: &File) -> io::Result<NativeFileIdentity> {
     }
 }
 
+/// Observe whether the retained native file has exactly one filesystem link.
+/// This does not prevent another link being created after the observation.
+pub(crate) fn single_link(file: &File) -> io::Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(file.metadata()?.nlink() == 1)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: file owns a live handle; information is a correctly aligned,
+        // writable BY_HANDLE_FILE_INFORMATION buffer. No handle is transferred.
+        let result = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+        if result == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(information.nNumberOfLinks == 1)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = file;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Native file link count is unavailable",
+        ))
+    }
+}
+
 fn validate_kind(metadata: &Metadata, kind: EntryKind) -> io::Result<()> {
     if is_alias(metadata)
         || !match kind {
@@ -507,6 +540,24 @@ mod tests {
                 .kind(),
             io::ErrorKind::PermissionDenied
         );
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn single_link_observes_hardlink_changes_on_the_retained_file() {
+        let fixture = Fixture::new();
+        let path = fixture.root.join("Sketch.ino");
+        let alias = fixture.root.join("Alias.cpp");
+        fs::write(&path, b"owned link-count fixture").unwrap();
+        let handle = open_metadata(&path, EntryKind::Source).unwrap();
+        assert!(single_link(&handle.file).unwrap());
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(!single_link(&handle.file).unwrap());
+        let alias_handle = open_metadata(&alias, EntryKind::Source).unwrap();
+        assert!(!single_link(&alias_handle.file).unwrap());
+        drop(alias_handle);
+        fs::remove_file(&alias).unwrap();
+        assert!(single_link(&handle.file).unwrap());
     }
 
     #[test]

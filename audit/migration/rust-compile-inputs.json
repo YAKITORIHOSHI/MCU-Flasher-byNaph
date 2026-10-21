@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "updated": "2026-10-21 Asia/Manila",
+  "continuation_base": "dd1a6ff448367af1627241d991d8dd314167ec21",
+  "scope": "development-only native compile-input staging and fixed-self process lifetime; separate uninvoked firmware-tool entry",
+  "source_tree_sha256": "292b8eab242cc1f311c7c8111a240132f4f0702a2a22895ce1416c5eb01272e4",
+  "source_sha256": {
+    "desktop/crates/core/src/compile_inputs.rs": "fb563575248cc83759f2e892a050351410154bd9e1ca38e05b66dd6bcf83206e",
+    "desktop/crates/core/src/prepared_target.rs": "6b33650c85bd8fcf6c7f516972729f631a7e57beb1ed25296dae9fe6be30cab9",
+    "desktop/crates/host/src/compile_fixture.rs": "1ee87a5ffeddf008d100782e13fd2bfa1ffa4546210c43d65b9adfbf1fe6eeb9",
+    "desktop/crates/host/src/compile_process_fixture.rs": "56fe51f00d4309cdec6830173abe07522d88c1fedcd711a04b6181c96814a603",
+    "desktop/crates/host/src/bin/compile_process_probe.rs": "192dc62f1f959a5e4e7cfb4e69b89848bb5b5e63ec677f4077aaddee28b201b8",
+    "desktop/crates/host/src/file_identity.rs": "e9bcb9f55ffe5a2b26442254882403e06993d8ef56686938a8d54ba030c50e0f",
+    "desktop/crates/host/src/recipe_snapshot.rs": "f7a6ede2b26d14e506e8b3c57b1f82b2a5296c1d24895bf28c774bae65ec881a",
+    "desktop/crates/core/src/lib.rs": "d0e2bfed4476570d8d481b94ace3d6f9cf9c9d82db14e58751197c7399b9cbcf",
+    "desktop/crates/host/src/lib.rs": "49559cdd281b8637231ef50c8f28d9a3c15fa95ace9c100aa1a0d208aed478df",
+    "desktop/crates/host/Cargo.toml": "b5bd089e9ff9d3110fc1ed4ea8d472d1c31be7f0f0e1eb603d7f09c3c31d9a74",
+    "desktop/firmware-tools/platformio_compile.py": "62e430ea03175759fa3a18a05a1954284bf5d24470406bbfd226e078c29c7d1d",
+    "desktop/scripts/verify-tool-only-entry.py": "56cd6a8201575ce179a05942bb84e8c0146abc0c8fec42e3bb41556a18c6f923"
+  },
+  "local": {
+    "host": "Ubuntu 26.04.1 LTS x86_64 (/etc/os-release verified)",
+    "rust_default_tests": 197,
+    "compile_planner_tests": 13,
+    "descriptor_tests": 10,
+    "owned_staging_tests": 19,
+    "single_link_test": 1,
+    "process_unit_tests": 6,
+    "process_probe": {
+      "architecture": "x86_64",
+      "checks": 15,
+      "descendantsReaped": 1,
+      "executableBinding": "running_image_procfs",
+      "externalToolImageAuthority": false,
+      "fixtureOnly": true,
+      "host": "linux",
+      "noCompilerDispatch": true,
+      "threadedDrains": false,
+      "windowsPrePinRunningImageBindingQualified": false
+    },
+    "fake_tool_entry": {
+      "checks": [
+        "static-settings-free-import-closure-and-first-startup-check",
+        "protected-components-refused-before-any-path-access",
+        "fixed-compile-argv-explicit-roots-jobs-1",
+        "prepared-packages-returned-without-upstream-install-or-lock",
+        "real-base-mixin-order-registry-symlink-uninstall-guards",
+        "platform-override-skips-preparation-and-uninstall-side-effects",
+        "defined-utf8-stdout-and-stderr",
+        "default-tempfile-allocation-stays-in-owned-output",
+        "denied-tempfile-allocation-fails-without-fallback",
+        "project-and-prepared-input-inventory-bytes-preserved",
+        "missing-force-positional-local-symlink-vcs-registry-update-refusals",
+        "python-network-and-application-import-refusals",
+        "installer-and-shell-subprocess-audit-refusals-without-process-spawn",
+        "no-pth-sitecustomize-cwd-or-caller-policy-import",
+        "fixed-compile-argv-explicit-roots-jobs-6",
+        "invalid-jobs-'0'",
+        "invalid-jobs-'7'",
+        "invalid-jobs-'-1'",
+        "invalid-jobs-'1.0'",
+        "invalid-jobs-'01'",
+        "invalid-jobs-''",
+        "unsupported-target-platformio/atmelavr@5.0.0",
+        "unsupported-target-platformio/espressif32@6.0.0",
+        "unsupported-target-megaatmega2560",
+        "unsupported-target-zephyr",
+        "relative-root",
+        "dot-parent-root",
+        "missing-root",
+        "protected-root-before-io:.mcu_flasher_build_cache",
+        "protected-root-before-io:.PIO",
+        "protected-root-before-io:.VsCode",
+        "protected-root-before-io:.clangd",
+        "protected-root-before-io:.OPENCODE",
+        "non-directory-root",
+        "wrong-writable-core-child",
+        "overlapping-root",
+        "output-overlaps-prepared-input",
+        "upload-command-unavailable",
+        "duplicate-argument",
+        "custom-hook-config",
+        "changed-source-config",
+        "output-file-alias",
+        "hardlinked-config",
+        "directory-symlink-refusal",
+        "simulated-missing-flag-before-third-party-import:isolated",
+        "simulated-missing-flag-before-third-party-import:no_site",
+        "simulated-missing-flag-before-third-party-import:dont_write_bytecode"
+      ],
+      "count": 47,
+      "real_tools_dispatched": false,
+      "scope": "source-isolated fake PlatformIO; startup flag negatives simulated safely",
+      "limitations": [
+        "no full runtime/tool provenance",
+        "no immutable tool lifetime",
+        "no native finite child owner",
+        "nested Python startup unqualified",
+        "Windows real compiler and lock behavior unqualified",
+        "Python audit hooks are not an OS network sandbox"
+      ]
+    },
+    "strict_linux_clippy": true,
+    "strict_msvc_target_clippy": true,
+    "rustfmt": true,
+    "private_python_runtime_tests": 46,
+    "private_python_qt_isolated_ownership_recovery": "passed; offscreen platform warnings retained in temp log"
+  },
+  "ci": {
+    "status": "pending dispatch at source checkpoint",
+    "native_windows_execution": false,
+    "ubuntu_arm64_execution": false
+  },
+  "limits": {
+    "sources": {
+      "files": 128,
+      "bytes_per_file": 2097152,
+      "total_bytes": 16777216,
+      "root_entries": 4096,
+      "entrypoint": "literal main.cpp; no ino transform"
+    },
+    "prepared_tree": {
+      "files": 4096,
+      "directories_including_root": 512,
+      "bytes_per_file": 67108864,
+      "total_bytes": 268435456,
+      "path_bytes": 4096,
+      "path_components": 24
+    },
+    "staged_inputs": {
+      "files": 4226,
+      "directories_including_root": 515,
+      "total_bytes": 306184192,
+      "manifest_max_bytes": 20971520,
+      "note": "separate project and prepared roots; writable outputs outside captured input tree"
+    },
+    "scope": "one attempt per authority; native caller owns/drops all retained handles and limits concurrent scopes; no process-wide caller cap",
+    "retention": "failed/complete staging kept for explicit owned cleanup; no fallible recursive Drop cleanup"
+  },
+  "review": {
+    "host_findings_fixed": [
+      "undeclared initial staged file/directory adoption: exact expected inventory plus RED-to-GREEN injection fixture",
+      "prepared limits excluded generated staging overhead: separate aggregate limits plus 4096-file/512-directory fixtures"
+    ],
+    "additional_regressions": [
+      "protected components refused",
+      "replacement capture revokes receipt",
+      "separate output root does not mutate inputs",
+      "project/prepared/output roots match tool contract"
+    ],
+    "pure_target_descriptor_review": "no actionable findings",
+    "tool_entry_findings_fixed": [
+      "tempfile fallback outside output root",
+      "Windows UTF-8 error streams",
+      "actual mixin method ordering and platform-specific mutation override"
+    ],
+    "process_review": "clean after inherited SIGCHLD defect fix: ignored/custom/SA_NOCLDWAIT refuse before spawn; ECHILD revokes reservation and no subsequent numeric group signal"
+  },
+  "capability_ledger": {
+    "total": 67,
+    "partial": 14,
+    "pending": 53,
+    "python_application_services_retired": 0
+  },
+  "real_rust_firmware_compiles": 0,
+  "production_entry": "unchanged Python application",
+  "remaining_gates": [
+    "persistent native project ownership/Open/Edit/Save/target/settings integration",
+    "complete admitted private interpreter/site/platform/framework/compiler/adapter provenance and native host identity",
+    "immutable tool lifetime, active ABA/non-atomic capture/ancestor/final-use races",
+    "settings-free nested Python startup propagation and exact PlatformIO version/lock behavior",
+    "Windows serialized subprocess audit currently refuses real child commands",
+    "Windows fixed-name process fixture does not prove current running-image equality before its file pin",
+    "finite external tool process adoption (fixed-self standalone process fixture is not a generic compiler runner)",
+    "ino conversion, libraries, compatibility overrides and configured-board expansion",
+    "fresh artifact validation/reuse; no upload/reset authority",
+    "native desktops/devices/packages/recovery and full parity before launcher switch"
+  ]
+}

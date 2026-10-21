@@ -82,6 +82,14 @@ Run independent GUI/backend/Windows work in parallel where it helps. Measure pro
 - [x] Add fixture-only bounded native descriptor snapshots and exact Linux Arduino Q policy at `26c7675`; preserve wider JSON/path refusals as explicit limits. Both Ubuntu hosts pass 136 backend tests/987 decisions, and Windows passes 132 tests/979 decisions after the literal-parent fixture-only correction (`39443653534`); parser/path differences remain separately counted. This is a dependency milestone, not production package/build authority.
 - [x] Add fixture-only native recipe-generation observation/revalidation at `30d99af`: retained ancestor/file identities, raw byte digests, exact selection/host/options, bounded opaque observations and refusal invalidation. Ubuntu AMD64/ARM64 pass 148 backend tests/31 process checks; Windows passes 144/23 after controller-only `002cc95`. This does not freeze packages, close final-use races, enable build dispatch or retire a service.
 - [ ] Implement exact prepared-target plus multi-file source/config/tool-provenance staging in a create-new owned native compile scope; keep subprocess dispatch unavailable until admitted tool inputs and lifetime are qualified.
+  Fixture implementation now captures root C/C++ bytes, exact descriptor pairs,
+  fixed INI and the complete declared prepared tree in new files; opaque native
+  owner/selection receipts revalidate inventories, identities and digests.
+  This does not complete the item: real prepared runtime/closure/lifetime,
+  `.ino` conversion and native workspace integration remain unqualified.
+  Separate development dependencies now include a settings-free fixed AVR
+  tool entry with isolated fake-PlatformIO verification and a fixed-self native
+  process containment fixture. Neither grants external compiler dispatch.
 - [ ] Complete exact target/catalog and build-input policy, source-save transactions/identity races/recovery, coexistence leases and activation/release.
 - [ ] Integrate Rust serial reader/Send worker and PTY/process ownership with finite deadlines and no replay/retry of hardware writes.
 - [ ] Port settings, cloud/auth/vault, downloader/package/setup/repair and native maintenance orchestration under the 67-capability ledger.
@@ -306,3 +314,30 @@ dependencies and unchanged storage/CPU/process cleanup bounds. Valid native
 recipes with no compatibility override need verified-target evidence separately
 from the generation service's intentional `NoRecipe` refusal. Cooperative leases
 alone do not prove immutable tool inputs or close final check/use races.
+
+### 21 October continuation: native compile inputs and tool boundary
+
+Added pure literal target/config/source planning, exact paired descriptor checks
+and fixture-only owned native staging. Source, prepared tools and writable
+outputs have separate roots. Opaque owner/selection receipts re-read complete
+inventories, native identities and raw hashes; create-new copies never retain
+source hardlinks. Protected components, ambiguous descriptors, changed bytes,
+foreign/stale/replaced observations and undeclared staged entries refuse.
+
+The separate development firmware-tool entry has no application imports or
+settings lookup and receives explicit native roots/jobs/target. Its 47 fake
+checks cover exact config/argv, installed-only package guards using the observed
+6.2.0 mixin shape, output/temp isolation and UTF-8 refusals. No real tool runs.
+Fixed-self native process evidence adds bounded independent pipes, cancellation,
+deadlines and owned group/job cleanup without reader threads. Review caught and
+closed Linux inherited SIGCHLD auto-reap/reservation loss before the checkpoint.
+Windows pre-pin running-image equality remains explicitly unproven.
+
+Local Ubuntu 26.04.1 AMD64 passes 197 default Rust tests, 15 process checks,
+strict Linux/MSVC-target linting, formatting and the existing 46-test private
+runtime/isolated Qt check. Source and review scope are recorded in
+`rust-compile-inputs.json`; native cross-host CI is pending at this entry.
+Task 3 and BLD-01 stay open: complete runtime/tool admission and immutable
+lifetime, external compiler ownership, nested Python startup, `.ino`/libraries
+and native workspace integration are still required. No Python application
+service is retired, no hardware/cloud action ran and production stays Python.

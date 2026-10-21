@@ -103,7 +103,7 @@ const MAX_GENERATION_FILES: usize = 8;
 const MAX_GENERATION_DIRECTORIES: usize = 48;
 const MAX_GENERATION_BYTES: usize = MAX_GENERATION_FILES * MAX_METADATA_BYTES;
 
-struct PinnedDirectory {
+pub(crate) struct PinnedDirectory {
     path: PathBuf,
     handle: File,
     identity: NativeFileIdentity,
@@ -142,7 +142,7 @@ impl NativeReader {
     }
 }
 
-fn pin_chain(path: &Path) -> Result<Vec<PinnedDirectory>, SnapshotRefusal> {
+pub(crate) fn pin_chain(path: &Path) -> Result<Vec<PinnedDirectory>, SnapshotRefusal> {
     directory_chain(path)?;
     let mut path_so_far = PathBuf::new();
     let mut directories = Vec::new();
@@ -170,7 +170,7 @@ fn pin_chain(path: &Path) -> Result<Vec<PinnedDirectory>, SnapshotRefusal> {
     Ok(directories)
 }
 
-fn verify_directories(directories: &[PinnedDirectory]) -> Result<(), SnapshotRefusal> {
+pub(crate) fn verify_directories(directories: &[PinnedDirectory]) -> Result<(), SnapshotRefusal> {
     for directory in directories {
         let current = open_native(&directory.path, true)?;
         let metadata = current.metadata().map_err(|_| SnapshotRefusal::Io)?;
@@ -226,7 +226,7 @@ fn ordinary_path(path: &Path) -> Result<(), SnapshotRefusal> {
     Ok(())
 }
 
-fn alias(metadata: &Metadata) -> bool {
+pub(crate) fn alias(metadata: &Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -278,7 +278,7 @@ fn checked_file(path: &Path, boundary: &Path) -> Result<(), SnapshotRefusal> {
     Ok(())
 }
 
-fn open_native(path: &Path, attributes_only: bool) -> Result<File, SnapshotRefusal> {
+pub(crate) fn open_native(path: &Path, attributes_only: bool) -> Result<File, SnapshotRefusal> {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::OpenOptionsExt;

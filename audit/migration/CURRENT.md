@@ -1,6 +1,6 @@
 # Current migration handoff
 
-Updated: 20 October 2026, Asia/Manila. Read this first, then only the reports
+Updated: 21 October 2026, Asia/Manila. Read this first, then only the reports
 needed for the next slice. Preserve historical failures and exact tested sources.
 
 ## State and evidence
@@ -11,8 +11,9 @@ needed for the next slice. Preserve historical failures and exact tested sources
   remaining device/services and packaging. Preserve the design/layout; retain
   glassmorphism if reliable. Otherwise use ordinary Light/Dark/system_default
   (follow OS appearance). This explicit fallback overrides older glass mandates.
-- Current source: `002cc95da9aec9a39f2ba9743123cf9c1c5bb867` on
-  `codex/rust-tauri-migration`. Runtime service checkpoint `30d99af` adds native
+- Continuation base: `dd1a6ff448367af1627241d991d8dd314167ec21` on
+  `codex/rust-tauri-migration`. The new compile-input/tool-entry source is tracked
+  in [its receipt](rust-compile-inputs.json). Runtime checkpoint `30d99af` adds native
   recipe-generation observation/revalidation. Follow-up `002cc95` changes only
   the Python mutation controller; all Rust runtime source remains unchanged.
 - [Backend CI 39447542929](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39447542929)
@@ -39,6 +40,12 @@ needed for the next slice. Preserve historical failures and exact tested sources
   completed 318-target Linux campaign; no hardware upload/reset was qualified.
 - **67 capabilities = 14 partial/53 pending; zero Python services retired.**
   Full BLD-01, complete native UI/backend and deployment remain unfinished.
+- New continuation local evidence on Ubuntu 26.04.1 AMD64: **197 default Rust
+  tests, 19 staging checks within that suite, 15 fixed process checks and 47
+  fake-tool checks**. Strict Linux/MSVC-target linting and formatting pass.
+  Private-runtime verification passes 46 tests plus isolated Qt recovery.
+  Independent review fixes and exact source digests are in the new receipt;
+  native Windows/Ubuntu ARM64 execution of this source is pending CI.
 
 ## Implemented scope and next slice
 
@@ -57,13 +64,33 @@ needed for the next slice. Preserve historical failures and exact tested sources
   64 commands and 10-second idle. API callers retain handles until receipt Drop;
   no process-global caller-owned handle cap, immutability or execution grant.
   Active ABA, non-atomic reads and final check/use remain explicit gaps.
-- Next: **owned native compile-input staging/preflight**, with exact prepared
-  target evidence, complete multi-file source generation, deterministic config
-  and admitted tool/runtime provenance. Keep spawning unavailable until tool
-  lifetime/immutability and finite child cleanup are qualified. Current Python
-  offline wrapper imports app settings; a tool-only boundary must accept Rust
-  policy explicitly. A verified native recipe with no override is separate from
-  this positive-only service's NoRecipe refusal. See Task 3 in [the plan](NATIVE_RUST_PLAN.md).
+- New `compile_inputs`/`prepared_target` pure services and `compile_fixture`
+  capture/stage complete root C/C++ inputs, paired exact descriptor bytes,
+  deterministic INI and every declared prepared-tree file. Native opaque
+  owner/selection receipts pin identities, hashes and complete inventories;
+  refusals revoke. Project, prepared inputs and writable output roots are
+  separate. Only explicit `temp/audit/native-compile-inputs` fixtures are admitted;
+  original/staged aliases and protected components refuse. No live target/store,
+  `.ino` conversion, library discovery or Compile callback is integrated.
+- The separate development `desktop/firmware-tools` entry accepts native roots,
+  pinned AVR policy and jobs with mandatory `-I -S -B`; it imports no app settings
+  or backend adapters. Its 47 fake-PlatformIO checks pass locally, including
+  actual 6.2.0 mixin-shape guard fixtures, output/temp isolation and UTF-8 errors.
+  This is not real PlatformIO/runtime qualification. The shipping Python wrapper
+  remains unchanged. Nested startup, complete third-party provenance, native
+  compiler processes/Windows tool locks and immutable input lifetime stay gates.
+- A separate `compile_process_probe` owns only fixed self-child roles. Linux
+  uses a dedicated subreaper/session and retained leader reservation; Windows
+  uses suspended creation, explicit pipe inheritance and job assignment before
+  resume. Output is bounded independently per stream without reader threads;
+  incomplete cleanup poisons the single-probe lease. This does not adopt external
+  compiler images, prove Windows pre-pin running-image equality or qualify
+  detached external tool descendants. Exact checks/source follow in the receipt.
+- Next: qualify admitted prepared runtime/byte lifetime and finite process
+  ownership, then integrate one real native-controlled already-prepared C++
+  sample on Windows/Ubuntu. Keep compiler dispatch unavailable until those gates
+  pass. A verified native recipe with no override remains separate from the
+  positive-only recipe service's NoRecipe refusal. See Task 3 in [the plan](NATIVE_RUST_PLAN.md).
 - Continue this work in the newly requested chat using the accepted delivery
   order in the plan; integrate usable features instead of stopping at probes.
 - Source-save leases/recovery, catalog/build integration, serial/PTY, settings/
