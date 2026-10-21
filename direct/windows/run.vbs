@@ -15,6 +15,19 @@ Set shell = CreateObject("WScript.Shell")
 ' must start without the workspace's conditional offline runtime guard.
 Dim setupEnvironment, setupVariable
 Set setupEnvironment = shell.Environment("PROCESS")
+' Consume the portable entry's process-local payload before any Bootstrap work.
+' Unmarked direct invocations retain the strings supplied by their WSH host.
+Dim launchArguments, argumentReadNumber, argumentReadError
+On Error Resume Next
+launchArguments = ReadLauncherArguments(WScript.Arguments, setupEnvironment)
+argumentReadNumber = Err.Number
+argumentReadError = Err.Description
+Err.Clear
+On Error GoTo 0
+If argumentReadNumber <> 0 Then
+    MsgBox "MCU Flasher could not read its launcher arguments: " & argumentReadError, vbCritical, "MCU Flasher"
+    WScript.Quit 1
+End If
 ' Run expands environment names once; preserve literal percent paths in preflight too.
 setupEnvironment("MCU_FLASHER_LITERAL_PERCENT") = "%"
 For Each setupVariable In Array("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX", _
@@ -186,8 +199,8 @@ End If
 
 Dim argIdx, allArgs
 allArgs = ""
-For argIdx = 0 To WScript.Arguments.Count - 1
-    allArgs = allArgs & " " & QuoteWindowsArgument(WScript.Arguments(argIdx))
+For argIdx = 0 To UBound(launchArguments)
+    allArgs = allArgs & " " & QuoteWindowsArgument(launchArguments(argIdx))
 Next
 
 If InStr(launchPython, "\") > 0 Then
@@ -615,6 +628,76 @@ Function AutoHealPrivatePython(rootDir)
     On Error GoTo 0
 End Function
 
+Function ReadLauncherArguments(arguments, environment)
+    Dim values, countText, count, index, units, value, invalid
+    values = Array()
+    invalid = False
+    If arguments.Count > 0 Then
+        If arguments(0) = "--mcu-flasher-wsh-arguments" Then
+            countText = environment("MCU_FLASHER_WSH_ARG_COUNT")
+            ' Check decimal spelling before conversion; no numeric coercion or
+            ' enormous allocation is allowed for an inherited malformed payload.
+            invalid = (arguments.Count <> 1 Or Len(countText) = 0 Or Len(countText) > 4)
+            If Not invalid Then
+                For index = 1 To Len(countText)
+                    If Mid(countText, index, 1) < "0" Or Mid(countText, index, 1) > "9" Then invalid = True
+                Next
+            End If
+            If Not invalid Then
+                count = CLng(countText)
+                invalid = (count > 1024 Or CStr(count) <> countText)
+            End If
+            units = 0
+            If Not invalid Then
+                If count > 0 Then ReDim values(count - 1)
+                For index = 0 To count - 1
+                    value = environment("MCU_FLASHER_WSH_ARG_" & CStr(index))
+                    If Left(value, 3) <> "v1:" Or Len(value) > 32766 Then
+                        invalid = True
+                        Exit For
+                    End If
+                    values(index) = Mid(value, 4)
+                    units = units + Len(values(index)) + 1
+                    If units > 32767 Then
+                        invalid = True
+                        Exit For
+                    End If
+                Next
+            End If
+            ClearLauncherArgumentPayload environment
+            If invalid Then Err.Raise vbObjectError + 71, "MCU Flasher", "Invalid or oversized forwarded argument payload."
+            ReadLauncherArguments = values
+            Exit Function
+        End If
+    End If
+    If arguments.Count > 0 Then ReDim values(arguments.Count - 1)
+    For index = 0 To arguments.Count - 1
+        values(index) = arguments(index)
+    Next
+    ClearLauncherArgumentPayload environment
+    ReadLauncherArguments = values
+End Function
+
+Sub ClearLauncherArgumentPayload(environment)
+    Dim entry, separator, name, names(), count, index
+    count = 0
+    ReDim names(environment.Count)
+    For Each entry In environment
+        separator = InStr(entry, "=")
+        If separator > 1 Then
+            name = Left(entry, separator - 1)
+            If Left(UCase(name), 20) = "MCU_FLASHER_WSH_ARG_" Then
+                names(count) = name
+                count = count + 1
+            End If
+        End If
+    Next
+    For index = 0 To count - 1
+        environment.Remove names(index)
+    Next
+End Sub
+
+' Python uses the CRT convention, unlike the WSH-to-WSH forwarding above.
 Function QuoteWindowsArgument(value)
     Dim quoted, slashes, index, character
     quoted = Chr(34)

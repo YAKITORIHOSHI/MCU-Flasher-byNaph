@@ -142,7 +142,7 @@ class ArtifactChecks(unittest.TestCase):
             for name in EXPECTED - {"WINDOWS.vbs", "README.md"}:
                 self.assertEqual((LAUNCHERS / name).stat().st_mode & 0o777, 0o755, name)
 
-    def test_windows_entries_are_ascii_crlf_and_share_literal_quoting(self):
+    def test_windows_entries_are_ascii_crlf_and_separate_wsh_from_crt_quoting(self):
         paths = (LAUNCHERS / "WINDOWS.vbs", ROOT / "direct/windows/run.vbs")
         texts = []
         for path in paths:
@@ -153,8 +153,9 @@ class ArtifactChecks(unittest.TestCase):
             texts.append(text)
             self.assertIn('Replace(', text)
             self.assertIn('"%MCU_FLASHER_LITERAL_PERCENT%"', text)
-        self.assertEqual(windows_helper(texts[0]), windows_helper(texts[1]))
-        self.assertIn('QuoteWindowsArgument(WScript.Arguments(argIdx))', texts[1])
+        self.assertNotIn('QuoteWindowsArgument', texts[0])
+        self.assertIn('QuoteWshPath(entry)', texts[0])
+        self.assertIn('QuoteWindowsArgument(launchArguments(argIdx))', texts[1])
         self.assertIn('"direct\\windows\\run.vbs"', texts[0])
         self.assertIn('fs.GetParentFolderName(fs.GetParentFolderName(WScript.ScriptFullName))', texts[0])
         code = "\n".join(line for line in texts[0].splitlines() if not line.lstrip().startswith("'"))
@@ -366,43 +367,171 @@ class WindowsDispatchChecks(OwnedFixture):
         target.write_bytes(source.replace('\n', '\r\n').encode('utf-16'))
         return target
 
-    def capture_windows(self, target, arguments, receipt, *, timeout=30):
+    def capture_windows(self, target, arguments, receipt, *, timeout=30,
+                        expected_arguments=None, extra_environment=None):
         cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
         return windows_probe().capture(
             cscript, target, arguments, receipt, self.sandbox,
             command_prefix=[str(cscript), "//nologo", str(self.project / "LAUNCHER/WINDOWS.vbs")],
-            expected_cwd=self.sandbox, expected_script=Path("-c"), timeout=timeout)
+            expected_cwd=self.sandbox, expected_script=Path("-c"), timeout=timeout,
+            expected_arguments=expected_arguments, extra_environment=extra_environment)
 
-    def test_native_windows_both_forwarding_layers_preserve_literal_arguments_after_move(self):
+    def write_python_forwarding_dispatcher(self, receipt):
         source = (ROOT / "direct/windows/run.vbs").read_text(encoding="ascii")
         loop = re.search(r"Dim argIdx, allArgs\n.*?^Next$", source, re.MULTILINE | re.DOTALL).group()
         shielding = '\n'.join(('setupEnvironment("MCU_FLASHER_LITERAL_PERCENT") = "%"',
                                'runCmd = Replace(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%")'))
         self.assertIn(shielding, source)
-        moved = self.sandbox / "Relocated Ω %PATH% $cash `literal` & (safe)"
-        self.project.rename(moved)
-        self.project = moved
-        receipt = self.sandbox / "arguments.json"
         code = ('import json,os,sys; from pathlib import Path; '
                 'target=Path(sys.argv[1]); partial=target.with_suffix(".partial"); '
                 'partial.write_text(json.dumps({"arguments":sys.argv[2:],"cwd":os.getcwd(),'
-                '"script":sys.argv[0]},ensure_ascii=False),encoding="utf-8"); partial.rename(target)')
+                '"script":sys.argv[0],"forwardedEnvironment":'
+                '[key for key in os.environ if key.startswith("MCU_FLASHER_WSH_ARG_")]},'
+                'ensure_ascii=False),encoding="utf-8"); partial.rename(target)')
         base_command = subprocess.list2cmdline([sys.executable, "-B", "-c", code, str(receipt)])
         # Only the production argument loop/helper is executed. All Bootstrap,
         # runtime, installer, persistence and hardware code is replaced by this
         # owned Python argv recorder, which imports no application modules.
-        fixture = '\n'.join(('Option Explicit', 'Dim shell, setupEnvironment, runCmd',
+        fixture = '\n'.join(('Option Explicit', 'Dim shell, setupEnvironment, runCmd, launchArguments',
                              'Set shell = CreateObject("WScript.Shell")',
-                             'Set setupEnvironment = shell.Environment("PROCESS")', loop,
+                             'Set setupEnvironment = shell.Environment("PROCESS")',
+                             'launchArguments = ReadLauncherArguments(WScript.Arguments, setupEnvironment)', loop,
                              'runCmd = "' + base_command.replace('"', '""') + '" & allArgs',
-                             shielding, 'WScript.Quit shell.Run(runCmd, 0, True)', windows_helper(source), ''))
-        target = self.write_windows_dispatcher(fixture)
+                             shielding, 'WScript.Quit shell.Run(runCmd, 0, True)',
+                             windows_probe().python_argument_helpers(source), ''))
+        return self.write_windows_dispatcher(fixture)
+
+    def test_native_windows_both_forwarding_layers_preserve_received_arguments_after_move(self):
+        moved = self.sandbox / "Relocated Ω %PATH% $cash `literal` & (safe)"
+        self.project.rename(moved)
+        self.project = moved
+        receipt = self.sandbox / "arguments.json"
+        target = self.write_python_forwarding_dispatcher(receipt)
         arguments = ["--project", 'Sketch Ω "quoted"', "", "C:\\tail\\", 'slash\\"quote',
                      "%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%", "$(touch NEVER) & | ^ ! `literal`", "--new-window"]
-        result = self.capture_windows(target, arguments, receipt)
+        # Python serializes an argv list using CRT rules; WSH parses its own
+        # command line differently. Characterize the actual outer WSH input
+        # independently, then require production to preserve every received bit.
+        baseline = self.sandbox / "outer-wsh-arguments.vbs"
+        baseline.write_bytes(windows_probe().RECORDER.replace('\n', '\r\n').encode('utf-16'))
+        cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
+        received = windows_probe().capture(
+            cscript, baseline, arguments, self.sandbox / "outer-arguments.json", self.sandbox,
+            command_prefix=[str(cscript), "//nologo", str(baseline)],
+            expected_cwd=self.sandbox, expected_script=baseline)
+        self.assertIsNone(received["error"], received)
+        self.assertEqual(received["cleanupFailures"], [], received)
+        self.assertEqual(received["launcherExitCode"], 0, received)
+        self.assertIsNotNone(received["observed"], received)
+        expected = received["observed"]["arguments"]
+        print("Outer WSH parser baseline: " + json.dumps(
+            {"crtInput": arguments, "wshReceived": expected}, ensure_ascii=True), flush=True)
+        result = self.capture_windows(target, arguments, receipt, expected_arguments=expected)
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["observed"]["forwardedEnvironment"], [])
+
+    def test_native_windows_both_forwarding_layers_preserve_seeded_literal_arguments(self):
+        moved = self.sandbox / "Literal Ω %PATH% $cash `literal` & (safe)"
+        self.project.rename(moved)
+        self.project = moved
+        receipt = self.sandbox / "literal-arguments.json"
+        target = self.write_python_forwarding_dispatcher(receipt)
+        arguments = ["--project", 'Sketch Ω "quoted"', "", "C:\\tail\\", 'slash\\"quote',
+                     "%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%", "$(touch NEVER) & | ^ ! `literal`", "--new-window",
+                     "emoji 🙂 and 日本語", "line one\nline two\ttab"]
+        wrapper = self.project / "LAUNCHER/WINDOWS.vbs"
+        source = wrapper.read_text(encoding="ascii")
+        call = 'StoreForwardedArguments WScript.Arguments, shell.Environment("PROCESS")'
+        self.assertEqual(source.count(call), 1)
+        # Seed exactly the strings already available to production WScript code;
+        # only the outer host's argument collection is replaced, after parsing.
+        source = source.replace('Option Explicit\n', 'Option Explicit\nDim literalArguments\n'
+                                'Set literalArguments = New LiteralArguments\n', 1)
+        source = source.replace(call, call.replace('WScript.Arguments', 'literalArguments'), 1)
+        source += r'''
+Class LiteralArguments
+    Public Property Get Count
+        Count = CLng(CreateObject("WScript.Shell").Environment("PROCESS")("MCU_LAUNCHER_PROBE_ARG_COUNT"))
+    End Property
+    Public Default Property Get Item(index)
+        Item = CreateObject("WScript.Shell").Environment("PROCESS")("MCU_LAUNCHER_PROBE_ARG_" & CStr(index))
+    End Property
+End Class
+'''
+        wrapper.write_bytes(source.replace('\n', '\r\n').encode('utf-16'))
+        environment = {"MCU_LAUNCHER_PROBE_ARG_COUNT": str(len(arguments)),
+                       **{f"MCU_LAUNCHER_PROBE_ARG_{index}": argument
+                          for index, argument in enumerate(arguments)}}
+        result = self.capture_windows(target, [], receipt, expected_arguments=arguments,
+                                      extra_environment=environment)
         self.assertTrue(result["passed"], result)
         self.assertTrue(receipt.is_file(), "Windows entry did not reach the fake argv recorder")
         self.assertEqual(json.loads(receipt.read_text(encoding="utf-8"))["arguments"], arguments)
+        self.assertEqual(result["observed"]["forwardedEnvironment"], [])
+
+    def test_native_windows_portable_entry_preserves_representable_project_arguments(self):
+        moved = self.sandbox / "Project path Ω %PATH% $cash `literal` & (safe)"
+        self.project.rename(moved)
+        self.project = moved
+        receipt = self.sandbox / "project-arguments.json"
+        target = self.write_python_forwarding_dispatcher(receipt)
+        arguments = ["--project", str(moved / "user sketch Ω %PATH%/main.ino"),
+                     "%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%", "& | ^ ! $cash `literal`", "--new-window"]
+        result = self.capture_windows(target, arguments, receipt)
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["observed"]["arguments"], arguments)
+        self.assertEqual(result["observed"]["forwardedEnvironment"], [])
+
+    def test_native_windows_entry_without_arguments_consumes_empty_payload(self):
+        receipt = self.sandbox / "empty-arguments.json"
+        target = self.write_python_forwarding_dispatcher(receipt)
+        result = self.capture_windows(target, [], receipt)
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["observed"]["forwardedEnvironment"], [])
+
+    def test_native_windows_malformed_or_oversized_payload_refuses_and_clears(self):
+        source = (ROOT / "direct/windows/run.vbs").read_text(encoding="ascii")
+        fixture = self.sandbox / "read-forwarded-arguments.vbs"
+        fixture.write_bytes((r'''Option Explicit
+Dim shell, environment, values, failure, remaining, entry, stream, fs
+Set shell = CreateObject("WScript.Shell")
+Set environment = shell.Environment("PROCESS")
+On Error Resume Next
+values = ReadLauncherArguments(WScript.Arguments, environment)
+failure = Err.Number
+Err.Clear
+On Error GoTo 0
+remaining = 0
+For Each entry In environment
+    If Left(UCase(entry), 20) = "MCU_FLASHER_WSH_ARG_" Then remaining = remaining + 1
+Next
+Set fs = CreateObject("Scripting.FileSystemObject")
+Set stream = fs.CreateTextFile(environment("MCU_LAUNCHER_PROBE_RESULT"), True, True)
+stream.Write "{""error"":" & CStr(failure) & ",""remaining"":" & CStr(remaining) & "}"
+stream.Close
+WScript.Quit 0
+''' + windows_probe().python_argument_helpers(source)).replace('\n', '\r\n').encode('utf-16'))
+        cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
+        cases = [({}, []), ({"MCU_FLASHER_WSH_ARG_COUNT": "not-a-count"}, []),
+                 ({"MCU_FLASHER_WSH_ARG_COUNT": "0000"}, []),
+                 ({"MCU_FLASHER_WSH_ARG_COUNT": "1025"}, []),
+                 ({"MCU_FLASHER_WSH_ARG_COUNT": "1"}, []),
+                 ({"MCU_FLASHER_WSH_ARG_COUNT": "1", "MCU_FLASHER_WSH_ARG_0": "v0:bad"}, []),
+                 ({"MCU_FLASHER_WSH_ARG_COUNT": "2", "MCU_FLASHER_WSH_ARG_0": "v1:" + "x" * 20000,
+                   "MCU_FLASHER_WSH_ARG_1": "v1:" + "y" * 20000}, []),
+                 ({"MCU_FLASHER_WSH_ARG_COUNT": "0"}, ["unexpected-extra-argument"])]
+        for index, (payload, extra_arguments) in enumerate(cases):
+            with self.subTest(case=index):
+                receipt = self.sandbox / f"refused-{index}.json"
+                environment = {**os.environ, **payload, "MCU_FLASHER_WSH_ARG_stale": "must clear",
+                               "MCU_LAUNCHER_PROBE_RESULT": str(receipt)}
+                result = subprocess.run([str(cscript), "//nologo", str(fixture),
+                                         "--mcu-flasher-wsh-arguments", *extra_arguments], cwd=self.sandbox,
+                                        env=environment, capture_output=True, timeout=10, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                observed = json.loads(receipt.read_text(encoding="utf-16"))
+                self.assertNotEqual(observed["error"], 0)
+                self.assertEqual(observed["remaining"], 0)
 
     def test_native_runtime_preflight_preserves_literal_percent_without_launching_or_repair(self):
         source = (ROOT / "direct/windows/run.vbs").read_text(encoding="ascii")

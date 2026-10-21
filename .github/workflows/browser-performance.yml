@@ -86,7 +86,16 @@ on:
       - direct/verify_editor_review_ui.py
       - direct/verify_editor_c.py
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Check Windows AMD64 launcher/rendering changes only
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      windows_only:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -100,25 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            python: '3.11'
-            qt: 'PySide6>=6.7,<6.12'
-          - os: windows-latest
-            python: '3.14'
-            qt: 'PySide6>=6.12,<7'
-          - os: ubuntu-24.04
-            python: '3.12'
-            qt: 'PySide6>=6.12,<7'
-          - os: ubuntu-24.04-arm
-            python: '3.12'
-            qt: 'PySide6>=6.12,<7'
-          - os: ubuntu-26.04
-            python: '3.14'
-            qt: 'PySide6>=6.12,<7'
-          - os: ubuntu-26.04-arm
-            python: '3.14'
-            qt: 'PySide6>=6.12,<7'
+        include: ${{ fromJSON(inputs.windows_only && '[{"os":"windows-latest","python":"3.11","qt":"PySide6>=6.7,<6.12"},{"os":"windows-latest","python":"3.14","qt":"PySide6>=6.12,<7"}]' || '[{"os":"windows-latest","python":"3.11","qt":"PySide6>=6.7,<6.12"},{"os":"windows-latest","python":"3.14","qt":"PySide6>=6.12,<7"},{"os":"ubuntu-24.04","python":"3.12","qt":"PySide6>=6.12,<7"},{"os":"ubuntu-24.04-arm","python":"3.12","qt":"PySide6>=6.12,<7"},{"os":"ubuntu-26.04","python":"3.14","qt":"PySide6>=6.12,<7"},{"os":"ubuntu-26.04-arm","python":"3.14","qt":"PySide6>=6.12,<7"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -179,8 +170,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Invoke-BrowserCheck 'loading.log' @('direct/verify_browser_loading.py')
-          Invoke-BrowserCheck 'launchers.log' @('direct/verify_launcher_folder.py')
-          Invoke-BrowserCheck 'release-sources.log' @('direct/verify_release_sources.py')
           foreach ($scale in '1', '2') {
             Invoke-BrowserCheck "downloader-performance-scale-$scale.log" @('direct/verify_downloader_performance.py', '--scale', $scale)
             Invoke-BrowserCheck "downloader-appearance-scale-$scale.log" @('direct/verify_downloader_appearance.py', '--scale', $scale, '--render-dir', "$env:BROWSER_AUDIT_DIR/captures-scale-$scale")
@@ -194,6 +183,15 @@ jobs:
           Invoke-BrowserCheck 'ai-line-diff.log' @('direct/verify_ai_line_diff.py')
           Invoke-BrowserCheck 'ai-diff-colors.log' @('direct/verify_ai_diff_colors.py')
           Invoke-BrowserCheck 'editor-c.log' @('direct/verify_editor_c.py')
+      - name: Windows portable launcher and archive contracts
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & env/Scripts/python.exe -B direct/verify_launcher_folder.py 2>&1 | Tee-Object -FilePath "$env:BROWSER_AUDIT_DIR/launchers.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_release_sources.py 2>&1 | Tee-Object -FilePath "$env:BROWSER_AUDIT_DIR/release-sources.log"
+          exit $LASTEXITCODE
       - name: Ubuntu browser loading, native painting, sleep IPC and display scales
         if: runner.os == 'Linux'
         shell: bash
@@ -225,6 +223,7 @@ jobs:
             run_check editor-c.log direct/verify_editor_c.py
           '
       - name: Offscreen Qt resource and marquee regressions
+        if: ${{ !cancelled() }}
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
@@ -245,6 +244,7 @@ jobs:
           if-no-files-found: warn
 
   editor-components:
+    if: ${{ !inputs.windows_only }}
     name: Editor component availability (${{ matrix.os }})
     # These checks do not qualify application startup, setup, tools or drivers
     # on platforms whose native application support is still pending.

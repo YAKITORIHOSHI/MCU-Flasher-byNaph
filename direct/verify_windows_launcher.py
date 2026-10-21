@@ -155,28 +155,41 @@ def capture(executable: Path, script: Path, arguments: list[str], result: Path,
             and os.path.normcase(observed["script"]) == os.path.normcase(str(expected_script))}
 
 
+def vbs_procedure(source: str, name: str, kind: str = "Function") -> str:
+    match = re.search(r"^" + kind + " " + name + r"\(.*?^End " + kind + r"$", source, re.M | re.S)
+    if match is None:
+        raise ValueError(f"Missing production Windows {name} helper")
+    return match[0]
+
+
+def python_argument_helpers(source: str) -> str:
+    return "\n\n".join((vbs_procedure(source, "QuoteWindowsArgument"),
+                          vbs_procedure(source, "ReadLauncherArguments"),
+                          vbs_procedure(source, "ClearLauncherArgumentPayload", "Sub")))
+
+
 def python_assembly_fixture(source: str) -> str:
     """Extract only production argument assembly, never startup/repair actions."""
     marker = "Dim argIdx, allArgs"
     assembly = marker + source.split(marker, 1)[1].split("\nOn Error Resume Next", 1)[0]
-    helper = re.search(r"^Function QuoteWindowsArgument\(.*?^End Function", source, re.M | re.S)
     shielding = re.search(r'^setupEnvironment\("MCU_FLASHER_LITERAL_PERCENT"\) = "%"\n'
                           r'^runCmd = Replace\(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%"\)$',
                           source, re.M)
-    if helper is None or shielding is None:
+    if shielding is None:
         raise ValueError("Production Windows argument quoting/percent shielding is missing")
     return r'''Option Explicit
-Dim fs, shell, setupEnvironment, launchPython, bootstrapFile, exitCode
+Dim fs, shell, setupEnvironment, launchPython, bootstrapFile, exitCode, launchArguments
 Set fs = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 Set setupEnvironment = shell.Environment("PROCESS")
+launchArguments = ReadLauncherArguments(WScript.Arguments, setupEnvironment)
 launchPython = shell.Environment("PROCESS")("MCU_LAUNCHER_PROBE_PYTHON")
 bootstrapFile = shell.Environment("PROCESS")("MCU_LAUNCHER_PROBE_SCRIPT")
 Dim runCmd
 ''' + assembly + "\n" + shielding[0] + r'''
 exitCode = shell.Run(runCmd, 0, True)
 WScript.Quit exitCode
-''' + helper[0]
+''' + python_argument_helpers(source)
 
 
 def verify(report_dir: Path) -> dict:
@@ -229,22 +242,35 @@ def verify(report_dir: Path) -> dict:
             "destination = Path(os.environ['MCU_LAUNCHER_PROBE_RESULT'])\n"
             "partial = destination.with_suffix('.partial')\n"
             "partial.write_text(json.dumps({'arguments': sys.argv[1:], 'cwd': os.getcwd(), "
-            "'script': __file__}, ensure_ascii=True), encoding='utf-8')\n"
+            "'script': __file__, 'forwardedEnvironment': "
+            "[name for name in os.environ if name.startswith('MCU_FLASHER_WSH_ARG_')]}, "
+            "ensure_ascii=True), encoding='utf-8')\n"
             "partial.rename(destination)\n", encoding="utf-8")
         cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
         assembly_outcomes = []
         assembly_cases = [*cases,
                           ("empty_argument", "literal", ["--plan", ""]),
                           ("literal_environment_name", "literal", ["%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%"]),
-                          ("backslash_before_quote", "literal", ['slash\\"quote', "tail\\"])]
+                          ("backslash_before_quote", "literal", ['slash\\"quote', "tail\\"]),
+                          ("unicode_and_line_breaks", "literal", ["emoji 🙂 日本語", "one\ntwo\tthree"])]
         for index, (name, category, arguments) in enumerate(assembly_cases):
-            result = capture(cscript, assembly_script, arguments,
+            # Seed literal received strings through the production handoff.
+            # CRT serialization to cscript cannot express the general literals
+            # these final Python-assembly cases deliberately exercise.
+            payload = {"MCU_FLASHER_WSH_ARG_COUNT": str(len(arguments)),
+                       **{f"MCU_FLASHER_WSH_ARG_{position}": "v1:" + argument
+                          for position, argument in enumerate(arguments)}}
+            result = capture(cscript, assembly_script, [],
                              fixture / f"assembly-{index}.json", application,
-                             command_prefix=[str(cscript), "//nologo", str(assembly_script)],
+                             command_prefix=[str(cscript), "//nologo", str(assembly_script),
+                                             "--mcu-flasher-wsh-arguments"],
                              expected_arguments=["--hidden", *arguments], expected_cwd=application,
                              expected_script=python_recorder,
                              extra_environment={"MCU_LAUNCHER_PROBE_PYTHON": sys.executable,
-                                                "MCU_LAUNCHER_PROBE_SCRIPT": str(python_recorder)})
+                                                "MCU_LAUNCHER_PROBE_SCRIPT": str(python_recorder), **payload})
+            result["inputArguments"] = arguments
+            result["inputTransport"] = "process-local received-argument payload"
+            result["passed"] = (result["passed"] and result["observed"].get("forwardedEnvironment") == [])
             assembly_outcomes.append({"name": name, "category": category,
                                       "qualificationRequired": True, **result})
             print(f"Python assembly {name}: {'PASS' if result['passed'] else 'FAIL'}", flush=True)

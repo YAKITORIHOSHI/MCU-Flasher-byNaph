@@ -66,6 +66,18 @@ first-run and compile jobs. Their source alone is not a passed-run receipt.
 Exact successful runs remain linked from README and the migration handoff.
 Fedora and Mint desktop execution is not recorded in this slice.
 
+The expanded run
+[39648393272](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39648393272)
+at `c8a1377` passes all four Ubuntu 24.04/26.04 AMD64/ARM64 browser jobs and the
+Intel/Apple Silicon macOS 15 offline editor component jobs. Every rendered host
+checks five display scales, Arduino syntax and red/green AI decorations.
+Windows 11 ARM records the missing WebEngine binding and explicitly skips
+rendering; its green availability job is not an ARM rendering pass. Both AMD64
+Windows jobs fail a newly exercised WSH-to-WSH argument boundary; runtime
+preflight and owned timeout cleanup pass. Preserve that failure alongside the
+subsequent Windows-only correction and rerun. No macOS application support or
+Fedora/Mint execution is implied by this evidence.
+
 Runner availability and limitations were checked against the official
 [GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 Windows hosted VMs run as Administrator with UAC disabled; macOS ARM standard

@@ -31,6 +31,8 @@ jobs:
   browser-performance:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.browser_performance_only }}
     uses: ./.github/workflows/browser-performance.yml
+    with:
+      windows_only: ${{ inputs.windows_only }}
 
   native-prototype:
     if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.backend_only && !inputs.browser_performance_only) }}

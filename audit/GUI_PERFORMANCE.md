@@ -145,7 +145,7 @@ permissions. See [the current platform matrix](PLATFORM_VERIFICATION.md).
 
 Fresh local continuation checks also pass: responsive **20/20** (135 terminal
 layouts, callback depth one, no idle layouts), resource performance **32/32**,
-runtime **46/46** plus editor recovery, launcher **15 passed/3 Windows skips**,
+runtime **46/46** plus editor recovery, launcher **16 passed/3 Windows skips**,
 and release source/archive policy **7/7**. The native Windows resize fixtures
 now dispatch the real event loop because `update_idletasks` alone does not
 deliver Windows size events; pure debounce checks remain independent.
@@ -170,3 +170,25 @@ backticks literal. No view zones, file writes or recovery-journal access are
 added. The existing bounded fallback remains a conservative changed-middle
 comparison; its replacement display follows the same red/green policy.
 AI highlights are static; continuous glow animations have been removed.
+
+Expanded CI at `c8a1377`
+([39648393272](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39648393272))
+passes all four native Ubuntu 24/26 AMD64/ARM64 browser jobs and both macOS 15
+offline component jobs, including five viewport scales, Arduino colors and AI
+diff rendering. Windows ARM records WebEngine absence without running renderer
+checks. Both Windows AMD64 jobs expose a WSH forwarding problem; their initial
+failure stays recorded separately from the following correction. Git initially
+staged new executable launcher files as 0644 because `core.filemode=false`;
+`c8a1377` explicitly records 0755 and adds a Git-mode regression. A real committed
+`git archive` export passes all seven entry/content/mode checks locally.
+
+The Windows correction separates the initial WSH parser from internal forwarding.
+The portable entry preserves values it has actually received through a child-only
+PROCESS payload. Startup validates at most 1,024 arguments / 32,767 UTF-16 units,
+then clears all reserved fields before Bootstrap. A marked malformed/oversized
+payload refuses before setup; direct unmarked invocation retains ordinary WSH
+arguments. Only final Python launch uses CRT quoting. Native fixtures separately
+characterize the invoking WSH parser, seed arbitrary already-received quote,
+newline and emoji values through production forwarding, and check actual copied
+entries with no arguments and valid moved project paths. They assert exact values
+and no payload variables reaching Python; no quote cases are silently dropped.
