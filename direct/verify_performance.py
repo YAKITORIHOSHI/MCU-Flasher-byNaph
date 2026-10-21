@@ -163,16 +163,28 @@ class PerformanceChecks(unittest.TestCase):
             self.assertTrue(widget._timer.isActive())
         self.assertEqual(board.text(), text)
         self.assertEqual(combo.currentData(), "literal-port-id")
-        # Native platform fonts can make "Other port" overflow this 150-pixel
-        # control. Verify a fitting selection explicitly, including with a
-        # larger font, before expecting its animation to stop.
-        combo.setItemText(1, "Port")
+        # Measure the fitting label separately for each native font: even
+        # "Port" can overflow this 150-pixel control on Windows at 24 points.
         for point_size in (None, 24):
             with self.subTest(point_size=point_size):
                 if point_size is not None:
                     font = combo.font()
                     font.setPointSize(point_size)
                     combo.setFont(font)
+                option = QStyleOptionComboBox()
+                combo.initStyleOption(option)
+                field = combo.style().subControlRect(
+                    QStyle.ComplexControl.CC_ComboBox, option,
+                    QStyle.SubControl.SC_ComboBoxEditField, combo)
+                available = field.width() - 8
+                label_widths = [(label, option.fontMetrics.horizontalAdvance(label))
+                                for label in ("Other port", "Port", "P", "i", ".")]
+                fitting_label = next((label for label, width in label_widths
+                                      if width <= available), "")
+                self.assertTrue(fitting_label,
+                                f"No nonempty label fits: font={combo.font().toString()!r}, "
+                                f"available={available}, field={field}, labels={label_widths}")
+                combo.setItemText(1, fitting_label)
                 for index, overflowing in ((0, True), (1, False), (0, True)):
                     combo.setCurrentIndex(index)
                     option = QStyleOptionComboBox()
