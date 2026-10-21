@@ -31,6 +31,22 @@ the private Python/runtime dependency closure or grant immutable execution
 authority. See [preparation evidence](../../audit/migration/rust-avr-preparation.json)
 for the exact verified scope.
 
+The separate `prepare_avr_package_fixture` entry adds four deterministic native
+`.piopm` lookup records to a fresh fixture. It accepts only the fixed official
+size/digest tuple for every role and host, then still verifies all actual archive
+bytes. IDs are platform 8006, framework 8039, SCons 8192 and toolchain 8203;
+owner/name/version come from the pinned native catalog. Incoming archive
+`.piopm` components remain refused. The four fixed native paths use create-new
+files, count toward existing limits and enter the final complete inventory.
+No existing record is adopted or overwritten.
+
+`prepare_avr_probe --prepare-packages-linux-x86_64` checks the exact Linux payload
+and the verified PlatformIO 6.2.0 metadata format. It produces 2,762 files /
+240,450,165 bytes, including 631 bytes of native lookup metadata. The original
+2,758 prepared files retain their earlier aggregate digest. This does not qualify
+actual PlatformIO lookup, a complete installed dependency closure or tool launch;
+see [package metadata evidence](../../audit/migration/rust-avr-package-metadata.json).
+
 The entry imports standard-library code and explicitly admitted PlatformIO
 modules. It never imports MCU Flasher settings, GUI/backend modules,
 `offline_mode`, `offline_runtime`, platform adapters or per-user store discovery.

@@ -1,8 +1,11 @@
 //! Create-new preparation of one explicitly supplied Uno/AVR archive fixture.
-//! No registry resolution, network, runtime/tool launch, live store, `.piopm`
-//! synthesis, installed readiness or execution grant exists in this module.
+//! No registry resolution, network, runtime/tool launch, live store, installed
+//! readiness or execution grant exists in this module.
 //! Expected archive identity comes from a trusted native caller, never IPC.
 //! Source/package observations are not immutable dependency generations.
+//! The separate package-fixture entry emits four fixed native `.piopm` records
+//! only for exact official archive envelopes. These are lookup metadata, not
+//! private runtime admission, dependency readiness or permission to execute.
 
 use crate::file_identity::{native_identity, single_link, NativeFileIdentity};
 use crate::recipe_snapshot::{alias, open_native, pin_chain, verify_directories, PinnedDirectory};
@@ -118,6 +121,16 @@ pub struct PreparedAvrLinkCopy {
     pub bytes: u64,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct PreparedAvrPackageMetadata {
+    pub path: String,
+    #[serde(skip_serializing)]
+    pub role: AvrArchiveRole,
+    pub registry_id: u32,
+    pub sha256: String,
+    pub bytes: u64,
+}
+
 /// Process-local observation only. Drop never deletes a partial/full fixture.
 #[derive(Debug)]
 pub struct PreparedAvrFixture {
@@ -126,6 +139,7 @@ pub struct PreparedAvrFixture {
     host: AvrFixtureHost,
     files: Vec<PreparedAvrFile>,
     materialized_links: Vec<PreparedAvrLinkCopy>,
+    generated_metadata: Vec<PreparedAvrPackageMetadata>,
 }
 
 impl PreparedAvrFixture {
@@ -144,6 +158,9 @@ impl PreparedAvrFixture {
     pub fn materialized_links(&self) -> &[PreparedAvrLinkCopy] {
         &self.materialized_links
     }
+    pub fn generated_metadata(&self) -> &[PreparedAvrPackageMetadata] {
+        &self.generated_metadata
+    }
 }
 
 pub fn prepare_avr_fixture(
@@ -151,7 +168,40 @@ pub fn prepare_avr_fixture(
     parent: &Path,
     label: &str,
     host: AvrFixtureHost,
+    archives: [AvrArchiveInput; 4],
+) -> std::result::Result<PreparedAvrFixture, AvrPreparationRefusal> {
+    prepare_fixture(application_root, parent, label, host, archives, false)
+}
+
+/// Create a distinct owned package fixture with deterministic native lookup
+/// metadata. Exact official archive hashes/sizes bind the registry identities;
+/// no arbitrary caller digest can acquire the `platformio` owner records.
+pub fn prepare_avr_package_fixture(
+    application_root: &Path,
+    parent: &Path,
+    label: &str,
+    host: AvrFixtureHost,
+    archives: [AvrArchiveInput; 4],
+) -> std::result::Result<PreparedAvrFixture, AvrPreparationRefusal> {
+    if current_host() != Some(host) {
+        return Err(AvrPreparationRefusal::HostMismatch);
+    }
+    if !archives.iter().all(|archive| {
+        let (digest, size) = official_archive(archive.role, host);
+        archive.expected_sha256 == digest && archive.expected_size == size
+    }) {
+        return Err(AvrPreparationRefusal::InvalidInputs);
+    }
+    prepare_fixture(application_root, parent, label, host, archives, true)
+}
+
+fn prepare_fixture(
+    application_root: &Path,
+    parent: &Path,
+    label: &str,
+    host: AvrFixtureHost,
     mut archives: [AvrArchiveInput; 4],
+    package_metadata: bool,
 ) -> std::result::Result<PreparedAvrFixture, AvrPreparationRefusal> {
     if current_host() != Some(host) {
         return Err(AvrPreparationRefusal::HostMismatch);
@@ -233,6 +283,19 @@ pub fn prepare_avr_fixture(
     for output in &files {
         verify_output(&tree.root, output)?;
     }
+    let generated_metadata = if package_metadata {
+        let records = write_native_package_metadata(&mut tree, &mut files, &mut payload_bytes)?;
+        tree.verify()?;
+        for output in &files {
+            verify_output(&tree.root, output)?;
+        }
+        for source in &mut sources {
+            source.verify()?;
+        }
+        records
+    } else {
+        Vec::new()
+    };
     native(verify_directories(&scope))?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(PreparedAvrFixture {
@@ -242,6 +305,7 @@ pub fn prepare_avr_fixture(
         host,
         files,
         materialized_links,
+        generated_metadata,
     })
 }
 
@@ -253,6 +317,145 @@ fn current_host() -> Option<AvrFixtureHost> {
         _ => None,
     }
 }
+
+// Exact official registry archive records retained in the acquisition receipt.
+// This fixed mapping is not runtime registry resolution or caller authority.
+fn official_archive(role: AvrArchiveRole, host: AvrFixtureHost) -> (&'static str, u64) {
+    match role {
+        AvrArchiveRole::Platform => (
+            "370a482b8cd980b8954c03cec3e856f50758cac695491e6b6c8327f5e60079ac",
+            41_655,
+        ),
+        AvrArchiveRole::Framework => (
+            "bf85bcca114bad389fec51fecbf9b66821a233b366bd3f85cdb1cdcba6a28659",
+            565_720,
+        ),
+        AvrArchiveRole::ToolScons => (
+            "e405de1fcd3307fa80d624f0290c7cd30fbb47f67e135a9f56d7e46b6b895311",
+            523_448,
+        ),
+        AvrArchiveRole::Toolchain => match host {
+            AvrFixtureHost::LinuxX86_64 => (REVIEWED_LINUX_TOOLCHAIN_SHA, 52_965_047),
+            AvrFixtureHost::LinuxAarch64 => (
+                "37f51fc7269c952d7be6e887f65cb2630f7278ee5cecbc19e02003d895e9d334",
+                53_122_401,
+            ),
+            AvrFixtureHost::WindowsX86_64 => (
+                "6eafdc076c7c48a76576dd2933357ba9c8c4a0560f4900e11760d5a21604d8f2",
+                50_506_876,
+            ),
+        },
+    }
+}
+
+fn package_registry_id(role: AvrArchiveRole) -> u32 {
+    match role {
+        AvrArchiveRole::Platform => 8006,
+        AvrArchiveRole::Framework => 8039,
+        AvrArchiveRole::ToolScons => 8192,
+        AvrArchiveRole::Toolchain => 8203,
+    }
+}
+
+fn native_package_metadata(role: AvrArchiveRole) -> Result<Vec<u8>> {
+    #[derive(serde::Serialize)]
+    struct Spec {
+        owner: &'static str,
+        id: u32,
+        name: &'static str,
+        requirements: Option<&'static str>,
+        uri: Option<&'static str>,
+    }
+    #[derive(serde::Serialize)]
+    struct Metadata {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        name: &'static str,
+        version: &'static str,
+        spec: Spec,
+    }
+    let mut bytes = serde_json::to_vec(&Metadata {
+        kind: if role == AvrArchiveRole::Platform {
+            "platform"
+        } else {
+            "tool"
+        },
+        name: role.name(),
+        version: role.version(),
+        spec: Spec {
+            owner: "platformio",
+            id: package_registry_id(role),
+            name: role.name(),
+            requirements: None,
+            uri: None,
+        },
+    })
+    .map_err(|_| AvrPreparationRefusal::InvalidInputs)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn write_native_package_metadata(
+    tree: &mut Tree,
+    files: &mut Vec<PreparedAvrFile>,
+    payload_bytes: &mut u64,
+) -> Result<Vec<PreparedAvrPackageMetadata>> {
+    if !tree.native_metadata.is_empty() {
+        return Err(AvrPreparationRefusal::UnsafePath);
+    }
+    let records = [
+        AvrArchiveRole::Platform,
+        AvrArchiveRole::Framework,
+        AvrArchiveRole::ToolScons,
+        AvrArchiveRole::Toolchain,
+    ]
+    .map(|role| Ok((role, native_package_metadata(role)?)))
+    .into_iter()
+    .collect::<Result<Vec<_>>>()?;
+    let additional = records
+        .iter()
+        .map(|(_, bytes)| bytes.len() as u64)
+        .sum::<u64>();
+    if files
+        .len()
+        .checked_add(records.len())
+        .is_none_or(|count| count > MAX_FILES)
+        || payload_bytes
+            .checked_add(additional)
+            .is_none_or(|bytes| bytes > MAX_TOTAL_BYTES)
+    {
+        return Err(AvrPreparationRefusal::TooLarge);
+    }
+    let mut generated = Vec::with_capacity(4);
+    for (role, bytes) in records {
+        let path = format!("{}/.piopm", role.destination());
+        admit_file(files.len(), payload_bytes, bytes.len() as u64)?;
+        // The path is fixed by a native role. Archive entry paths still pass
+        // portable_path, which refuses every `.piopm` component. create_file
+        // uses create_new and never adopts or overwrites an existing leaf.
+        let mut file = tree.create_file(&path)?;
+        io(file.write_all(&bytes))?;
+        io(file.flush())?;
+        set_mode(&file, 0o644)?;
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        files.push(PreparedAvrFile {
+            path: path.clone(),
+            sha256: digest.clone(),
+            bytes: bytes.len() as u64,
+            unix_mode: 0o644,
+        });
+        tree.native_metadata.insert(path.clone());
+        generated.push(PreparedAvrPackageMetadata {
+            path,
+            role,
+            registry_id: package_registry_id(role),
+            sha256: digest,
+            bytes: bytes.len() as u64,
+        });
+    }
+    Ok(generated)
+}
+
 fn io<T>(value: io::Result<T>) -> Result<T> {
     value.map_err(|_| AvrPreparationRefusal::Io)
 }
@@ -388,6 +591,7 @@ struct Tree {
     directories: BTreeMap<String, Directory>,
     names: BTreeMap<String, (String, bool)>,
     explicit_directories: BTreeSet<String>,
+    native_metadata: BTreeSet<String>,
 }
 impl Tree {
     fn reserve(parent: &Path, label: &str) -> Result<Self> {
@@ -410,6 +614,7 @@ impl Tree {
             directories,
             names: BTreeMap::new(),
             explicit_directories: BTreeSet::new(),
+            native_metadata: BTreeSet::new(),
         })
     }
     fn ensure_directory(&mut self, name: &str) -> Result<()> {
@@ -505,7 +710,9 @@ impl Tree {
                 } else {
                     format!("{relative}/{leaf}")
                 };
-                portable_path(&name)?;
+                if !self.native_metadata.contains(&name) {
+                    portable_path(&name)?;
+                }
                 let expected = self
                     .names
                     .get(&fold(&name))
@@ -1435,6 +1642,8 @@ mod tests {
             "a//b",
             ".pio/cache",
             "safe/../../escape",
+            "safe/.piopm",
+            "safe/.PIOPM",
         ] {
             let fixture = Fixture::new();
             let mut archives = fixture.archives();
@@ -2084,5 +2293,132 @@ mod tests {
             fixture.run(archives).unwrap_err(),
             AvrPreparationRefusal::UnsafePath
         );
+    }
+
+    #[test]
+    fn package_metadata_requires_the_exact_official_archive_envelope_before_any_output() {
+        let fixture = Fixture::new();
+        assert_eq!(
+            prepare_avr_package_fixture(
+                &fixture.app,
+                &fixture.root,
+                "packages",
+                native_host(),
+                fixture.archives()
+            )
+            .unwrap_err(),
+            AvrPreparationRefusal::InvalidInputs
+        );
+        assert!(!fixture.root.join("packages").exists());
+    }
+
+    #[test]
+    fn declaring_official_archive_hashes_cannot_replace_verifying_actual_bytes() {
+        let fixture = Fixture::new();
+        let mut archives = fixture.archives();
+        for archive in &mut archives {
+            let (digest, size) = official_archive(archive.role, native_host());
+            archive.expected_sha256 = digest.into();
+            archive.expected_size = size;
+        }
+        assert_eq!(
+            prepare_avr_package_fixture(
+                &fixture.app,
+                &fixture.root,
+                "packages",
+                native_host(),
+                archives
+            )
+            .unwrap_err(),
+            AvrPreparationRefusal::HashMismatch
+        );
+        assert!(!fixture.root.join("packages").exists());
+    }
+
+    #[test]
+    fn native_package_records_match_verified_platformio_metadata_shape() {
+        for (role, id, kind) in [
+            (AvrArchiveRole::Platform, 8006, "platform"),
+            (AvrArchiveRole::Framework, 8039, "tool"),
+            (AvrArchiveRole::ToolScons, 8192, "tool"),
+            (AvrArchiveRole::Toolchain, 8203, "tool"),
+        ] {
+            let bytes = native_package_metadata(role).unwrap();
+            assert_eq!(bytes, native_package_metadata(role).unwrap());
+            assert!(bytes.len() <= 512 && bytes.ends_with(b"\n"));
+            let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                value,
+                serde_json::json!({"type":kind,"name":role.name(),"version":role.version(),"spec":{"owner":"platformio","id":id,"name":role.name(),"requirements":null,"uri":null}})
+            );
+        }
+    }
+
+    #[test]
+    fn generated_metadata_is_create_new_declared_and_counted_without_adopting_archive_metadata() {
+        let fixture = Fixture::new();
+        let mut tree = Tree::reserve(&fixture.root, "native-metadata").unwrap();
+        let mut files = Vec::new();
+        let mut bytes = 0;
+        let records = write_native_package_metadata(&mut tree, &mut files, &mut bytes).unwrap();
+        assert_eq!(records.len(), 4);
+        assert_eq!(files.len(), 4);
+        assert_eq!(
+            bytes,
+            records.iter().map(|record| record.bytes).sum::<u64>()
+        );
+        tree.verify().unwrap();
+        for record in records {
+            assert_eq!(
+                fs::read(tree.root.join(&record.path)).unwrap(),
+                native_package_metadata(record.role).unwrap()
+            );
+        }
+        assert_eq!(
+            write_native_package_metadata(&mut tree, &mut files, &mut bytes).unwrap_err(),
+            AvrPreparationRefusal::UnsafePath
+        );
+        for path in [".piopm", "core/packages/tool-scons/.piopm", "safe/.PIOPM"] {
+            assert_eq!(portable_path(path), Err(AvrPreparationRefusal::UnsafePath));
+        }
+    }
+
+    #[test]
+    fn preexisting_or_injected_metadata_is_never_overwritten_or_accepted() {
+        let fixture = Fixture::new();
+        let mut tree = Tree::reserve(&fixture.root, "injected-metadata").unwrap();
+        tree.ensure_directory("core/platforms/atmelavr").unwrap();
+        let path = tree.root.join("core/platforms/atmelavr/.piopm");
+        fs::write(&path, b"untrusted preexisting metadata").unwrap();
+        assert!(write_native_package_metadata(&mut tree, &mut Vec::new(), &mut 0).is_err());
+        assert_eq!(fs::read(path).unwrap(), b"untrusted preexisting metadata");
+        assert!(tree.verify().is_err());
+    }
+
+    #[test]
+    fn native_metadata_obeys_existing_file_and_payload_budgets() {
+        let fixture = Fixture::new();
+        let mut tree = Tree::reserve(&fixture.root, "metadata-byte-bound").unwrap();
+        let mut bytes = MAX_TOTAL_BYTES;
+        assert_eq!(
+            write_native_package_metadata(&mut tree, &mut Vec::new(), &mut bytes).unwrap_err(),
+            AvrPreparationRefusal::TooLarge
+        );
+        assert!(!tree.root.join("core/platforms/atmelavr/.piopm").exists());
+        let mut files = (0..MAX_FILES)
+            .map(|_| PreparedAvrFile {
+                path: String::new(),
+                sha256: String::new(),
+                bytes: 0,
+                unix_mode: 0,
+            })
+            .collect::<Vec<_>>();
+        let mut bytes = 0;
+        assert_eq!(
+            write_native_package_metadata(&mut tree, &mut files, &mut bytes).unwrap_err(),
+            AvrPreparationRefusal::TooLarge
+        );
+        assert_eq!(bytes, 0);
+        assert!(!tree.root.join("core").exists());
     }
 }

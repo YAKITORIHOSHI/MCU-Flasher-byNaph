@@ -16,6 +16,10 @@ and both Windows Python editor jobs. Runtime source equals `eb9d13c`; the
 follow-up fixes only the workflow's required 19-check workspace contract.
 Save, live/coexistence ownership, real Compile and service retirement remain
 open. The capability totals stay **14 partial / 53 pending / 0 retired**.
+The subsequent [native package record slice](rust-avr-package-metadata.json)
+adds four exact owned lookup records and preserves every original prepared
+package byte. Local 226 backend tests and exact Linux payload checks pass;
+actual PlatformIO lookup/runtime admission and compile integration stay open.
 
 The native recipe-generation checkpoint `30d99af` now pins observed root,
 ancestor and file identities, binds exact native selection/host/rule/options,

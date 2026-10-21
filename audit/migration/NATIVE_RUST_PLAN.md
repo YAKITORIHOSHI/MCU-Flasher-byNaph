@@ -395,3 +395,17 @@ host passes 23 native units, Windows passes 28, and all three pass 19 workspace
 plus 17 detach checks. Both Windows Python editor jobs pass. Intermediate runs
 were canceled by subsequent branch dispatches and do not qualify native runtime.
 Full independent session/archive reviews and actual desktop/device gates remain.
+
+The separate native package-fixture entry now creates four deterministic
+PlatformIO 6.2.0 `.piopm` owner/name/version/registry-ID records after a fixed
+official role/host size/hash envelope and all actual archive bytes verify.
+Incoming archive metadata remains refused; only the four fixed native paths
+enter the closed output inventory, within existing limits and create-new rules.
+Local exact Linux x86_64 preparation produces 2,762 files / 240,450,165 bytes,
+including 631 metadata bytes; the original 2,758-file aggregate remains identical
+to the prior archive-only checkpoint. Local checks: 226 backend tests (29 archive
+and metadata cases), strict Linux/MSVC-target linting and formatting. Backend CI
+for this source is pending. Native UI source remains unchanged at its passing
+checkpoint. Full private runtime/loader/nested-startup admission, immutable tool
+lifetime, actual installed lookup and real compiler dispatch remain gates. See
+`rust-avr-package-metadata.json`; package records are not a ready marker.

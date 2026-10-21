@@ -72,6 +72,10 @@ The following slice prepares exact owned Uno/AVR archives in Rust, with bounded
 extraction and explicit copies for eight known Linux toolchain links. Its
 [preparation evidence](audit/migration/rust-avr-preparation.json) remains separate
 from runtime admission and real Compile integration.
+A separate owned package fixture now supplies four fixed native owner/version
+records after official archive verification. Its [metadata evidence](audit/migration/rust-avr-package-metadata.json)
+preserves the original package bytes; actual runtime lookup and compilation
+remain unqualified.
 Native metadata fixtures retain original root/source identities and refuse
 Windows device-name and junction aliases. The pure serial-send queue now preserves
 active-plus-pending limits, captured connection identity, one-attempt writes and

@@ -1,0 +1,226 @@
+{
+  "schema": 1,
+  "updated": "2026-10-21 Asia/Manila",
+  "scope": "development-only deterministic native PlatformIO package lookup metadata in a fresh exact owned AVR fixture; no runtime or execution admission",
+  "continuation_base": "f97d655aa4d5e2bace1afa9a9a84d176803813df",
+  "source_sha256": {
+    "desktop/crates/host/src/prepare_avr_fixture.rs": "8be2907d0972ab2595e084a9e384812da4675469dac476f8a8d39cfb6994aa68",
+    "desktop/crates/host/src/bin/prepare_avr_probe.rs": "3ca507f2012ec107d4ef0ee74e32d612b06dfa5a8323cfe75b67285b2bfa6792",
+    "desktop/crates/host/src/lib.rs": "f6180938fd9dc23c2e1d6767b10f9afa1cd65ad3cb8943e59f000c0db5eab2f7",
+    "desktop/crates/host/Cargo.toml": "e81ebbc4ea64be5c183f28d89ec3cd94b6929130eeb5a8caee124a788e591901",
+    "desktop/Cargo.lock": "a8a85a840dc7cd5c0ad9326696f319f4147efea71b6669b81a1b86706ac51b57",
+    "desktop/crates/host/src/file_identity.rs": "e9bcb9f55ffe5a2b26442254882403e06993d8ef56686938a8d54ba030c50e0f",
+    "desktop/crates/host/src/recipe_snapshot.rs": "f7a6ede2b26d14e506e8b3c57b1f82b2a5296c1d24895bf28c774bae65ec881a",
+    "desktop/crates/core/src/prepared_target.rs": "6b33650c85bd8fcf6c7f516972729f631a7e57beb1ed25296dae9fe6be30cab9"
+  },
+  "source_tree_sha256": "19efee6abd09b14afd2b203abd8949de76f9c19224d093f26ec4a3c3aeb77faa",
+  "source_tree_encoding": "sorted UTF-8 relative path NUL sha256 LF",
+  "native_preparation": {
+    "architecture": "x86_64",
+    "archiveBytesPreserved": true,
+    "archiveFileListSha256": "5afff446889ffa0fbad05024be11f1225eee97299e6ddfc1d2d4341bc40c4631",
+    "compiler": {
+      "bytes": 949248,
+      "format": "ELF64 little-endian ET_EXEC x86_64",
+      "sha256": "8b9885fe307984cb8b5802a652567c9d01d2d91649a66ea8ee93b9b88cfce804"
+    },
+    "fileListEncoding": "sorted UTF-8 path NUL decimal-size NUL sha256 NUL octal-mode LF",
+    "fileListSha256": "732ae702e1068dac43373c3e59dc6154ca8a663bb94cccb44d1b65dfeb197179",
+    "files": 2762,
+    "fixtureOnly": true,
+    "host": "linux",
+    "immutableInputLifetime": false,
+    "installedPackageReadiness": false,
+    "liveStoreOrHardwareAccess": false,
+    "logicalBytes": 240450165,
+    "materializedArchiveLinks": [
+      {
+        "bytes": 57926,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so",
+        "sha256": "0f70f21126857e5448c789396ac45de26385a081d18d194c21e940749f702132",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 57926,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so.0",
+        "sha256": "0f70f21126857e5448c789396ac45de26385a081d18d194c21e940749f702132",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcc1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 124598,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so",
+        "sha256": "448f8e23f469a7ca7e8788680d4cd8aa934d5c428270545bc8148510f3c6c2c2",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 124598,
+        "path": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so.0",
+        "sha256": "448f8e23f469a7ca7e8788680d4cd8aa934d5c428270545bc8148510f3c6c2c2",
+        "target": "core/packages/toolchain-atmelavr/lib/gcc/avr/7.3.0/plugin/libcp1plugin.so.0.0.0"
+      },
+      {
+        "bytes": 116044,
+        "path": "core/packages/toolchain-atmelavr/lib/libcc1.so",
+        "sha256": "ee94f49678064279b22c414c0f748c05cba610803e76ad573ac8a245d85fed1c",
+        "target": "core/packages/toolchain-atmelavr/lib/libcc1.so.0.0.0"
+      },
+      {
+        "bytes": 116044,
+        "path": "core/packages/toolchain-atmelavr/lib/libcc1.so.0",
+        "sha256": "ee94f49678064279b22c414c0f748c05cba610803e76ad573ac8a245d85fed1c",
+        "target": "core/packages/toolchain-atmelavr/lib/libcc1.so.0.0.0"
+      },
+      {
+        "bytes": 90075,
+        "path": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so",
+        "sha256": "aff84cb9933d11a1588a8da881417a4679162914ad6fd3b6dfdf0887f1bbe243",
+        "target": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so.0.0.0"
+      },
+      {
+        "bytes": 90075,
+        "path": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so.0",
+        "sha256": "aff84cb9933d11a1588a8da881417a4679162914ad6fd3b6dfdf0887f1bbe243",
+        "target": "core/packages/toolchain-atmelavr/libexec/gcc/avr/7.3.0/liblto_plugin.so.0.0.0"
+      }
+    ],
+    "nativePackageMetadata": [
+      {
+        "bytes": 145,
+        "path": "core/platforms/atmelavr/.piopm",
+        "registry_id": 8006,
+        "sha256": "09335858ffd4deeed7898ba62308bf1798636846817c68a7a0c16828c4523404"
+      },
+      {
+        "bytes": 167,
+        "path": "core/packages/framework-arduino-avr/.piopm",
+        "registry_id": 8039,
+        "sha256": "e8844ec2b143c6848cb06b78c2b194097e63d6fea4c431b062c5db1e81d46797"
+      },
+      {
+        "bytes": 149,
+        "path": "core/packages/tool-scons/.piopm",
+        "registry_id": 8192,
+        "sha256": "fa0bef7b04c8bee5a0e424cc55dcaad6e84a6f8862d1cb93f343dfb1bdcee762"
+      },
+      {
+        "bytes": 170,
+        "path": "core/packages/toolchain-atmelavr/.piopm",
+        "registry_id": 8203,
+        "sha256": "942c08862037864af98ebc3dba31dd8ac4d0c618686707de105efdb428ca2730"
+      }
+    ],
+    "packageLookupMetadataGenerated": true,
+    "preparedRoot": "temp/audit/native-compile-inputs/prepared-avr-linux-38629-1792554817891781869",
+    "privateRuntimeAdmitted": false,
+    "regularFileRereadMatched": true,
+    "schemaVersion": 1,
+    "target": {
+      "board": "uno",
+      "framework": "arduino",
+      "platform": "platformio/atmelavr@5.3.0"
+    },
+    "toolOrCompilerExecution": false
+  },
+  "archive_only_checkpoint": "9a27b78842e90e2c12ca4d9ddd9c0e6f50a28d18",
+  "original_prepared_files_unchanged": true,
+  "metadata": {
+    "entry": "prepare_avr_package_fixture",
+    "original_archive_only_entry_unchanged": "prepare_avr_fixture still emits no native metadata",
+    "records": 4,
+    "bytes": 631,
+    "known_official_registry_identities": {
+      "tool-scons": {
+        "id": 8192,
+        "owner": "platformio",
+        "type": "tool",
+        "version": "4.41101.0",
+        "source_sha256": "0c06261da79f842cc655761bd6839dd86500f57e2e30b0721cb5299c16358195"
+      },
+      "atmelavr": {
+        "id": 8006,
+        "owner": "platformio",
+        "type": "platform",
+        "version": "5.3.0",
+        "source_sha256": "2b36c5fda10b00dbb5f2c73ac09e52b8252f8e3270279a587ac3d94d02d2cb71"
+      },
+      "framework-arduino-avr": {
+        "id": 8039,
+        "owner": "platformio",
+        "type": "tool",
+        "version": "5.4.0",
+        "source_sha256": "f33f115c8949f637f9b2d2d96aeb69d142093232a3724638c6a147cc181a6c2f"
+      },
+      "toolchain-atmelavr": {
+        "id": 8203,
+        "owner": "platformio",
+        "type": "tool",
+        "version": "1.70300.191015",
+        "source_sha256": "f6e99353c2007b32bc742250e342701a06153152e82643586e621d3e7df9a6bb"
+      }
+    },
+    "archive_gate": "every supplied size/hash must match the fixed role/host official envelope; complete actual archive bytes still verified before output",
+    "shape": "type,name,version,spec{owner,id,name,requirements:null,uri:null}; deterministic compact UTF-8 JSON + LF",
+    "archive_metadata_refusal": "incoming .piopm components remain refused, including case aliases",
+    "native_exception": "only four fixed role destinations are admitted into the final complete inventory",
+    "write_policy": "create-new only; no preexisting or duplicate record adoption; unchanged per-file/total/file-count budgets include all generated records",
+    "validation": "original archives and prepared files revalidated before native records; complete output inventory and every original/generated file revalidated afterward",
+    "registry_owner_records_are_not_full_installed_readiness": true
+  },
+  "local": {
+    "host": "Ubuntu 26.04.1 LTS x86_64",
+    "rust_default_tests": 226,
+    "archive_and_metadata_tests": 29,
+    "metadata_tests_added": 6,
+    "strict_linux_clippy": true,
+    "strict_msvc_target_clippy": true,
+    "format": true,
+    "exact_payload_preparation": "passed",
+    "metadata_manifest_bytes": 631,
+    "probe_receipt_sha256": "5964ac926e52759c98361586ab4a31b3dc52aa26ce9a302d87029d930810668c",
+    "log_sha256": {
+      "avr-metadata-red.log": "ac2d4b463715247e18a2957ce91dfb192aecdeb69b24545056f1eab2a7bdf894",
+      "avr-metadata-tests.log": "2fce97ca604ed16a269e18abba98f2aa58479d875d9a7b48389f0278e0a5b537",
+      "avr-metadata-linux-clippy.log": "dc524437a2773fe77ca7464da6e481e3921fb5940509fb3bc424697aa1c58ae8",
+      "avr-metadata-msvc-clippy.log": "6c19fe7fb657398c3e2f7c9a378dce35f172f558253df57126af0ab577b88f86",
+      "avr-metadata-format.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "avr-metadata-build.log": "4d265f4460305c9804cdb3368fdd48d3b1ad9244065ecd652b0e70941e3b8e4c"
+    }
+  },
+  "ci": {
+    "status": "not_yet_run_for_this_source",
+    "native_ui_full_ci_remains_at": 39539221917,
+    "prior_runtime_is_not_current_package_metadata_evidence": true
+  },
+  "review": {
+    "status": "author review; independent helper review unavailable after account usage-limit failures",
+    "independent_review_complete": false,
+    "checked": [
+      "fixed official digest/size gate plus actual-byte verification",
+      "fresh fixture reservation and incoming metadata refusal",
+      "native-only four-path exception and complete final inventory",
+      "duplicate/preexisting refusals and original-byte preservation",
+      "all generated files included in original resource limits",
+      "deterministic format/IDs/owner and exact payload comparison",
+      "no new process, network, app settings or mutable live store entry"
+    ]
+  },
+  "remaining_gates": [
+    "independent review and native cross-host metadata fixtures",
+    "actual Windows/ARM64 package payload qualification",
+    "complete owned private runtime/loader/site admission and nested startup",
+    "immutable input lifetime and finite external process ownership",
+    "actual installed lookup and real Rust-controlled C++ sample compile",
+    "native source-save transactions/coexistence and complete build integration"
+  ],
+  "boundaries": {
+    "package_manager_or_tool_executed": false,
+    "private_runtime_admitted": false,
+    "installed_dependency_readiness_qualified": false,
+    "compile_dispatch_enabled": false,
+    "live_store_hardware_cloud_settings_or_sketch_writes": false,
+    "python_application_services_retired": 0,
+    "shipping_entry_changed": false,
+    "active_aba_final_use_or_windows_path_races_closed": false,
+    "metadata_is_not_a_durable_ready_marker": true
+  }
+}

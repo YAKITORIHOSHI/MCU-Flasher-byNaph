@@ -60,6 +60,15 @@ in the exact Linux x86_64 toolchain digest may become independent regular copies
 all other link/special entries refuse. `prepare_avr_probe` consumes only fixed
 owned archive paths and performs no tool launch. Keep its local payload evidence
 separate from cross-host synthetic archive tests and historical compile receipts.
+`prepare_avr_package_fixture` separately emits four fixed native `.piopm`
+lookup records only after the caller's role/host size/hash tuples match the
+pinned official catalog and actual archive bytes verify. It never admits archive
+`.piopm` entries or overwrites existing metadata. Generated paths/bytes enter the
+closed inventory and existing limits; complete originals and outputs revalidate.
+The original archive-only entry still emits no lookup metadata. The package
+records are not installed dependency readiness, a durable ready marker or
+execution authority. Native metadata shape/IDs follow the verified PlatformIO
+6.2.0 contract; see `rust-avr-package-metadata.json` for exact source and tests.
 
 The current native workspace milestone shares the original 39 palette tokens
 across three themes (117 exact color values) and Montserrat between GTK and

@@ -2,7 +2,8 @@
 //! No process, installation, live package-store or firmware action is exposed.
 
 use mcu_host::prepare_avr_fixture::{
-    prepare_avr_fixture, AvrArchiveHost, AvrArchiveInput, AvrArchiveRole, AvrFixtureHost,
+    prepare_avr_fixture, prepare_avr_package_fixture, AvrArchiveHost, AvrArchiveInput,
+    AvrArchiveRole, AvrFixtureHost,
 };
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -11,13 +12,16 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
-    if std::env::args_os().skip(1).collect::<Vec<_>>() != ["--prepare-linux-x86_64"] {
-        eprintln!(
-            "Only --prepare-linux-x86_64 is supported; archive locations and identities are fixed."
-        );
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let packages = if arguments == ["--prepare-linux-x86_64"] {
+        false
+    } else if arguments == ["--prepare-packages-linux-x86_64"] {
+        true
+    } else {
+        eprintln!("Use --prepare-linux-x86_64 or --prepare-packages-linux-x86_64; all paths and identities are fixed.");
         std::process::exit(125);
-    }
-    match prepare() {
+    };
+    match prepare(packages) {
         Ok(receipt) => println!("{receipt}"),
         Err(error) => {
             eprintln!("{error}");
@@ -26,7 +30,7 @@ fn main() {
     }
 }
 
-fn prepare() -> Result<serde_json::Value, String> {
+fn prepare(packages: bool) -> Result<serde_json::Value, String> {
     if (std::env::consts::OS, std::env::consts::ARCH) != ("linux", "x86_64") {
         return Err("The acquired payload qualification is Linux x86_64 only.".into());
     }
@@ -80,7 +84,12 @@ fn prepare() -> Result<serde_json::Value, String> {
         .map_err(|error| error.to_string())?
         .as_nanos();
     let label = format!("prepared-avr-linux-{}-{timestamp}", std::process::id());
-    let prepared = prepare_avr_fixture(
+    let prepare_fixture = if packages {
+        prepare_avr_package_fixture
+    } else {
+        prepare_avr_fixture
+    };
+    let prepared = prepare_fixture(
         &application,
         &parent,
         &label,
@@ -95,6 +104,7 @@ fn prepare() -> Result<serde_json::Value, String> {
     files.sort_unstable_by(|left, right| left.path.cmp(&right.path));
     let mut total = 0u64;
     let mut aggregate = Sha256::new();
+    let mut archive_aggregate = Sha256::new();
     for file in files {
         let path = prepared.root().join(&file.path);
         let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
@@ -124,15 +134,87 @@ fn prepare() -> Result<serde_json::Value, String> {
         total = total
             .checked_add(bytes)
             .ok_or("Prepared byte total overflowed")?;
-        aggregate.update(format!(
+        let row = format!(
             "{}\0{}\0{}\0{:o}\n",
             file.path, bytes, digest, file.unix_mode
-        ));
+        );
+        aggregate.update(&row);
+        if !prepared
+            .generated_metadata()
+            .iter()
+            .any(|record| record.path == file.path)
+        {
+            archive_aggregate.update(&row);
+        }
     }
-    if prepared.files().len() != 2758 || total != 240_449_534 {
+    let archive_hash = format!("{:x}", archive_aggregate.finalize());
+    if archive_hash != "5afff446889ffa0fbad05024be11f1225eee97299e6ddfc1d2d4341bc40c4631" {
+        return Err(
+            "Original prepared package files differ from the verified archive-only checkpoint."
+                .into(),
+        );
+    }
+    let (expected_files, expected_bytes) = if packages {
+        (2762, 240_450_165)
+    } else {
+        (2758, 240_449_534)
+    };
+    if prepared.files().len() != expected_files || total != expected_bytes {
         return Err(
             "Exact acquired archive file/byte totals did not match the reviewed layout.".into(),
         );
+    }
+    let expected_metadata = [
+        (
+            "core/platforms/atmelavr/.piopm",
+            "atmelavr",
+            "5.3.0",
+            "platform",
+            8006,
+        ),
+        (
+            "core/packages/framework-arduino-avr/.piopm",
+            "framework-arduino-avr",
+            "5.4.0",
+            "tool",
+            8039,
+        ),
+        (
+            "core/packages/tool-scons/.piopm",
+            "tool-scons",
+            "4.41101.0",
+            "tool",
+            8192,
+        ),
+        (
+            "core/packages/toolchain-atmelavr/.piopm",
+            "toolchain-atmelavr",
+            "1.70300.191015",
+            "tool",
+            8203,
+        ),
+    ];
+    if prepared.generated_metadata().len() != if packages { 4 } else { 0 } {
+        return Err("The native metadata manifest has the wrong record count.".into());
+    }
+    for (record, (path, name, version, kind, id)) in
+        prepared.generated_metadata().iter().zip(expected_metadata)
+    {
+        if record.path != path || record.registry_id != id || record.bytes > 512 {
+            return Err(
+                "Native package metadata differs from the reviewed registry identity.".into(),
+            );
+        }
+        let bytes = fs::read(prepared.root().join(path)).map_err(|error| error.to_string())?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        if value
+            != serde_json::json!({"type":kind,"name":name,"version":version,"spec":{"owner":"platformio","id":id,"name":name,"requirements":null,"uri":null}})
+        {
+            return Err(
+                "Native package lookup metadata differs from PlatformIO's verified format.".into(),
+            );
+        }
     }
     let compiler = prepared
         .root()
@@ -172,8 +254,11 @@ fn prepare() -> Result<serde_json::Value, String> {
         "files":prepared.files().len(),
         "logicalBytes":total,
         "fileListSha256":format!("{:x}", aggregate.finalize()),
+        "archiveFileListSha256":archive_hash,
         "fileListEncoding":"sorted UTF-8 path NUL decimal-size NUL sha256 NUL octal-mode LF",
         "materializedArchiveLinks":prepared.materialized_links(),
+        "nativePackageMetadata":prepared.generated_metadata(),
+        "packageLookupMetadataGenerated":packages,
         "compiler":{
             "sha256":compiler_hash,"bytes":compiler_bytes,
             "format":"ELF64 little-endian ET_EXEC x86_64"

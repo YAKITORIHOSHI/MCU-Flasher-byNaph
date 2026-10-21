@@ -5,7 +5,7 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
-- Current code checkpoint: `49ab312` on `codex/rust-tauri-migration`.
+- Native UI code checkpoint: `49ab312` on `codex/rust-tauri-migration`.
   [Complete native CI 39539221917](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39539221917)
   passes all five jobs: native Ubuntu AMD64/ARM64 and Windows plus both Windows
   editor jobs. Each native host passes 19 workspace/17 detach checks, including
@@ -145,9 +145,15 @@ needed for the next slice. Preserve historical failures and exact tested sources
   metadata has no registry owner and cannot satisfy explicit `platformio/...`
   installed lookup. Verified registry identities and the `.piopm` format are
   recorded in `temp/audit/native-compile-inputs/owned-package-metadata-next.md`.
-  Add deterministic native metadata only in a newly owned generation after
-  full revalidation; keep incoming archive metadata refused and include generated
-  files in the declared inventory. No metadata is currently generated.
+  A new separate `prepare_avr_package_fixture` now creates the four deterministic
+  native records in a fresh generation after fixed official-envelope and full
+  byte verification. Incoming `.piopm` stays refused; generated records count
+  toward existing limits and the complete final inventory. Local exact Linux
+  payload: 2,762 files / 240,450,165 bytes, including 631 metadata bytes. The
+  original 2,758-file aggregate matches the prior checkpoint exactly. Local
+  checks: 226 backend tests (29 archive/metadata checks), strict Linux/MSVC
+  linting and formatting. See [new metadata evidence](rust-avr-package-metadata.json);
+  backend CI for this source is pending. Native UI sources remain unchanged.
   The named OS interpreter's static loader/required-library records are in
   `runtime-loader-profile.json` in the same temp folder. Complete native loader
   and private runtime admission remains unqualified; no dependency was copied.
