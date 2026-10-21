@@ -1,6 +1,6 @@
 # Current migration handoff
 
-Updated: 21 October 2026, Asia/Manila. Read this first, then only the reports
+Updated: 22 October 2026, Asia/Manila. Read this first, then only the reports
 needed for the next slice. Preserve historical failures and exact tested sources.
 
 ## State and evidence
@@ -13,6 +13,20 @@ needed for the next slice. Preserve historical failures and exact tested sources
   See [GUI performance evidence](../GUI_PERFORMANCE.md) for exact scope/checks
   and remaining host qualification. This slice changes the current Python
   application; it does not complete the Rust GUI or retire a Python service.
+- The following shipping-UI continuation adds researched Arduino-inspired editor
+  syntax colors, terminal theme/fit corrections, event-driven Linux PTY readiness
+  and the root `LAUNCHER/` folder. Existing font/model/undo state is preserved.
+  macOS/Fedora/Mint launcher entries are availability notices, not completed ports;
+  Windows ARM64 is refused. See [current shipping platform verification](../PLATFORM_VERIFICATION.md)
+  and [palette provenance](../../src/editor/ARDUINO_PALETTE.md). Focused CI expands
+  to Ubuntu 24/26 on both CPUs and separately labels macOS/Windows ARM component
+  availability. ARM Qt WebEngine's official wheel currently lacks native modules;
+  record this gap without counting skipped rendering as a pass.
+  AI replacement highlights now use green current text and a red original-text
+  marker/hover; additions/removals keep green/red and paints are static. Existing
+  diff counts, revisions and Accept/Reject/history authority are unchanged.
+  These editor changes apply to the shipping offline page; native preview assets
+  and full design/service parity remain separate migration work.
 - User expanded replacement platform requirements on 21 October: Windows 10/11
   AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
   Fedora x86_64/aarch64 and Linux Mint AMD64. See [required platform coverage](PLATFORM_SUPPORT.md)

@@ -22,6 +22,27 @@ on:
       - direct/verify_downloader_appearance.py
       - direct/verify_performance.py
       - direct/verify_ubuntu_download_manager.py
+      - main/qt/posix_terminal_panel.py
+      - src/editor/**
+      - LAUNCHER/**
+      - direct/windows/run.vbs
+      - direct/verify_launcher_folder.py
+      - direct/verify_release_sources.py
+      - direct/build_release.py
+      - direct/verify_embedded_viewports.py
+      - direct/verify_arduino_palette.py
+      - direct/verify_pty_readiness.py
+      - direct/ubuntu/preflight.py
+      - direct/verify_windows_launcher.py
+      - main/core/theme.py
+      - main/core/log_colors.py
+      - main/qt/editor_panel.py
+      - src/assets/xterm/**
+      - main/core/ai_review.py
+      - direct/verify_ai_diff_colors.py
+      - direct/verify_ai_line_diff.py
+      - direct/verify_editor_review_ui.py
+      - direct/verify_editor_c.py
   pull_request:
     paths:
       - .github/workflows/browser-performance.yml
@@ -43,6 +64,27 @@ on:
       - direct/verify_downloader_appearance.py
       - direct/verify_performance.py
       - direct/verify_ubuntu_download_manager.py
+      - main/qt/posix_terminal_panel.py
+      - src/editor/**
+      - LAUNCHER/**
+      - direct/windows/run.vbs
+      - direct/verify_launcher_folder.py
+      - direct/verify_release_sources.py
+      - direct/build_release.py
+      - direct/verify_embedded_viewports.py
+      - direct/verify_arduino_palette.py
+      - direct/verify_pty_readiness.py
+      - direct/ubuntu/preflight.py
+      - direct/verify_windows_launcher.py
+      - main/core/theme.py
+      - main/core/log_colors.py
+      - main/qt/editor_panel.py
+      - src/assets/xterm/**
+      - main/core/ai_review.py
+      - direct/verify_ai_diff_colors.py
+      - direct/verify_ai_line_diff.py
+      - direct/verify_editor_review_ui.py
+      - direct/verify_editor_c.py
   workflow_dispatch:
   workflow_call:
 
@@ -70,6 +112,12 @@ jobs:
             qt: 'PySide6>=6.12,<7'
           - os: ubuntu-24.04-arm
             python: '3.12'
+            qt: 'PySide6>=6.12,<7'
+          - os: ubuntu-26.04
+            python: '3.14'
+            qt: 'PySide6>=6.12,<7'
+          - os: ubuntu-26.04-arm
+            python: '3.14'
             qt: 'PySide6>=6.12,<7'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -107,15 +155,16 @@ jobs:
           set -euo pipefail
           mkdir -p "$BROWSER_AUDIT_DIR"
           sudo apt-get update 2>&1 | tee "$BROWSER_AUDIT_DIR/display-dependencies.log"
-          sudo apt-get install -y xvfb python3-tk libegl1 libgl1 libnss3 libnspr4 libgbm1 libdbus-1-3 libfontconfig1 libfreetype6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1 libxcb-dri3-0 2>&1 | tee -a "$BROWSER_AUDIT_DIR/display-dependencies.log"
-          read -r -a qt_runtime_packages <<< "$(python -c 'from direct.ubuntu.preflight import normalize_packages; print(" ".join(normalize_packages(["libasound2", "libglib2.0-0"])))')"
+          sudo apt-get install -y xvfb python3-venv python3-tk desktop-file-utils libegl1 libgl1 libnss3 libnspr4 libgbm1 libdbus-1-3 libfontconfig1 libfreetype6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1 libxcb-dri3-0 2>&1 | tee -a "$BROWSER_AUDIT_DIR/display-dependencies.log"
+          read -r -a qt_runtime_packages <<< "$(python -c 'from direct.ubuntu.preflight import normalize_packages, system_libraries; print(" ".join(normalize_packages(package for _, package in system_libraries())))')"
           sudo apt-get install -y "${qt_runtime_packages[@]}" 2>&1 | tee -a "$BROWSER_AUDIT_DIR/display-dependencies.log"
       - name: Private Ubuntu fixture runtime
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          python -m venv .venv-linux
+          # Match this release's Tcl/Tk ABI rather than an unrelated Python build.
+          /usr/bin/python3 -m venv .venv-linux
           .venv-linux/bin/python -m pip install --log "$BROWSER_AUDIT_DIR/pip-install.log" '${{ matrix.qt }}' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets
       - name: Windows browser loading, native painting and display scales
         if: runner.os == 'Windows'
@@ -130,10 +179,21 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           Invoke-BrowserCheck 'loading.log' @('direct/verify_browser_loading.py')
+          Invoke-BrowserCheck 'launchers.log' @('direct/verify_launcher_folder.py')
+          Invoke-BrowserCheck 'release-sources.log' @('direct/verify_release_sources.py')
           foreach ($scale in '1', '2') {
             Invoke-BrowserCheck "downloader-performance-scale-$scale.log" @('direct/verify_downloader_performance.py', '--scale', $scale)
             Invoke-BrowserCheck "downloader-appearance-scale-$scale.log" @('direct/verify_downloader_appearance.py', '--scale', $scale, '--render-dir', "$env:BROWSER_AUDIT_DIR/captures-scale-$scale")
           }
+          foreach ($scale in '1', '1.25', '1.5', '1.75', '2') {
+            $env:QT_SCALE_FACTOR = $scale
+            Invoke-BrowserCheck "embedded-scale-$scale.log" @('direct/verify_embedded_viewports.py', '--report', "$env:BROWSER_AUDIT_DIR/embedded-scale-$scale.json", '--render-dir', "$env:BROWSER_AUDIT_DIR/embedded-scale-$scale")
+          }
+          $env:QT_SCALE_FACTOR = '1'
+          Invoke-BrowserCheck 'arduino-palette.log' @('direct/verify_arduino_palette.py')
+          Invoke-BrowserCheck 'ai-line-diff.log' @('direct/verify_ai_line_diff.py')
+          Invoke-BrowserCheck 'ai-diff-colors.log' @('direct/verify_ai_diff_colors.py')
+          Invoke-BrowserCheck 'editor-c.log' @('direct/verify_editor_c.py')
       - name: Ubuntu browser loading, native painting, sleep IPC and display scales
         if: runner.os == 'Linux'
         shell: bash
@@ -149,10 +209,20 @@ jobs:
             }
             run_check sleep-ipc.log direct/verify_ubuntu_download_manager.py
             run_check loading.log direct/verify_browser_loading.py
+            run_check launchers.log direct/verify_launcher_folder.py
+            run_check release-sources.log direct/verify_release_sources.py
+            run_check pty-readiness.log direct/verify_pty_readiness.py
             for scale in 1 2; do
               run_check "downloader-performance-scale-$scale.log" direct/verify_downloader_performance.py --scale "$scale"
               run_check "downloader-appearance-scale-$scale.log" direct/verify_downloader_appearance.py --scale "$scale" --render-dir "$BROWSER_AUDIT_DIR/captures-scale-$scale"
             done
+            for scale in 1 1.25 1.5 1.75 2; do
+              QT_SCALE_FACTOR="$scale" run_check "embedded-scale-$scale.log" direct/verify_embedded_viewports.py --report "$BROWSER_AUDIT_DIR/embedded-scale-$scale.json" --render-dir "$BROWSER_AUDIT_DIR/embedded-scale-$scale"
+            done
+            run_check arduino-palette.log direct/verify_arduino_palette.py
+            run_check ai-line-diff.log direct/verify_ai_line_diff.py
+            run_check ai-diff-colors.log direct/verify_ai_diff_colors.py
+            run_check editor-c.log direct/verify_editor_c.py
           '
       - name: Offscreen Qt resource and marquee regressions
         shell: bash
@@ -172,4 +242,94 @@ jobs:
         with:
           name: browser-performance-${{ matrix.os }}-python-${{ matrix.python }}
           path: temp/audit/browser-performance
+          if-no-files-found: warn
+
+  editor-components:
+    name: Editor component availability (${{ matrix.os }})
+    # These checks do not qualify application startup, setup, tools or drivers
+    # on platforms whose native application support is still pending.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-11-arm, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUNBUFFERED: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+      QT_SCALE_FACTOR: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
+      - name: Private component fixture runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p temp/audit/editor-components
+          python -m venv component-env
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            fixture_python=component-env/Scripts/python.exe
+          else
+            fixture_python=component-env/bin/python
+          fi
+          "$fixture_python" -m pip install --log temp/audit/editor-components/pip.log 'PySide6>=6.12,<7' 'psutil>=5.9,<8'
+          "$fixture_python" -c 'import json,platform,struct,sys; print(json.dumps({"platform":platform.platform(),"machine":platform.machine(),"bits":struct.calcsize("P")*8,"python":sys.version}))' | tee temp/audit/editor-components/host.json
+      - name: Record actual native WebEngine capability
+        id: capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            fixture_python=component-env/Scripts/python.exe
+          else
+            fixture_python=component-env/bin/python
+          fi
+          "$fixture_python" -B - <<'PY'
+          import json, os, platform, sys
+          from pathlib import Path
+          result = {'system':platform.system(), 'machine':platform.machine(), 'webengine':False}
+          try:
+              from PySide6.QtWebEngineCore import QWebEnginePage
+              from PySide6.QtWebEngineWidgets import QWebEngineView
+              result['webengine'] = True
+          except (ImportError, OSError) as error:
+              result['reason'] = str(error)
+          Path('temp/audit/editor-components/capability.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result))
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('webengine=' + str(result['webengine']).lower() + '\n')
+          if not result['webengine']:
+              known_gap = sys.platform == 'win32' and platform.machine().lower() in ('arm64','aarch64')
+              if not known_gap:
+                  raise SystemExit('Required WebEngine component is unavailable on this host')
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+                  summary.write('Windows ARM64: Qt WebEngine unavailable; editor rendering checks were NOT run. Full application support remains pending.\n')
+          PY
+      - name: Native offline editor and terminal surfaces
+        if: steps.capability.outputs.webengine == 'true'
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: ${{ runner.os == 'Windows' && 'windows' || 'cocoa' }}
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            fixture_python=component-env/Scripts/python.exe
+          else
+            fixture_python=component-env/bin/python
+          fi
+          for scale in 1 1.25 1.5 1.75 2; do
+            QT_SCALE_FACTOR="$scale" "$fixture_python" -B direct/verify_embedded_viewports.py --report "temp/audit/editor-components/scale-$scale.json" --render-dir "temp/audit/editor-components/scale-$scale" 2>&1 | tee "temp/audit/editor-components/scale-$scale.log"
+          done
+          "$fixture_python" -B direct/verify_arduino_palette.py 2>&1 | tee temp/audit/editor-components/arduino-palette.log
+          "$fixture_python" -B direct/verify_ai_diff_colors.py 2>&1 | tee temp/audit/editor-components/ai-diff-colors.log
+      - name: Component evidence, not full application qualification
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: editor-components-${{ matrix.os }}
+          path: temp/audit/editor-components
           if-no-files-found: warn

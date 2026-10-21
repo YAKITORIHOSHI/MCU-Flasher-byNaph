@@ -159,18 +159,24 @@ def python_assembly_fixture(source: str) -> str:
     """Extract only production argument assembly, never startup/repair actions."""
     marker = "Dim argIdx, allArgs"
     assembly = marker + source.split(marker, 1)[1].split("\nOn Error Resume Next", 1)[0]
-    helper = re.search(r"^Function QuoteWindowsArg\(.*?^End Function", source, re.M | re.S)
+    helper = re.search(r"^Function QuoteWindowsArgument\(.*?^End Function", source, re.M | re.S)
+    shielding = re.search(r'^setupEnvironment\("MCU_FLASHER_LITERAL_PERCENT"\) = "%"\n'
+                          r'^runCmd = Replace\(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%"\)$',
+                          source, re.M)
+    if helper is None or shielding is None:
+        raise ValueError("Production Windows argument quoting/percent shielding is missing")
     return r'''Option Explicit
-Dim fs, shell, launchPython, bootstrapFile, exitCode
+Dim fs, shell, setupEnvironment, launchPython, bootstrapFile, exitCode
 Set fs = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
+Set setupEnvironment = shell.Environment("PROCESS")
 launchPython = shell.Environment("PROCESS")("MCU_LAUNCHER_PROBE_PYTHON")
 bootstrapFile = shell.Environment("PROCESS")("MCU_LAUNCHER_PROBE_SCRIPT")
 Dim runCmd
-''' + assembly + r'''
+''' + assembly + "\n" + shielding[0] + r'''
 exitCode = shell.Run(runCmd, 0, True)
 WScript.Quit exitCode
-''' + (helper[0] if helper else "")
+''' + helper[0]
 
 
 def verify(report_dir: Path) -> dict:
@@ -227,7 +233,11 @@ def verify(report_dir: Path) -> dict:
             "partial.rename(destination)\n", encoding="utf-8")
         cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
         assembly_outcomes = []
-        for index, (name, category, arguments) in enumerate(cases):
+        assembly_cases = [*cases,
+                          ("empty_argument", "literal", ["--plan", ""]),
+                          ("literal_environment_name", "literal", ["%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%"]),
+                          ("backslash_before_quote", "literal", ['slash\\"quote', "tail\\"])]
+        for index, (name, category, arguments) in enumerate(assembly_cases):
             result = capture(cscript, assembly_script, arguments,
                              fixture / f"assembly-{index}.json", application,
                              command_prefix=[str(cscript), "//nologo", str(assembly_script)],
@@ -236,7 +246,7 @@ def verify(report_dir: Path) -> dict:
                              extra_environment={"MCU_LAUNCHER_PROBE_PYTHON": sys.executable,
                                                 "MCU_LAUNCHER_PROBE_SCRIPT": str(python_recorder)})
             assembly_outcomes.append({"name": name, "category": category,
-                                      "qualificationRequired": category != "diagnostic", **result})
+                                      "qualificationRequired": True, **result})
             print(f"Python assembly {name}: {'PASS' if result['passed'] else 'FAIL'}", flush=True)
         copied_hash = digest(executable)
     preserved = digest(source) == original_hash == copied_hash

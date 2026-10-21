@@ -142,6 +142,7 @@ FIXTURE = r"""
     realtime_check_syntax: () => 'null',  // Qt queues diagnostics separately from the string reply.
     save_tab_order: () => true,
     set_cursor_position: () => true,
+    set_active_file: () => true,
     get_board_info: () => ({connected:false}),
     accept_ai_edit: (path, revision) => {
       const snapshot = state.reviews.find(s => s.revision === revision) || {};
@@ -477,7 +478,7 @@ class EditorReviewChecks(unittest.TestCase):
         self.assertEqual(before['banner'], 'flex')
         self.assertFalse(before['close']['disabled'])
         self.assertNotEqual(before['close']['display'], 'none')
-        self.assertEqual(len(before['decorations']), 3, before)
+        self.assertEqual(len(before['decorations']), 4, before)
         self.js("(() => {const close=document.getElementById('ai-history-close');close.focus();close.click();return true;})()")
         hidden = self.snapshot()
         self.assertEqual(hidden['banner'], 'none')
@@ -856,9 +857,9 @@ class EditorReviewChecks(unittest.TestCase):
     def test_removed_anchor_and_existing_rulers_follow_each_theme(self):
         self.review()
         themes = (
-            ('default','#f05050',{'#5ccc6e','#61afef','#f05050'}),
-            ('light','#cf222e',{'#1a7f37','#0969da','#cf222e'}),
-            ('solarized','#dc322f',{'#859900','#268bd2','#dc322f'}),
+            ('default','#f05050',{'#5ccc6e','#f05050'}),
+            ('light','#cf222e',{'#1a7f37','#cf222e'}),
+            ('solarized','#dc322f',{'#859900','#dc322f'}),
         )
         for theme, expected, ruler_colors in themes:
             self.js('window.__reviewFixture.theme=' + json.dumps(theme) + '; window.setEditorTheme(window.__reviewFixture.theme); true')
@@ -887,7 +888,7 @@ class EditorReviewChecks(unittest.TestCase):
             self.assertEqual(result['boundaryWidth'], '2px', result)
             self.assertIn(result['bg'], ('rgba(0, 0, 0, 0)','transparent'), result)
             self.assertFalse(result['inline'], result)
-            self.assertEqual(result['decorationCount'], 3, result)
+            self.assertEqual(result['decorationCount'], 4, result)
             self.assertEqual({color.lower() for color in result['rulers']}, ruler_colors, result)
             if CAPTURES:
                 self.async_js('await new Promise(resolve => setTimeout(resolve,80)); return true;')
@@ -925,7 +926,7 @@ class EditorReviewChecks(unittest.TestCase):
           return {original,shifted,recolored:ranges(),content,after:model.getValue(),
             version,afterVersion:model.getAlternativeVersionId()};
         })()""")
-        self.assertEqual(len(result['original']), 3, result)
+        self.assertEqual(len(result['original']), 4, result)
         for original, shifted in zip(result['original'], result['shifted']):
             self.assertEqual(shifted['kind'], original['kind'])
             self.assertEqual(shifted['range']['startLineNumber'], original['range']['startLineNumber'] + 2)

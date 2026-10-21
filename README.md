@@ -19,6 +19,25 @@ updates stay on the UI thread. Constrained machines use static text with full
 tooltips, and inactive/minimized Controls stop marquee animations. See the
 [performance evidence and remaining qualification](audit/GUI_PERFORMANCE.md).
 
+Double-click entries now live in [`LAUNCHER/`](LAUNCHER/README.md): `WINDOWS.vbs`
+and `UBUNTU.desktop` use the existing production launchers. `UBUNTU` is a shell
+fallback. `MacOS.command`, `FEDORA.desktop` and `LINUX_MINT.desktop` currently
+show availability notices because those application ports are unfinished.
+Windows ARM64 is also pending. See the [current OS verification matrix](audit/PLATFORM_VERIFICATION.md)
+for actual support, source gaps and the distinction between editor checks and
+full application qualification.
+
+The editor now uses an [Arduino-inspired syntax palette](src/editor/ARDUINO_PALETTE.md),
+adapted from Arduino's official Light/Dark colors with small-text contrast
+adjustments. Existing font choices, dirty buffers, tab order and undo history
+are preserved; Solarized keeps its existing reading surface. Terminal surfaces
+now follow theme changes throughout their viewport, and OpenCode padding fits
+inside the terminal grid. Linux PTYs wait for native readiness while idle and
+retain bounded active frames, output backpressure and exact queued input.
+AI replacements show new text in green and the removed original at a red
+marker with a bounded read-only hover. Pure additions/removals keep green/red;
+highlights remain static and preserve review/undo state.
+
 The Rust replacement's required platform coverage now includes Windows 10/11
 AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
 Fedora x86_64/aarch64 and Linux Mint AMD64. These are migration requirements;

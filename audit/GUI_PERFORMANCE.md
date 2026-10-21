@@ -1,6 +1,6 @@
 # Board/Library responsiveness and retained sleep state
 
-21 October 2026, Asia/Manila. Scope: the current Python/Tk package browser and
+Updated 22 October 2026, Asia/Manila. Scope: the current Python/Tk package browser and
 Python/Qt Controls, alongside the unfinished native Rust migration. The user
 reports lag in opening, searching, scrolling/resizing and selection, authorizes
 backend changes, requests removal of Quit and asks to preserve lists in RAM.
@@ -98,3 +98,75 @@ Windows 10/11 desktop/device qualification, physical low-end-device performance
 and the [expanded replacement platforms](migration/PLATFORM_SUPPORT.md) remain
 separate requirements. No board upload/reset or production launcher switch is
 part of this optimization.
+
+## Editor, terminal and launcher continuation
+
+The offline editor adapts the official Arduino IDE Light/Dark palette pinned
+in [palette provenance](../src/editor/ARDUINO_PALETTE.md). Known C/C++ types,
+constants and lexical call names receive the corresponding syntax colors;
+existing comment/string/raw-string grammar states remain intact. Light hues
+and dark comments have explicit small-text contrast adjustments. Solarized
+retains its reading background with the compatible Dark syntax adaptation.
+Font family/size, models, dirty text, tab order, selection and undo remain owned
+by the existing editor; switching themes does not reload the project.
+
+Terminal HTML/body/host surfaces now use the configured background/foreground.
+OpenCode's padding moves inside xterm so FitAddon excludes it from grid space;
+this fixes the extra bottom row clipping. The Monaco page fallback color now
+matches its actual reading surface during startup and native repaint.
+The real offline pages pass 40 retained-state/geometry/theme combinations at
+each native Linux scale 100/125/150/175/200%, plus offscreen 75%. Tests cover
+actual compact ~420px logical viewports, Qt/Chromium DPR agreement, hide-resize-
+show, retained output/selection, no session restart and no typed/replayed input.
+The first strengthened 175% fixture rejected Qt's legitimate 419px rounding of
+a 420px request; a one-logical-pixel tolerance passes. Both receipts remain under
+`temp/audit/embedded-viewports/`. Windows HTML tested on Linux is page evidence,
+not native Windows execution. Expanded CI supplies separate host evidence.
+
+Linux PTYs now use read/write readiness watches instead of a recurring idle
+25/40ms timer. Active work retains four/eight 4KiB read/write budgets and an owned
+single-shot cooldown. Disabled/queued stale activations cannot bypass it.
+The 128,000-character renderer backlog pauses reads until consumption; queued
+capability replies/paste retain progress and exact partial-write offsets.
+Close disables/disconnects watches before handing the descriptor to existing
+owned background cleanup. Only reported notifier setup failure uses the old
+polling fallback. Thirteen owned socketpair checks pass, including actual fd
+number reuse, Unicode boundaries, EOF, start failure and no idle reads/ticks.
+Seven existing Linux PTY/runtime checks also pass.
+
+`LAUNCHER/` contains portable Windows/Ubuntu entries and explicit availability
+notices for unfinished macOS/Fedora/Mint ports. Windows ARM remains refused.
+The Windows forwarding path preserves empty arguments, quotes, trailing slashes
+and literal percent names through both WSH layers, including runtime preflight
+and repair dispatch. Isolated fixtures never execute setup/repair/installers;
+timeout coverage retires owned descendant processes before fixture cleanup.
+Release archive validation requires all seven entries and native executable
+permissions. See [the current platform matrix](PLATFORM_VERIFICATION.md).
+
+Fresh local continuation checks also pass: responsive **20/20** (135 terminal
+layouts, callback depth one, no idle layouts), resource performance **32/32**,
+runtime **46/46** plus editor recovery, launcher **15 passed/3 Windows skips**,
+and release source/archive policy **7/7**. The native Windows resize fixtures
+now dispatch the real event loop because `update_idletasks` alone does not
+deliver Windows size events; pure debounce checks remain independent.
+
+## AI edit highlight correction
+
+The reported blue removal was the existing replacement display: shared AFTER
+rows were classified as modified and painted blue, without a separate visible
+removal marker. Replacement AFTER rows now use the addition's green, with a
+separate red boundary/gutter marker for the original text. Pure deletion anchors
+stay red without tinting the surviving source line. A deleted file's retained
+original view is red. All three themes refresh actual moved ranges and ruler
+colors while preserving models, dirty text, undo and review state.
+
+Original-line metadata is added to replacement hunks without changing counts,
+change types, revision checks, Accept/Reject or history authority. Red markers
+offer a read-only original-text hover: at most 20 lines / 4 KiB UTF-8 per preview,
+32 previews and a 256 Ki-code-unit original prefix. Failed prefix lookup marks
+the scan exhausted so many later hunks cannot rescan the same long tail.
+Untrusted indented Markdown code, with HTML disabled, keeps source markup and
+backticks literal. No view zones, file writes or recovery-journal access are
+added. The existing bounded fallback remains a conservative changed-middle
+comparison; its replacement display follows the same red/green policy.
+AI highlights are static; continuous glow animations have been removed.

@@ -48,26 +48,36 @@ class AILineDiffChecks(unittest.TestCase):
     def test_equal_size_replacement_remains_modified(self):
         diff = build_ai_line_diff("keep\nold one\nold two\ntail\n", "keep\nnew one\nnew two\ntail\n")
         self.assert_counts(diff, modified=2)
-        self.assertEqual(diff["changes"], [{"type": "modified", "startLine": 2, "endLine": 3}])
+        self.assertEqual(diff["changes"], [{"type": "modified", "startLine": 2, "endLine": 3,
+                                            "beforeStartLine": 2, "beforeEndLine": 3}])
+
+    def test_replacement_carries_original_line_range_for_readonly_removed_preview(self):
+        diff = build_ai_line_diff("keep\nold one\nold two\ntail\n", "keep\nnew one\nnew two\ntail\n")
+        self.assert_counts(diff, modified=2)
+        change = diff["changes"][0]
+        self.assertEqual((change.get("beforeStartLine"), change.get("beforeEndLine")), (2, 3))
 
     def test_replacement_surplus_additions_have_their_own_green_range(self):
         diff = build_ai_line_diff("keep\nold\ntail\n", "keep\nnew one\nnew two\nnew three\ntail\n")
         self.assert_counts(diff, added=2, modified=1)
         self.assertEqual(diff["changes"], [
-            {"type": "modified", "startLine": 2, "endLine": 2},
+            {"type": "modified", "startLine": 2, "endLine": 2,
+             "beforeStartLine": 2, "beforeEndLine": 2},
             {"type": "added", "startLine": 3, "endLine": 4},
         ])
 
     def test_replacement_surplus_deletions_have_a_separate_red_anchor(self):
         diff = build_ai_line_diff("keep\nold one\nold two\nold three\ntail\n", "keep\nnew\ntail\n")
         self.assert_counts(diff, removed=2, modified=1)
-        self.assertEqual(diff["changes"][0], {"type": "modified", "startLine": 2, "endLine": 2})
+        self.assertEqual(diff["changes"][0], {"type": "modified", "startLine": 2, "endLine": 2,
+                                               "beforeStartLine": 2, "beforeEndLine": 2})
         self.assert_anchor(diff["changes"][1], 3, 3, 4)
 
     def test_eof_deletion_anchor_can_share_a_modified_line_without_reclassifying_it(self):
         diff = build_ai_line_diff("keep\nold one\nold two\n", "keep\nnew\n")
         self.assert_counts(diff, removed=1, modified=1)
-        self.assertEqual(diff["changes"][0], {"type": "modified", "startLine": 2, "endLine": 2})
+        self.assertEqual(diff["changes"][0], {"type": "modified", "startLine": 2, "endLine": 2,
+                                               "beforeStartLine": 2, "beforeEndLine": 2})
         self.assert_anchor(diff["changes"][1], 2, 3, 3)
         self.assertEqual(diff["firstLine"], 2)
 
@@ -120,7 +130,8 @@ class AILineDiffChecks(unittest.TestCase):
         self.assert_anchor(fewer["changes"][1], 5, 5, 6)
         self.assert_counts(more, added=1, modified=1)
         self.assertEqual(more["changes"], [
-            {"type": "modified", "startLine": 4, "endLine": 4},
+            {"type": "modified", "startLine": 4, "endLine": 4,
+             "beforeStartLine": 4, "beforeEndLine": 4},
             {"type": "added", "startLine": 5, "endLine": 5},
         ])
 

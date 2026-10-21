@@ -6,13 +6,14 @@
   <title>MCU Flasher terminal</title>
   <link rel="stylesheet" href="../assets/xterm/xterm.css">
   <style>
-    html, body, #terminal { height: 100%; margin: 0; overflow: hidden; background: #101b2a; }
+    :root { --terminal-bg: #101b2a; --terminal-fg: #e3edf6; }
+    html, body, #terminal { height: 100%; margin: 0; overflow: hidden; background: var(--terminal-bg); color: var(--terminal-fg); }
     #terminal { box-sizing: border-box; }
     #terminal .xterm { height: 100%; padding: 8px; box-sizing: border-box; }
     /* Hide output chrome while retaining xterm's scrollable history. */
     #terminal .xterm-viewport { scrollbar-width: none; }
     #terminal .xterm-viewport::-webkit-scrollbar { display: none; width: 0; height: 0; }
-    #error { padding: 12px; color: #e3edf6; font: 14px sans-serif; }
+    #error { padding: 12px; color: var(--terminal-fg); font: 14px sans-serif; }
   </style>
   <script src="../assets/xterm/xterm.js"></script>
   <script src="../assets/xterm/xterm-addon-fit.js"></script>
@@ -53,6 +54,8 @@
       };
       window.configureTerminal = (theme, size, scrollback = 5000) => {
         term.options.theme = theme; term.options.fontSize = size;
+        document.documentElement.style.setProperty('--terminal-bg', theme.background);
+        document.documentElement.style.setProperty('--terminal-fg', theme.foreground);
         term.options.scrollback = scrollback; window.fitTerminal();
       };
       new QWebChannel(qt.webChannelTransport, channel => {

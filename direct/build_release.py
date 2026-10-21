@@ -36,6 +36,26 @@ REQUIRED_RUNTIME = ('python.exe', 'pythonw.exe', 'python3.dll', 'python314.dll',
                     'Lib/tkinter/__init__.py', 'DLLs/_tkinter.pyd',
                     'DLLs/tcl90.dll', 'DLLs/tcl9tk90.dll',
                     'tcl/libtcl9.0.4.zip', 'tcl/libtk9.0.4.zip')
+REQUIRED_LAUNCHERS = ('LAUNCHER/WINDOWS.vbs', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU.desktop',
+                      'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA.desktop',
+                      'LAUNCHER/LINUX_MINT.desktop', 'LAUNCHER/README.md')
+
+
+def validate_launcher_entries(entries):
+    """Check the portable entry folder inside the actual release archive."""
+    for name in REQUIRED_LAUNCHERS:
+        if name not in entries or not entries[name][0]:
+            raise RuntimeError(f'Missing release launcher entry: {name}')
+        data, mode = entries[name]
+        if not name.endswith(('.vbs', '.md')) and mode & 0o111 != 0o111:
+            raise RuntimeError(f'Release launcher must remain executable: {name}')
+    windows = entries['LAUNCHER/WINDOWS.vbs'][0]
+    try:
+        windows.decode('ascii')
+    except UnicodeDecodeError as error:
+        raise RuntimeError('Windows launcher must use ASCII and CRLF.') from error
+    if not windows or b'\n' in windows.replace(b'\r\n', b'') or b'\r\n' not in windows:
+        raise RuntimeError('Windows launcher must use ASCII and CRLF.')
 
 
 def digest_file(path):
@@ -209,6 +229,14 @@ def build(output, report_dir):
                     raise RuntimeError(f'Invalid native Ubuntu launcher: {name}')
             if not bundle.read(prefix + 'MCU_Flasher.exe').startswith(b'MZ'):
                 raise RuntimeError('Missing Windows launcher.')
+            launcher_entries = {}
+            for name in REQUIRED_LAUNCHERS:
+                try:
+                    item = bundle.getinfo(prefix + name)
+                except KeyError as error:
+                    raise RuntimeError(f'Missing release launcher entry: {name}') from error
+                launcher_entries[name] = bundle.read(item), (item.external_attr >> 16) & 0o777
+            validate_launcher_entries(launcher_entries)
             if json.loads(bundle.read(prefix + 'src/dbs/bootstrap_config.json')) != {'skip_updates': False}:
                 raise RuntimeError('The committed Bootstrap defaults are not fresh.')
         if runtime_files != windows_runtime_files():

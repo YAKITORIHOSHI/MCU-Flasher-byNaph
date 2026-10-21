@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Portable first-click entry. Keep this LAUNCHER folder inside the application.
+set -euo pipefail
+launcher_path=${BASH_SOURCE[0]}
+launcher_directory=${launcher_path%/*}
+[[ $launcher_directory != "$launcher_path" ]] || launcher_directory=.
+app_root="$(CDPATH= cd -- "$launcher_directory/.." && pwd -P)"
+entry="$app_root/direct/ubuntu/run.sh"
+if [[ ! -f $entry || ! -r $entry ]]; then
+    printf '%s\n' 'MCU Flasher cannot locate direct/ubuntu/run.sh. Keep the whole LAUNCHER folder inside the complete application folder.' >&2
+    exit 1
+fi
+# The existing entry validates native Ubuntu and CPU support before setup.
+# Bash is explicit: this also works when copying lost run.sh's executable bit.
+exec /bin/bash "$entry" --desktop "$@"

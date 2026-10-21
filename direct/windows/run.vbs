@@ -15,6 +15,8 @@ Set shell = CreateObject("WScript.Shell")
 ' must start without the workspace's conditional offline runtime guard.
 Dim setupEnvironment, setupVariable
 Set setupEnvironment = shell.Environment("PROCESS")
+' Run expands environment names once; preserve literal percent paths in preflight too.
+setupEnvironment("MCU_FLASHER_LITERAL_PERCENT") = "%"
 For Each setupVariable In Array("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX", _
                                 "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE")
     If Len(setupEnvironment(setupVariable)) > 0 Then setupEnvironment.Remove setupVariable
@@ -185,7 +187,7 @@ End If
 Dim argIdx, allArgs
 allArgs = ""
 For argIdx = 0 To WScript.Arguments.Count - 1
-    allArgs = allArgs & " """ & WScript.Arguments(argIdx) & """"
+    allArgs = allArgs & " " & QuoteWindowsArgument(WScript.Arguments(argIdx))
 Next
 
 If InStr(launchPython, "\") > 0 Then
@@ -195,6 +197,9 @@ Else
 End If
 
 On Error Resume Next
+' Shield literal percent signs from WScript.Shell.Run environment expansion.
+setupEnvironment("MCU_FLASHER_LITERAL_PERCENT") = "%"
+runCmd = Replace(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%")
 shell.Run runCmd, 1, False
 If Err.Number <> 0 Then
     Dim launchErr
@@ -285,6 +290,7 @@ Function IsPythonExeValid(exePath)
     Else
         runCmd = """" & exePath & """ -I -B -c ""import sys, encodings; sys.exit(0 if sys.version_info[:2] >= (3, 8) else 1)"""
     End If
+    runCmd = Replace(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%")
     exitCode = shell.Run(runCmd, 0, True)
     If Err.Number <> 0 Or exitCode <> 0 Then
         Err.Clear
@@ -591,19 +597,39 @@ Function AutoHealPrivatePython(rootDir)
     ' Remove hidden attribute and clean target directory if partially broken
     If fso.FolderExists(targetDir) Then
         On Error Resume Next
-        shell.Run "attrib -h """ & targetDir & """", 0, True
+        shell.Run Replace("attrib -h """ & targetDir & """", "%", "%MCU_FLASHER_LITERAL_PERCENT%"), 0, True
         fso.DeleteFolder targetDir, True
         On Error GoTo 0
     End If
 
     runCmd = """" & installerExe & """ /quiet TargetDir=""" & targetDir & """ InstallAllUsers=0 PrependPath=0 Include_test=0 Include_doc=0 Include_launcher=0 /log """ & logFile & """"
     On Error Resume Next
+    runCmd = Replace(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%")
     exitCode = shell.Run(runCmd, 0, True)
     If Err.Number = 0 And exitCode = 0 Then
-        shell.Run "attrib +h """ & targetDir & """", 0, True
+        shell.Run Replace("attrib +h """ & targetDir & """", "%", "%MCU_FLASHER_LITERAL_PERCENT%"), 0, True
         If IsPythonExeValid(targetDir & "\python.exe") Then
             AutoHealPrivatePython = True
         End If
     End If
     On Error GoTo 0
+End Function
+
+Function QuoteWindowsArgument(value)
+    Dim quoted, slashes, index, character
+    quoted = Chr(34)
+    slashes = 0
+    For index = 1 To Len(value)
+        character = Mid(value, index, 1)
+        If character = "\" Then
+            slashes = slashes + 1
+        ElseIf character = Chr(34) Then
+            quoted = quoted & String(slashes * 2 + 1, "\") & Chr(34)
+            slashes = 0
+        Else
+            quoted = quoted & String(slashes, "\") & character
+            slashes = 0
+        End If
+    Next
+    QuoteWindowsArgument = quoted & String(slashes * 2, "\") & Chr(34)
 End Function

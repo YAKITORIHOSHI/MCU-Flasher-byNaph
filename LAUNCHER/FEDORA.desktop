@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=FEDORA (not available yet)
+Comment=Availability notice only; no application or installer
+Exec=/bin/bash -c "printf '%%s\\\\n' 'MCU Flasher for Fedora is not available in this release.'\nprintf '%%s\\\\n' 'Native application and firmware-tool support is still being implemented.'\nprintf '%%s\\\\n' 'This notice does not install or launch the Ubuntu application.'\nif [[ -t 0 ]]; then read -r -p 'Press Enter to close this notice.' || true; fi\nexit 1"
+Icon=dialog-information
+Terminal=true
+Categories=Development;Electronics;
+StartupNotify=false

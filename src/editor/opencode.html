@@ -6,9 +6,12 @@
   <title>OpenCode AI Assistant</title>
   <link rel="stylesheet" href="../assets/xterm/xterm.css">
   <style>
-    html, body, #assistant { height: 100%; margin: 0; overflow: hidden; background: #101b2a; }
-    #assistant { padding: 8px; box-sizing: border-box; }
-    #error { padding: 16px; color: #e3edf6; font: 14px sans-serif; }
+    :root { --terminal-bg: #101b2a; --terminal-fg: #e3edf6; }
+    html, body, #assistant { height: 100%; margin: 0; overflow: hidden; background: var(--terminal-bg); color: var(--terminal-fg); }
+    #assistant { box-sizing: border-box; }
+    /* FitAddon subtracts xterm padding; padding on its parent is grid space. */
+    #assistant .xterm { height: 100%; padding: 8px; box-sizing: border-box; }
+    #error { padding: 16px; color: var(--terminal-fg); font: 14px sans-serif; }
   </style>
   <script src="../assets/xterm/xterm.js"></script>
   <script src="../assets/xterm/xterm-addon-fit.js"></script>
@@ -39,7 +42,8 @@
       };
       window.configureOpenCode = (theme, size, scrollback = 5000) => {
         term.options.theme = theme; term.options.fontSize = size; term.options.scrollback = scrollback;
-        document.body.style.background = theme.background;
+        document.documentElement.style.setProperty('--terminal-bg', theme.background);
+        document.documentElement.style.setProperty('--terminal-fg', theme.foreground);
         window.fitOpenCode();
       };
       new QWebChannel(qt.webChannelTransport, channel => {

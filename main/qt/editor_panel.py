@@ -54,6 +54,14 @@ _WEBCHANNEL_INIT_JS = """
 """
 
 
+def editor_page_background(theme_name: str) -> str:
+    """Match Monaco's reading surface during page startup and repaint."""
+    name = (theme_name or "default").lower().strip().replace("-", "_")
+    if name in ("solarized", "solarize_dark"):
+        name = "solarized_dark"
+    return {"light": "#ffffff", "solarized_dark": "#002b36"}.get(name, "#1f272a")
+
+
 class EditorBridgeAPI(QObject):
     """
     Python-side of the Monaco ↔ Python bridge via QWebChannel.
@@ -697,11 +705,9 @@ class MonacoEditorPanel(QWidget):
         # Ensure page background matches active theme to prevent white flash
         try:
             from main.core.config import get_theme_mode
-            from main.qt.theme import get_palette
             # pyrefly: ignore [missing-import]
             from PySide6.QtGui import QColor
-            pal = get_palette(get_theme_mode())
-            bg_col = pal.get("BG_DARK", "#002b36")
+            bg_col = editor_page_background(get_theme_mode())
             self._view.page().setBackgroundColor(QColor(bg_col))
             self._view.setStyleSheet(f"background-color: {bg_col};")
         except Exception:
@@ -879,11 +885,9 @@ class MonacoEditorPanel(QWidget):
     def set_theme(self, theme_name: str) -> None:
         """Change the Monaco editor colour theme."""
         try:
-            from main.qt.theme import get_palette
             # pyrefly: ignore [missing-import]
             from PySide6.QtGui import QColor
-            pal = get_palette(theme_name)
-            bg_col = pal.get("BG_DARK", "#002b36")
+            bg_col = editor_page_background(theme_name)
             self._view.page().setBackgroundColor(QColor(bg_col))
             self._view.setStyleSheet(f"background-color: {bg_col};")
         except Exception:

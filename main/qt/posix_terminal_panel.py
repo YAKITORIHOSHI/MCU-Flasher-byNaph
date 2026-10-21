@@ -4,13 +4,12 @@ from __future__ import annotations
 import codecs
 import json
 import os
-import select
 import shutil
 import sys
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSocketNotifier, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QStackedWidget
@@ -40,7 +39,14 @@ class PtySession(QObject):
         self._dimensions = (24, 80)
         self.timer = QTimer(self)
         self.timer.setInterval(self._performance.terminal_interval_ms)
+        self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._drain)
+        self._read_notifier = None
+        self._write_notifier = None
+        self._notifier_fd = None
+        self._notifier_connections = []
+        self._fallback_polling = False
+        self._draining = False
         self._closed = False
         self._prompt_observer = None
         self.assistant_active = None
@@ -71,13 +77,76 @@ class PtySession(QObject):
             command = [sys.executable, "-I", "-B", str(supervisor), "--", *self.argv]
             self.process = NativePtyProcess.spawn(command, cwd=self.cwd, env=env, dimensions=self._dimensions)
             # A full PTY input buffer must never block Qt during a large paste.
-            # Partial writes are retained and drained by the session timer.
+            # Partial writes are retained until Qt reports writable readiness.
             os.set_blocking(self.process.fd, False)
-            self.timer.start()
+            self._install_notifiers()
             return True
         except (ImportError, OSError) as exc:
+            # A failure after spawn still owns a live handle/descriptor.
+            self.close()
             self.ended.emit(f"Terminal could not start: {exc}. Run the Ubuntu setup command to repair dependencies.")
             return False
+
+    def _install_notifiers(self):
+        try:
+            self._notifier_fd = self.process.fd
+            self._read_notifier = QSocketNotifier(self._notifier_fd, QSocketNotifier.Type.Read, self)
+            self._read_notifier.setEnabled(False)
+            self._write_notifier = QSocketNotifier(self._notifier_fd, QSocketNotifier.Type.Write, self)
+            self._write_notifier.setEnabled(False)
+            self._notifier_connections.append(self._read_notifier.activated.connect(self._read_ready))
+            self._notifier_connections.append(self._write_notifier.activated.connect(self._write_ready))
+            self._sync_notifiers()
+        except (OSError, RuntimeError, TypeError) as exc:
+            self._remove_notifiers()
+            self._fallback_polling = True
+            self.timer.setSingleShot(False)
+            self._send_output(f"\r\nTerminal readiness is unavailable; using polling fallback: {exc}\r\n")
+            if not self._closed:
+                self.timer.start()
+
+    def _remove_notifiers(self):
+        self._notifier_fd = None
+        self._pause_notifiers()
+        for connection in self._notifier_connections:
+            QObject.disconnect(connection)
+        self._notifier_connections.clear()
+        for name in ("_read_notifier", "_write_notifier"):
+            notifier = getattr(self, name)
+            setattr(self, name, None)
+            if notifier is not None:
+                notifier.deleteLater()
+
+    def _pause_notifiers(self):
+        for notifier in (self._read_notifier, self._write_notifier):
+            if notifier is not None:
+                notifier.setEnabled(False)
+
+    def _sync_notifiers(self):
+        if self._closed or self.process is None or self._fallback_polling:
+            return
+        ready = not self._draining and not self.timer.isActive()
+        if self._read_notifier is not None:
+            self._read_notifier.setEnabled(ready and self._pending_chars < 128_000)
+        if self._write_notifier is not None:
+            self._write_notifier.setEnabled(ready and bool(self._input_chunks))
+
+    def _schedule_frame(self):
+        if self._read_notifier is not None and not self._closed:
+            self._pause_notifiers()
+            self.timer.start()
+
+    def _read_ready(self, *_):
+        if (self.process is not None and not self._closed and not self._draining
+                and not self.timer.isActive() and self.process.fd == self._notifier_fd
+                and self._read_notifier is not None and self._read_notifier.isEnabled()):
+            self._drain()
+
+    def _write_ready(self, *_):
+        if (self.process is not None and not self._closed and not self._draining
+                and not self.timer.isActive() and self.process.fd == self._notifier_fd
+                and self._write_notifier is not None and self._write_notifier.isEnabled()):
+            self._drain()
 
     @Slot(str)
     def write(self, data):
@@ -103,7 +172,9 @@ class PtySession(QObject):
 
     def _flush_input(self):
         if not self.process or self._closed:
-            return
+            return False
+        wrote = False
+        self._pause_notifiers()
         try:
             for _ in range(4 if self._performance.constrained else 8):
                 if not self._input_chunks:
@@ -112,18 +183,24 @@ class PtySession(QObject):
                 written = os.write(self.process.fd, chunk[self._input_offset:self._input_offset + 4096])
                 if written <= 0:
                     break
+                wrote = True
                 self._input_bytes -= written
                 self._input_offset += written
                 if self._input_offset == len(chunk):
                     self._input_chunks.popleft()
                     self._input_offset = 0
         except (BlockingIOError, InterruptedError):
-            # Keep the exact remaining bytes for the next timer tick.
+            # Keep the exact remaining bytes until writable readiness returns.
             pass
         except OSError as exc:
             self._finish(str(exc))
         if self._input_bytes < 2 * 1024 * 1024:
             self._input_overflow_notified = False
+        if not self._draining:
+            if wrote and self._input_chunks:
+                self._schedule_frame()
+            self._sync_notifiers()
+        return wrote
 
     @Slot(int, int)
     def resize(self, rows, columns):
@@ -140,32 +217,38 @@ class PtySession(QObject):
     @Slot(int)
     def consumed(self, chars):
         self._pending_chars = max(0, self._pending_chars - max(0, chars))
+        self._sync_notifiers()
 
     def _send_output(self, text):
         if text:
             self._pending_chars += len(text.encode("utf-16-le")) // 2
+            self._sync_notifiers()
             self.output.emit(text)
 
     def _drain(self):
-        self._flush_input()
-        if not self.process or self._closed or self._pending_chars >= 128_000:
+        if not self.process or self._closed:
             return
+        self._draining = True
+        self._pause_notifiers()
+        active = False
         chunks = []
         try:
+            active = self._flush_input()
+            if not self.process or self._closed or self._pending_chars >= 128_000:
+                return
             # Bound work per frame so verbose commands cannot starve the GUI.
             for _ in range(4 if self._performance.constrained else 8):
-                if not select.select([self.process.fd], [], [], 0)[0]:
-                    break
                 raw = self.process.read(4096)
                 if raw is None:
                     break
                 if not raw:
                     raise EOFError
+                active = True
                 text = self._decoder.decode(raw)
                 if text:
                     chunks.append(text)
         except (BlockingIOError, InterruptedError):
-            # Readiness can change after select; this is temporary backpressure.
+            # Nonblocking descriptors can become empty after notification.
             pass
         except (OSError, EOFError):
             tail = self._decoder.decode(b"", final=True)
@@ -174,7 +257,19 @@ class PtySession(QObject):
             self._send_output("".join(chunks))
             self._finish("Session ended. Open a new session to continue.")
             return
+        finally:
+            self._draining = False
+            if not self._closed:
+                # One cooldown follows active work; an empty pass returns to
+                # readiness with no recurring idle wakeups. A paused renderer
+                # needs only its consumption acknowledgement, not a timer.
+                if active and (self._pending_chars < 128_000 or self._input_chunks):
+                    self._schedule_frame()
+                self._sync_notifiers()
         self._send_output("".join(chunks))
+        if self._pending_chars >= 128_000 and not self._input_chunks and not self._fallback_polling:
+            self.timer.stop()
+            self._sync_notifiers()
 
     def _finish(self, message):
         self.close()
@@ -185,6 +280,7 @@ class PtySession(QObject):
             return
         self._closed = True
         self.timer.stop()
+        self._remove_notifiers()
         self._input_chunks.clear()
         self._input_bytes = self._input_offset = 0
         if self._prompt_observer:

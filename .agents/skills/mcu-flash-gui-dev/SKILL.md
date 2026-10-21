@@ -38,6 +38,48 @@ release/tool-host guards as a shortcut: implement and qualify per-host policies,
 matching runtimes, drivers, native ownership and setup/repair first. Preserve
 unknown/malformed OS refusal and all live cache/journal/sketch boundaries.
 
+Read `audit/PLATFORM_VERIFICATION.md` for the shipping Python platform matrix.
+`LAUNCHER/` forwards to the existing Windows AMD64 / Ubuntu AMD64/ARM64 entries;
+macOS/Fedora/Mint entries currently show availability notices and Windows ARM
+refuses. Keep this distinction explicit. Native editor component checks do not
+qualify application startup, setup, tools, drivers or USB. Current Windows ARM
+PySide6-WebEngine wheels lack native browser modules; record capability absence
+and skipped rendering, never a host-rendering pass. Use production Ubuntu
+`preflight.system_libraries()` for that CPU's CI dependencies and the release's
+native Python/Tcl/Tk ABI. Portable Windows WSH forwarding must quote empty,
+embedded-quote and trailing-backslash arguments and shield literal percent paths
+through preflight/repair as well as final launch. Keep its fixtures read-only,
+with tracked descendant cleanup on timeout; archive validation preserves every
+launcher entry and executable mode.
+
+Editor syntax adapts the pinned official Arduino Light/Dark colors documented
+in `src/editor/ARDUINO_PALETTE.md`, including explicit small-text contrast changes.
+Solarized retains its reading surface with compatible Dark syntax. Preserve
+chosen font family/size, dirty models, undo, tab order, focus and selection;
+native page fallback, HTML host and Monaco must agree on the reading background.
+Extend existing cached C/C++ grammar identifier rules without scanning source
+per edit or losing separate C keywords/comments/strings/raw-string states.
+Verify actual rendered spans with `direct/verify_arduino_palette.py` and actual
+offline page geometry at five scales with `direct/verify_embedded_viewports.py`.
+Terminal padding belongs inside xterm's box so FitAddon excludes it from grid
+space; all HTML/body/host surfaces follow configured theme colors.
+AI addition/current replacement text is static green; removed original text or
+deletion anchors are red. Keep replacement counts/types and decision/revision
+authority intact. Red markers may show only bounded read-only original text
+with untrusted code-safe Markdown and HTML disabled. Bound successful previews
+and total source lookup; mark truncated/exhausted lookups so later hunks cannot
+repeat long scans. Verify actual rendered colors/rulers through theme changes
+and retained dirty undo/review state with `direct/verify_ai_diff_colors.py`,
+plus `verify_ai_line_diff.py` and `verify_editor_review_ui.py`.
+
+Linux PTYs use Qt read/write readiness with no idle polling. Retain bounded
+four/eight 4KiB frame work, demand-only cooldown and 128k-character renderer
+backpressure. Queued disabled/stale activations cannot bypass the cooldown.
+Consumption rearms reads; exact queued input/capability replies remain writable.
+Disable/disconnect watches before owned descriptor cleanup; reported watch setup
+failure alone falls back to polling. Run `direct/verify_pty_readiness.py` plus
+the existing Ubuntu runtime/terminal verifiers without live shells or hardware.
+
 Continuation preference: keep the existing layout/design and glassmorphism when
 reliable. If glass is incompatible, unreliable or harms responsiveness, use
 ordinary Light, Dark and `system_default` themes (follow OS appearance). This

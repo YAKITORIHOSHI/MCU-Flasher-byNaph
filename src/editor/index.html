@@ -38,7 +38,7 @@
     }
 
     :root, body.theme-default {
-      --bg-darkest: #101b2a;
+      --bg-darkest: #1f272a;
       --bg-dark: #18283b;
       --bg-tab-hover: #2a415a;
       --border: #425e79;
@@ -658,13 +658,13 @@
       animation: lineFlashTarget 1.2s ease-out forwards;
     }
 
-    /* AI Edits Glow & Diff Highlighting Styles — all colors driven by CSS theme variables */
+    /* Static AI diff colors: current additions/replacements green, originals red. */
     .monaco-editor .ai-edit-added-line,
     .ai-edit-added-line {
       background-color: rgba(var(--diff-add-rgb), 0.38) !important;
       border-left: 5px solid var(--diff-add-solid) !important;
       box-shadow: inset 0 0 12px rgba(var(--diff-add-rgb), 0.44) !important;
-      animation: greenGlowPulse 0.9s ease-in-out infinite alternate !important;
+      animation: none !important;
     }
 
     .monaco-editor .ai-edit-removed-line,
@@ -672,15 +672,15 @@
       background-color: rgba(var(--diff-remove-rgb), 0.38) !important;
       border-left: 5px solid var(--diff-remove-solid) !important;
       box-shadow: inset 0 0 12px rgba(var(--diff-remove-rgb), 0.44) !important;
-      animation: redGlowPulse 0.9s ease-in-out infinite alternate !important;
+      animation: none !important;
     }
 
     .monaco-editor .ai-edit-modified-line,
     .ai-edit-modified-line {
-      background-color: rgba(var(--diff-modify-rgb), 0.32) !important;
-      border-left: 5px solid var(--diff-modify-solid) !important;
-      box-shadow: inset 0 0 12px rgba(var(--diff-modify-rgb), 0.42) !important;
-      animation: blueGlowPulse 0.9s ease-in-out infinite alternate !important;
+      background-color: rgba(var(--diff-add-rgb), 0.38) !important;
+      border-left: 5px solid var(--diff-add-solid) !important;
+      box-shadow: inset 0 0 12px rgba(var(--diff-add-rgb), 0.44) !important;
+      animation: none !important;
     }
 
     .monaco-editor .ai-edit-added-inline,
@@ -699,8 +699,8 @@
 
     .monaco-editor .ai-edit-modified-inline,
     .ai-edit-modified-inline {
-      background-color: rgba(var(--diff-modify-rgb), 0.40) !important;
-      color: var(--diff-modify-text) !important;
+      background-color: rgba(var(--diff-add-rgb), 0.40) !important;
+      color: var(--diff-add-text) !important;
       border-radius: 3px !important;
     }
 
@@ -735,43 +735,10 @@
 
     .ai-edit-modified-gutter::before {
       content: '~';
-      color: var(--diff-modify-solid);
+      color: var(--diff-add-solid);
       font-weight: bold;
       font-size: 14px;
       margin-left: 3px;
-    }
-
-    @keyframes greenGlowPulse {
-      0% {
-        background-color: rgba(var(--diff-add-rgb), 0.16) !important;
-        box-shadow: inset 0 0 6px rgba(var(--diff-add-rgb), 0.22) !important;
-      }
-      100% {
-        background-color: rgba(var(--diff-add-rgb), 0.42) !important;
-        box-shadow: inset 0 0 18px rgba(var(--diff-add-rgb), 0.60) !important;
-      }
-    }
-
-    @keyframes redGlowPulse {
-      0% {
-        background-color: rgba(var(--diff-remove-rgb), 0.16) !important;
-        box-shadow: inset 0 0 6px rgba(var(--diff-remove-rgb), 0.22) !important;
-      }
-      100% {
-        background-color: rgba(var(--diff-remove-rgb), 0.42) !important;
-        box-shadow: inset 0 0 18px rgba(var(--diff-remove-rgb), 0.60) !important;
-      }
-    }
-
-    @keyframes blueGlowPulse {
-      0% {
-        background-color: rgba(var(--diff-modify-rgb), 0.18) !important;
-        box-shadow: inset 0 0 6px rgba(var(--diff-modify-rgb), 0.24) !important;
-      }
-      100% {
-        background-color: rgba(var(--diff-modify-rgb), 0.42) !important;
-        box-shadow: inset 0 0 18px rgba(var(--diff-modify-rgb), 0.62) !important;
-      }
     }
 
     #ai-diff-banner {
@@ -1257,11 +1224,49 @@
     // Extend the offline C++ language after its lazy configuration loads.
     // Monaco keeps its normal undo, multicursor and tab/space settings.
     (function () {
+      const styledLanguages = new WeakSet();
+      function styleArduinoIdentifiers(language, cpp) {
+        if (!language || styledLanguages.has(language)) return language;
+        styledLanguages.add(language);
+        // Arduino's upstream palette uses TextMate scopes. Our bundled editor
+        // uses Monarch: classify calls and known scalar/Arduino names once in
+        // the grammar, retaining its own comment/string/raw-string states.
+        language.mcuArduinoTypes = [
+          'size_t', 'ptrdiff_t', 'intptr_t', 'uintptr_t', 'intmax_t', 'uintmax_t',
+          'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+          'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t',
+          'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t',
+          'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t',
+          'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t',
+          ...(cpp ? ['String', 'byte', 'word', 'boolean', 'HardwareSerial', 'Stream', 'Print', 'IPAddress'] : [])
+        ];
+        language.mcuArduinoConstants = ['NULL', 'EOF', ...(cpp ? [
+          'HIGH', 'LOW', 'INPUT', 'OUTPUT', 'INPUT_PULLUP', 'INPUT_PULLDOWN', 'LED_BUILTIN',
+          'PI', 'HALF_PI', 'TWO_PI', 'DEG_TO_RAD', 'RAD_TO_DEG', 'LSBFIRST', 'MSBFIRST',
+          'CHANGE', 'FALLING', 'RISING', 'DEFAULT', 'EXTERNAL', 'INTERNAL', 'NOT_A_PIN', 'NOT_AN_INTERRUPT'
+        ] : [])];
+        const identifierCases = fallback => ({cases:{
+          '@keywords':{token:'keyword.$0'}, '@mcuArduinoTypes':'type',
+          '@mcuArduinoConstants':'constant', '@default':fallback
+        }});
+        language.tokenizer = {...language.tokenizer, root:language.tokenizer.root.flatMap(rule => {
+          if (!Array.isArray(rule) || !(rule[0] instanceof RegExp) || rule[0].source !== '[a-zA-Z_]\\w*') return [rule];
+          return [
+            [/[a-zA-Z_]\w*(?=\s*\()/, identifierCases('function')],
+            [/[a-zA-Z_]\w*/, identifierCases('identifier')]
+          ];
+        })};
+        return language;
+      }
+
       async function configureCppIndentation() {
         if (typeof monaco === 'undefined' || !monaco.languages) return false;
         try {
           const cpp = monaco.languages.getLanguages().find(language => language.id === 'cpp');
           const loaded = cpp && cpp.loader ? await cpp.loader() : null;
+          if (loaded?.language) {
+            monaco.languages.setMonarchTokensProvider('cpp', styleArduinoIdentifiers(loaded.language, true));
+          }
           // The first C++ model also registers this lazily loaded object.
           // Extend it in memory so that registration cannot erase these rules.
           const configuration = loaded && loaded.conf ? loaded.conf : {};
@@ -1389,7 +1394,7 @@
             [/'/, 'string.invalid']
           ]}
         };
-        return {language, conf:{...loaded.conf}};
+        return {language:styleArduinoIdentifiers(language, false), conf:{...loaded.conf}};
       }
       function loadCLanguageDefinition() {
         if (!cDefinitionPromise) cDefinitionPromise = buildCLanguageDefinition();
@@ -2853,8 +2858,57 @@
       }
 
       function diffOverviewColor(kind) {
-        const token = kind === 'added' ? 'add' : kind === 'removed' ? 'remove' : 'modify';
+        // Replacements show the current AFTER text in green; their original
+        // text is represented separately by a red deletion marker/hover.
+        const token = kind === 'removed' ? 'remove' : 'add';
         return getComputedStyle(document.body).getPropertyValue(`--diff-${token}-solid`).trim();
+      }
+
+      function originalTextHover(change, replacement, budget) {
+        const count = Math.max(1, replacement
+          ? Number(change.beforeEndLine) - Number(change.beforeStartLine) + 1
+          : Number(change.removedCount) || 1);
+        const label = replacement ? 'Original text replaced here' : `${count} line(s) removed here`;
+        const plain = { value: label, isTrusted: false, supportHtml: false };
+        const source = budget.source;
+        const start = Number(change.beforeStartLine), end = Number(change.beforeEndLine);
+        if (typeof source !== 'string' || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+            || start < 1 || end < start || budget.previews >= 32) return plain;
+        // Walk the original only once across ordered hunks. Bound total lookup
+        // work and retained hover bytes; giant generated files keep the marker.
+        if (start < budget.line) return plain;
+        while (budget.line < start) {
+          const next = source.indexOf('\n', budget.offset);
+          if (next < 0) { budget.source = null; return plain; }
+          budget.offset = next + 1;
+          budget.line++;
+        }
+        let offset = budget.offset, preview = '', lines = 0, truncated = false;
+        while (lines < Math.min(20, end - start + 1) && offset < source.length) {
+          let next = source.indexOf('\n', offset);
+          if (next < 0) next = source.length;
+          const remaining = 4096 - preview.length;
+          if (remaining <= 0) { truncated = true; break; }
+          preview += source.slice(offset, Math.min(next, offset + remaining)).replace(/\r$/, '') + '\n';
+          lines++;
+          if (next - offset > remaining) { truncated = true; break; }
+          offset = next + 1;
+        }
+        // UTF-8 bytes, rather than code units, bound multibyte original text.
+        const encoded = new TextEncoder().encode(preview);
+        if (encoded.length > 4096) {
+          preview = new TextDecoder('utf-8').decode(encoded.subarray(0, 4096), {stream:true});
+          truncated = true;
+        }
+        if (!preview) return plain;
+        budget.previews++;
+        truncated ||= lines < end - start + 1;
+        truncated ||= offset >= source.length && budget.sourceTruncated;
+        // Indented code keeps arbitrary backticks/HTML in an untrusted code
+        // block without allowing long source fences to expand the preview.
+        const code = preview.split('\n').map(line => '    ' + line).join('\n');
+        return {value: `${label}\n\n${code}${truncated ? '\n\nPreview truncated.' : ''}`,
+          isTrusted:false, supportHtml:false};
       }
 
       window.refreshAiDiffTheme = function () {
@@ -2880,6 +2934,9 @@
         enableReviewGlyphMargin();
         const lineCount = Math.max(1, model.getLineCount());
         const decorations = [];
+        const hoverBudget = {offset:0, line:1, previews:0,
+          source:typeof snapshot?.beforeContent === 'string' ? snapshot.beforeContent.slice(0, 262144) : null,
+          sourceTruncated:typeof snapshot?.beforeContent === 'string' && snapshot.beforeContent.length > 262144};
         const changes = Array.isArray(diff.changes) ? diff.changes : [];
         for (const change of changes) {
           let start = Math.min(lineCount, Math.max(1, Number(change.startLine) || 1));
@@ -2893,6 +2950,8 @@
           const color = diffOverviewColor(kind);
           const anchor = kind === 'removed' && change.anchorOnly && snapshot?.afterExists !== false;
           const gutter = anchor ? 'ai-edit-removed-anchor-gutter' : `ai-edit-${kind}-gutter`;
+          const hover = kind === 'removed' || kind === 'modified'
+            ? originalTextHover(change, kind === 'modified', hoverBudget) : null;
           decorations.push({
             range: new monaco.Range(start, 1, end, model.getLineMaxColumn(end)),
             options: {
@@ -2901,13 +2960,27 @@
               ...(anchor ? {} : { inlineClassName: `ai-edit-${kind}-inline` }),
               linesDecorationsClassName: gutter,
               glyphMarginClassName: gutter,
-              ...(anchor ? { glyphMarginHoverMessage: { value: `${Number(change.removedCount) || 1} line(s) removed here` } } : {}),
+              ...(anchor ? { glyphMarginHoverMessage: hover, hoverMessage: hover } : {}),
               overviewRuler: {
                 color,
                 position: monaco.editor.OverviewRulerLane.Full
               }
             }
           });
+          if (kind === 'modified') {
+            decorations.push({
+              range: new monaco.Range(start, 1, start, 1),
+              options: {
+                isWholeLine:true,
+                className:'ai-edit-removed-anchor-line',
+                linesDecorationsClassName:'ai-edit-removed-anchor-gutter',
+                glyphMarginClassName:'ai-edit-removed-anchor-gutter',
+                glyphMarginHoverMessage:hover,
+                hoverMessage:hover,
+                overviewRuler:{color:diffOverviewColor('removed'),position:monaco.editor.OverviewRulerLane.Full}
+              }
+            });
+          }
         }
         replaceDecorations(model, decorations);
         showReviewBanner(snapshot || currentReview);
@@ -2940,10 +3013,12 @@
         const shared = Math.min(oldCount, newCount);
         const firstLine = Math.min(Math.max(1, prefix + 1), model.getLineCount());
         const changes = [];
-        if (shared) changes.push({ type: 'modified', startLine: prefix + 1, endLine: prefix + shared });
+        if (shared) changes.push({ type: 'modified', startLine: prefix + 1, endLine: prefix + shared,
+          beforeStartLine:prefix + 1,beforeEndLine:prefix + shared });
         if (newCount > shared) changes.push({ type: 'added', startLine: prefix + shared + 1, endLine: newTail });
         if (oldCount > shared) changes.push({ type: 'removed', startLine: Math.min(model.getLineCount(), prefix + shared + 1),
-          endLine: Math.min(model.getLineCount(), prefix + shared + 1), anchorOnly: true, removedCount: oldCount - shared });
+          endLine: Math.min(model.getLineCount(), prefix + shared + 1), anchorOnly: true, removedCount: oldCount - shared,
+          beforeStartLine:prefix + shared + 1,beforeEndLine:oldTail });
         const diff = { changes, firstLine, modified: shared, added: newCount - shared, removed: oldCount - shared };
         window.applyStructuredAiDiff(diff, model, { ...(snapshot || currentReview || {}), diff });
       };
@@ -4581,6 +4656,48 @@
     (function () {
       let themesRegistered = false;
 
+      // Adapted from Arduino IDE's pinned Light/Dark palettes; see
+      // ARDUINO_PALETTE.md for provenance and small-text contrast adjustments.
+      const arduinoDark = {
+        foreground:'dae3e3', identifier:'dae3e3', comment:'839091', type:'0ca1a6',
+        function:'f39c12', literal:'7fcbcd', control:'c586c0', directive:'569cd6'
+      };
+      const arduinoLight = {
+        foreground:'4e5b61', identifier:'434f54', comment:'657375', type:'007f84',
+        function:'c94f00', literal:'005c5f', control:'657c00', directive:'826c59'
+      };
+      function arduinoRules(palette, background) {
+        const rules = [
+          {token:'', foreground:palette.foreground, background, fontStyle:''},
+          {token:'identifier', foreground:palette.identifier, fontStyle:''},
+          {token:'delimiter', foreground:palette.identifier, fontStyle:''},
+          {token:'operator', foreground:palette.identifier, fontStyle:''},
+          {token:'comment', foreground:palette.comment, fontStyle:''},
+          {token:'keyword', foreground:palette.type, fontStyle:''},
+          {token:'type', foreground:palette.type, fontStyle:''},
+          {token:'function', foreground:palette.function, fontStyle:''},
+          {token:'constant', foreground:palette.literal, fontStyle:''},
+          {token:'string', foreground:palette.literal, fontStyle:''},
+          {token:'string.escape', foreground:palette.literal, fontStyle:''},
+          {token:'number', foreground:palette.literal, fontStyle:''},
+          {token:'keyword.directive', foreground:palette.directive, fontStyle:''}
+        ];
+        for (const keyword of ['if','else','for','while','do','switch','case','default',
+            'break','continue','return','goto','try','catch','throw']) {
+          rules.push({token:'keyword.'+keyword, foreground:palette.control, fontStyle:''});
+        }
+        for (const literal of ['true','false','nullptr','__nullptr']) {
+          rules.push({token:'keyword.'+literal, foreground:palette.literal, fontStyle:''});
+        }
+        return rules;
+      }
+      function arduinoBracketColors(palette) {
+        // Keep matching-bracket behavior without inherited rainbow inks
+        // overriding the Arduino punctuation color.
+        return Object.fromEntries(Array.from({length:6}, (_, index) =>
+          ['editorBracketHighlight.foreground'+(index+1), '#'+palette.identifier]));
+      }
+
       function registerCustomMonacoThemes() {
         const monacoObj = window.monaco || (typeof monaco !== 'undefined' ? monaco : null);
         if (!monacoObj || !monacoObj.editor) return;
@@ -4591,19 +4708,11 @@
           monacoObj.editor.defineTheme('mcu-solarized-dark', {
             base: 'vs-dark',
             inherit: true,
-            rules: [
-              { token: '', foreground: 'ffffff', background: '002b36' },
-              { token: 'comment', foreground: '718c93', fontStyle: 'italic' },
-              { token: 'string', foreground: '2aa198' },
-              { token: 'keyword', foreground: '859900', fontStyle: 'bold' },
-              { token: 'number', foreground: 'd33682' },
-              { token: 'type', foreground: 'b58900' },
-              { token: 'identifier', foreground: '268bd2' },
-              { token: 'delimiter', foreground: 'e0e6ed' }
-            ],
+            rules: arduinoRules(arduinoDark, '002b36'),
             colors: {
+              ...arduinoBracketColors(arduinoDark),
               'editor.background': '#002b36',
-              'editor.foreground': '#ffffff',
+              'editor.foreground': '#dae3e3',
               'editorLineNumber.foreground': '#586e75',
               'editorLineNumber.activeForeground': '#39c5bb',
               'editor.lineHighlightBackground': '#073642',
@@ -4619,50 +4728,37 @@
           monacoObj.editor.defineTheme('mcu-light', {
             base: 'vs',
             inherit: true,
-            rules: [
-              { token: '', foreground: '24292f', background: 'ffffff' },
-              { token: 'comment', foreground: '6e7781', fontStyle: 'italic' },
-              { token: 'string', foreground: '0a3069' },
-              { token: 'keyword', foreground: 'cf222e', fontStyle: 'bold' },
-              { token: 'number', foreground: '0550ae' },
-              { token: 'type', foreground: '953800' },
-              { token: 'identifier', foreground: '116329' },
-              { token: 'delimiter', foreground: '24292f' }
-            ],
+            rules: arduinoRules(arduinoLight, 'ffffff'),
             colors: {
+              ...arduinoBracketColors(arduinoLight),
               'editor.background': '#ffffff',
-              'editor.foreground': '#24292f',
+              'editor.foreground': '#4e5b61',
               'editorLineNumber.foreground': '#8c959f',
               'editorLineNumber.activeForeground': '#0969da',
-              'editor.lineHighlightBackground': '#f6f8fa',
-              'editorCursor.foreground': '#0969da',
+              'editor.lineHighlightBackground': '#434f5410',
+              'editorCursor.foreground': '#4e5b61',
               'editorWhitespace.foreground': '#d0d7de',
               'editorIndentGuide.background': '#d0d7de',
               'editorIndentGuide.activeBackground': '#afb8c1',
-              'editor.selectionBackground': '#add6ff',
-              'editorGutter.background': '#f6f8fa'
+              'editor.selectionBackground': '#7fcbcdb3',
+              'editorGutter.background': '#ffffff'
             }
           });
 
           monacoObj.editor.defineTheme('mcu-default-dark', {
             base: 'vs-dark',
             inherit: true,
-            rules: [
-              { token: '', foreground: 'e3edf6', background: '101b2a' },
-              { token: 'comment', foreground: 'adc0d3', fontStyle: 'italic' },
-              { token: 'keyword', foreground: '80d9ce', fontStyle: 'bold' },
-              { token: 'string', foreground: '98c379' },
-              { token: 'number', foreground: 'd19a66' }
-            ],
+            rules: arduinoRules(arduinoDark, '1f272a'),
             colors: {
-              'editor.background': '#101b2a',
-              'editor.foreground': '#e3edf6',
+              ...arduinoBracketColors(arduinoDark),
+              'editor.background': '#1f272a',
+              'editor.foreground': '#dae3e3',
               'editorLineNumber.foreground': '#6b7d94',
               'editorLineNumber.activeForeground': '#80d9ce',
-              'editor.lineHighlightBackground': '#18283b',
-              'editorCursor.foreground': '#80d9ce',
-              'editor.selectionBackground': '#324e69',
-              'editorGutter.background': '#101b2a'
+              'editor.lineHighlightBackground': '#434f5410',
+              'editorCursor.foreground': '#dae3e3',
+              'editor.selectionBackground': '#00818480',
+              'editorGutter.background': '#1f272a'
             }
           });
         } catch (e) {

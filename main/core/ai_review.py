@@ -109,7 +109,8 @@ def build_ai_line_diff(before_content: str, after_content: str) -> dict:
             shared = min(old_count, new_count)
             modified += shared
             if shared:
-                append_change("modified", j1 + 1, j1 + shared)
+                append_change("modified", j1 + 1, j1 + shared,
+                              beforeStartLine=i1 + 1, beforeEndLine=i1 + shared)
             if new_count > shared:
                 added += new_count - shared
                 append_change("added", j1 + shared + 1, j2)

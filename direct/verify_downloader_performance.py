@@ -316,6 +316,19 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
     def pending(self):
         return tuple(self.root.tk.splitlist(self.root.tk.call("after", "info")))
 
+    def resize_native(self, width, height):
+        # Windows delivers native WM_SIZE/Configure through the full event
+        # loop; update_idletasks alone can leave the previous client size.
+        before = (self.root.winfo_width(), self.root.winfo_height())
+        self.root.geometry(f"{width}x{height}+20+20")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            self.root.update()
+            if (self.root.winfo_width(), self.root.winfo_height()) != before:
+                return
+            time.sleep(.005)
+        self.fail("The native fixture window did not accept a different client size")
+
     def settle(self):
         """Wait for actual callbacks to drain, then require a quiet debounce turn."""
         deadline, quiet = time.monotonic() + 10, None
@@ -365,9 +378,8 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
         previous = scene._material_image
         with patch.object(tk_glass.resource_glass_png, "__wrapped__", delayed):
             try:
-                self.root.geometry(f"{self.root.winfo_width() - 40}x"
-                                   f"{self.root.winfo_height() - 20}+20+20")
-                self.root.update_idletasks()
+                self.resize_native(self.root.winfo_width() - 40,
+                                   self.root.winfo_height() - 20)
                 scene._draw()
                 self.assertTrue(entered.wait(2), "The large raster must start")
                 self.assertNotIn(threading.get_ident(), threads,
@@ -419,9 +431,8 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
             renderer = self.root._resource_raster
             with patch.object(renderer._queue, "encode", delayed):
                 try:
-                    self.root.geometry(f"{self.root.winfo_width() - 80}x"
-                                       f"{self.root.winfo_height() - 40}+20+20")
-                    self.root.update_idletasks()
+                    self.resize_native(self.root.winfo_width() - 80,
+                                       self.root.winfo_height() - 40)
                     scene._draw()
                     self.assertTrue(entered.wait(2))
                     current = SimpleNamespace(**{key: getattr(palette, key) for key in
@@ -449,9 +460,11 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
     def test_material_worker_start_failure_reports_once_and_next_draw_can_retry(self):
         scene = self.app._scene
         previous = scene._material_image
-        self.root.geometry(f"{self.root.winfo_width() - 40}x"
-                           f"{self.root.winfo_height() - 20}+20+20")
-        self.root.update_idletasks()
+        # Change a material input directly: native resize timing must not
+        # decide whether this exact worker-start failure is reached.
+        scene.palette = SimpleNamespace(**{key: getattr(scene.palette, key) for key in
+            ("BG_LIGHT", "BG_MID", "BG_DARK", "BG_DARKEST", "BORDER", "BORDER_LIT", "WINDOW_BG")})
+        scene.palette.BG_LIGHT = "#253142"
         with (patch("src.modules.tk_raster.threading.Thread", side_effect=RuntimeError("fixture start")),
               patch.object(self.root, "report_callback_exception") as reported):
             scene._draw()
@@ -475,7 +488,10 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
         dialog.geometry("600x420+40+40")
         scene = tk_glass.GlassScene(dialog, self.module.Theme)
         scene.pack(fill="both", expand=True)
-        self.root.update_idletasks()
+        self.settle()
+        scene.palette = SimpleNamespace(**{key: getattr(scene.palette, key) for key in
+            ("BG_LIGHT", "BG_MID", "BG_DARK", "BG_DARKEST", "BORDER", "BORDER_LIT", "WINDOW_BG")})
+        scene.palette.BG_LIGHT = "#253142"
         reference = weakref.ref(scene)
         with patch.object(self.root._resource_raster._queue, "encode", delayed):
             try:
@@ -508,20 +524,18 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
         scene = self.app._scene
         before = (scene.winfo_width(), scene.winfo_height())
         material = scene._material_image
-        with patch.object(scene, "_draw", wraps=scene._draw) as raster:
+        # Hold only material painting while the real native loop dispatches
+        # geometry. Scheduling/coalescing is independently checked above.
+        with patch.object(scene, "_draw"):
             for delta in (20, 40, 60, 80):
-                self.root.geometry(f"{max(500, before[0] - delta)}x"
-                                   f"{max(400, before[1] - delta // 2)}+20+20")
-                # Tcl's idle geometry/display pass intentionally excludes
-                # timed callbacks. Check layout without running the raster.
-                self.root.update_idletasks()
+                self.resize_native(max(500, before[0] - delta), max(400, before[1] - delta // 2))
             actual = (scene.winfo_width(), scene.winfo_height())
             self.assertNotEqual(actual, before, "The native scene must actually resize")
             self.assertEqual((scene.body.winfo_width(), scene.body.winfo_height()), actual,
                              "The live native body must fill the latest scene before glass is baked")
-            raster.assert_not_called()
             self.assertIs(scene._material_image, material)
             self.assertIsNotNone(scene._redraw_id, "The final material draw must remain deferred")
+        scene._draw()
         self.settle()
 
     def test_cached_tab_hover_and_focus_only_repaint_the_strip(self):
