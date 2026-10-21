@@ -222,6 +222,27 @@ class OwnedFixture(unittest.TestCase):
 
 
 class ProcessCleanupChecks(OwnedFixture):
+    def test_failed_owned_fixture_retains_bounded_stdout_and_stderr(self):
+        fixture = self.sandbox / "failing-output.py"
+        fixture.write_text(
+            "import sys\n"
+            "sys.stdout.write('fixture stdout: ' + 'x' * 20000)\n"
+            "sys.stdout.flush()\n"
+            "sys.stderr.write('fixture stderr: ' + 'y' * 20000)\n"
+            "sys.stderr.flush()\n"
+            "sys.exit(7)\n", encoding="utf-8")
+        result = windows_probe().capture(
+            Path(sys.executable), fixture, [], self.sandbox / "absent-output-result.json", self.sandbox,
+            command_prefix=[sys.executable, "-I", "-B", str(fixture)], timeout=5)
+        self.assertEqual(result["launcherExitCode"], 7, result)
+        self.assertIn("code 7", result["error"])
+        self.assertEqual(result["cleanupFailures"], [])
+        for stream in ("stdout", "stderr"):
+            diagnostic = result["diagnostics"][stream]
+            self.assertTrue(diagnostic.startswith("fixture " + stream + ": "), result)
+            self.assertLessEqual(len(diagnostic), 4096)
+            self.assertTrue(result["diagnostics"][stream + "Truncated"])
+
     def test_timeout_stops_owned_parent_and_descendant_before_fixture_cleanup(self):
         import psutil
 
@@ -446,10 +467,10 @@ class WindowsDispatchChecks(OwnedFixture):
         # Seed exactly the strings already available to production WScript code;
         # only the outer host's argument collection is replaced, after parsing.
         source = source.replace('Option Explicit\n', 'Option Explicit\nDim literalArguments\n'
-                                'Set literalArguments = New LiteralArguments\n', 1)
+                                'Set literalArguments = New SeededArgumentCollection\n', 1)
         source = source.replace(call, call.replace('WScript.Arguments', 'literalArguments'), 1)
         source += r'''
-Class LiteralArguments
+Class SeededArgumentCollection
     Public Property Get Count
         Count = CLng(CreateObject("WScript.Shell").Environment("PROCESS")("MCU_LAUNCHER_PROBE_ARG_COUNT"))
     End Property

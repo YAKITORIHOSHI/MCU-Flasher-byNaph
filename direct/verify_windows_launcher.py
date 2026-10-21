@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 
@@ -87,7 +88,30 @@ def capture(executable: Path, script: Path, arguments: list[str], result: Path,
         environment.pop(name, None)
     process = subprocess.Popen([*(command_prefix or [str(executable)]), *arguments], cwd=unrelated_cwd,
                                env=environment, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Drain continuously so a failing recorder cannot block on a full pipe.
+    # Retain only the first 4 KiB per stream for useful native WSH diagnostics.
+    output = {name: bytearray() for name in ("stdout", "stderr")}
+    output_truncated = {name: False for name in output}
+    output_errors = {}
+
+    def collect_output(name, pipe):
+        try:
+            while chunk := pipe.read1(4096):
+                available = 4096 - len(output[name])
+                output[name].extend(chunk[:available])
+                if len(chunk) > available:
+                    output_truncated[name] = True
+        except OSError as failure:
+            output_errors[name] = str(failure)
+        finally:
+            pipe.close()
+
+    readers = {name: threading.Thread(target=collect_output, args=(name, getattr(process, name)),
+                                      daemon=True, name="launcher-fixture-" + name)
+               for name in output}
+    for reader in readers.values():
+        reader.start()
     children = {}
     deadline = time.monotonic() + timeout
     observed = None
@@ -142,12 +166,21 @@ def capture(executable: Path, script: Path, arguments: list[str], result: Path,
         process.wait(timeout=5)
         _, alive = psutil.wait_procs(list(children.values()), timeout=3)
         cleanup_failures.extend(f"Owned recorder PID {child.pid} survived cleanup" for child in alive)
+        for name, reader in readers.items():
+            reader.join(timeout=1)
+            if reader.is_alive():
+                cleanup_failures.append(f"Owned recorder {name} reader did not finish")
+        cleanup_failures.extend(f"Owned recorder {name} reader failed: {failure}"
+                                for name, failure in output_errors.items())
     expected_arguments = arguments if expected_arguments is None else expected_arguments
     expected_cwd = executable.parent if expected_cwd is None else expected_cwd
     expected_script = script if expected_script is None else expected_script
     return {"inputArguments": arguments, "expected": expected_arguments, "observed": observed,
             "launcherExitCode": process.returncode, "error": error,
             "cleanupFailures": cleanup_failures,
+            "diagnostics": {**{name: bytes(value).decode("utf-8", errors="replace")
+                               for name, value in output.items()},
+                            **{name + "Truncated": value for name, value in output_truncated.items()}},
             "passed": error is None and not cleanup_failures and process.returncode == 0
             and observed is not None
             and observed["arguments"] == expected_arguments

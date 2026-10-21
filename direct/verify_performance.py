@@ -137,7 +137,7 @@ class PerformanceChecks(unittest.TestCase):
                 self.assertEqual(widget.currentText(), text)
 
     def test_marquees_pause_and_resume_with_window_enabled_and_visibility_state(self):
-        from PySide6.QtWidgets import QWidget
+        from PySide6.QtWidgets import QStyle, QStyleOptionComboBox, QWidget
         owner, board, combo, text = self._marquee_fixture(False)
         for widget in (board, combo):
             self.assertTrue(widget._timer.isActive())
@@ -163,10 +163,31 @@ class PerformanceChecks(unittest.TestCase):
             self.assertTrue(widget._timer.isActive())
         self.assertEqual(board.text(), text)
         self.assertEqual(combo.currentData(), "literal-port-id")
-        combo.setCurrentIndex(1)
-        self.assertFalse(combo._timer.isActive())
-        combo.setCurrentIndex(0)
-        self.assertTrue(combo._timer.isActive())
+        # Native platform fonts can make "Other port" overflow this 150-pixel
+        # control. Verify a fitting selection explicitly, including with a
+        # larger font, before expecting its animation to stop.
+        combo.setItemText(1, "Port")
+        for point_size in (None, 24):
+            with self.subTest(point_size=point_size):
+                if point_size is not None:
+                    font = combo.font()
+                    font.setPointSize(point_size)
+                    combo.setFont(font)
+                for index, overflowing in ((0, True), (1, False), (0, True)):
+                    combo.setCurrentIndex(index)
+                    option = QStyleOptionComboBox()
+                    combo.initStyleOption(option)
+                    field = combo.style().subControlRect(
+                        QStyle.ComplexControl.CC_ComboBox, option,
+                        QStyle.SubControl.SC_ComboBoxEditField, combo)
+                    available = field.width() - 8
+                    text_width = option.fontMetrics.horizontalAdvance(combo.currentText())
+                    diagnostic = (f"font={combo.font().toString()!r}, "
+                                  f"text={combo.currentText()!r}, text_width={text_width}, "
+                                  f"available={available}, field={field}")
+                    self.assertGreater(available, 0, diagnostic)
+                    self.assertEqual(text_width > available, overflowing, diagnostic)
+                    self.assertEqual(combo._timer.isActive(), overflowing, diagnostic)
 
     def test_marquees_pause_when_the_active_owner_is_minimized(self):
         owner, board, combo, _text = self._marquee_fixture(False)

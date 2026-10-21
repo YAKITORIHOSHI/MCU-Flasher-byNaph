@@ -19,6 +19,10 @@ on:
         description: Run isolated current-app browser and resource checks only
         type: boolean
         default: false
+      browser_regressions_only:
+        description: Skip Windows native rendering already verified at the same product source
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,6 +37,7 @@ jobs:
     uses: ./.github/workflows/browser-performance.yml
     with:
       windows_only: ${{ inputs.windows_only }}
+      regressions_only: ${{ inputs.browser_regressions_only }}
 
   native-prototype:
     if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.backend_only && !inputs.browser_performance_only) }}
