@@ -5,6 +5,13 @@ Python/Qt Controls, alongside the unfinished native Rust migration. The user
 reports lag in opening, searching, scrolling/resizing and selection, authorizes
 backend changes, requests removal of Quit and asks to preserve lists in RAM.
 
+The shipping GUI changes have passed isolated native Windows AMD64 and Ubuntu
+24/26 AMD64/ARM64 browser/editor checks. Intel/Apple Silicon macOS editor
+components also pass; full macOS application support is still pending.
+The final focused Windows run is
+[39653405199](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39653405199)
+at `91632a1`. Exact earlier rendering checkpoints and retained failures follow.
+
 ## Changes
 
 - Closing hides the loaded browser. Reopening reuses its widgets, catalogs,
@@ -145,7 +152,7 @@ permissions. See [the current platform matrix](PLATFORM_VERIFICATION.md).
 
 Fresh local continuation checks also pass: responsive **20/20** (135 terminal
 layouts, callback depth one, no idle layouts), resource performance **32/32**,
-runtime **46/46** plus editor recovery, launcher **16 passed/3 Windows skips**,
+runtime **46/46** plus editor recovery, launcher **17 passed/7 Windows skips**,
 and release source/archive policy **7/7**. The native Windows resize fixtures
 now dispatch the real event loop because `update_idletasks` alone does not
 deliver Windows size events; pure debounce checks remain independent.
@@ -192,3 +199,47 @@ characterize the invoking WSH parser, seed arbitrary already-received quote,
 newline and emoji values through production forwarding, and check actual copied
 entries with no arguments and valid moved project paths. They assert exact values
 and no payload variables reaching Python; no quote cases are silently dropped.
+
+At `2b79f98`, the Windows-only run
+[39650299818](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39650299818)
+passes the complete native browser/Tk appearance and performance step on both
+Python/Qt ranges, including five viewport scales, Arduino syntax, AI red/green
+rendering and C startup. The actual moved-path and no-argument Windows entries
+also pass. Two remaining failures are confined to new fixtures: a case-insensitive
+VBScript variable/class name collision in seeded arguments, and an assumed
+fitting combo label that overflows native Windows fonts. `3331153` corrects the
+fixture class name and measures native font/edit-field geometry at default and
+24-point fonts. Failed launch fixtures now retain at most 4 KiB per output stream
+while continuously draining and cleaning up owned processes. Product source is
+unchanged from `2b79f98`.
+
+At `3331153`, the focused run
+[39652819135](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39652819135)
+passes both Windows launcher suites (15 executed / 9 platform skips each) and
+all seven release-source checks. Seeded literal quotes, empty arguments,
+Unicode, newline values and payload cleanup now pass natively. The run still
+fails only the new 24-point font fixture: even “Port” measures 128 pixels in
+117 available pixels on the hosted Windows font. The assertion correctly
+identifies overflow; a fitting sample must be selected from actual metrics.
+
+The focused rerun selector skips the already-passed native Windows painting step
+only when explicitly requested. Default workflow runs retain the complete host
+matrix and renderer checks. Launcher/archive and Qt resource checks remain
+independent, so a failure cannot suppress the other evidence.
+
+The final focused run
+[39653405199](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39653405199)
+at `91632a1` passes both Windows Python/Qt ranges: launcher **15 passed / 9
+platform skips**, release policy **7/7**, Qt resources/marquees **32/32** each.
+The font fixture selects a nonempty fitting label from actual metrics for each
+font, then independently asserts long → fitting → long overflow/timer behavior.
+It also passes the exact 128-pixel/117-pixel local reproduction. The correction
+is fixture-only; no production timer policy or teardown behavior was relaxed.
+
+Product hashes confirm the editor, AI review, terminal, Board/Library and Controls
+sources still match the earlier passing Ubuntu/macOS checkpoint. Windows native
+painting remains the separately passed `2b79f98` step; it was deliberately skipped
+in the final focused run. Product Windows launcher source also remains at
+`2b79f98`; subsequent corrections affect fixtures and workflow selection only.
+This is combined evidence from explicit checkpoints, not a claim that the last
+workflow reran every platform or that unsupported application ports are ready.

@@ -8,10 +8,10 @@ does not establish a complete working application on another operating system.
 
 | Requested system | Current application status | Evidence and remaining qualification |
 | --- | --- | --- |
-| Windows 10/11 AMD64 | Existing production entry and backend | Windows hosted AMD64 checks exercise isolated runtime, GUI and launcher contracts. Hosted Server images do not establish physical Windows 10/11, standard-user/UAC, mixed-monitor DPI or real USB driver/upload behavior. |
+| Windows 10/11 AMD64 | Existing production entry and backend | Hosted AMD64 browser/editor rendering passes in two Python/Qt ranges; final launcher/archive/resource checks also pass. Hosted Server images do not establish physical Windows 10/11, standard-user/UAC, mixed-monitor DPI or real USB driver/upload behavior. |
 | Windows 10/11 ARM64 | Unavailable | New `LAUNCHER/WINDOWS.vbs` refuses this host. Python repair/release still selects AMD64, CP210x setup selects x64 for any 64-bit host, and native ARM64 terminal/runtime/USB closure remains unqualified. Editor-only ARM checks are separate. |
 | Ubuntu 24.04 LTS AMD64/ARM64 | Existing production entries and native host policies | Both native CPU families and 64-bit userspace are admitted. Existing CI covers runtime/first-run paths; this performance slice adds focused checks per release/CPU. Xvfb and software-rendered fixtures do not establish actual Wayland/X11 input, compositor or physical USB behavior. |
-| Ubuntu 26.04 LTS AMD64/ARM64 | Existing production entries and native host policies | Release/architecture admission is the same; its own Python/Tcl/Tk ABI and native ARM Qt dependencies must be used. Local 26.04.1 AMD64 evidence exists; separate hosted runs are required for both CPUs. |
+| Ubuntu 26.04 LTS AMD64/ARM64 | Existing production entries and native host policies | Focused native browser/editor/PTY checks pass on both hosted CPU families using the release's own Python/Tcl/Tk ABI and native ARM Qt dependencies. Local 26.04.1 AMD64 evidence also exists. Physical desktop, input and USB qualification remain separate. |
 | macOS Intel/Apple Silicon | Unavailable | No Darwin backend, private runtime selection, native PTY/process containment, keychain or app bundle exists. Native offline editor checks alone cannot qualify these services. |
 | Fedora x86_64/aarch64 | Unavailable | Production release validation intentionally rejects Fedora before Ubuntu setup/repair. A Fedora package/dependency, process, credentials and desktop adapter is required. |
 | Linux Mint AMD64 | Unavailable | Exact Ubuntu release validation rejects Mint even when `ID_LIKE` mentions Ubuntu. Its own reviewed admission/setup and desktop qualification are required. LMDE and any ARM port need separate policies. |
@@ -77,6 +77,35 @@ Windows jobs fail a newly exercised WSH-to-WSH argument boundary; runtime
 preflight and owned timeout cleanup pass. Preserve that failure alongside the
 subsequent Windows-only correction and rerun. No macOS application support or
 Fedora/Mint execution is implied by this evidence.
+
+The Windows-only run
+[39650299818](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39650299818)
+at `2b79f98` passes both complete native rendering steps, including Tk browser
+appearance/performance, five embedded viewport scales, Arduino syntax and AI
+red/green review colors. Actual portable entry execution with no arguments and
+moved project paths passes. The run remains failed because two new verifier
+assumptions are wrong: a seeded VBScript class shares its variable's name, and
+a supposedly fitting label overflows the Windows font. The corrections at
+`3331153` change fixtures only; no additional platform support is implied.
+
+At `3331153`, the focused run
+[39652819135](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39652819135)
+passes both Windows launcher suites (15 executed / 9 platform skips each) and
+release-source policy (7/7 each). The seeded literal argument route now passes.
+The overall run remains failed because the larger-font fixture's replacement
+label also overflows its measured edit field; this does not establish a
+production marquee failure.
+
+The final focused run
+[39653405199](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39653405199)
+at `91632a1` passes both Windows jobs: launcher 15 passed / 9 platform skips,
+release policy 7/7 and Qt resources/marquees 32/32 each. The fitting-label fixture
+now selects a nonempty sample using the current native font metrics before
+independently asserting both overflow transitions. This run explicitly skips
+the native painting step already passed at `2b79f98`; product source did not
+change. The earlier Ubuntu/macOS renderer source hashes also remain unchanged.
+Neither a skipped check nor a partial host job is counted as full application
+qualification on a pending platform.
 
 Runner availability and limitations were checked against the official
 [GitHub runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).

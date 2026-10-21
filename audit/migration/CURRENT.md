@@ -27,6 +27,20 @@ needed for the next slice. Preserve historical failures and exact tested sources
   diff counts, revisions and Accept/Reject/history authority are unchanged.
   These editor changes apply to the shipping offline page; native preview assets
   and full design/service parity remain separate migration work.
+- Shipping GUI verification now combines exact checkpoints: `c8a1377`
+  [39648393272](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39648393272)
+  passes all four Ubuntu 24/26 AMD64/ARM64 browser jobs and both macOS offline
+  component jobs. `2b79f98`
+  [39650299818](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39650299818)
+  passes both full Windows native rendering steps; its overall run retains two
+  fixture failures. Final fixture-only `91632a1`
+  [39653405199](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39653405199)
+  passes both focused Windows jobs, each with 15 launcher passes / 9 platform
+  skips, 7 release checks and 32 Qt resource checks. Product hashes remain
+  unchanged across those renderer checkpoints. Windows ARM still lacks native
+  WebEngine; macOS/Fedora/Mint full application ports and physical desktop/USB
+  qualification remain pending. Continue native Save/Compile and host adapters
+  under the existing usable-beta plan; no Python service is retired by this slice.
 - User expanded replacement platform requirements on 21 October: Windows 10/11
   AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
   Fedora x86_64/aarch64 and Linux Mint AMD64. See [required platform coverage](PLATFORM_SUPPORT.md)

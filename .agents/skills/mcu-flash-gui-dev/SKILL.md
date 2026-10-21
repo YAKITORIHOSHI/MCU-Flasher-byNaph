@@ -1208,16 +1208,16 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - **Ctrl+Click / F12 Go-To-Definition** with cross-file symbol resolution (`findProjectSymbol()`, `parseSymbolDetails()`), including built-in Arduino function registry (`BUILTIN_ARDUINO`).
    - **Ctrl+Hover** floating definition card with function signature, parameters, and return type.
    - **Realtime syntax checking** via `realtime_check_syntax()` → `src/syntax_checker.py` (C++ linting).
-   - **AI Edit Diff & Glowing Highlights** — Line-level LCS diff with Monaco decorations (animations disabled under constrained/reduced-motion profiles):
-     - 🟢 **Green glow** (pulsing CSS animation `greenGlowPulse`) + `+` gutter icon on added/changed lines.
-     - 🔴 **Red glow** (pulsing CSS animation `redGlowPulse`) + `-` gutter icon on removed lines.
-     - Floating banner with line count summaries and a quick **"Dismiss Glow ✖"** button.
+   - **AI Edit Highlights** — Bounded line diff with static Monaco decorations:
+     - 🟢 Green added/replacement AFTER text and addition gutter markers.
+     - 🔴 Red removed-original markers with bounded read-only previews; pure deletions do not tint surviving text.
+     - Preserve line count summaries, review controls, model/undo state and highlight dismissal.
 
 3. **Dedicated AI Assistant Controller (Windows: `src/modules/dedicated_AI.py` & `main/qt/ai_panel.py`; Ubuntu: `main/qt/posix_ai_panel.py`)**
    - Manages an **OpenCode AI** terminal session rendered directly inside a right-side collapsible panel.
    - Can be toggled visible/hidden dynamically via the `🤖 AI Assistant` toolbar button or `✖ Hide` header button.
    - `AIController` manages session lifecycle and a file-watcher for AI-applied edits.
-   - When AI edits a file, `AIController` triggers editor reload, diff glow animation, and a notification entry.
+   - When AI edits a file, `AIController` reconciles editor state, static green/red review highlights and a notification entry under existing revision/Accept/Reject authority.
    - Ubuntu keeps a single protected OpenCode TUI, retains it through hide/reveal and starts only empty PTYs during bounded recovery. `main/platforms/ubuntu_opencode.py` owns native installed-CLI discovery and the restart limit; general Bash sessions remain in the Terminal tab.
 
 4. **Project Terminal (`src/modules/project_terminal.py` & `main/qt/terminal_panel.py`)**
@@ -1419,7 +1419,7 @@ MCU Flasher by Naph/
   - Python calls JS via `evaluate_js("functionName()")`.
   - JS calls Python via `window.pywebview.api.methodName()` (polyfilled through `QWebChannel`).
 - Monaco decorations (`deltaDecorations`) are used for diff highlights and hover cards.
-- **AI Edit Diff & Glow**: When the AI edits a file, the editor runs a line-level LCS diff and applies animated pulsating CSS classes (`.ai-edit-added-line` for green glow, `.ai-edit-removed-line` for red glow).
+- **AI Edit Highlights**: Preserve bounded line-diff work and existing review authority. Added/replacement AFTER text is static green; removed originals use static red markers and bounded read-only previews. Keep `.ai-edit-added-line` / `.ai-edit-removed-line` free of recurring glow animation, preserve model/undo state, and verify actual rendering with `direct/verify_ai_diff_colors.py`.
 
 ### 3. Toolchain & Serial Monitor Execution Pipeline
 - **PlatformIO targets**: Validate the exact board and declared framework through `target_profile.py`; never silently substitute a family default. `.ino` projects require Arduino. Runtime refresh reads only installed/cache definitions. Firmware cache fingerprints include host, board/framework/platform, manifests and sources.
