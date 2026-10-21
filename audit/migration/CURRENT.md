@@ -45,7 +45,10 @@ needed for the next slice. Preserve historical failures and exact tested sources
   fake-tool checks**. Strict Linux/MSVC-target linting and formatting pass.
   Private-runtime verification passes 46 tests plus isolated Qt recovery.
   Independent review fixes and exact source digests are in the new receipt;
-  native Windows/Ubuntu ARM64 execution of this source is pending CI.
+  [CI 39534638853](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39534638853)
+  at `dbf92f0` passes Ubuntu AMD64/ARM64 **197 tests/15 process checks** and
+  Windows **190 tests/12 process checks**, with **47 fake-tool checks** on all
+  hosts. Existing recipe-generation 31/23 checks also pass. No GUI jobs rerun.
 
 ## Implemented scope and next slice
 
@@ -91,6 +94,13 @@ needed for the next slice. Preserve historical failures and exact tested sources
   sample on Windows/Ubuntu. Keep compiler dispatch unavailable until those gates
   pass. A verified native recipe with no override remains separate from the
   positive-only recipe service's NoRecipe refusal. See Task 3 in [the plan](NATIVE_RUST_PLAN.md).
+- Prepared-sample investigation found the campaign work/package roots were
+  cleaned. The retained successful Uno receipt used exact **atmelavr 5.3.0**,
+  while **5.1.0** in the uninvoked tool entry was only the earlier proposal.
+  New work is assembling an explicitly owned 5.3.0 sample from exact official
+  archives, without restarting the campaign or adopting a live store. Runtime
+  closure remains absent; `.venv-linux` uses an external interpreter link and
+  app/setuptools `.pth` startup files. Do not call it an admitted staged runtime.
 - Continue this work in the newly requested chat using the accepted delivery
   order in the plan; integrate usable features instead of stopping at probes.
 - Source-save leases/recovery, catalog/build integration, serial/PTY, settings/

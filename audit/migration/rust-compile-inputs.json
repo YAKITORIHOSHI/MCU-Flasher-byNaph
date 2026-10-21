@@ -107,9 +107,93 @@
     "private_python_qt_isolated_ownership_recovery": "passed; offscreen platform warnings retained in temp log"
   },
   "ci": {
-    "status": "pending dispatch at source checkpoint",
-    "native_windows_execution": false,
-    "ubuntu_arm64_execution": false
+    "status": "success",
+    "run_id": 39534638853,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39534638853",
+    "source_commit": "dbf92f007bc9b5a880fec4f6ce9568139d68911c",
+    "hosts": {
+      "migration-backend-ubuntu-24.04": {
+        "rust_default_tests": 197,
+        "process_probe": {
+          "architecture": "x86_64",
+          "checks": 15,
+          "descendantsReaped": 1,
+          "executableBinding": "running_image_procfs",
+          "externalToolImageAuthority": false,
+          "fixtureOnly": true,
+          "host": "linux",
+          "noCompilerDispatch": true,
+          "threadedDrains": false,
+          "windowsPrePinRunningImageBindingQualified": false
+        },
+        "fake_tool_checks": 47,
+        "recipe_generation_checks": 31,
+        "fixture_directory_symlink_check": "directory-symlink-refusal",
+        "artifact_file_sha256": {
+          "backend-unit.log": "d2e4cc1824040ca5fcfd66dc3727224178647dd446b338bd4a435829f860c8f7",
+          "board-compatibility-rust.json": "5d008b1f162782f148f8c9df12bade72add3e22dde3fdaab7b49a8013abbd688",
+          "board-recipe-rust.json": "4334c0b34f145b92f17cbdcd99acc309ef5f9e5decd7ac5c42fe5a0ae518d6e6",
+          "compile-process.json": "ab0f84cf12373c2c2a64e533b2b51401047d67ecd5f3a9baa29593d1afe28ed1",
+          "recipe-generation-rust.json": "850f44934e2e67983c8f2fa23df2ac1a178ee7e1d7bddeb8948e76ffd4b42978",
+          "tool-only-entry.json": "1230c2241f7bccc80eeecc0247f200d4be3fe06d836766c6d9735bddd73ca182"
+        }
+      },
+      "migration-backend-ubuntu-24.04-arm": {
+        "rust_default_tests": 197,
+        "process_probe": {
+          "architecture": "aarch64",
+          "checks": 15,
+          "descendantsReaped": 1,
+          "executableBinding": "running_image_procfs",
+          "externalToolImageAuthority": false,
+          "fixtureOnly": true,
+          "host": "linux",
+          "noCompilerDispatch": true,
+          "threadedDrains": false,
+          "windowsPrePinRunningImageBindingQualified": false
+        },
+        "fake_tool_checks": 47,
+        "recipe_generation_checks": 31,
+        "fixture_directory_symlink_check": "directory-symlink-refusal",
+        "artifact_file_sha256": {
+          "backend-unit.log": "85221122d307b5b55734980968d647ecc3af2d6457b8f9f3695c6ad9a002e80f",
+          "board-compatibility-rust.json": "9b17d3275ab74d359a422f2f929e7af89eb9e2a11b1c3aedc61db83e54f6e646",
+          "board-recipe-rust.json": "5cde2f19f7b49e92c3841cd3e713717fa050eca80321aedd196af2ea0f3a88fe",
+          "compile-process.json": "782a0d6ac5bec3c8ff1f5d657159b7d672f3fdd1d0133400c2b4d4a8738d2a7d",
+          "recipe-generation-rust.json": "ec5fcbebff973d5bf605c5ddff95b01c29e9642dbf5abf9be0b450b018e935bf",
+          "tool-only-entry.json": "1230c2241f7bccc80eeecc0247f200d4be3fe06d836766c6d9735bddd73ca182"
+        }
+      },
+      "migration-backend-windows-2022": {
+        "rust_default_tests": 190,
+        "process_probe": {
+          "architecture": "x86_64",
+          "checks": 12,
+          "descendantsReaped": 0,
+          "executableBinding": "named_current_executable_pinned_after_open",
+          "externalToolImageAuthority": false,
+          "fixtureOnly": true,
+          "host": "windows",
+          "noCompilerDispatch": true,
+          "threadedDrains": false,
+          "windowsPrePinRunningImageBindingQualified": false
+        },
+        "fake_tool_checks": 47,
+        "recipe_generation_checks": 23,
+        "fixture_directory_symlink_check": "directory-symlink-refusal",
+        "artifact_file_sha256": {
+          "backend-unit.log": "405fe562b2566b6e26b2074f1ade318d77d4a0ce9f3b7b2470fd4252d2139fb5",
+          "board-compatibility-rust.json": "cb38cb9be1731b8a0b93efc47a5902deaf1f24fd3d86edcfcc48d817355ee49c",
+          "board-recipe-rust.json": "831369e053d421d4b50f015c462296dd19c1a399fa85d0f3172b448d3149ce65",
+          "compile-process.json": "0f619278eed889831306aeb21c6a1db4fcef05eb3eabb78f1e4b519345b4683a",
+          "recipe-generation-rust.json": "655094e2932d14c4417e65f695e523fa20a462d0c2594b6330d76643ea630d17",
+          "tool-only-entry.json": "07d77b5b8217604b9bf450ff9722e8d66ce1e29e2314b38a2b6a9a6ffc74f918"
+        }
+      }
+    },
+    "native_windows_execution": true,
+    "ubuntu_arm64_execution": true,
+    "gui_jobs": "not run; prior native GUI receipts retained"
   },
   "limits": {
     "sources": {
@@ -175,5 +259,6 @@
     "ino conversion, libraries, compatibility overrides and configured-board expansion",
     "fresh artifact validation/reuse; no upload/reset authority",
     "native desktops/devices/packages/recovery and full parity before launcher switch"
-  ]
+  ],
+  "source_commit": "dbf92f007bc9b5a880fec4f6ce9568139d68911c"
 }

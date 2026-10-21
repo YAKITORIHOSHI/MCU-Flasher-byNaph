@@ -336,8 +336,19 @@ Windows pre-pin running-image equality remains explicitly unproven.
 Local Ubuntu 26.04.1 AMD64 passes 197 default Rust tests, 15 process checks,
 strict Linux/MSVC-target linting, formatting and the existing 46-test private
 runtime/isolated Qt check. Source and review scope are recorded in
-`rust-compile-inputs.json`; native cross-host CI is pending at this entry.
+`rust-compile-inputs.json`. CI `39534638853` at exact source `dbf92f0` now passes
+both Ubuntu architectures (197 tests/15 process checks) and Windows (190/12),
+with 47 fake-tool checks on all three hosts. Prior GUI receipts stay unchanged.
 Task 3 and BLD-01 stay open: complete runtime/tool admission and immutable
 lifetime, external compiler ownership, nested Python startup, `.ino`/libraries
 and native workspace integration are still required. No Python application
 service is retired, no hardware/cloud action ran and production stays Python.
+
+The next prepared-sample slice uses the retained successful Uno tuple
+`platformio/atmelavr@5.3.0`, `framework-arduino-avr@5.4.0`,
+`tool-scons@4.41101.0`, `toolchain-atmelavr@1.70300.191015`. Campaign work trees
+were deliberately cleaned; receipts are not installed payload proof. This
+explicit owned sample supersedes the earlier uninvoked 5.1.0 proposal only when
+its preparer/tool-entry changes are integrated. Reacquire just the exact missing
+archives, verify official record hashes and bounded owned extraction, then admit
+the complete private runtime before any tool dispatch. No campaign restart.
