@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSize, QPoint
+from PySide6.QtCore import Qt, Slot, Signal, QTimer, QSize, QPoint, QEvent
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import QColor, QPainter, QPen, QGuiApplication, QIcon
 # pyrefly: ignore [missing-import]
@@ -1046,7 +1046,73 @@ class PrimaryToolbar(QToolBar):
         self._actions_popup = popup
 
 
-class MarqueeComboBox(QComboBox):
+class _MarqueeBehavior:
+    """Keep optional text motion confined to an active, unconstrained window."""
+
+    def _init_marquee_policy(self):
+        from src.modules.runtime_resources import performance_profile
+        self._marquee_constrained = performance_profile().constrained
+        self._marquee_window = None
+
+    def _marquee_animation_allowed(self):
+        return (not self._marquee_constrained and self.isVisible()
+                and self.isEnabled() and self.isActiveWindow() and not self.window().isMinimized())
+
+    def _watch_marquee_window(self):
+        owner = self.window()
+        if owner is not self._marquee_window:
+            if self._marquee_window is not None:
+                try:
+                    self._marquee_window.removeEventFilter(self)
+                except RuntimeError:
+                    pass  # Reparenting can outlive the previous native owner.
+            self._marquee_window = owner
+            owner.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if watched is self._marquee_window and event.type() == QEvent.Type.WindowStateChange:
+            self._sync_marquee_timer()
+        return super().eventFilter(watched, event)
+
+    def _sync_marquee_timer(self):
+        needed = self._check_marquee_needed()
+        active = self._timer.isActive()
+        if needed:
+            if not active:
+                self._timer.start()
+        else:
+            self._timer.stop()
+            self._offset = 0
+            self._dir = 1
+            self._pause = 30
+        if active != needed:
+            self.update()
+
+    def setToolTip(self, text):
+        self._marquee_help = str(text)
+        self._refresh_marquee_tooltip()
+
+    def _refresh_marquee_tooltip(self):
+        text = self.currentText()
+        context = getattr(self, "_marquee_help", "")
+        tooltip = f"{text}\n{context}" if text and context else text or context
+        super().setToolTip(tooltip)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if (hasattr(self, "_timer") and event.type() in
+                (QEvent.Type.EnabledChange, QEvent.Type.FontChange, QEvent.Type.StyleChange)):
+            self._sync_marquee_timer()
+
+    def event(self, event):
+        result = super().event(event)
+        if (hasattr(self, "_timer") and event.type() in
+                (QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate)):
+            self._sync_marquee_timer()
+        return result
+
+
+class MarqueeComboBox(_MarqueeBehavior, QComboBox):
     """
     QComboBox with smooth text marquee sliding when the text overflows.
     Mirrors the behavior of self._start_marquee() in the stable reference.
@@ -1054,6 +1120,7 @@ class MarqueeComboBox(QComboBox):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self._init_marquee_policy()
         self._offset = 0
         self._dir = 1
         self._pause = 30  # initial pause ~1.2s
@@ -1064,13 +1131,13 @@ class MarqueeComboBox(QComboBox):
         self._timer.timeout.connect(self._step)
         # Demand-driven: timer starts only when text overflows width
 
-        self.currentIndexChanged.connect(self._on_index_changed)
+        self.currentTextChanged.connect(self.refresh_current_text)
         view = self.view()
         if view:
             view.setTextElideMode(Qt.TextElideMode.ElideNone)
 
     def _check_marquee_needed(self) -> bool:
-        if not self.isVisible() or self._is_popup_open or not self.isEnabled():
+        if not self._marquee_animation_allowed() or self._is_popup_open:
             return False
         opt = QStyleOptionComboBox()
         self.initStyleOption(opt)
@@ -1085,10 +1152,12 @@ class MarqueeComboBox(QComboBox):
             return False
         return fm.horizontalAdvance(text) > avail
 
-    def _on_index_changed(self) -> None:
+    def refresh_current_text(self) -> None:
+        """Refresh after text changes, including signal-blocked port updates."""
         self._offset = 0
         self._dir = 1
         self._pause = 30
+        self._refresh_marquee_tooltip()
         self.update()
         if self._check_marquee_needed():
             if not self._timer.isActive():
@@ -1153,6 +1222,7 @@ class MarqueeComboBox(QComboBox):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._watch_marquee_window()
         if self._check_marquee_needed() and not self._timer.isActive():
             self._timer.start()
 
@@ -1232,12 +1302,15 @@ class MarqueeComboBox(QComboBox):
         text_w = fm.horizontalAdvance(text)
         if text_w <= avail:
             p.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        elif not self._timer.isActive():
+            p.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       fm.elidedText(text, Qt.TextElideMode.ElideRight, avail))
         else:
             y = text_rect.y() + (text_rect.height() + fm.ascent() - fm.descent()) // 2
             p.drawText(text_rect.x() - self._offset, y, text)
 
 
-class MarqueeBoardSelector(QWidget):
+class MarqueeBoardSelector(_MarqueeBehavior, QWidget):
     """
     Board display widget with marquee sliding text on overflow and click-to-open
     the BoardSearchDialog modal window.
@@ -1246,6 +1319,7 @@ class MarqueeBoardSelector(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self._init_marquee_policy()
         self._text = ""
         self._offset = 0
         self._dir = 1
@@ -1262,7 +1336,7 @@ class MarqueeBoardSelector(QWidget):
         # Demand-driven: timer starts only when text overflows button width
 
     def _check_marquee_needed(self) -> bool:
-        if not self.isVisible() or not self.isEnabled() or not self._text:
+        if not self._marquee_animation_allowed() or not self._text:
             return False
         fm = self.fontMetrics()
         text_w = fm.horizontalAdvance(self._text)
@@ -1274,6 +1348,7 @@ class MarqueeBoardSelector(QWidget):
         self._offset = 0
         self._dir = 1
         self._pause = 30
+        self._refresh_marquee_tooltip()
         self.update()
         if self._check_marquee_needed():
             if not self._timer.isActive():
@@ -1314,6 +1389,7 @@ class MarqueeBoardSelector(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._watch_marquee_window()
         if self._check_marquee_needed() and not self._timer.isActive():
             self._timer.start()
 
@@ -1393,6 +1469,9 @@ class MarqueeBoardSelector(QWidget):
         avail = inner.width()
         if text_w <= avail:
             p.drawText(inner, Qt.AlignmentFlag.AlignCenter, display_text)
+        elif not self._timer.isActive():
+            p.drawText(inner, Qt.AlignmentFlag.AlignCenter,
+                       fm.elidedText(display_text, Qt.TextElideMode.ElideRight, avail))
         else:
             y = inner.y() + (inner.height() + fm.ascent() - fm.descent()) // 2
             p.drawText(inner.x() - self._offset, y, display_text)
@@ -1745,6 +1824,7 @@ class ControlsBar(QWidget):
             previous = self.port_combo.findData(self._backend.current_port or "")
             self.port_combo.setCurrentIndex(max(0, previous))
             self.port_combo.blockSignals(False)
+            self.port_combo.refresh_current_text()
         self._update_action_button_states_on_controls()
 
     def _on_upload_speed_changed(self, speed: str) -> None:
@@ -1889,6 +1969,7 @@ class ControlsBar(QWidget):
                     self.port_combo.blockSignals(True)
                     self.port_combo.setCurrentIndex(idx)
                     self.port_combo.blockSignals(False)
+                    self.port_combo.refresh_current_text()
             self._update_action_button_states_on_controls()
             return
 
@@ -1928,6 +2009,7 @@ class ControlsBar(QWidget):
             if self._backend and self._backend.current_port:
                 self._backend.current_port = ""
         self.port_combo.blockSignals(False)
+        self.port_combo.refresh_current_text()
         self._update_action_button_states_on_controls()
 
     @Slot(dict)
@@ -1947,6 +2029,7 @@ class ControlsBar(QWidget):
         previous = self.port_combo.blockSignals(True)
         self.port_combo.setCurrentIndex(self.port_combo.findData(port) if port else -1)
         self.port_combo.blockSignals(previous)
+        self.port_combo.refresh_current_text()
         self._update_action_button_states_on_controls()
 
     @Slot(bool)

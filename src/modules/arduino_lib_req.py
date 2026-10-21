@@ -227,6 +227,31 @@ def _validate_index_payload(data, expected_key: str) -> dict:
 # Keep only small raw indexes. Large catalogs retain grouped metadata instead.
 _INDEX_JSON_RAM_CACHE = OrderedDict()
 _INDEX_JSON_RAM_LOCK = threading.Lock()
+_INDEX_VALID_SIGNATURES = OrderedDict()
+
+
+def _remember_valid_index(cache_file, expected_key, st):
+    """Called under the raw-cache lock; retain signatures, never large JSON."""
+    key = cache_file, expected_key
+    _INDEX_VALID_SIGNATURES[key] = st.st_mtime_ns, st.st_size
+    _INDEX_VALID_SIGNATURES.move_to_end(key)
+    while len(_INDEX_VALID_SIGNATURES) > 64:
+        _INDEX_VALID_SIGNATURES.popitem(last=False)
+
+
+def _has_valid_index_cache(cache_file, expected_key):
+    """Avoid parsing a source again merely to decide whether to refresh it."""
+    try:
+        st = os.stat(cache_file)
+    except OSError:
+        return False
+    key = cache_file, expected_key
+    with _INDEX_JSON_RAM_LOCK:
+        if _INDEX_VALID_SIGNATURES.get(key) == (st.st_mtime_ns, st.st_size):
+            _INDEX_VALID_SIGNATURES.move_to_end(key)
+            return True
+        _INDEX_VALID_SIGNATURES.pop(key, None)
+    return _read_index_cache(cache_file, expected_key) is not None
 
 
 def _read_index_cache(cache_file: str, expected_key: str) -> dict | None:
@@ -236,13 +261,19 @@ def _read_index_cache(cache_file: str, expected_key: str) -> dict | None:
             cached = _INDEX_JSON_RAM_CACHE.get(cache_file)
             if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
                 _INDEX_JSON_RAM_CACHE.move_to_end(cache_file)
-                return _validate_index_payload(cached[2], expected_key)
+                data = _validate_index_payload(cached[2], expected_key)
+                _remember_valid_index(cache_file, expected_key, st)
+                return data
             _INDEX_JSON_RAM_CACHE.pop(cache_file, None)
 
         with open(cache_file, "r", encoding="utf-8-sig") as fh:
             data = _validate_index_payload(json.load(fh), expected_key)
+            current = os.stat(cache_file)
             with _INDEX_JSON_RAM_LOCK:
-                if st.st_size <= 1_000_000:
+                stable = (st.st_mtime_ns, st.st_size) == (current.st_mtime_ns, current.st_size)
+                if stable:
+                    _remember_valid_index(cache_file, expected_key, st)
+                if stable and st.st_size <= 1_000_000:
                     _INDEX_JSON_RAM_CACHE[cache_file] = (st.st_mtime_ns, st.st_size, data)
                     while (len(_INDEX_JSON_RAM_CACHE) > 4 or
                            sum(entry[1] for entry in _INDEX_JSON_RAM_CACHE.values()) > 2_000_000):
@@ -265,6 +296,9 @@ def _write_index_cache(cache_file: str, raw_text: str) -> None:
             # Invalidate stale RAM cache entry so next read loads new text
             with _INDEX_JSON_RAM_LOCK:
                 _INDEX_JSON_RAM_CACHE.pop(cache_file, None)
+                for key in tuple(_INDEX_VALID_SIGNATURES):
+                    if key[0] == cache_file:
+                        _INDEX_VALID_SIGNATURES.pop(key, None)
         except OSError:
             pass
     finally:
@@ -1576,6 +1610,9 @@ class BrowseTab:
         self._load_more_after_id = None
         self._label_after_id = None
         self._search_revision = 0
+        self._search_pending = False
+        self._rendered_search_items = None
+        self._rendered_search_query = None
         from src.modules.browser_loading import LatestScan, search_catalog
         self._search_worker = LatestScan(app._tasks, search_catalog)
         self._version_revision = 0
@@ -1858,17 +1895,31 @@ class BrowseTab:
         if self._search_after_id is not None:
             self.app.root.after_cancel(self._search_after_id)
         self._search_after_id = None
-        self._search_revision += 1
-        revision, items = self._search_revision, self.all_items
+        items = self.all_items
         query = self.search_var.get().strip().casefold()
+        if (not self._search_pending and items is self._rendered_search_items
+                and query == self._rendered_search_query):
+            return
+        self._search_revision += 1
+        revision = self._search_revision
+        self._search_pending = True
         def completed(names, error):
             if revision != self._search_revision or items is not self.all_items:
                 return
+            self._search_pending = False
             if error:
+                self._rendered_search_items = None
+                self._rendered_search_query = None
                 self.lbl_search_status.config(text=f"Search unavailable: {error}")
+                return
+            if names is None:
+                self._rendered_search_items = None
+                self._rendered_search_query = None
                 return
             if names is not None:
                 self.filtered_names = names
+                self._rendered_search_items = items
+                self._rendered_search_query = query
                 self._populate_listbox()
         if len(items) <= 1000:
             from src.modules.browser_loading import search_catalog
@@ -2205,9 +2256,13 @@ class InstalledTab:
 
     def _start_loading_animation(self, req_id: int, frame_idx: int = 0):
         self._animation_after_id = None
+        self._animation_suspended = False
         if getattr(self, "_select_req_id", 0) != req_id:
             return
         if getattr(self, "_loading_complete_req_id", None) == req_id:
+            return
+        if getattr(self.app, '_is_hidden', False):
+            self._animation_suspended = True
             return
 
         frame = self._SPINNER_FRAMES[frame_idx % len(self._SPINNER_FRAMES)]
@@ -2492,6 +2547,7 @@ class InstalledTab:
         self._load_details_async_worker(item, req_id)
 
     def _stop_loading_animation(self):
+        self._animation_suspended = False
         if self._animation_after_id is not None:
             self.app.root.after_cancel(self._animation_after_id)
             self._animation_after_id = None
@@ -2611,7 +2667,6 @@ class ArduinoBrowser:
         self._active_download_tab = None
         self._downloading_item_name = None
         self._cancel_event = threading.Event()
-        self._keep_alive = True
         self._is_hidden = False
 
         # Load persisted download directory
@@ -2656,26 +2711,46 @@ class ArduinoBrowser:
 
         self._build_ui()
         self.root.after(100, self._initial_load)
-        self.root.after(250, self._check_show_trigger)
+        self._start_manager_listener()
 
     def _on_window_close(self):
-        """Sleep Mode: Hide window on close to keep loaded indexes in RAM."""
-        if getattr(self, "_keep_alive", True):
-            self.root.withdraw()
-            self._is_hidden = True
-        else:
-            self._force_exit()
+        """Retain the loaded window; only workspace shutdown destroys it."""
+        self._is_hidden = True
+        self.progress.stop()
+        detail = getattr(self, 'installed_tab', None)
+        if detail is not None:
+            suspended = detail._animation_after_id is not None or getattr(detail, '_animation_suspended', False)
+            detail._stop_loading_animation()
+            detail._animation_suspended = suspended
+        self.root.withdraw()
+
+    def _start_manager_listener(self):
+        """Use native IPC readiness so a sleeping Linux window has no poll."""
+        self._channel_watcher = None
+        channel = getattr(self, '_linux_channel', None)
+        if sys.platform.startswith('linux') and channel is not None:
+            self._channel_watcher = channel.watch(self.root, self._handle_linux_commands)
+            if self._channel_watcher is not None:
+                return
+        self.root.after(250, self._check_show_trigger)
+
+    def _handle_linux_commands(self, commands):
+        for command in commands:
+            if command == 'quit':
+                self._force_exit()
+                return False
+            if command == 'wake':
+                self._unhide_window()
+        return True
 
     def _check_show_trigger(self):
         """Poll for wake-up or force-exit trigger file sent by main MCU Flasher GUI."""
         if sys.platform.startswith("linux"):
             channel = getattr(self, "_linux_channel", None)
-            for command in channel.poll() if channel is not None else ():
-                if command == "quit":
-                    self._force_exit()
-                    return
-                self._unhide_window()
-            self.root.after(150, self._check_show_trigger)
+            if not self._handle_linux_commands(channel.poll() if channel is not None else ()):
+                return
+            self.root.after(1000 if getattr(self, '_is_hidden', False) else 150,
+                            self._check_show_trigger)
             return
         # If the main app is shutting down, it writes a force-exit trigger so
         # this sleeping Download Manager process doesn't remain as an orphan.
@@ -2758,7 +2833,12 @@ class ArduinoBrowser:
         self._configure_styles()
 
     def _wake_sync(self):
-        self._compute_installed_items_async()
+        """Resume display-only work without reloading or rescanning packages."""
+        if self._busy and str(self.progress.cget('mode')) == 'indeterminate':
+            self.progress.start(self._progress_interval)
+        detail = getattr(self, 'installed_tab', None)
+        if detail is not None and getattr(detail, '_animation_suspended', False) is True:
+            detail._start_loading_animation(detail._select_req_id)
 
     def _force_exit(self):
         """Permanently close process and purge memory."""
@@ -2891,12 +2971,6 @@ class ArduinoBrowser:
         self._header = header
         header.pack(fill="x", padx=16, pady=(12, 8))
         actions = header.actions
-
-        self.quit_btn = make_flat_button(
-            actions, "Quit", self._force_exit,
-            Theme.BTN_CLEAR, Theme.BTN_CLEAR_H
-        )
-        self.quit_btn.pack(side="right", padx=(6, 0))
 
         self.refresh_btn = make_flat_button(
             actions, "Refresh indexes", self._refresh_all,
@@ -3071,6 +3145,13 @@ class ArduinoBrowser:
                 self._set_status(f'Installed packages could not be scanned: {error}')
                 return
             if items is None:
+                return
+            if items == self._installed_items and hasattr(self, '_installed_map'):
+                # A repeated scan must not rebuild selected rows or restart the
+                # detail worker. The Installed page may not have opened yet.
+                if (self.notebook.index(self.notebook.select()) == 2
+                        and self.installed_tab.installed_items is not self._installed_items):
+                    self.installed_tab.populate(self._installed_items)
                 return
             self._installed_items = items
             self._installed_map = {item["name"].lower(): item for item in items}
@@ -4156,22 +4237,31 @@ class ArduinoBrowser:
         self._busy = True
         self.refresh_btn.config(state='disabled')
         self.progress.config(mode='indeterminate')
-        self.progress.start(self._progress_interval)
+        if not self._is_hidden:
+            self.progress.start(self._progress_interval)
         self._tasks.start(target, failed=lambda error: self._finish_load(f'Catalog load failed: {error}'))
 
     def _load_both(self, force_refresh=False):
         """Publish cached catalogs before HTTP requests; bound refresh concurrency."""
         from concurrent.futures import ThreadPoolExecutor
         from src.modules.runtime_resources import performance_profile
+        from src.modules.browser_loading import CatalogPublisher
+        publications = CatalogPublisher(getattr(getattr(self, 'lib_tab', None), 'all_items', {}),
+                                        getattr(getattr(self, 'board_tab', None), 'all_items', {}))
+
+        def publish(libraries, boards):
+            # Content comparison belongs to this worker, never a Tk callback.
+            self._post_ui(self._publish_catalogs, *publications.prepare(libraries, boards))
+
         urls = [BOARD_INDEX_URL, *self._additional_board_urls]
         paths = [BOARD_CACHE_FILE if index == 0 else _board_index_cache_file(url)
                  for index, url in enumerate(urls)]
         libs = _read_library_catalog(LIBRARY_CACHE_FILE)
         source_urls = dict(zip(paths, urls))
         boards = _read_board_catalog(paths, source_urls=source_urls)
-        self._post_ui(self._publish_catalogs, libs, boards)
+        publish(libs, boards)
         needed = [(index, url, cache) for index, (url, cache) in enumerate(zip(urls, paths))
-                  if force_refresh or not self._cache_is_fresh(cache) or _read_index_cache(cache, 'packages') is None]
+                  if force_refresh or not self._cache_is_fresh(cache) or not _has_valid_index_cache(cache, 'packages')]
         need_libraries = force_refresh or libs is None or not self._cache_is_fresh(LIBRARY_CACHE_FILE)
         if not needed and not need_libraries:
             self._post_ui(self._finish_load, f'{len(libs or {})} libraries, {len(boards or {})} board platforms loaded from cache')
@@ -4187,7 +4277,7 @@ class ArduinoBrowser:
             data = self._load_index(LIBRARY_INDEX_URL, LIBRARY_CACHE_FILE, True, 'library')
             if data is not None:
                 libs = _read_library_catalog(LIBRARY_CACHE_FILE, data)
-                self._post_ui(self._publish_catalogs, libs, None)
+                publish(libs, None)
             del data
         fresh, failed = {}, []
         def fetch(index, url, cache):
@@ -4204,7 +4294,7 @@ class ArduinoBrowser:
         if needed:
             boards = _read_board_catalog(paths, fresh, source_urls=source_urls)
         self._is_online = self._index_fetch_succeeded.is_set()
-        self._post_ui(self._publish_catalogs, libs, boards)
+        publish(libs, boards)
         message = f'{len(libs or {})} libraries, {len(boards or {})} board platforms loaded'
         if not self._is_online:
             message += ' — offline/unavailable; using local caches'

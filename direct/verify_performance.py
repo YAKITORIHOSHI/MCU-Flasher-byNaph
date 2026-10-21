@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
-from PySide6.QtCore import QCoreApplication, QEvent, QThread
+from PySide6.QtCore import QCoreApplication, QEvent, QThread, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from main.core import config
@@ -52,6 +52,194 @@ class PerformanceChecks(unittest.TestCase):
         self.config_patch = patch.object(config, "_load_raw_config", return_value={"shared": {}, "instances": {}})
         self.config_patch.start()
         self.addCleanup(self.config_patch.stop)
+
+    def _marquee_fixture(self, constrained):
+        from PySide6.QtWidgets import QWidget
+        from main.qt.toolbar import MarqueeBoardSelector, MarqueeComboBox
+        from src.modules import runtime_resources
+        profile = performance_profile(cores=4 if constrained else 12,
+                                      physical_cores=4 if constrained else 8,
+                                      total_memory_gb=4 if constrained else 16)
+        owner = QWidget()
+        owner.resize(320, 110)
+        with patch.object(runtime_resources, "performance_profile", return_value=profile):
+            board = MarqueeBoardSelector(owner)
+            combo = MarqueeComboBox(owner)
+        text = "A complete long microcontroller and serial description retained for reading"
+        board.set_board(text)
+        combo.addItem(text, "literal-port-id")
+        combo.addItem("Other port", "other-port-id")
+        for index, widget in enumerate((board, combo)):
+            widget.setFixedSize(150, 28)
+            widget.move(10, 10 + index * 45)
+            widget.setToolTip("Contextual selection help")
+        owner.show()
+        owner.activateWindow()
+        wait_until(owner.isActiveWindow)
+        self.addCleanup(owner.deleteLater)
+        self.addCleanup(owner.close)
+        return owner, board, combo, text
+
+    def test_constrained_marquees_keep_full_tooltips_without_animation(self):
+        owner, board, combo, text = self._marquee_fixture(True)
+        combo.setFocus()
+        APP.processEvents()
+        ticks = []
+        for widget in (board, combo):
+            widget._timer.timeout.connect(lambda: ticks.append(True))
+            self.assertFalse(widget._timer.isActive())
+            self.assertIn(text, widget.toolTip())
+            self.assertIn("Contextual selection help", widget.toolTip())
+        QTest.qWait(100)
+        self.assertEqual(ticks, [])
+        self.assertEqual(board.text(), text)
+        self.assertEqual(combo.currentData(), "literal-port-id")
+        self.assertTrue(combo.hasFocus())
+        QTest.keyClick(combo, Qt.Key.Key_Down)
+        self.assertEqual(combo.currentData(), "other-port-id")
+        self.assertIn("Other port", combo.toolTip())
+        self.assertNotIn(text, combo.toolTip())
+        combo.setItemText(1, "Updated readable port")
+        self.assertIn("Updated readable port", combo.toolTip())
+        self.assertEqual(combo.currentData(), "other-port-id")
+        # A later busy-state tooltip must retain its contextual explanation.
+        board.setToolTip("Board selection is locked")
+        self.assertIn("Board selection is locked", board.toolTip())
+        self.assertIn(text, board.toolTip())
+
+    def test_constrained_overflow_renders_an_ellipsis_without_changing_source_text(self):
+        from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
+        owner, board, combo, text = self._marquee_fixture(True)
+        for widget in (board, combo):
+            with self.subTest(widget=type(widget).__name__):
+                if widget is combo:
+                    option = QStyleOptionComboBox()
+                    combo.initStyleOption(option)
+                    field = combo.style().subControlRect(
+                        QStyle.ComplexControl.CC_ComboBox, option,
+                        QStyle.SubControl.SC_ComboBoxEditField, combo)
+                    width = field.width() - 8
+                else:
+                    width = 134  # The 150-pixel board control has 8-pixel side padding.
+                elided = widget.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, width)
+                self.assertTrue(elided.endswith("\u2026"))
+                original = widget.grab().toImage()
+                if widget is combo:
+                    combo.setItemText(0, elided)
+                else:
+                    board.set_board(elided)
+                APP.processEvents()
+                self.assertEqual(original, widget.grab().toImage())
+                if widget is combo:
+                    combo.setItemText(0, text)
+                else:
+                    board.set_board(text)
+                self.assertEqual(widget.currentText(), text)
+
+    def test_marquees_pause_and_resume_with_window_enabled_and_visibility_state(self):
+        from PySide6.QtWidgets import QWidget
+        owner, board, combo, text = self._marquee_fixture(False)
+        for widget in (board, combo):
+            self.assertTrue(widget._timer.isActive())
+        other = QWidget()
+        self.addCleanup(other.deleteLater)
+        self.addCleanup(other.close)
+        other.show()
+        other.activateWindow()
+        wait_until(other.isActiveWindow)
+        for widget in (board, combo):
+            self.assertFalse(widget._timer.isActive())
+        owner.activateWindow()
+        wait_until(owner.isActiveWindow)
+        for widget in (board, combo):
+            self.assertTrue(widget._timer.isActive())
+            widget.setEnabled(False)
+            self.assertFalse(widget._timer.isActive())
+            widget.setEnabled(True)
+            self.assertTrue(widget._timer.isActive())
+            widget.hide()
+            self.assertFalse(widget._timer.isActive())
+            widget.show()
+            self.assertTrue(widget._timer.isActive())
+        self.assertEqual(board.text(), text)
+        self.assertEqual(combo.currentData(), "literal-port-id")
+        combo.setCurrentIndex(1)
+        self.assertFalse(combo._timer.isActive())
+        combo.setCurrentIndex(0)
+        self.assertTrue(combo._timer.isActive())
+
+    def test_marquees_pause_when_the_active_owner_is_minimized(self):
+        owner, board, combo, _text = self._marquee_fixture(False)
+        self.assertTrue(all(widget._timer.isActive() for widget in (board, combo)))
+        owner.showMinimized()
+        APP.processEvents()
+        self.assertTrue(owner.isMinimized())
+        for widget in (board, combo):
+            self.assertFalse(widget._timer.isActive())
+        owner.showNormal()
+        owner.activateWindow()
+        wait_until(owner.isActiveWindow)
+        self.assertTrue(all(widget._timer.isActive() for widget in (board, combo)))
+
+    def test_controls_port_updates_refresh_full_text_during_signal_blocked_changes(self):
+        from PySide6.QtWidgets import QWidget
+        from main.qt.toolbar import ControlsBar
+        from src.modules import runtime_resources
+        profile = performance_profile(cores=4, physical_cores=4, total_memory_gb=4)
+        owner = QWidget()
+        self.addCleanup(owner.deleteLater)
+        self.addCleanup(owner.close)
+        with patch.object(runtime_resources, "performance_profile", return_value=profile):
+            controls = ControlsBar(None, owner)
+        combo = controls.port_combo
+        ports = [dict(device="/dev/tty-fixture-0", description="First full device description"),
+                 dict(device="/dev/tty-fixture-1", description="Second full device description")]
+        controls.on_ports_updated(ports)
+        controls.on_port_selected(dict(port="/dev/tty-fixture-0"))
+        self.assertEqual(combo.currentData(), "/dev/tty-fixture-0")
+        self.assertIn("First full device description", combo.toolTip())
+        self.assertIn("Serial port for upload and monitoring", combo.toolTip())
+        ports[0] = dict(device="/dev/tty-fixture-0", description="Updated full device description")
+        controls.on_ports_updated(ports)
+        self.assertIn("Updated full device description", combo.toolTip())
+        self.assertNotIn("First full device description", combo.toolTip())
+        controls.on_port_selected(dict(port=""))
+        self.assertNotIn("Updated full device description", combo.toolTip())
+        # An unchanged inventory can still restore the backend's selected port.
+        controls._backend = SimpleNamespace(current_port="/dev/tty-fixture-1")
+        controls.on_ports_updated(ports)
+        self.assertEqual(combo.currentData(), "/dev/tty-fixture-1")
+        self.assertIn("Second full device description", combo.toolTip())
+        controls._backend = SimpleNamespace(current_port="/dev/tty-fixture-0",
+                                             select_port=lambda _port: False)
+        controls.on_port_selected(dict(port="/dev/tty-fixture-0"))
+        combo.setCurrentIndex(1)  # A refused selection restores the previous port under blocked signals.
+        self.assertEqual(combo.currentData(), "/dev/tty-fixture-0")
+        self.assertIn("Updated full device description", combo.toolTip())
+        self.assertNotIn("Second full device description", combo.toolTip())
+
+    def test_marquees_can_move_after_the_previous_native_owner_was_destroyed(self):
+        from PySide6.QtWidgets import QWidget
+        from shiboken6 import delete
+        from main.qt.toolbar import MarqueeBoardSelector, MarqueeComboBox
+        for cls in (MarqueeBoardSelector, MarqueeComboBox):
+            with self.subTest(widget=cls.__name__):
+                previous, replacement = QWidget(), QWidget()
+                control = cls(previous)
+                previous.show()
+                APP.processEvents()
+                control.hide()
+                control.setParent(replacement)
+                delete(previous)
+                try:
+                    control._watch_marquee_window()
+                    self.assertIs(control._marquee_window, replacement)
+                    replacement.show()
+                    control.show()
+                    APP.processEvents()
+                finally:
+                    replacement.close()
+                    replacement.deleteLater()
 
     def test_editor_resource_protocol_and_debounce(self):
         node = shutil.which("node")

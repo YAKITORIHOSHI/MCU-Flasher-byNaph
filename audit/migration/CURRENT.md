@@ -5,6 +5,14 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- Current user priority is shipping GUI responsiveness, especially Board/Library
+  opening/search/scroll/resize/selection, with permission to rework its backend.
+  Close must sleep with loaded state in RAM; no visible Quit or repeated list
+  reloads. The current changes address renderer work, unchanged data/search
+  publication, background sleep IPC and constrained-host marquee policy.
+  See [GUI performance evidence](../GUI_PERFORMANCE.md) for exact scope/checks
+  and remaining host qualification. This slice changes the current Python
+  application; it does not complete the Rust GUI or retire a Python service.
 - User expanded replacement platform requirements on 21 October: Windows 10/11
   AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
   Fedora x86_64/aarch64 and Linux Mint AMD64. See [required platform coverage](PLATFORM_SUPPORT.md)

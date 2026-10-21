@@ -90,6 +90,164 @@ class TkTaskLifecycleChecks(unittest.TestCase):
         self.assertEqual(self.pending, {})
 
 
+class BrowserSleepChecks(unittest.TestCase):
+    """A retained browser sleeps without cancelling user work or reading disk."""
+
+    def browser(self):
+        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
+        app.root, app.progress, app.refresh_btn = Mock(), Mock(), Mock()
+        app._tasks = Mock()
+        app._busy, app._is_hidden = False, False
+        app._progress_interval = 120
+        app._cancel_event = threading.Event()
+        app._apply_current_theme = Mock()
+        app._force_exit = Mock()
+        app._compute_installed_items_async = Mock(side_effect=AssertionError('Warm wake scanned disk'))
+        app._initial_load = Mock(side_effect=AssertionError('Warm wake reloaded catalogs'))
+        app._load_both = Mock(side_effect=AssertionError('Warm wake reloaded catalogs'))
+        return app
+
+    def test_close_always_sleeps_even_if_old_keep_alive_flag_is_false(self):
+        app = self.browser()
+        app._keep_alive = False
+        app._on_window_close()
+        self.assertTrue(app._is_hidden)
+        app.root.withdraw.assert_called_once()
+        app._force_exit.assert_not_called()
+        app.root.destroy.assert_not_called()
+        self.assertFalse(app._cancel_event.is_set())
+
+    def test_wake_reuses_catalog_and_selection_without_disk_or_catalog_reload(self):
+        app = self.browser()
+        app.lib_tab = SimpleNamespace(all_items=record(), search='Sensor', selection=(0,), scroll=.4)
+        app.board_tab = SimpleNamespace(all_items={'Board': object()})
+        app._installed_items = [dict(name='Sensor', path='fixture', installed_version='1.0.0')]
+        catalogs = app.lib_tab.all_items, app.board_tab.all_items, app._installed_items
+        app._is_hidden = True
+        with patch.object(browser.sys, 'platform', 'linux'):
+            app._unhide_window()
+        self.assertFalse(app._is_hidden)
+        self.assertIs(app.lib_tab.all_items, catalogs[0])
+        self.assertIs(app.board_tab.all_items, catalogs[1])
+        self.assertIs(app._installed_items, catalogs[2])
+        self.assertEqual((app.lib_tab.search, app.lib_tab.selection, app.lib_tab.scroll), ('Sensor', (0,), .4))
+        app.root.deiconify.assert_called_once()
+        app._initial_load.assert_not_called()
+        app._load_both.assert_not_called()
+        app._compute_installed_items_async.assert_not_called()
+        app.progress.start.assert_not_called()
+
+    def test_sleep_stops_display_animation_and_wake_resumes_active_catalog(self):
+        app = self.browser()
+        app._busy = True
+        app.progress.cget.return_value = 'indeterminate'
+        app._on_window_close()
+        app.progress.stop.assert_called_once()
+        self.assertFalse(app._cancel_event.is_set(), 'Hiding must not cancel a user download')
+        with patch.object(browser.sys, 'platform', 'linux'):
+            app._unhide_window()
+        app.progress.start.assert_called_once_with(120)
+
+    def test_hidden_catalog_load_keeps_worker_without_display_animation(self):
+        app = self.browser()
+        app._is_hidden = True
+        target = Mock()
+        app._start_thread(target)
+        self.assertTrue(app._busy)
+        self.assertIs(app._tasks.start.call_args.args[0], target)
+        app.progress.start.assert_not_called()
+
+    def test_wake_does_not_animate_determinate_download(self):
+        app = self.browser()
+        app._busy = True
+        app.progress.cget.return_value = 'determinate'
+        app._wake_sync()
+        app.progress.start.assert_not_called()
+        app._compute_installed_items_async.assert_not_called()
+
+    def test_unchanged_inventory_keeps_visible_rows_and_selection(self):
+        app = self.browser()
+        app._inventory_request_id, app._catalog_revision = 0, 3
+        app._download_dir = 'fixture'
+        app._is_online = True
+        app._installed_items = [dict(name='Sensor', path='fixture/Sensor', installed_version='1.0.0')]
+        app._installed_map = {'sensor': app._installed_items[0]}
+        app.lib_tab = SimpleNamespace(all_items=record(), refresh_listbox_labels=Mock())
+        app.board_tab = SimpleNamespace(all_items={}, refresh_listbox_labels=Mock())
+        app.notebook = Mock()
+        app.notebook.index.return_value = 2
+        app.installed_tab = Mock(installed_items=app._installed_items)
+        app._update_version_status = Mock()
+        app._inventory_worker = Mock()
+        app.status_var = Mock()
+        # Call the production method, bypassing this fixture's no-wake-scan guard.
+        browser.ArduinoBrowser._compute_installed_items_async(app)
+        _request, completed = app._inventory_worker.submit.call_args.args
+        completed([dict(item) for item in app._installed_items], None)
+        app.lib_tab.refresh_listbox_labels.assert_not_called()
+        app.board_tab.refresh_listbox_labels.assert_not_called()
+        app.installed_tab.populate.assert_not_called()
+        app._update_version_status.assert_not_called()
+
+    def test_unchanged_inventory_still_populates_newly_opened_installed_tab(self):
+        app = self.browser()
+        app._inventory_request_id, app._catalog_revision = 0, 3
+        app._download_dir, app._is_online = 'fixture', True
+        app._installed_items = [dict(name='Sensor', path='fixture/Sensor', installed_version='1.0.0')]
+        app._installed_map = {'sensor': app._installed_items[0]}
+        app.lib_tab = SimpleNamespace(all_items=record(), refresh_listbox_labels=Mock())
+        app.board_tab = SimpleNamespace(all_items={}, refresh_listbox_labels=Mock())
+        app.notebook = Mock()
+        app.notebook.index.return_value = 2
+        app.installed_tab = Mock(installed_items=[])
+        app._inventory_worker, app.status_var = Mock(), Mock()
+        original = app._installed_items
+        browser.ArduinoBrowser._compute_installed_items_async(app)
+        _request, completed = app._inventory_worker.submit.call_args.args
+        completed([dict(item) for item in original], None)
+        self.assertIs(app._installed_items, original)
+        app.installed_tab.populate.assert_called_once_with(original)
+
+    def test_linux_listener_uses_readiness_without_a_poll_timer(self):
+        app = self.browser()
+        app._linux_channel = Mock()
+        watcher = app._linux_channel.watch.return_value
+        with patch.object(browser.sys, 'platform', 'linux'):
+            app._start_manager_listener()
+        app._linux_channel.watch.assert_called_once_with(app.root, app._handle_linux_commands)
+        self.assertIs(app._channel_watcher, watcher)
+        app.root.after.assert_not_called()
+
+    def test_listener_falls_back_without_dropping_parent_shutdown(self):
+        app = self.browser()
+        app._linux_channel = Mock()
+        app._linux_channel.watch.return_value = None
+        with patch.object(browser.sys, 'platform', 'linux'):
+            app._start_manager_listener()
+            app._handle_linux_commands(['quit', 'wake'])
+        app.root.after.assert_called_once_with(250, app._check_show_trigger)
+        app._force_exit.assert_called_once()
+        app.root.deiconify.assert_not_called()
+
+    def test_sleep_pauses_detail_animation_without_cancelling_the_scan(self):
+        app = self.browser()
+        detail = browser.InstalledTab.__new__(browser.InstalledTab)
+        detail.app, detail.lbl_size = app, Mock()
+        detail._select_req_id, detail._loading_complete_req_id = 7, 6
+        detail._animation_after_id = 'detail-spinner'
+        detail._detail_worker = Mock()
+        app.installed_tab = detail
+        app._on_window_close()
+        app.root.after_cancel.assert_called_once_with('detail-spinner')
+        self.assertIsNone(detail._animation_after_id)
+        detail._start_loading_animation(7)
+        app.root.after.assert_not_called()
+        detail._detail_worker.cancel.assert_not_called()
+        app._is_hidden = False
+        app._wake_sync()
+        self.assertEqual(app.root.after.call_args.args[0], 180)
+
+
 class CacheChecks(unittest.TestCase):
     def setUp(self):
         parent = ROOT / 'temp/audit/downloader'
@@ -103,6 +261,7 @@ class CacheChecks(unittest.TestCase):
         self.cache = str(self.folder / 'catalog.json')
         loading._CATALOGS.clear()
         browser._INDEX_JSON_RAM_CACHE.clear()
+        browser._INDEX_VALID_SIGNATURES.clear()
 
     def touch_source(self):
         stat = self.source.stat()
@@ -176,6 +335,65 @@ assert not any(name.split('.')[0] in {'PySide6', 'PyQt5', 'shiboken6'} for name 
         packages = [dict(name=vendor, platforms=[dict(name='Device core', version='1.0', boards=[dict(name='MCU')],
                                                      url='https://example.invalid/core.zip')]) for vendor in ('one', 'two')]
         self.assertEqual(len(browser._group_boards(packages)), 2)
+
+    def test_catalog_load_does_not_parse_large_board_source_twice(self):
+        source = self.folder / 'large-board.json'
+        source.write_text(json.dumps(dict(packages=[dict(name='fixture', platforms=[dict(
+            name='Fixture core', version='1.0.0', architecture='fixture',
+            url='https://fixture.invalid/core.zip', boards=[dict(name='Fixture board')])])],
+            padding='x' * 1_100_000)), encoding='utf-8')
+        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
+        app._additional_board_urls = []
+        app._cache_is_fresh = Mock(return_value=True)
+        app._post_ui = Mock()
+        app._load_index = Mock(side_effect=AssertionError('Fresh source caused a download'))
+        with (patch.object(browser, 'BOARD_CACHE_FILE', str(source)),
+              patch.object(browser, 'INDEX_CACHE_DIR', str(self.folder)),
+              patch.object(browser, '_read_library_catalog', return_value=record()),
+              patch.object(browser.json, 'load', wraps=json.load) as parse):
+            app._load_both()
+        reads = [call for call in parse.call_args_list if call.args[0].name == str(source)]
+        self.assertEqual(len(reads), 1, 'A validated catalog source was reparsed just to decide whether to refresh')
+        self.assertNotIn(str(source), browser._INDEX_JSON_RAM_CACHE,
+                         'Avoiding duplicate parsing must not retain the large raw source')
+
+    def test_validation_summary_rechecks_changed_or_rewritten_sources_and_schema(self):
+        path = str(self.source)
+        self.assertTrue(browser._has_valid_index_cache(path, 'libraries'))
+        self.assertFalse(browser._has_valid_index_cache(path, 'packages'))
+        original = self.source.stat()
+        browser._write_index_cache(path, ' ' * original.st_size)
+        # An application-controlled replacement can have the same size and a
+        # coarse filesystem timestamp. Its explicit write must revoke validity.
+        os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+        self.assertFalse(browser._has_valid_index_cache(path, 'libraries'))
+        self.source.write_text('{"libraries":[]}', encoding='utf-8')
+        self.touch_source()
+        self.assertTrue(browser._has_valid_index_cache(path, 'libraries'))
+        self.source.unlink()
+        self.assertFalse(browser._has_valid_index_cache(path, 'libraries'))
+
+    def test_unchanged_refresh_reuses_catalogs_before_tk_delivery(self):
+        libraries = record()
+        boards = {'Core': dict(name='Core', versions=[dict(version='1.0', url='https://fixture.invalid/core.zip')])}
+        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
+        app.lib_tab, app.board_tab = SimpleNamespace(all_items=libraries), SimpleNamespace(all_items=boards)
+        app._additional_board_urls = []
+        app._cache_is_fresh = Mock(return_value=True)
+        app._post_ui, app._load_index = Mock(), Mock(return_value={})
+        # The worker can publish cached data and freshly decoded equal data
+        # before Tk has handled the first delivery. Neither should reset rows.
+        with (patch.object(browser, '_read_library_catalog', side_effect=lambda *args: json.loads(json.dumps(libraries))),
+              patch.object(browser, '_read_board_catalog', side_effect=lambda *args, **kwargs: json.loads(json.dumps(boards)))):
+            app._load_both(force_refresh=True)
+        published = [call.args[1:] for call in app._post_ui.call_args_list
+                     if call.args[0] == app._publish_catalogs]
+        self.assertEqual(len(published), 3)
+        for libs, cores in published:
+            if libs is not None:
+                self.assertIs(libs, libraries, 'Equal library data must keep native rows and selection')
+            if cores is not None:
+                self.assertIs(cores, boards, 'Equal board data must keep native rows and selection')
 
     def test_custom_index_shape_newlines_and_atomic_settings_failure(self):
         self.assertEqual(browser.parse_additional_board_urls("https://vendor.invalid/a.json\nhttps://vendor.invalid/b.json,https://vendor.invalid/a.json"),
@@ -395,6 +613,91 @@ class BrowserLoadingChecks(TkDownloaderFixture):
         self.app._cancel_event = threading.Event()
         self.app._compute_installed_items = MethodType(browser.ArduinoBrowser._compute_installed_items, self.app)
         self.app._compute_installed_items_async = MethodType(browser.ArduinoBrowser._compute_installed_items_async, self.app)
+
+    def test_sleep_and_wake_preserve_native_search_selection_and_release(self):
+        app, tab = self.app, self.app.lib_tab
+        releases = [dict(version=value, url='https://fixture.invalid/sensor.zip') for value in ('2.0', '1.0')]
+        tab.populate({'Sensor': dict(name='Sensor', author='Fixture', maintainer='', category='Sensors',
+                                    architectures=['*'], sentence='Fixture sensor', paragraph='',
+                                    website='', versions=releases)})
+        tab.search_var.set('Sensor')
+        tab._execute_search()
+        tab.listbox.selection_set(0)
+        tab._on_select()
+        tab.version_combo.current(1)
+        widgets = tab.listbox, tab.search_entry, tab.version_combo, app.notebook
+        catalog = tab.all_items
+        self.root.deiconify()
+        self.root.update_idletasks()
+        with (patch.object(app, '_apply_current_theme'),
+              patch.object(app, '_compute_installed_items_async', side_effect=AssertionError('Wake scanned disk')),
+              patch.object(app, '_initial_load', side_effect=AssertionError('Wake reloaded catalog')),
+              patch.object(app, '_load_both', side_effect=AssertionError('Wake reloaded catalog'))):
+            for _ in range(3):
+                app._on_window_close()
+                self.assertEqual(self.root.state(), 'withdrawn')
+                app._unhide_window()
+                self.root.update_idletasks()
+                self.assertEqual(tab.listbox.curselection(), (0,))
+                self.assertEqual(tab.search_var.get(), 'Sensor')
+                self.assertEqual(tab.version_var.get(), '1.0')
+                self.assertIs(tab.all_items, catalog)
+                self.assertEqual((tab.listbox, tab.search_entry, tab.version_combo, app.notebook), widgets)
+        self.assertFalse(hasattr(app, 'quit_btn'), 'The browser has sleep-on-close rather than a Quit action')
+        self.assertFalse(app._cancel_event.is_set())
+
+    def test_repeated_unchanged_search_keeps_native_rows_and_selection(self):
+        tab = self.app.lib_tab
+        tab.populate(record())
+        tab.listbox.selection_set(0)
+        with patch.object(tab, '_populate_listbox', wraps=tab._populate_listbox) as rebuild:
+            for _ in range(5):
+                tab._execute_search()
+            rebuild.assert_not_called()
+        self.assertEqual(tab.listbox.curselection(), (0,))
+
+    def test_returned_query_failure_allows_an_explicit_retry(self):
+        tab = self.app.lib_tab
+        tab.populate(record())
+        requests = []
+        # Exercise worker completion without involving filesystem or threads.
+        tab.all_items = {f'Sensor {index}': {} for index in range(1001)}
+        tab._search_worker = SimpleNamespace(cancel=lambda: None,
+            submit=lambda request, callback: requests.append((request, callback)))
+        tab.search_var.set('Sensor')
+        tab._execute_search()
+        requests[-1][1](['Sensor 0'], None)
+        tab.search_var.set('other')
+        tab._execute_search()
+        tab.search_var.set('Sensor')
+        tab._execute_search()
+        requests[-1][1](None, 'Worker unavailable')
+        previous = len(requests)
+        tab._execute_search()
+        self.assertEqual(len(requests), previous + 1, 'The failed latest query must remain retryable')
+        requests[-1][1](['Sensor 0'], None)
+        self.assertEqual(tab.filtered_names, ['Sensor 0'])
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Native Linux Tk socket readiness')
+    def test_native_tk_listener_wakes_sleeping_browser_without_polling(self):
+        from src.modules.ubuntu_download_manager import DownloadManagerChannel, request
+        channel = DownloadManagerChannel(self.folder)
+        self.addCleanup(channel.close)
+        self.app._linux_channel = channel
+        self.app._unhide_window = Mock()
+        self.app._force_exit = Mock(side_effect=channel.close)
+        self.app._start_manager_listener()
+        watcher = self.app._channel_watcher
+        self.assertIsNotNone(watcher)
+        self.assertIsNone(watcher._timer)
+        self.assertTrue(request(self.folder, 'wake'))
+        self.until(lambda: self.app._unhide_window.called)
+        self.app._unhide_window.assert_called_once()
+        self.assertIsNone(watcher._timer)
+        self.assertTrue(request(self.folder, 'quit'))
+        self.until(lambda: self.app._force_exit.called)
+        self.assertTrue(watcher._closed)
+        self.assertIsNone(watcher._timer)
 
     def until(self, predicate, timeout=3):
         deadline = time.monotonic() + timeout
@@ -924,7 +1227,7 @@ class BrowserLoadingChecks(TkDownloaderFixture):
 
 if __name__ == '__main__':
     suite = unittest.TestSuite()
-    for cls in (TkTaskLifecycleChecks, CacheChecks, InstalledUpdateChecks, BrowserLoadingChecks):
+    for cls in (TkTaskLifecycleChecks, BrowserSleepChecks, CacheChecks, InstalledUpdateChecks, BrowserLoadingChecks):
         for name in cls.__dict__:
             if name.startswith('test_'):
                 suite.addTest(cls(name))

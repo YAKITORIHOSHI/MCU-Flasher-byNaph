@@ -235,7 +235,7 @@ class AppearanceChecks(TkDownloaderFixture):
         # at large scales. Await actual idleness with a deadline, preserving the
         # assertions that static glass must settle without an animation timer.
         def painting(widget):
-            return (any(getattr(widget, name, None) is not None for name in ("_redraw_id", "_paint_id"))
+            return (any(getattr(widget, name, None) is not None for name in ("_redraw_id", "_paint_id", "_resource_request"))
                     or any(painting(child) for child in widget.winfo_children()))
         deadline = time.monotonic() + 10
         earliest = time.monotonic() + .25
@@ -301,7 +301,7 @@ class AppearanceChecks(TkDownloaderFixture):
                 app._apply_current_theme()
             for width in (1040, 480):
                 self.show(width)
-                for button in (app.sources_btn, app.refresh_btn, app.quit_btn, app.browse_btn):
+                for button in (app.sources_btn, app.refresh_btn, app.browse_btn):
                     assert_button_corners(button)
                 for well in (app._folder_well, app.lib_tab._search_well):
                     owner = _owner(well)
@@ -513,7 +513,7 @@ class AppearanceChecks(TkDownloaderFixture):
                 self.assertEqual(app.lib_tab.listbox.cget("font"), expected_font)
                 self.assertGreaterEqual(contrast_ratio(app.lib_tab.listbox.cget("selectforeground"),
                                                       app.lib_tab.listbox.cget("selectbackground")), 4.5)
-                for button in (app.browse_btn, app.sources_btn, app.refresh_btn, app.quit_btn):
+                for button in (app.browse_btn, app.sources_btn, app.refresh_btn):
                     image_name = str(button._svg_image)
                     image_width = int(self.root.tk.call("image", "width", image_name))
                     image_height = int(self.root.tk.call("image", "height", image_name))
@@ -529,7 +529,7 @@ class AppearanceChecks(TkDownloaderFixture):
                     material = "#" + "".join(f"{int(channel):02x}" for channel in rgb)
                     self.assertGreaterEqual(contrast_ratio(ink, material), 4.5)
                 for control in (app.folder_entry, app.browse_btn, app.sources_btn, app.refresh_btn,
-                                app.quit_btn, app.lib_tab.version_combo, app.lib_tab.download_btn):
+                                app.lib_tab.version_combo, app.lib_tab.download_btn):
                     self.assertTrue(control.winfo_ismapped())
                     self.assertLessEqual(control.winfo_x() + control.winfo_width(), control.master.winfo_width() + 1,
                                          f"{control.winfo_class()} must fit its native row")

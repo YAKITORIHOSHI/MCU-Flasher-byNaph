@@ -1180,7 +1180,7 @@ class TkResponsiveChecks(DownloaderChecks):
             self.pump()
             self.assertEqual(app.lib_tab._responsive_panes._vertical,
                              app.lib_tab._responsive_panes.pane.winfo_width() < round(660 * scale))
-            for button in (app.sources_btn, app.refresh_btn, app.quit_btn):
+            for button in (app.sources_btn, app.refresh_btn):
                 self.assertTrue(button.winfo_ismapped())
                 self.assertLessEqual(button.winfo_rootx() + button.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
                 self.assertLessEqual(button.winfo_y() + button.winfo_height(), button.master.winfo_height())
@@ -1237,13 +1237,13 @@ class TkResponsiveChecks(DownloaderChecks):
             self.pump()
             self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
             if RENDER_DIR:
-                pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
-                self.assertTrue(pixmap.save(str(RENDER_DIR / f'installed-{width}.png')))
+                from direct.tk_capture import save_tk_capture
+                save_tk_capture(self.root, RENDER_DIR / f'installed-{width}.png', capture_app=APP)
             app.notebook.select(0)
             self.pump()
             if RENDER_DIR:
-                pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
-                self.assertTrue(pixmap.save(str(RENDER_DIR / f'downloader-{width}.png')))
+                from direct.tk_capture import save_tk_capture
+                save_tk_capture(self.root, RENDER_DIR / f'downloader-{width}.png', capture_app=APP)
 
     def test_board_preparation_controls_and_source_status_wrap_on_short_screen(self):
         app = self.app
@@ -1301,8 +1301,8 @@ class TkResponsiveChecks(DownloaderChecks):
             self.assertLessEqual(control_bottom, visible_bottom + 1,
                                  f'{control.winfo_class()} is below the details viewport')
             if RENDER_DIR:
-                pixmap = APP.primaryScreen().grabWindow(int(self.root.winfo_id()))
-                self.assertTrue(pixmap.save(str(RENDER_DIR / f'board-control-{index}.png')))
+                from direct.tk_capture import save_tk_capture
+                save_tk_capture(self.root, RENDER_DIR / f'board-control-{index}.png', capture_app=APP)
             self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
         app.sources_status.configure(text='https://vendor.invalid/package/device/index.json: Refresh failed; using saved catalog')
         app.sources_btn.invoke()

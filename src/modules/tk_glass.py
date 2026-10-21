@@ -7,6 +7,7 @@ import math
 import base64
 import struct
 import zlib
+import time
 from functools import lru_cache
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -639,7 +640,7 @@ def _resource_colors(stops):
 
 
 @lru_cache(maxsize=32)
-def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scene=False):
+def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scene=False, *, _cooperate=None):
     """Bake the project selector's directional material into native row runs.
 
     Split at the reflection edges as well as bounded gradient samples, keeping
@@ -660,6 +661,11 @@ def resource_glass_png(width, height, stops, rim, lit, surround, radius=12, scen
     base_breaks = {round(width * step / samples) for step in range(samples + 1)}
     rows = bytearray()
     for y in range(height):
+        if _cooperate is not None and y % 16 == 0:
+            # Tcl calls briefly release Python's GIL. A CPU-only thread that
+            # immediately reacquires it can otherwise stall a whole layout's
+            # many small native queries. Yield between bounded row batches.
+            _cooperate()
         center, vertical = y + .5, (y + .5) / height
         dy = max(0., radius - min(center, height - center))
         inset = radius - math.sqrt(max(0., radius * radius - dy * dy)) if rounded else 0
@@ -727,6 +733,44 @@ def resource_photo(master, width, height, palette, surround, radius=12, *, scene
     return tk.PhotoImage(master=master, data=base64.b64encode(renderer(*key)), format="png")
 
 
+def _encode_resource(args, cancel=None):
+    """CPU-only worker entry; resolve the exact existing renderer at use time."""
+    def cooperate():
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Native material request superseded")
+        time.sleep(.001)
+
+    return resource_glass_png.__wrapped__(*args, _cooperate=cooperate)
+
+
+def _resource_surface(widget, key, width, height, palette, surround, radius=12, *, scene=False):
+    """Keep the old native image until the current large material is ready."""
+    ready = getattr(widget, "_resource_ready", None)
+    if ready is not None:
+        widget._resource_ready = None
+        if ready[0] == key:
+            return tk.PhotoImage(master=widget, data=base64.b64encode(ready[1]), format="png")
+    if width * height <= 65536:
+        _cancel_resource_surface(widget)
+        return resource_photo(widget, width, height, palette, surround, radius, scene=scene)
+    from src.modules.tk_raster import ResourceRaster
+    root = widget._root()
+    renderer = getattr(root, "_resource_raster", None)
+    if renderer is None:
+        root._resource_raster = renderer = ResourceRaster(root, _encode_resource)
+    stops = tuple(getattr(palette, name) for name in ("BG_LIGHT", "BG_MID", "BG_DARK", "BG_DARKEST"))
+    renderer.request(widget, key, (width, height, stops, palette.BORDER, palette.BORDER_LIT,
+                                  surround, radius, scene))
+    return None
+
+
+def _cancel_resource_surface(widget):
+    """A return to the painted viewport no longer needs an in-flight raster."""
+    renderer = getattr(widget._root(), "_resource_raster", None)
+    if renderer is not None:
+        renderer.discard(widget)
+
+
 def _material_underlay(widget):
     """Let rounded corners reveal the owning scene instead of a dark square."""
     from src.modules.tk_material import _owner
@@ -789,10 +833,14 @@ class GlassScene(tk.Canvas):
         p = self.palette
         key = (width, height, p.BG_LIGHT, p.BG_MID, p.BG_DARK, p.BG_DARKEST, p.BORDER, p.BORDER_LIT)
         if key == getattr(self, "_surface_key", None):
+            _cancel_resource_surface(self)
             self.body.refresh_material()
             return
+        image = _resource_surface(self, key, width, height, p, p.WINDOW_BG, 0, scene=True)
+        if image is None:
+            return
         self._surface_key = key
-        self._material_image = resource_photo(self, width, height, p, p.WINDOW_BG, 0, scene=True)
+        self._material_image = image
         self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if readable_foreground(p.BG_DARKEST) == "#000000" else .18))
         self.delete("material")
         self.create_image(0, 0, image=self._material_image, anchor="nw", tags="material")
@@ -853,10 +901,11 @@ class GlassButton(SvgButton):
     config = configure
 
     def _refresh_svg(self):
-        font = tkfont.Font(root=self, font=self.cget("font"))
+        font = self.cget("font")
         text = self.cget("text")
         scale = ui_scale(self)
-        size = max(12, min(32, font.metrics("linespace")))
+        line_height = int(self.tk.call("font", "metrics", font, "-linespace"))
+        size = max(12, min(32, line_height))
         name = getattr(self, "_svg_name", "")
         disabled = str(self.cget("state")) == "disabled"
         active = getattr(self, "_svg_hovering", False) and not disabled
@@ -893,8 +942,9 @@ class GlassButton(SvgButton):
                         upper, lower = first, last
                         break
             tk.Button.configure(self, **{"disabledforeground" if disabled else "activeforeground" if active else "foreground": ink})
-        width = font.measure(text) + round(24 * scale) + (2 * (size + round(5 * scale)) if name else 0)
-        height = max(size, font.metrics("linespace")) + round(14 * scale)
+        text_width = int(self.tk.call("font", "measure", font, text))
+        width = text_width + round(24 * scale) + (2 * (size + round(5 * scale)) if name else 0)
+        height = max(size, line_height) + round(14 * scale)
         rim = mix(base, "#ffffff", .12 if readable_foreground(base) == "#ffffff" else .24)
         if self.focus_get() is self:
             rim = hex_color(self.cget("highlightcolor"))
@@ -909,7 +959,7 @@ class GlassButton(SvgButton):
                 self.tk.call(self._svg_image, "copy", skin, "-compositingrule", "overlay")
             if name:
                 icon = svg_photo(self, name, ink, size)
-                x = round((width - font.measure(text)) / 2 - size - 5 * scale)
+                x = round((width - text_width) / 2 - size - 5 * scale)
                 self.tk.call(self._svg_image, "copy", icon, "-to", x, (height - size) // 2,
                              "-compositingrule", "overlay")
             tk.Button.configure(self, image=self._svg_image, compound="center", padx=0, pady=0,
@@ -1048,7 +1098,6 @@ class BrowserHeader(tk.Canvas):
         width, height, pad, mark_size, title_height, action_width, action_height, stacked, action_y = self._layout()
         if width < 2 or not self.winfo_viewable():
             return
-        self.delete("material")
         outside = self.cget("background")
         top = mix(p.BG_MID, "#ffffff", .025) if self.framed else outside
         bottom = p.BG_DARK if self.framed else outside
@@ -1059,11 +1108,18 @@ class BrowserHeader(tk.Canvas):
             _material_underlay(self)
             top = mix(p.BG_LIGHT, "#ffffff", .36 if readable_foreground(p.BG_DARKEST) == "#000000" else .18)
             bottom = p.BG_DARKEST
-            key = (width, height, top, bottom, p.BORDER, outside, round(12 * scale), True)
+            key = (width, height, top, bottom, p.BORDER, outside, round(12 * scale), True,
+                   p.BG_MID, p.BG_DARK, p.BORDER_LIT)
         if key != getattr(self, "_surface_key", None):
+            image = (_resource_surface(self, key, width, height, p, outside, round(12 * scale))
+                     if resource else glass_photo(self, *key))
+            if image is None:
+                return
             self._surface_key = key
-            self._surface = (resource_photo(self, width, height, p, outside, round(12 * scale))
-                             if resource else glass_photo(self, *key))
+            self._surface = image
+        else:
+            _cancel_resource_surface(self)
+        self.delete("material")
         self._material_image = self._surface
         self._material_bounds = (top, bottom)
         self.create_image(0, 0, image=self._surface, anchor="nw", tags="material")
@@ -1290,9 +1346,14 @@ class GlassCard(tk.Canvas):
         key = (*args, p.BG_LIGHT, p.BG_DARK, p.BG_DARKEST, p.BORDER_LIT,
                bool(getattr(p, "RESOURCE_GLASS", False)))
         if key != getattr(self, "_surface_key", None):
+            image = (_resource_surface(self, key, width, height, p, self.cget("background"), round(12 * ui_scale(self)))
+                     if getattr(p, "RESOURCE_GLASS", False) else glass_photo(self, *args))
+            if image is None:
+                return
             self._surface_key = key
-            self._surface = (resource_photo(self, width, height, p, self.cget("background"), round(12 * ui_scale(self)))
-                             if getattr(p, "RESOURCE_GLASS", False) else glass_photo(self, *args))
+            self._surface = image
+        else:
+            _cancel_resource_surface(self)
         self._material_image = self._surface
         self._material_bounds = (p.BG_DARKEST, mix(p.BG_LIGHT, "#ffffff", .36 if light else .18))
         paint_key = (key, heading_height, self.heading, p.TEXT_BRIGHT, getattr(self, "_underlay_key", None))

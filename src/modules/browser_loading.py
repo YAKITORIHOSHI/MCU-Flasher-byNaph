@@ -34,6 +34,29 @@ def search_catalog(request, cancel):
     return starts + contains
 
 
+class CatalogPublisher:
+    """Coalesce equal catalogs on the worker before native list delivery.
+
+    Keep only the last two catalog references. Cached and fresh publications
+    may both be queued before Tk receives either, so comparing only against
+    the currently displayed objects would still rebuild the same rows twice.
+    """
+
+    def __init__(self, libraries, boards):
+        self._catalogs = [libraries, boards]
+
+    def prepare(self, libraries, boards):
+        result = []
+        for index, incoming in enumerate((libraries, boards)):
+            if incoming is not None:
+                previous = self._catalogs[index]
+                if incoming is previous or incoming == previous:
+                    incoming = previous
+                self._catalogs[index] = incoming
+            result.append(incoming)
+        return tuple(result)
+
+
 def source_signature(paths):
     result = []
     for path in paths:

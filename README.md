@@ -10,6 +10,15 @@
 
 [v10 release notes and verification limits](RELEASE_NOTES.md)
 
+Board/Library browser performance work now keeps its loaded window in memory:
+closing hides it, and reopening preserves catalogs, search, selection and release
+choices without a wake-time rescan. The Quit button is removed; final workspace
+shutdown still owns process cleanup. Equal catalog refreshes retain the current
+lists. Large glass images are prepared by a bounded worker while native image
+updates stay on the UI thread. Constrained machines use static text with full
+tooltips, and inactive/minimized Controls stop marquee animations. See the
+[performance evidence and remaining qualification](audit/GUI_PERFORMANCE.md).
+
 The Rust replacement's required platform coverage now includes Windows 10/11
 AMD64/ARM64, Ubuntu 24.04/26.04 LTS AMD64/ARM64, macOS Intel/Apple Silicon,
 Fedora x86_64/aarch64 and Linux Mint AMD64. These are migration requirements;
@@ -1848,8 +1857,9 @@ verification; board compilation/upload still requires separate target checks.
 - **`src/modules/dedicated_AI.py`**: OpenCode AI assistant process controller (HTTP server + WebSocket + pywinpty).
 - **`src/modules/project_terminal.py`**: Standalone project terminal server & PTY backend for integrated multi-terminal sessions.
 - **`src/modules/win_subprocess_hide.py`**: Enforces `CREATE_NO_WINDOW` on all background subprocesses.
-- **`src/modules/arduino_lib_req.py`**: Tk/ttk glass browser for Arduino libraries, board packages and installed items. Keeps search, version selection, checksum verification and cancellation; **Board indexes** reveals advanced vendor URLs. **Quit** releases the process; closing the window keeps its catalog ready to reopen.
+- **`src/modules/arduino_lib_req.py`**: Tk/ttk glass browser for Arduino libraries, board packages and installed items. Keeps search, version selection, checksum verification and cancellation; **Board indexes** reveals advanced vendor URLs. Closing sleeps with loaded catalogs/UI retained in RAM; reopening performs no catalog reload or inventory scan. Final workspace shutdown still releases the process. Equal refreshes and unchanged searches preserve the existing list.
 - **`src/modules/tk_glass.py`**: Antialiased static glass materials, rounded SVG buttons/tabs and a reflective browser header. Native Tk paints the same materials on Ubuntu and Windows without optional image packages, compositor blur or an animation loop. Large surfaces retain one size/theme cache; package reading fonts and native keyboard actions remain intact. Compact headers yield their subtitle before reducing the details pane.
+- **`src/modules/tk_raster.py`**: One bounded CPU-only image worker per Tk root, latest requests per surface, cancellation and a single completed PNG. Native images, geometry and widget changes stay on Tk; obsolete size/theme/hidden-window results are discarded.
 - **`src/modules/browser_loading.py`**: Source-validated compact catalog caches, atomic background cache writes, bounded disk scans and demand-driven Tk callback delivery.
 - **`main/qt/responsive.py`** and **`src/modules/ui_metrics.py`**: Shared work-area fitting, dialog placement and event-driven monitor tracking. Keep Qt logical coordinates separate from Tk native pixels.
 - **`src/modules/detector.py`**: USB serial port auto-detection and board identification helper.

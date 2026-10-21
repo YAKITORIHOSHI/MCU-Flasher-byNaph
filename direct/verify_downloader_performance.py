@@ -8,13 +8,16 @@ pointer bindings. A missing desktop is reported as a unittest skip.
 from __future__ import annotations
 
 import argparse
+import gc
 from contextlib import ExitStack
 from pathlib import Path
 import sys
+import threading
 import time
 import tkinter as tk
 from types import SimpleNamespace
 import unittest
+import weakref
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +115,177 @@ class GlassResizeSchedulingChecks(unittest.TestCase):
                 self.assertEqual(pending, {})
 
 
+class RasterWorkerChecks(unittest.TestCase):
+    def take(self, worker):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            result = worker.take()
+            if result is not None:
+                return result
+            time.sleep(.002)
+        self.fail("The bounded encoder did not complete")
+
+    def test_worker_keeps_latest_per_surface_and_one_completed_result(self):
+        from src.modules.tk_raster import RasterQueue
+        entered, release, seen, cancelled = threading.Event(), threading.Event(), [], []
+
+        def encode(value, cancel):
+            seen.append(value)
+            if value == b"old":
+                entered.set()
+                release.wait(3)
+                cancelled.append(cancel.is_set())
+            return value
+
+        worker = RasterQueue(encode)
+        self.addCleanup(worker.close)
+        try:
+            worker.request(1, 1, b"old")
+            self.assertTrue(entered.wait(2))
+            worker.request(1, 2, b"superseded")
+            worker.request(1, 3, b"latest")
+            worker.request(2, 4, b"other surface")
+            release.set()
+            deadline = time.monotonic() + 2
+            while len(seen) < 2 and time.monotonic() < deadline:
+                time.sleep(.002)
+            time.sleep(.02)
+            self.assertEqual(seen, [b"old", b"latest"],
+                             "One completed PNG must backpressure the next encode")
+            self.assertEqual(self.take(worker), (1, 3, b"latest", None))
+            self.assertEqual(self.take(worker), (2, 4, b"other surface", None))
+            self.assertEqual(cancelled, [True], "A newer request must cancel stale CPU work")
+        finally:
+            release.set()
+
+    def test_worker_bounds_requests_and_completed_bytes_and_recovers_start_failure(self):
+        from src.modules.tk_raster import RasterQueue
+        entered, release = threading.Event(), threading.Event()
+
+        def encode(value, _cancel):
+            entered.set()
+            release.wait(3)
+            return value
+
+        worker = RasterQueue(encode)
+        self.addCleanup(worker.close)
+        try:
+            worker.request(0, 0, b"zero")
+            self.assertTrue(entered.wait(2))
+            for token in range(1, worker.MAX_SURFACES):
+                worker.request(token, token, b"bounded")
+            with self.assertRaisesRegex(RuntimeError, "Too many"):
+                worker.request(worker.MAX_SURFACES, 17, b"refused")
+            worker.close()
+        finally:
+            release.set()
+        deadline = time.monotonic() + 2
+        while worker.busy() and time.monotonic() < deadline:
+            time.sleep(.002)
+        self.assertFalse(worker.busy(), "Closing must retire the encoder without a UI callback")
+        self.assertIsNone(worker.take(), "Closing must discard pending and in-flight results")
+
+        worker = RasterQueue(lambda value, _cancel: value)
+        self.addCleanup(worker.close)
+        for replacement in (Mock(side_effect=RuntimeError("no thread")),
+                            Mock(return_value=SimpleNamespace(start=Mock(side_effect=RuntimeError("no thread"))))):
+            with patch("src.modules.tk_raster.threading.Thread", replacement):
+                with self.assertRaisesRegex(RuntimeError, "no thread"):
+                    worker.request(1, 1, b"first")
+            self.assertFalse(worker.busy())
+        worker.MAX_RESULT_BYTES = 2
+        worker.request(1, 2, b"oversized")
+        token, generation, data, error = self.take(worker)
+        self.assertEqual((token, generation, data), (1, 2, None))
+        self.assertIn("PNG budget", error)
+        worker.request(1, 3, b"ok")
+        self.assertEqual(self.take(worker), (1, 3, b"ok", None))
+
+    def test_cooperative_renderer_preserves_exact_png_bytes(self):
+        palette = SimpleNamespace(BG_LIGHT="#1c2532", BG_MID="#161d27", BG_DARK="#10151c",
+                                  BG_DARKEST="#0a0e14", BORDER="#2a3545", BORDER_LIT="#3d5068")
+        stops = tuple(getattr(palette, key) for key in ("BG_LIGHT", "BG_MID", "BG_DARK", "BG_DARKEST"))
+        args = (360, 240, stops, palette.BORDER, palette.BORDER_LIT, palette.BG_DARKEST, 12, False)
+        expected = tk_glass.resource_glass_png.__wrapped__(*args)
+        self.assertEqual(tk_glass._encode_resource(args), expected,
+                         "Scheduling must not change even one encoded material byte")
+
+    def test_delivery_releases_png_when_current_surface_no_longer_needs_it(self):
+        from src.modules.tk_raster import ResourceRaster
+
+        class Surface:
+            _redraw_id = None
+
+            def winfo_exists(self):
+                return True
+
+            winfo_viewable = winfo_exists
+
+            def _draw(self):
+                # Returning to a cached size, or a now-short viewport, can
+                # legitimately leave a delivered PNG unconsumed by _draw.
+                if getattr(self, "fail", False):
+                    raise ValueError("fixture native image failure")
+
+        surface = Surface()
+        delivery = ResourceRaster.__new__(ResourceRaster)
+        delivery._targets = {1: (weakref.ref(surface), 2, "stale viewport")}
+        delivery._accept((1, 2, b"completed bytes", None))
+        self.assertIsNone(surface._resource_ready,
+                          "A no-op draw must not retain another large completed PNG")
+        surface.fail = True
+        delivery._targets = {1: (weakref.ref(surface), 3, "current viewport")}
+        with self.assertRaisesRegex(ValueError, "native image failure"):
+            delivery._accept((1, 3, b"completed bytes", None))
+        self.assertIsNone(surface._resource_ready,
+                          "Failed native image creation must release its completed bytes")
+
+    def test_each_surface_cache_hit_cancels_unneeded_in_flight_work(self):
+        from src.modules.tk_raster import ResourceRaster
+
+        class CachedKey:
+            def __eq__(self, other):
+                return True
+
+            def __ne__(self, other):
+                return False
+
+        class Cancelled(Exception):
+            pass
+
+        palette = SimpleNamespace(BG_LIGHT="#1c2532", BG_MID="#161d27", BG_DARK="#10151c",
+                                  BG_DARKEST="#0a0e14", BORDER="#2a3545", BORDER_LIT="#3d5068",
+                                  WINDOW_BG="#0a0e14", CYAN="#00aabb", RESOURCE_GLASS=True)
+        for cls, layout in ((tk_glass.GlassScene, (100, 100)),
+                            (tk_glass.GlassCard, (100, 100, 0)),
+                            (tk_glass.BrowserHeader, (100, 100, 4, 16, 18, 20, 18, False, 3))):
+            with self.subTest(surface=cls.__name__):
+                queue = Mock()
+                renderer = ResourceRaster.__new__(ResourceRaster)
+                renderer._queue, renderer._targets = queue, {}
+                root = SimpleNamespace(_resource_raster=renderer)
+                widget = SimpleNamespace(_root=lambda: root, _layout=lambda: layout, palette=palette,
+                                         winfo_viewable=lambda: True, winfo_fpixels=lambda _value: 96,
+                                         _surface_key=CachedKey(), cget=lambda _value: palette.WINDOW_BG,
+                                         framed=True, _resource_request="old request",
+                                         _resource_ready=("stale", b"large completed PNG"))
+                renderer._targets[id(widget)] = "pending"
+
+                def discard(target):
+                    ResourceRaster.discard(renderer, target)
+                    # Stop before native painting; this fixture needs no Tcl.
+                    raise Cancelled()
+
+                renderer.discard = discard
+                with patch.object(tk_glass, "_material_underlay"):
+                    with self.assertRaises(Cancelled):
+                        cls._draw(widget)
+                queue.discard.assert_called_once_with(id(widget))
+                self.assertIsNone(widget._resource_request)
+                self.assertIsNone(widget._resource_ready)
+                self.assertNotIn(id(widget), renderer._targets)
+
+
 class DownloaderPerformanceChecks(TkDownloaderFixture):
     def setUp(self):
         make_root = tk.Tk
@@ -175,6 +349,146 @@ class DownloaderPerformanceChecks(TkDownloaderFixture):
         return {str(widget): getattr(widget, "_material_image")
                 for widget in descendants(self.root)
                 if getattr(widget, "_material_image", None) is not None}
+
+    def test_large_material_encoding_does_not_block_tk_or_replace_previous_image(self):
+        scene, entered, release = self.app._scene, threading.Event(), threading.Event()
+        original = tk_glass.resource_glass_png.__wrapped__
+        threads = []
+
+        def delayed(*args, **kwargs):
+            threads.append(threading.get_ident())
+            entered.set()
+            if threading.current_thread() is not threading.main_thread():
+                release.wait(3)
+            return original(*args, **kwargs)
+
+        previous = scene._material_image
+        with patch.object(tk_glass.resource_glass_png, "__wrapped__", delayed):
+            try:
+                self.root.geometry(f"{self.root.winfo_width() - 40}x"
+                                   f"{self.root.winfo_height() - 20}+20+20")
+                self.root.update_idletasks()
+                scene._draw()
+                self.assertTrue(entered.wait(2), "The large raster must start")
+                self.assertNotIn(threading.get_ident(), threads,
+                                 "PNG generation must not execute on the Tk thread")
+                self.assertIs(scene._material_image, previous,
+                              "Keep the previous image while the worker paints")
+                marker = []
+                self.root.after(0, lambda: marker.append(True))
+                self.root.update()
+                self.assertEqual(marker, [True], "Tk must deliver input while encoding is blocked")
+            finally:
+                release.set()
+            self.settle()
+        self.assertIsNot(scene._material_image, previous)
+        self.assertEqual((scene._material_image.width(), scene._material_image.height()),
+                         (scene.winfo_width(), scene.winfo_height()))
+        self.assertEqual(self.pending(), (), "The worker delivery timer must stop when idle")
+
+    def test_button_refresh_reuses_native_font_and_observes_named_font_changes(self):
+        from tkinter import font as tkfont
+        button = self.app.refresh_btn
+        named = tkfont.Font(root=self.root, family="Montserrat", size=9, weight="bold")
+        button.configure(font=named)
+        self.settle()
+        width = button.winfo_reqwidth()
+        with patch.object(tk_glass.tkfont, "Font", wraps=tkfont.Font) as clones:
+            for _ in range(10):
+                button._refresh_svg()
+            self.assertEqual(clones.call_count, 0,
+                             "Unchanged input must not clone/delete a Tcl font")
+            named.configure(size=15)
+            button._refresh_svg()
+            self.assertGreater(button.winfo_reqwidth(), width,
+                               "A named font change must still resize its native skin")
+
+    def test_hidden_and_superseded_materials_are_discarded_then_map_renders_current_theme(self):
+        scene, entered, release = self.app._scene, threading.Event(), threading.Event()
+        original = tk_glass._encode_resource
+
+        def delayed(args, cancel=None):
+            entered.set()
+            release.wait(3)
+            return original(args, cancel)
+
+        previous, palette = scene._material_image, scene.palette
+        with patch.object(tk_glass, "_encode_resource", delayed):
+            # Existing controllers retain a CPU-only module entry; replace it
+            # here to gate an actual native request rather than starting a UI.
+            renderer = self.root._resource_raster
+            with patch.object(renderer._queue, "encode", delayed):
+                try:
+                    self.root.geometry(f"{self.root.winfo_width() - 80}x"
+                                       f"{self.root.winfo_height() - 40}+20+20")
+                    self.root.update_idletasks()
+                    scene._draw()
+                    self.assertTrue(entered.wait(2))
+                    current = SimpleNamespace(**{key: getattr(palette, key) for key in
+                                              ("BG_LIGHT", "BG_MID", "BG_DARK", "BG_DARKEST",
+                                               "BORDER", "BORDER_LIT", "WINDOW_BG")})
+                    current.BG_LIGHT = "#243140"
+                    scene.palette = current
+                    scene._draw()
+                    self.root.withdraw()
+                    self.root.update()
+                finally:
+                    release.set()
+                self.settle()
+                self.assertIs(scene._material_image, previous, "A hidden surface must retain its old image")
+                self.assertEqual(self.pending(), (), "Hidden results must not leave a polling timer")
+            self.root.deiconify()
+            self.settle()
+        self.assertIsNot(scene._material_image, previous)
+        self.assertEqual(scene._surface_key[2], current.BG_LIGHT,
+                         "Reopening must accept only the current palette")
+        self.assertEqual((scene._material_image.width(), scene._material_image.height()),
+                         (scene.winfo_width(), scene.winfo_height()))
+        scene.palette = palette
+
+    def test_material_worker_start_failure_reports_once_and_next_draw_can_retry(self):
+        scene = self.app._scene
+        previous = scene._material_image
+        self.root.geometry(f"{self.root.winfo_width() - 40}x"
+                           f"{self.root.winfo_height() - 20}+20+20")
+        self.root.update_idletasks()
+        with (patch("src.modules.tk_raster.threading.Thread", side_effect=RuntimeError("fixture start")),
+              patch.object(self.root, "report_callback_exception") as reported):
+            scene._draw()
+            self.assertEqual(reported.call_count, 1)
+            self.assertIs(scene._material_image, previous)
+            self.assertIsNone(scene._resource_request)
+        scene._draw()
+        self.settle()
+        self.assertIsNot(scene._material_image, previous)
+
+    def test_destroying_surface_cancels_active_work_without_retaining_native_widgets(self):
+        entered, release = threading.Event(), threading.Event()
+        original = tk_glass._encode_resource
+
+        def delayed(args, cancel=None):
+            entered.set()
+            release.wait(3)
+            return original(args, cancel)
+
+        dialog = tk.Toplevel(self.root)
+        dialog.geometry("600x420+40+40")
+        scene = tk_glass.GlassScene(dialog, self.module.Theme)
+        scene.pack(fill="both", expand=True)
+        self.root.update_idletasks()
+        reference = weakref.ref(scene)
+        with patch.object(self.root._resource_raster._queue, "encode", delayed):
+            try:
+                scene._draw()
+                self.assertTrue(entered.wait(2))
+                dialog.destroy()
+                scene = dialog = None
+                gc.collect()
+                self.assertIsNone(reference(), "The encoder must not retain a destroyed Tcl widget")
+            finally:
+                release.set()
+            self.settle()
+        self.assertEqual(self.pending(), ())
 
     def test_idle_has_no_repaint_callbacks_or_image_generation(self):
         self.assertEqual(self.pending(), (), "Static glass must stop scheduling when idle")
@@ -314,6 +628,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     SCALE = args.scale
     suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
-                               for cls in (GlassResizeSchedulingChecks, DownloaderPerformanceChecks))
+                               for cls in (GlassResizeSchedulingChecks, RasterWorkerChecks, DownloaderPerformanceChecks))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

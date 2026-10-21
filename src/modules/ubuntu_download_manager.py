@@ -75,6 +75,7 @@ class DownloadManagerChannel:
     def __init__(self, root):
         self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._clients = {}
+        self._watcher = None
         try:
             self._socket.bind(_address(root))
             self._socket.listen(16)
@@ -120,11 +121,110 @@ class DownloadManagerChannel:
                 commands.append("quit")
         return commands
 
+    def watch(self, root, on_commands):
+        """Use Tk listener readiness when available, otherwise permit polling.
+
+        Must be called on the Tk thread. No timer runs while the listener is
+        idle; only incomplete accepted clients need a finite deadline timer.
+        """
+        if self._watcher is not None:
+            self._watcher.close()
+        if not (callable(getattr(root, "createfilehandler", None))
+                and callable(getattr(root, "deletefilehandler", None))):
+            return None
+        watcher = _TkChannelWatch(self, root, on_commands)
+        try:
+            watcher.start()
+        except Exception:
+            watcher.close()
+            return None
+        self._watcher = watcher
+        return watcher
+
     def close(self) -> None:
+        if self._watcher is not None:
+            self._watcher.close()
         for connection in self._clients:
             connection.close()
         self._clients.clear()
         self._socket.close()
+
+
+class _TkChannelWatch:
+    """Own one Tk file handler and only the timers for partial requests."""
+
+    def __init__(self, channel, root, on_commands):
+        self._channel, self._root, self._on_commands = channel, root, on_commands
+        self._descriptor = channel._socket.fileno()
+        self._registered = False
+        self._binding = None
+        self._timer = None
+        self._closed = False
+
+    def start(self):
+        # Tk's READABLE mask is 2. Keep this lifecycle module free of GUI
+        # imports; the supplied root owns all interpreter calls.
+        self._registered = True
+        self._root.createfilehandler(self._descriptor, 2, self._readable)
+        self._binding = self._root.bind("<Destroy>", self._destroy, add="+")
+        self._schedule_partial()
+
+    def _readable(self, _descriptor, _mask):
+        self._drain()
+
+    def _partial(self):
+        self._timer = None
+        self._drain()
+
+    def _drain(self):
+        if self._closed:
+            return
+        try:
+            commands = self._channel.poll()
+            if commands:
+                self._on_commands(commands)
+        finally:
+            # A quit callback can close the channel/root during delivery.
+            if not self._closed:
+                self._schedule_partial()
+
+    def _schedule_partial(self):
+        if self._channel._clients:
+            if self._timer is None:
+                self._timer = self._root.after(25, self._partial)
+        elif self._timer is not None:
+            self._root.after_cancel(self._timer)
+            self._timer = None
+
+    def _destroy(self, event):
+        if event.widget is self._root:
+            self.close()
+
+    def close(self):
+        """Retire callbacks on the Tk thread without closing the channel."""
+        if self._closed:
+            return
+        self._closed = True
+        if self._timer is not None:
+            try:
+                self._root.after_cancel(self._timer)
+            except Exception:
+                pass  # The interpreter may already be being destroyed.
+            self._timer = None
+        if self._registered:
+            try:
+                self._root.deletefilehandler(self._descriptor)
+            except Exception:
+                pass
+            self._registered = False
+        if self._binding:
+            try:
+                self._root.unbind("<Destroy>", self._binding)
+            except Exception:
+                pass
+            self._binding = None
+        if self._channel._watcher is self:
+            self._channel._watcher = None
 
 
 _CHILDREN = {}

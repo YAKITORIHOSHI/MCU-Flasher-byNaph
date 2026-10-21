@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -20,6 +21,59 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from main.qt import download_dialog
 from src.modules import arduino_lib_req as browser
 from src.modules import ubuntu_download_manager as lifecycle
+
+
+class FileHandlerRoot:
+    """A stepped Tk boundary; protocol I/O still uses real owned sockets."""
+
+    def __init__(self):
+        self.handlers, self.timers, self.bindings = {}, {}, {}
+        self._next = 0
+
+    def createfilehandler(self, descriptor, mask, callback):
+        if mask != 2:
+            raise AssertionError("Only listener readability may be watched")
+        self.handlers[descriptor] = callback
+
+    def deletefilehandler(self, descriptor):
+        self.handlers.pop(descriptor, None)
+
+    def after(self, delay, callback):
+        if not 0 < delay <= 100:
+            raise AssertionError("Partial requests need a short bounded timer")
+        self._next += 1
+        identifier = f"timer-{self._next}"
+        self.timers[identifier] = callback
+        return identifier
+
+    def after_cancel(self, identifier):
+        self.timers.pop(identifier, None)
+
+    def bind(self, event, callback, add=None):
+        if event != "<Destroy>" or add != "+":
+            raise AssertionError("Retain the root's other destruction callbacks")
+        self._next += 1
+        identifier = f"binding-{self._next}"
+        self.bindings[identifier] = callback
+        return identifier
+
+    def unbind(self, event, identifier):
+        if event != "<Destroy>":
+            raise AssertionError("Only the owned destruction binding may be removed")
+        self.bindings.pop(identifier, None)
+
+    def readable(self):
+        for descriptor, callback in list(self.handlers.items()):
+            callback(descriptor, 2)
+
+    def step_timer(self):
+        identifier, callback = next(iter(self.timers.items()))
+        self.timers.pop(identifier)
+        callback()
+
+    def destroy(self, widget=None):
+        for callback in list(self.bindings.values()):
+            callback(SimpleNamespace(widget=self if widget is None else widget))
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Ubuntu downloader IPC")
@@ -78,6 +132,116 @@ class DownloaderChecks(unittest.TestCase):
             client.connect(lifecycle._address(self.root))
             client.sendall(b"MCU-DM-1 quit\nextra command")
             self.assertEqual(channel.poll(), [])
+
+    def test_watcher_sleeps_without_timers_and_delivers_each_command_once(self):
+        channel, root, commands = self.channel(), FileHandlerRoot(), []
+        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
+        watcher = channel.watch(root, commands.extend)
+        self.assertIsNotNone(watcher)
+        self.assertEqual(len(root.handlers), 1)
+        self.assertEqual(root.timers, {})
+        self.assertTrue(lifecycle.request(self.root, "wake"))
+        self.assertTrue(lifecycle.request(self.root, "quit"))
+        root.readable()
+        root.readable()
+        self.assertEqual(commands, ["wake", "quit"])
+        self.assertEqual(root.timers, {})
+
+    def test_watcher_finishes_partial_request_then_stops_its_timer(self):
+        channel, root, commands = self.channel(), FileHandlerRoot(), []
+        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
+        channel.watch(root, commands.extend)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.connect(lifecycle._address(self.root))
+            client.sendall(b"MCU-DM-1 ")
+            root.readable()
+            self.assertEqual(commands, [])
+            self.assertEqual(len(root.timers), 1)
+            client.sendall(b"wake\n")
+            root.step_timer()
+            self.assertEqual(commands, ["wake"])
+            self.assertEqual(root.timers, {})
+
+    def test_watcher_retires_expired_partial_client_without_idle_rescheduling(self):
+        channel, root, commands = self.channel(), FileHandlerRoot(), []
+        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
+        channel.watch(root, commands.extend)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client, \
+                patch.object(lifecycle.time, "monotonic", return_value=10) as now:
+            client.connect(lifecycle._address(self.root))
+            client.sendall(b"MCU-DM-1 ")
+            root.readable()
+            self.assertEqual(len(root.timers), 1)
+            now.return_value = 11.1
+            root.step_timer()
+            self.assertEqual(client.recv(1), b"")
+        self.assertEqual(commands, [])
+        self.assertEqual(root.timers, {})
+
+    def test_watcher_close_and_root_destroy_retire_callbacks_without_closing_channel(self):
+        for destroy in (False, True):
+            with self.subTest(destroy=destroy):
+                root, commands = FileHandlerRoot(), []
+                channel = self.channel(self.root / str(destroy))
+                self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
+                watcher = channel.watch(root, commands.extend)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.connect(lifecycle._address(self.root / str(destroy)))
+                    client.sendall(b"MCU-DM-1 ")
+                    root.readable()
+                    ready = next(iter(root.handlers.values()))
+                    timer = next(iter(root.timers.values()))
+                    root.destroy(widget=object())
+                    self.assertEqual(len(root.handlers), 1)
+                    if destroy:
+                        root.destroy()
+                    else:
+                        watcher.close()
+                    watcher.close()
+                    ready(-1, 2)
+                    timer()
+                self.assertEqual((root.handlers, root.timers, root.bindings), ({}, {}, {}))
+                self.assertEqual(commands, [])
+                self.assertTrue(lifecycle.request(self.root / str(destroy), "wake"))
+                self.assertEqual(channel.poll(), ["wake"])
+
+    def test_channel_shutdown_retires_watcher_even_when_command_callback_closes_it(self):
+        channel, root, commands = self.channel(), FileHandlerRoot(), []
+        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
+        def received(batch):
+            commands.extend(batch)
+            channel.close()
+        channel.watch(root, received)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as partial:
+            partial.connect(lifecycle._address(self.root))
+            partial.sendall(b"MCU-DM-1 ")
+            self.assertTrue(lifecycle.request(self.root, "quit"))
+            root.readable()
+        self.assertEqual(commands, ["quit"])
+        self.assertEqual((root.handlers, root.timers, root.bindings), ({}, {}, {}))
+        self.assertFalse(lifecycle.request(self.root, "wake"))
+
+    def test_watcher_setup_failures_fall_back_without_socket_or_callback_leaks(self):
+        channel = self.channel()
+        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
+        for failure in ("unavailable", "register", "bind"):
+            with self.subTest(failure=failure):
+                root = FileHandlerRoot()
+                if failure == "unavailable":
+                    root.createfilehandler = None
+                    context = ExitStack()
+                elif failure == "register":
+                    def broken_registration(descriptor, mask, callback):
+                        root.handlers[descriptor] = callback
+                        raise RuntimeError("fixture registration failed")
+                    context = patch.object(root, "createfilehandler", side_effect=broken_registration)
+                else:
+                    context = patch.object(root, "bind", side_effect=RuntimeError("fixture bind failed"))
+                with context:
+                    self.assertIsNone(channel.watch(root, lambda commands: None))
+                self.assertEqual((root.handlers, root.timers, root.bindings), ({}, {}, {}))
+                self.assertTrue(lifecycle.request(self.root, "wake"))
+                self.assertEqual(channel.poll(), ["wake"])
 
     def test_launcher_wakes_existing_manager_without_spawn_or_cache_writes(self):
         channel = self.channel()
