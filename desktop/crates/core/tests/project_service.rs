@@ -665,17 +665,59 @@ fn read_only_save_is_refused_and_unchanged_save_never_changes_permissions() {
 #[cfg(unix)]
 #[test]
 fn portable_case_and_device_aliases_are_rejected_before_registration() {
+    use std::io::{ErrorKind, Write};
+    use std::os::unix::fs::MetadataExt;
+
     let fixture = Fixture::new();
-    fs::write(fixture.project.join("demo.INO"), "// conflict\n").unwrap();
-    assert_eq!(
-        fixture
-            .service()
-            .register_project("main", &fixture.project)
-            .unwrap_err()
-            .code,
-        ErrorCode::InvalidPath
-    );
-    fs::remove_file(fixture.project.join("demo.INO")).unwrap();
+    let original = fixture.project.join("Demo.ino");
+    let baseline = fs::read(&original).unwrap();
+    let original_metadata = fs::metadata(&original).unwrap();
+    let alternate_case = fixture.project.join("demo.INO");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&alternate_case)
+    {
+        Ok(mut conflict) => {
+            conflict.write_all(b"// conflict\n").unwrap();
+            drop(conflict);
+            assert_eq!(fs::read_dir(&fixture.project).unwrap().count(), 2);
+            assert_ne!(
+                fs::metadata(&alternate_case).unwrap().ino(),
+                original_metadata.ino()
+            );
+            assert_eq!(
+                fixture
+                    .service()
+                    .register_project("main", &fixture.project)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::InvalidPath
+            );
+            fs::remove_file(&alternate_case).unwrap();
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            // Case-insensitive volumes prevent a second entry. Prove that the
+            // failed create preserved the original instead of truncating it.
+            let alias_metadata = fs::metadata(&alternate_case).unwrap();
+            assert_eq!(alias_metadata.dev(), original_metadata.dev());
+            assert_eq!(alias_metadata.ino(), original_metadata.ino());
+            assert_eq!(fs::read(&alternate_case).unwrap(), baseline);
+            assert_eq!(fs::read_dir(&fixture.project).unwrap().count(), 1);
+            let registration = fixture
+                .service()
+                .register_project("main", &fixture.project)
+                .unwrap();
+            assert_eq!(registration.manifest.files.len(), 1);
+            assert_eq!(registration.manifest.files[0].name, "Demo.ino");
+            assert_eq!(
+                registration.manifest.files[0].content_digest,
+                source_digest(&baseline)
+            );
+        }
+        Err(error) => panic!("Cannot create the case-collision fixture: {error}"),
+    }
+    assert_eq!(fs::read(&original).unwrap(), baseline);
     fs::write(fixture.project.join("NUL.txt"), "// device\n").unwrap();
     assert_eq!(
         fixture

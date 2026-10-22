@@ -2,17 +2,17 @@
 """Verify portable LAUNCHER entries with owned, fake dispatchers only.
 
 Never runs application startup, setup, metadata generation or hardware services.
-Native Windows checks exercise WScript and private Python argument parsing;
-Linux checks include the installed GLib desktop-entry parser when available.
+Native Linux checks execute the actual matching ELF entry. Native Windows
+checks execute the actual PE entry, WScript and private Python argument parsing.
 """
 from __future__ import annotations
 
-import ctypes
-import ctypes.util
+import argparse
 import importlib.util
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import subprocess
@@ -20,51 +20,11 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
-from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHERS = ROOT / "LAUNCHER"
-EXPECTED = {"WINDOWS.vbs", "UBUNTU", "UBUNTU.desktop", "MacOS.command",
-            "FEDORA.desktop", "LINUX_MINT.desktop", "README.md"}
-
-
-def desktop_command(text: str, *, action: bool = False) -> list[str]:
-    """Apply the desktop string/Exec quoting layers, retaining %k as a token."""
-    values = [line.removeprefix("Exec=") for line in text.splitlines() if line.startswith("Exec=")]
-    value = values[1 if action else 0]
-    escapes = {"s": " ", "n": "\n", "t": "\t", "r": "\r", "\\": "\\"}
-    value = re.sub(r"\\([sntr\\])", lambda match: escapes[match.group(1)], value)
-    arguments, current = [], []
-    quoted = False
-    index = 0
-    while index < len(value):
-        character = value[index]
-        if character == '"':
-            quoted = not quoted
-        elif quoted and character == "\\" and index + 1 < len(value) and value[index + 1] in '\\"`$':
-            index += 1
-            current.append(value[index])
-        elif not quoted and character.isspace():
-            if current:
-                arguments.append("".join(current))
-                current = []
-        else:
-            current.append(character)
-        index += 1
-    if quoted:
-        raise ValueError("Unclosed desktop Exec argument")
-    if current:
-        arguments.append("".join(current))
-    return [argument.replace("%%", "%") for argument in arguments]
-
-
-def windows_helper(text: str) -> str:
-    match = re.search(r"^Function QuoteWindowsArgument\(value\)\n.*?^End Function$", text,
-                      re.MULTILINE | re.DOTALL)
-    if not match:
-        raise AssertionError("Missing Windows argument quoting helper")
-    return match.group()
+EXPECTED = {"WINDOWS.exe", "UBUNTU", "UBUNTU_ARM64", "MacOS.command",
+            "FEDORA", "FEDORA_ARM64", "LINUX_MINT", "README.md"}
 
 
 def windows_probe():
@@ -131,7 +91,7 @@ class ArtifactChecks(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=10, check=True)
         modes = {entry.split("\t", 1)[1]: entry.split(" ", 1)[0]
                  for entry in result.stdout.split("\0") if entry}
-        for name in EXPECTED - {"WINDOWS.vbs", "README.md"}:
+        for name in EXPECTED - {"WINDOWS.exe", "README.md"}:
             self.assertEqual(modes.get("LAUNCHER/" + name), "100755", name)
 
     def test_named_entries_and_executable_modes(self):
@@ -139,47 +99,29 @@ class ArtifactChecks(unittest.TestCase):
         for name in EXPECTED:
             self.assertFalse((LAUNCHERS / name).is_symlink(), name)
         if os.name != "nt":
-            for name in EXPECTED - {"WINDOWS.vbs", "README.md"}:
+            for name in EXPECTED - {"WINDOWS.exe", "README.md"}:
                 self.assertEqual((LAUNCHERS / name).stat().st_mode & 0o777, 0o755, name)
 
-    def test_windows_entries_are_ascii_crlf_and_separate_wsh_from_crt_quoting(self):
-        paths = (LAUNCHERS / "WINDOWS.vbs", ROOT / "direct/windows/run.vbs")
-        texts = []
-        for path in paths:
-            raw = path.read_bytes()
-            raw.decode("ascii")
-            self.assertNotIn(b"\n", raw.replace(b"\r\n", b""))
-            text = raw.decode("ascii").replace("\r\n", "\n")
-            texts.append(text)
-            self.assertIn('Replace(', text)
-            self.assertIn('"%MCU_FLASHER_LITERAL_PERCENT%"', text)
-        self.assertNotIn('QuoteWindowsArgument', texts[0])
-        self.assertIn('QuoteWshPath(entry)', texts[0])
-        self.assertIn('QuoteWindowsArgument(launchArguments(argIdx))', texts[1])
-        self.assertIn('"direct\\windows\\run.vbs"', texts[0])
-        self.assertIn('fs.GetParentFolderName(fs.GetParentFolderName(WScript.ScriptFullName))', texts[0])
-        code = "\n".join(line for line in texts[0].splitlines() if not line.lstrip().startswith("'"))
-        self.assertNotIn("cmd.exe", code)
+    def test_linux_payloads_are_native_elf_for_the_named_architecture(self):
+        for name, machine in (("UBUNTU", 62), ("UBUNTU_ARM64", 183),
+                              ("FEDORA", 62), ("FEDORA_ARM64", 183), ("LINUX_MINT", 62)):
+            with self.subTest(entry=name):
+                data = (LAUNCHERS / name).read_bytes()
+                self.assertGreaterEqual(len(data), 64)
+                self.assertEqual(data[:7], b"\x7fELF\x02\x01\x01")
+                self.assertIn(int.from_bytes(data[16:18], "little"), (2, 3))
+                self.assertEqual(int.from_bytes(data[18:20], "little"), machine)
 
-    def test_desktop_entries_have_no_fixed_checkout_or_working_directory(self):
-        for name in ("UBUNTU.desktop", "FEDORA.desktop", "LINUX_MINT.desktop"):
-            text = (LAUNCHERS / name).read_text(encoding="utf-8")
-            self.assertNotIn("Path=", text)
-            self.assertNotIn(str(ROOT), text)
-            self.assertNotIn("/home/", text)
-            self.assertEqual(desktop_command(text)[:2], ["/bin/bash", "-c"])
-        ubuntu = (LAUNCHERS / "UBUNTU.desktop").read_text(encoding="utf-8")
-        self.assertEqual(desktop_command(ubuntu)[3:], ["mcu-flasher-launcher", "%k"])
-        self.assertEqual(desktop_command(ubuntu, action=True)[3:], ["mcu-flasher-launcher", "%k", "--repair"])
-
-    def test_native_desktop_file_validation(self):
-        validator = shutil.which("desktop-file-validate")
-        if not validator:
-            self.skipTest("desktop-file-validate is unavailable")
-        result = subprocess.run([validator, *(str(LAUNCHERS / name) for name in sorted(EXPECTED)
-                                            if name.endswith(".desktop"))], capture_output=True,
-                                text=True, timeout=10, check=False)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    def test_windows_payload_is_a_gui_pe_executable(self):
+        data = (LAUNCHERS / "WINDOWS.exe").read_bytes()
+        self.assertEqual(data[:2], b"MZ")
+        self.assertGreaterEqual(len(data), 64)
+        offset = int.from_bytes(data[60:64], "little")
+        self.assertGreaterEqual(offset, 64)
+        self.assertGreaterEqual(len(data), offset + 94)
+        self.assertEqual(data[offset:offset + 4], b"PE\0\0")
+        self.assertEqual(int.from_bytes(data[offset + 4:offset + 6], "little"), 0x14c)
+        self.assertEqual(int.from_bytes(data[offset + 92:offset + 94], "little"), 2)
 
     def test_existing_windows_assembly_fixture_extracts_quoting_without_bootstrap(self):
         module = windows_probe()
@@ -219,6 +161,8 @@ class OwnedFixture(unittest.TestCase):
         self.env.pop("BASH_ENV", None)
         self.env.pop("ENV", None)
         self.env["PATH"] = ""
+        for name in ("DISPLAY", "WAYLAND_DISPLAY"):
+            self.env.pop(name, None)
 
 
 class ProcessCleanupChecks(OwnedFixture):
@@ -271,18 +215,21 @@ class ProcessCleanupChecks(OwnedFixture):
                 pass
 
 
-@unittest.skipIf(os.name == "nt", "Portable Bash/desktop dispatch runs on native Linux")
+@unittest.skipUnless(sys.platform.startswith("linux"), "Native Linux ELF execution is required")
 class UbuntuDispatchChecks(OwnedFixture):
-    def invoke_desktop(self, location=None, arguments=(), *, action=False):
-        command = desktop_command((self.project / "LAUNCHER/UBUNTU.desktop").read_text(), action=action)
-        # %k is one literal argument supplied by the file manager, not source.
-        self.assertEqual(command[4], "%k")
-        if location is None:
-            command.pop(4)
-        else:
-            command[4] = location
-        return subprocess.run([*command, *arguments], cwd=self.sandbox, env=self.env,
-                              capture_output=True, timeout=10, check=False)
+    def native_entry(self, name="UBUNTU"):
+        machine = platform.machine().lower()
+        if machine in ("aarch64", "arm64"):
+            if name == "LINUX_MINT":
+                self.skipTest("Linux Mint has an AMD64 entry only")
+            name += "_ARM64"
+        elif machine not in ("x86_64", "amd64"):
+            self.skipTest("A supported native Linux CPU is required")
+        return self.project / "LAUNCHER" / name
+
+    def invoke(self, arguments=(), *, name="UBUNTU"):
+        return subprocess.run([str(self.native_entry(name)), *arguments], cwd=self.sandbox,
+                              env=self.env, capture_output=True, timeout=10, check=False)
 
     def assert_dispatch(self, result, arguments=()):
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
@@ -290,94 +237,57 @@ class UbuntuDispatchChecks(OwnedFixture):
                          [str(self.project / "direct/ubuntu/run.sh"), "--desktop", *arguments])
         self.assertFalse((self.sandbox / "NEVER").exists())
 
-    def test_shell_entry_resolves_parent_and_preserves_empty_unicode_and_shell_arguments(self):
-        arguments = ["--project", 'Sketch Ω $(touch NEVER) "quoted"', "", "line\nbreak", "%PATH%", "tail\\"]
-        result = subprocess.run(["/bin/bash", str(self.project / "LAUNCHER/UBUNTU"), *arguments],
-                                cwd=self.sandbox, env=self.env, capture_output=True,
-                                timeout=10, check=False)
-        self.assert_dispatch(result, arguments)
+    def test_native_entry_preserves_empty_unicode_and_shell_arguments(self):
+        arguments = ["--project", 'Sketch Ω $(touch NEVER) "quoted"', "", "line\nbreak",
+                     "%PATH%", "tail\\", "日本語 🙂", "--repair"]
+        self.assert_dispatch(self.invoke(arguments), arguments)
 
-    def test_desktop_survives_move_and_literal_quote_path_without_python_or_path(self):
+    def test_native_entry_survives_move_and_literal_quote_path_without_python_or_path(self):
         moved = self.sandbox / 'Moved Ω %20 %k $cash `literal` "quoted" $(touch NEVER)'
         self.project.rename(moved)
         self.project = moved
         arguments = ["--project", 'Project Ω "quote" $(touch NEVER)', "--new-window", ""]
-        result = self.invoke_desktop(str(moved / "LAUNCHER/UBUNTU.desktop"), arguments)
-        self.assert_dispatch(result, arguments)
+        self.assert_dispatch(self.invoke(arguments), arguments)
 
-    def test_local_uri_decodes_percent_only_once_and_preserves_arguments(self):
-        location = quote(str(self.project / "LAUNCHER/UBUNTU.desktop"))
-        for prefix in ("file://", "file://localhost"):
-            with self.subTest(prefix=prefix):
-                self.assert_dispatch(self.invoke_desktop(prefix + location, ["--check", "%20"]), ["--check", "%20"])
-
-    def test_repair_action_forwards_after_desktop_location(self):
-        result = self.invoke_desktop(str(self.project / "LAUNCHER/UBUNTU.desktop"), action=True)
-        self.assert_dispatch(result, ["--repair"])
-
-    def test_invalid_remote_or_missing_location_refuses_without_dispatch(self):
-        for location in (None, "", "relative.desktop", "--repair", "file://remote/shortcut.desktop",
-                         "file:///tmp/a?query", "file:///tmp/a#fragment", "file:///tmp/%00/a",
-                         "file:///tmp/%GG/a", "file:///tmp/%/a"):
-            with self.subTest(location=location):
-                result = self.invoke_desktop(location)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn(b"cannot locate", result.stderr)
-                self.assertEqual(result.stdout, b"")
+    def test_native_entry_reports_dispatcher_exit_status(self):
+        self.recorder.write_text("exit 23\n", encoding="utf-8")
+        self.assertEqual(self.invoke().returncode, 23)
 
     def test_missing_application_script_refuses(self):
         self.recorder.unlink()
-        result = self.invoke_desktop(str(self.project / "LAUNCHER/UBUNTU.desktop"))
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b"cannot locate direct/ubuntu/run.sh", result.stderr)
+        result = self.invoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"direct/ubuntu/run.sh", result.stderr)
+        self.assertEqual(result.stdout, b"")
 
-    def test_unavailable_platforms_only_print_notice_and_refuse(self):
-        for name, platform in (("FEDORA.desktop", "Fedora"), ("LINUX_MINT.desktop", "Linux Mint"),
-                               ("MacOS.command", "macOS")):
-            with self.subTest(name=name):
-                entry = self.project / "LAUNCHER" / name
-                command = desktop_command(entry.read_text()) if name.endswith(".desktop") else ["/bin/bash", str(entry)]
-                result = subprocess.run(command, cwd=self.sandbox, env=self.env,
+    def test_renamed_or_displaced_linux_entry_refuses_without_dispatch(self):
+        entry = self.native_entry()
+        for destination in (self.project / "LAUNCHER/UNKNOWN", self.project / entry.name):
+            with self.subTest(destination=destination.name):
+                shutil.copy2(entry, destination)
+                result = subprocess.run([str(destination)], cwd=self.sandbox, env=self.env,
                                         capture_output=True, timeout=10, check=False)
                 self.assertEqual(result.returncode, 1)
-                self.assertIn(("MCU Flasher for " + platform + " is not available").encode(), result.stdout)
-                self.assertNotIn(b"\0", result.stdout)
+                self.assertEqual(result.stdout, b"")
+                self.assertIn(b"LAUNCHER", result.stderr)
+                destination.unlink()
+
+    def test_unavailable_platforms_only_report_notice_and_refuse(self):
+        for name, display in (("FEDORA", "Fedora"), ("LINUX_MINT", "Linux Mint")):
+            with self.subTest(name=name):
+                result = self.invoke(name=name)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(("MCU Flasher for " + display + " is not available").encode(),
+                              result.stdout + result.stderr)
+                self.assertNotIn(b"\0", result.stdout + result.stderr)
                 self.assertEqual(sorted(path.name for path in self.sandbox.iterdir()), [self.project.name])
 
-    def test_native_glib_parser_launches_only_moved_fake_dispatcher(self):
-        library = ctypes.util.find_library("gio-2.0")
-        if not library:
-            self.skipTest("GLib desktop-entry API unavailable")
-        gio = ctypes.CDLL(library)
-        gio.g_desktop_app_info_new_from_filename.argtypes = [ctypes.c_char_p]
-        gio.g_desktop_app_info_new_from_filename.restype = ctypes.c_void_p
-        gio.g_app_info_launch.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
-                                         ctypes.POINTER(ctypes.c_void_p)]
-        gio.g_app_info_launch.restype = ctypes.c_int
-        gio.g_object_unref.argtypes = [ctypes.c_void_p]
-        gio.g_error_free.argtypes = [ctypes.c_void_p]
-        self.recorder.write_text('printf \'%s\\0\' "$0" "$@" > "$MCU_LAUNCHER_FOLDER_RECEIPT"\n')
-        moved = self.sandbox / 'GLib moved Ω %20 $cash `literal` "quoted"'
-        self.project.rename(moved)
-        self.project = moved
-        receipt = self.sandbox / "receipt"
-        app_info = gio.g_desktop_app_info_new_from_filename(os.fsencode(moved / "LAUNCHER/UBUNTU.desktop"))
-        self.assertTrue(app_info, "GLib did not parse UBUNTU.desktop")
-        error = ctypes.c_void_p()
-        try:
-            with patch.dict(os.environ, {"MCU_LAUNCHER_FOLDER_RECEIPT": str(receipt)}):
-                launched = gio.g_app_info_launch(app_info, None, None, ctypes.byref(error))
-            self.assertTrue(launched, "GLib refused the owned desktop fixture")
-        finally:
-            if error.value:
-                gio.g_error_free(error)
-            gio.g_object_unref(app_info)
-        deadline = time.monotonic() + 3
-        while not receipt.exists() and time.monotonic() < deadline:
-            time.sleep(.02)
-        self.assertTrue(receipt.is_file(), "GLib child did not reach the fake dispatcher")
-        self.assertEqual(receipt.read_bytes().decode().split("\0")[:-1],
-                         [str(moved / "direct/ubuntu/run.sh"), "--desktop"])
+    def test_macos_notice_does_not_invoke_the_application_dispatcher(self):
+        result = subprocess.run(["/bin/bash", str(self.project / "LAUNCHER/MacOS.command")],
+                                cwd=self.sandbox, env=self.env, capture_output=True, timeout=10, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"MCU Flasher for macOS is not available", result.stdout + result.stderr)
+        self.assertNotIn(b"\0", result.stdout + result.stderr)
 
 
 @unittest.skipUnless(os.name == "nt", "Native Windows Script Host is required")
@@ -390,11 +300,11 @@ class WindowsDispatchChecks(OwnedFixture):
 
     def capture_windows(self, target, arguments, receipt, *, timeout=30,
                         expected_arguments=None, extra_environment=None):
-        cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
+        executable = self.project / "LAUNCHER/WINDOWS.exe"
         return windows_probe().capture(
-            cscript, target, arguments, receipt, self.sandbox,
-            command_prefix=[str(cscript), "//nologo", str(self.project / "LAUNCHER/WINDOWS.vbs")],
-            expected_cwd=self.sandbox, expected_script=Path("-c"), timeout=timeout,
+            executable, target, arguments, receipt, self.sandbox,
+            command_prefix=[str(executable)],
+            expected_cwd=self.project, expected_script=Path("-c"), timeout=timeout,
             expected_arguments=expected_arguments, extra_environment=extra_environment)
 
     def write_python_forwarding_dispatcher(self, receipt):
@@ -422,73 +332,27 @@ class WindowsDispatchChecks(OwnedFixture):
                              windows_probe().python_argument_helpers(source), ''))
         return self.write_windows_dispatcher(fixture)
 
-    def test_native_windows_both_forwarding_layers_preserve_received_arguments_after_move(self):
+    def test_native_windows_pe_and_production_wsh_preserve_literal_arguments_after_move(self):
         moved = self.sandbox / "Relocated Ω %PATH% $cash `literal` & (safe)"
-        self.project.rename(moved)
-        self.project = moved
-        receipt = self.sandbox / "arguments.json"
-        target = self.write_python_forwarding_dispatcher(receipt)
-        arguments = ["--project", 'Sketch Ω "quoted"', "", "C:\\tail\\", 'slash\\"quote',
-                     "%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%", "$(touch NEVER) & | ^ ! `literal`", "--new-window"]
-        # Python serializes an argv list using CRT rules; WSH parses its own
-        # command line differently. Characterize the actual outer WSH input
-        # independently, then require production to preserve every received bit.
-        baseline = self.sandbox / "outer-wsh-arguments.vbs"
-        baseline.write_bytes(windows_probe().RECORDER.replace('\n', '\r\n').encode('utf-16'))
-        cscript = Path(os.environ["SystemRoot"]) / "System32/cscript.exe"
-        received = windows_probe().capture(
-            cscript, baseline, arguments, self.sandbox / "outer-arguments.json", self.sandbox,
-            command_prefix=[str(cscript), "//nologo", str(baseline)],
-            expected_cwd=self.sandbox, expected_script=baseline)
-        self.assertIsNone(received["error"], received)
-        self.assertEqual(received["cleanupFailures"], [], received)
-        self.assertEqual(received["launcherExitCode"], 0, received)
-        self.assertIsNotNone(received["observed"], received)
-        expected = received["observed"]["arguments"]
-        print("Outer WSH parser baseline: " + json.dumps(
-            {"crtInput": arguments, "wshReceived": expected}, ensure_ascii=True), flush=True)
-        result = self.capture_windows(target, arguments, receipt, expected_arguments=expected)
-        self.assertTrue(result["passed"], result)
-        self.assertEqual(result["observed"]["forwardedEnvironment"], [])
-
-    def test_native_windows_both_forwarding_layers_preserve_seeded_literal_arguments(self):
-        moved = self.sandbox / "Literal Ω %PATH% $cash `literal` & (safe)"
         self.project.rename(moved)
         self.project = moved
         receipt = self.sandbox / "literal-arguments.json"
         target = self.write_python_forwarding_dispatcher(receipt)
         arguments = ["--project", 'Sketch Ω "quoted"', "", "C:\\tail\\", 'slash\\"quote',
-                     "%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%", "$(touch NEVER) & | ^ ! `literal`", "--new-window",
-                     "emoji 🙂 and 日本語", "line one\nline two\ttab"]
-        wrapper = self.project / "LAUNCHER/WINDOWS.vbs"
-        source = wrapper.read_text(encoding="ascii")
-        call = 'StoreForwardedArguments WScript.Arguments, shell.Environment("PROCESS")'
-        self.assertEqual(source.count(call), 1)
-        # Seed exactly the strings already available to production WScript code;
-        # only the outer host's argument collection is replaced, after parsing.
-        source = source.replace('Option Explicit\n', 'Option Explicit\nDim literalArguments\n'
-                                'Set literalArguments = New SeededArgumentCollection\n', 1)
-        source = source.replace(call, call.replace('WScript.Arguments', 'literalArguments'), 1)
-        source += r'''
-Class SeededArgumentCollection
-    Public Property Get Count
-        Count = CLng(CreateObject("WScript.Shell").Environment("PROCESS")("MCU_LAUNCHER_PROBE_ARG_COUNT"))
-    End Property
-    Public Default Property Get Item(index)
-        Item = CreateObject("WScript.Shell").Environment("PROCESS")("MCU_LAUNCHER_PROBE_ARG_" & CStr(index))
-    End Property
-End Class
-'''
-        wrapper.write_bytes(source.replace('\n', '\r\n').encode('utf-16'))
-        environment = {"MCU_LAUNCHER_PROBE_ARG_COUNT": str(len(arguments)),
-                       **{f"MCU_LAUNCHER_PROBE_ARG_{index}": argument
-                          for index, argument in enumerate(arguments)}}
-        result = self.capture_windows(target, [], receipt, expected_arguments=arguments,
-                                      extra_environment=environment)
+                     "%PATH%", "%MCU_FLASHER_LITERAL_PERCENT%", "$(touch NEVER) & | ^ ! `literal`",
+                     "--new-window", "emoji 🙂 and 日本語", "line one\nline two\ttab"]
+        result = self.capture_windows(target, arguments, receipt,
+                                      extra_environment={"MCU_FLASHER_WSH_ARG_stale": "must clear"})
         self.assertTrue(result["passed"], result)
-        self.assertTrue(receipt.is_file(), "Windows entry did not reach the fake argv recorder")
-        self.assertEqual(json.loads(receipt.read_text(encoding="utf-8"))["arguments"], arguments)
+        self.assertEqual(result["observed"]["arguments"], arguments)
         self.assertEqual(result["observed"]["forwardedEnvironment"], [])
+        self.assertFalse((self.sandbox / "NEVER").exists())
+
+    def test_native_windows_pe_propagates_dispatcher_failure(self):
+        target = self.write_windows_dispatcher("WScript.Quit 23\n")
+        result = self.capture_windows(target, [], self.sandbox / "absent-failure.json")
+        self.assertEqual(result["launcherExitCode"], 23, result)
+        self.assertEqual(result["cleanupFailures"], [], result)
 
     def test_native_windows_portable_entry_preserves_representable_project_arguments(self):
         moved = self.sandbox / "Project path Ω %PATH% $cash `literal` & (safe)"
@@ -598,4 +462,12 @@ WScript.Quit 0
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--native-only", action="store_true",
+                        help="Run owned host payload dispatch fixtures before cross-host artifact assembly")
+    options, remaining = parser.parse_known_args()
+    if options.native_only:
+        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
+                                   for case in (ProcessCleanupChecks, UbuntuDispatchChecks, WindowsDispatchChecks))
+        sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())
+    unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

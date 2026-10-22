@@ -23,6 +23,10 @@ on:
         description: Run native GUI and new platform contracts without Python editor checks
         type: boolean
         default: false
+      launcher_executables:
+        description: Build and verify the native LAUNCHER executables
+        type: boolean
+        default: false
       browser_performance_only:
         description: Run isolated current-app browser and resource checks only
         type: boolean
@@ -40,6 +44,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  launcher-executables:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.launcher_executables }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Build matching native launcher entries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p temp/audit/launcher-executables
+          python -B direct/build_launcher_folder.py 2>&1 | tee temp/audit/launcher-executables/build.log
+      - name: Verify literal arguments and moved-folder dispatch without startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install 'psutil>=5.9,<8'
+          python -B direct/verify_launcher_folder.py --native-only 2>&1 | tee temp/audit/launcher-executables/verify.log
+      - name: Retain native binaries and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: launcher-executables-${{ matrix.os }}
+          path: |
+            LAUNCHER/UBUNTU
+            LAUNCHER/UBUNTU_ARM64
+            LAUNCHER/FEDORA
+            LAUNCHER/FEDORA_ARM64
+            LAUNCHER/LINUX_MINT
+            LAUNCHER/WINDOWS.exe
+            temp/audit/launcher-executables/
+          if-no-files-found: warn
+
   browser-performance:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.browser_performance_only }}
     uses: ./.github/workflows/browser-performance.yml
