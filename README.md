@@ -19,9 +19,10 @@ updates stay on the UI thread. Constrained machines use static text with full
 tooltips, and inactive/minimized Controls stop marquee animations. See the
 [performance evidence and remaining qualification](audit/GUI_PERFORMANCE.md).
 
-Double-click entries now live in [`LAUNCHER/`](LAUNCHER/README.md): `WINDOWS.vbs`
-and `UBUNTU.desktop` use the existing production launchers. `UBUNTU` is a shell
-fallback. `MacOS.command`, `FEDORA.desktop` and `LINUX_MINT.desktop` currently
+Double-click entries now live in [`LAUNCHER/`](LAUNCHER/README.md): `WINDOWS.exe`
+and native `UBUNTU` / `UBUNTU_ARM64` executables use the existing production
+startup paths. The folder contains no `.desktop` shortcuts.
+`MacOS.command`, native `FEDORA` / `FEDORA_ARM64` and `LINUX_MINT` currently
 show availability notices because those application ports are unfinished.
 Windows ARM64 is also pending. See the [current OS verification matrix](audit/PLATFORM_VERIFICATION.md)
 for actual support, source gaps and the distinction between editor checks and

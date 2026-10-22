@@ -1590,8 +1590,7 @@ impl App {
             && !self.workspace_smoke
             && self.project_deadline.is_none()
             && self.save_fixture_worker.is_none()
-            && state.projects.active().is_some()
-            && !state.projects.is_saving()
+            && state.projects.can_save()
     }
 
     fn sync_save_controls(&mut self) {
@@ -1763,6 +1762,23 @@ impl App {
         }
     }
 
+    fn save_worker_lost(&mut self) {
+        use mcu_native_ui_probe::workspace_project::SAVE_WORKER_LOST_MESSAGE;
+        let script = self.evidence.borrow_mut().projects.save_worker_lost();
+        self.sync_save_controls();
+        self.status(SAVE_WORKER_LOST_MESSAGE);
+        if self.save_smoke {
+            self.evidence.borrow_mut().error = Some(SAVE_WORKER_LOST_MESSAGE.into());
+        }
+        if let Some(script) = script {
+            if let Err(error) = self.editor.evaluate_script(&script) {
+                self.status(&format!(
+                    "{SAVE_WORKER_LOST_MESSAGE} Editor acknowledgement failed: {error}"
+                ));
+            }
+        }
+    }
+
     fn handle_save(&mut self) {
         let error = self.evidence.borrow_mut().save_error.take();
         if let Some(error) = error {
@@ -1789,7 +1805,7 @@ impl App {
                 }
                 Some(Err(mpsc::TryRecvError::Disconnected)) => {
                     self.save_worker = None;
-                    self.abort_save("The save worker stopped before returning the native project session. Buffers remain open.");
+                    self.save_worker_lost();
                 }
                 _ => {}
             }

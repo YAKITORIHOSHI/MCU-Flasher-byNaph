@@ -40,6 +40,17 @@ unknown/malformed OS refusal and all live cache/journal/sketch boundaries.
 
 Read `audit/PLATFORM_VERIFICATION.md` for the shipping Python platform matrix.
 `LAUNCHER/` forwards to the existing Windows AMD64 / Ubuntu AMD64/ARM64 entries;
+use native `WINDOWS.exe`, `UBUNTU` and `UBUNTU_ARM64` executable entries, without
+`.desktop` shortcuts. `FEDORA` / `FEDORA_ARM64` and `LINUX_MINT` are native
+availability notices; `MacOS.command` remains an executable macOS notice.
+Rebuild matching host binaries with `direct/build_launcher_folder.py`; source
+is `src/launcher_folder_linux.c` / `src/launcher_folder_windows.cs`. The Windows
+GUI entry sends literal arguments through child-only environment fields to the
+existing WSH dispatcher, including empty/quoted/percent/Unicode values. Never
+replace this with a shell command or loose command-line concatenation. Keep
+Linux ELF CPU IDs, PE GUI format and Git 100755 Unix permissions in release
+validation; archives must reject extra legacy launcher entries. Verify supplied
+binaries before native rebuild checks with `direct/verify_launcher_folder.py`.
 macOS/Fedora/Mint entries currently show availability notices and Windows ARM
 refuses. Keep this distinction explicit. Native editor component checks do not
 qualify application startup, setup, tools, drivers or USB. Current Windows ARM
@@ -96,8 +107,15 @@ save/build integration remain pending. Do not treat role labels, descriptor
 matches or hashes as complete runtime readiness or immutable execution authority.
 The development-only `desktop/firmware-tools` entry is separate from the shipping
 Python wrapper; its fake-PlatformIO verifier does not qualify real compiler
-execution. Keep nested Python startup, admitted runtime closure, finite native
-child lifetime and final-use gaps explicit. See `rust-compile-inputs.json` and
+execution. The subsequent `scons_compile.py` handoff now validates the exact
+PlatformIO 6.2.0 child vector and starts the fixed SCons engine with `-I -S -B`,
+then reinstalls package/import/network/subprocess guards before engine import.
+Never patch installed PlatformIO. The guarded Popen constructor validates
+Windows vectors before serialization; only its exact thread-scoped serialization
+may pass the audit hook. The 68 fake-tool checks include a real nested isolated
+Python with fake SCons; they do not qualify real runtime/compiler execution.
+Keep admitted runtime closure, finite native child lifetime and final-use gaps
+explicit. See `rust-compile-inputs.json` and
 the tool directory README for exact source/test scope.
 `compile_process_probe --self-check` exercises only its fixed self-child roles:
 independent bounded stdout/stderr, cancellation/deadlines and owned descendant

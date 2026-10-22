@@ -96,11 +96,310 @@
   "reviews": {
     "backendAndSharedSave": "Independent read-only review: no remaining actionable findings after effective permission and metadata refusal fixes",
     "gtk": "Independent read-only review: recovery-text accessibility finding fixed; build/lint/Save smoke pass",
-    "windows": "Independent review in progress"
+    "windows": "Read-only Windows review found a terminal worker-loss close-guard issue; fixed with shared authority-loss handling and a two-case real-file/channel regression. Other examined mailbox/reentrancy/fixture paths have no actionable finding; hosted rerun of the fix remains pending."
   },
   "ci": {
-    "status": "pending exact-source commit and native_with_platform_contracts dispatch",
-    "scope": "3 native GUI jobs; Ubuntu 26 AMD64/ARM64 backend; Windows ARM64 and macOS Intel/ARM portable core"
+    "status": "Historical completed run: all three native GUI jobs, both Ubuntu 26 backend jobs and Windows 11 ARM core pass; both macOS fixture failures are retained and corrected by successful follow-up 39824882032",
+    "run": 39823016524,
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39823016524",
+    "source": "bc41c1bd143432ae154a1df2d68bbf23d5284926",
+    "conclusion": "failure",
+    "scope": "3 native GUI jobs; Ubuntu 26 AMD64/ARM64 backend; Windows ARM64 and macOS Intel/ARM portable core",
+    "nativeGui": {
+      "ubuntu-24.04": {
+        "conclusion": "success",
+        "scope": "native GTK/Win32 development preview",
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "saveChecks": {
+          "disk_bytes_verified": true,
+          "external_change_refused": true,
+          "external_change_reported": true,
+          "late_edit_retained": true,
+          "native_save": true,
+          "native_save_all": true,
+          "native_save_buttons": true,
+          "no_python_application_service": true,
+          "phase_0_dirty": true,
+          "phase_0_models_selection": true,
+          "phase_1_dirty": true,
+          "phase_1_disk_bytes": true,
+          "phase_1_models_selection": true,
+          "phase_1_undo_redo": true,
+          "phase_2_dirty": true,
+          "phase_2_models_selection": true,
+          "phase_2_undo_redo": true,
+          "phase_3_dirty": true,
+          "phase_3_disk_bytes": true,
+          "phase_3_models_selection": true,
+          "phase_3_undo_redo": true,
+          "phase_4_dirty": true,
+          "phase_4_disk_bytes": true,
+          "phase_4_models_selection": true,
+          "phase_4_undo_redo": true,
+          "same_models": true,
+          "save_all_Config_h": true,
+          "save_all_Sketch_ino": true,
+          "save_preserves_other_source": true,
+          "saved_bom_unicode": true,
+          "selection_retained": true,
+          "undo_redo_retained": true
+        },
+        "artifactPaths": {
+          "save": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-save/latest-smoke.json",
+          "workspace": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-workspace/latest-smoke.json",
+          "detach": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-ui/latest-smoke.json"
+        }
+      },
+      "ubuntu-24.04-arm": {
+        "conclusion": "success",
+        "scope": "native GTK/Win32 development preview",
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "saveChecks": {
+          "disk_bytes_verified": true,
+          "external_change_refused": true,
+          "external_change_reported": true,
+          "late_edit_retained": true,
+          "native_save": true,
+          "native_save_all": true,
+          "native_save_buttons": true,
+          "no_python_application_service": true,
+          "phase_0_dirty": true,
+          "phase_0_models_selection": true,
+          "phase_1_dirty": true,
+          "phase_1_disk_bytes": true,
+          "phase_1_models_selection": true,
+          "phase_1_undo_redo": true,
+          "phase_2_dirty": true,
+          "phase_2_models_selection": true,
+          "phase_2_undo_redo": true,
+          "phase_3_dirty": true,
+          "phase_3_disk_bytes": true,
+          "phase_3_models_selection": true,
+          "phase_3_undo_redo": true,
+          "phase_4_dirty": true,
+          "phase_4_disk_bytes": true,
+          "phase_4_models_selection": true,
+          "phase_4_undo_redo": true,
+          "same_models": true,
+          "save_all_Config_h": true,
+          "save_all_Sketch_ino": true,
+          "save_preserves_other_source": true,
+          "saved_bom_unicode": true,
+          "selection_retained": true,
+          "undo_redo_retained": true
+        },
+        "artifactPaths": {
+          "save": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-save/latest-smoke.json",
+          "workspace": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-workspace/latest-smoke.json",
+          "detach": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-ui/latest-smoke.json"
+        }
+      },
+      "windows-2022": {
+        "conclusion": "success",
+        "scope": "native GTK/Win32 development preview",
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "saveChecks": {
+          "disk_bytes_verified": true,
+          "external_change_refused": true,
+          "external_change_reported": true,
+          "late_edit_retained": true,
+          "native_save": true,
+          "native_save_all": true,
+          "native_save_buttons": true,
+          "no_python_application_service": true,
+          "phase_0_dirty": true,
+          "phase_0_models_selection": true,
+          "phase_1_dirty": true,
+          "phase_1_disk_bytes": true,
+          "phase_1_models_selection": true,
+          "phase_1_undo_redo": true,
+          "phase_2_dirty": true,
+          "phase_2_models_selection": true,
+          "phase_2_undo_redo": true,
+          "phase_3_dirty": true,
+          "phase_3_disk_bytes": true,
+          "phase_3_models_selection": true,
+          "phase_3_undo_redo": true,
+          "phase_4_dirty": true,
+          "phase_4_disk_bytes": true,
+          "phase_4_models_selection": true,
+          "phase_4_undo_redo": true,
+          "same_models": true,
+          "save_all_Config_h": true,
+          "save_all_Sketch_ino": true,
+          "save_preserves_other_source": true,
+          "saved_bom_unicode": true,
+          "selection_retained": true,
+          "undo_redo_retained": true
+        },
+        "artifactPaths": {
+          "save": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-save-windows.json",
+          "workspace": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-workspace-windows.json",
+          "detach": "temp/audit/native-save-ci-39823016524/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-ui-windows.json"
+        }
+      }
+    },
+    "platformResults": {
+      "ubuntu-26.04": {
+        "conclusion": "success",
+        "scope": "native backend fixtures only",
+        "host": {
+          "scope": "native Rust backend fixtures; no GUI or device qualification",
+          "source": "bc41c1bd143432ae154a1df2d68bbf23d5284926",
+          "runnerLabel": "ubuntu-26.04",
+          "runnerArchitecture": "X64",
+          "system": "Linux",
+          "systemRelease": "7.0.0-1017-azure",
+          "machine": "x86_64",
+          "osRelease": {
+            "NAME": "Ubuntu",
+            "ID": "ubuntu",
+            "PRETTY_NAME": "Ubuntu 26.04.1 LTS",
+            "VERSION_ID": "26.04",
+            "VERSION": "26.04.1 LTS (Resolute Raccoon)",
+            "VERSION_CODENAME": "resolute",
+            "ID_LIKE": "debian",
+            "HOME_URL": "https://www.ubuntu.com/",
+            "SUPPORT_URL": "https://help.ubuntu.com/",
+            "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+            "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+            "UBUNTU_CODENAME": "resolute",
+            "LOGO": "ubuntu-logo"
+          },
+          "rustcHost": "x86_64-unknown-linux-gnu",
+          "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n"
+        },
+        "libraryTests": {
+          "contracts": 1,
+          "core": 78,
+          "host": 148
+        },
+        "projectServiceChecks": 15
+      },
+      "ubuntu-26.04-arm": {
+        "conclusion": "success",
+        "scope": "native backend fixtures only",
+        "host": {
+          "scope": "native Rust backend fixtures; no GUI or device qualification",
+          "source": "bc41c1bd143432ae154a1df2d68bbf23d5284926",
+          "runnerLabel": "ubuntu-26.04-arm",
+          "runnerArchitecture": "ARM64",
+          "system": "Linux",
+          "systemRelease": "7.0.0-1017-azure",
+          "machine": "aarch64",
+          "osRelease": {
+            "NAME": "Ubuntu",
+            "ID": "ubuntu",
+            "PRETTY_NAME": "Ubuntu 26.04.1 LTS",
+            "VERSION_ID": "26.04",
+            "VERSION": "26.04.1 LTS (Resolute Raccoon)",
+            "VERSION_CODENAME": "resolute",
+            "ID_LIKE": "debian",
+            "HOME_URL": "https://www.ubuntu.com/",
+            "SUPPORT_URL": "https://help.ubuntu.com/",
+            "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+            "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+            "UBUNTU_CODENAME": "resolute",
+            "LOGO": "ubuntu-logo"
+          },
+          "rustcHost": "aarch64-unknown-linux-gnu",
+          "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n"
+        },
+        "libraryTests": {
+          "contracts": 1,
+          "core": 78,
+          "host": 148
+        },
+        "projectServiceChecks": 15
+      },
+      "windows-11-arm": {
+        "conclusion": "success",
+        "scope": "native contracts/core only",
+        "host": {
+          "scope": "native mcu-contracts/mcu-core execution only; no host adapters, GUI, tool runtimes or devices",
+          "source": "bc41c1bd143432ae154a1df2d68bbf23d5284926",
+          "runnerLabel": "windows-11-arm",
+          "runnerArchitecture": "ARM64",
+          "system": "Windows",
+          "systemRelease": "11",
+          "systemVersion": "10.0.26200",
+          "machine": "ARM64",
+          "macVersion": "",
+          "rustcHost": "aarch64-pc-windows-msvc",
+          "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-pc-windows-msvc\nrelease: 1.99.1\nLLVM version: 23.1.1\n"
+        },
+        "contractsChecks": 1,
+        "coreLibraryChecks": 79,
+        "projectServiceChecks": {
+          "passed": 12,
+          "failed": 0
+        }
+      },
+      "macos-15": {
+        "conclusion": "failure",
+        "scope": "native contracts/core only",
+        "host": {
+          "scope": "native mcu-contracts/mcu-core execution only; no host adapters, GUI, tool runtimes or devices",
+          "source": "bc41c1bd143432ae154a1df2d68bbf23d5284926",
+          "runnerLabel": "macos-15",
+          "runnerArchitecture": "ARM64",
+          "system": "Darwin",
+          "systemRelease": "24.6.0",
+          "systemVersion": "Darwin Kernel Version 24.6.0: Tue Jul 21 20:51:34 PDT 2026; root:xnu-11417.140.69.711.44~1/RELEASE_ARM64_VMAPPLE",
+          "machine": "arm64",
+          "macVersion": "15.7.9",
+          "rustcHost": "aarch64-apple-darwin",
+          "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-apple-darwin\nrelease: 1.99.1\nLLVM version: 23.1.1\n"
+        },
+        "contractsChecks": 1,
+        "coreLibraryChecks": 78,
+        "projectServiceChecks": {
+          "passed": 14,
+          "failed": 1
+        },
+        "failure": "Case-collision fixture fs::write(\"demo.INO\") aliases/truncates existing \"Demo.ino\" on a case-insensitive volume; registration legitimately succeeds, making unwrap_err fail. Runtime source unchanged. create_new fixture correction awaits exact-source CI."
+      },
+      "macos-15-intel": {
+        "conclusion": "failure",
+        "scope": "native contracts/core only",
+        "host": {
+          "scope": "native mcu-contracts/mcu-core execution only; no host adapters, GUI, tool runtimes or devices",
+          "source": "bc41c1bd143432ae154a1df2d68bbf23d5284926",
+          "runnerLabel": "macos-15-intel",
+          "runnerArchitecture": "X64",
+          "system": "Darwin",
+          "systemRelease": "24.6.0",
+          "systemVersion": "Darwin Kernel Version 24.6.0: Tue Jul 21 20:50:07 PDT 2026; root:xnu-11417.140.69.711.44~1/RELEASE_X86_64",
+          "machine": "x86_64",
+          "macVersion": "15.7.9",
+          "rustcHost": "x86_64-apple-darwin",
+          "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-apple-darwin\nrelease: 1.99.1\nLLVM version: 23.1.1\n"
+        },
+        "contractsChecks": 1,
+        "coreLibraryChecks": 78,
+        "projectServiceChecks": {
+          "passed": 14,
+          "failed": 1
+        },
+        "failure": "Case-collision fixture fs::write(\"demo.INO\") aliases/truncates existing \"Demo.ino\" on a case-insensitive volume; registration legitimately succeeds, making unwrap_err fail. Runtime source unchanged. create_new fixture correction awaits exact-source CI."
+      }
+    },
+    "logs": "temp/audit/native-save-ci-39823016524",
+    "summary": "temp/audit/native-save-ci-39823016524/summary.json",
+    "sourceReceiptMatchesCi": true,
+    "fixtureCorrection": "Fixture-only correction committed at 4a99205; successful native macOS Intel/ARM core rerun 39824882032 preserves original bytes/identity on case-insensitive volumes and retains case-sensitive collision/device refusal"
   },
   "limits": [
     "Native leases coordinate native Save sessions only; legacy Python coexistence remains unqualified",
@@ -109,5 +408,117 @@
     "No real Compile, device services, macOS GUI, Fedora/Mint admission or complete Windows ARM application support is enabled",
     "Hosted native component checks do not qualify physical desktop input, mixed monitors, setup, packaging or USB",
     "Capability ledger remains 14 partial / 53 pending / zero Python application services retired"
-  ]
+  ],
+  "sourceCheckpoint": "Historical native Save GUI runtime source bc41c1bd143432ae154a1df2d68bbf23d5284926; worker-loss source changes are separately hashed below and await hosted execution",
+  "platformFollowupCi": {
+    "run": 39824882032,
+    "source": "4a99205a5eadc02f3351a6310d6f0a17ecf48cac",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39824882032",
+    "conclusion": "success",
+    "selectedJobs": 8,
+    "scope": "Five scoped platform backend/core jobs and three separate launcher executable jobs; native Save GUI jobs deliberately skipped",
+    "portableCore": {
+      "macos-15": {
+        "conclusion": "success",
+        "scope": "Native contracts/core only; no host adapters, GUI, firmware runtime or devices",
+        "contractsChecks": 1,
+        "coreLibraryChecks": 78,
+        "projectServiceChecks": 15,
+        "strictClippy": "pass",
+        "rustcHost": "aarch64-apple-darwin",
+        "log": "temp/audit/native-save-platform-39824882032/macos-arm64-core.log"
+      },
+      "macos-15-intel": {
+        "conclusion": "success",
+        "scope": "Native contracts/core only; no host adapters, GUI, firmware runtime or devices",
+        "contractsChecks": 1,
+        "coreLibraryChecks": 78,
+        "projectServiceChecks": 15,
+        "strictClippy": "pass",
+        "rustcHost": "x86_64-apple-darwin",
+        "log": "temp/audit/native-save-platform-39824882032/macos-intel-core.log"
+      },
+      "windows-11-arm": {
+        "conclusion": "success",
+        "scope": "Native contracts/core only; no host adapters, GUI, firmware runtime or devices",
+        "contractsChecks": 1,
+        "coreLibraryChecks": 79,
+        "projectServiceChecks": 12,
+        "strictClippy": "pass",
+        "rustcHost": "aarch64-pc-windows-msvc",
+        "log": "temp/audit/native-save-platform-39824882032/windows11-arm64-core.log"
+      }
+    },
+    "backend": {
+      "ubuntu-26.04": {
+        "conclusion": "success",
+        "scope": "native backend fixtures only; no GUI",
+        "libraryTests": {
+          "contracts": 1,
+          "core": 78,
+          "host": 148
+        },
+        "projectServiceChecks": 15,
+        "strictClippy": "pass",
+        "log": "temp/audit/native-save-platform-39824882032/ubuntu26-amd64-backend.log"
+      },
+      "ubuntu-26.04-arm": {
+        "conclusion": "success",
+        "scope": "native backend fixtures only; no GUI",
+        "libraryTests": {
+          "contracts": 1,
+          "core": 78,
+          "host": 148
+        },
+        "projectServiceChecks": 15,
+        "strictClippy": "pass",
+        "log": "temp/audit/native-save-platform-39824882032/ubuntu26-arm64-backend.log"
+      }
+    },
+    "macFixtureCorrection": "Fixture-only create_new/identity/byte preservation correction passes both native macOS runners. Historical failed run 39823016524 is retained."
+  },
+  "workerLossFollowup": {
+    "status": "Uncommitted source on 4a99205; local verification passes, exact-source hosted GUI rerun pending",
+    "sourceSha256": {
+      "desktop/native-ui/src/workspace_project.rs": "b123c383ff1e2aaea66af8bdabec6e3739e3abd2712f35da87c9441c1014867b",
+      "desktop/native-ui/src/windows.rs": "c9ad400a08370a282f78bd7e828c6aa6c5c2e4ed509a69d03b1ba5288e426b2b",
+      "desktop/native-ui/src/linux_workspace.rs": "07bafbd2a71d41550a12f4d7dc8f1e21d336db79466f85d34e40eb21cd8d8195"
+    },
+    "behavior": [
+      "Confirmed worker termination releases the close guard without recreating native write authority; Save remains disabled until reopening",
+      "Matching empty save acknowledgement preserves editor models and dirty state; status explicitly warns that partial disk changes may exist",
+      "Windows handles disconnected completion channel; GTK catches worker unwind and reports a terminal completion through its event channel; transfer deadlines never cancel commits"
+    ],
+    "local": {
+      "nativeUiLibraryTests": 29,
+      "workerLossRegression": "Real retained project/session and disconnected worker channel, both before a write and after a committed write with lost result; no rollback assumed",
+      "gtk": {
+        "native-save": {
+          "checks": 32,
+          "passed": true,
+          "receipt": "temp/audit/native-save-worker-loss/audit/migration/scratch/native-save/latest-smoke.json"
+        },
+        "native-workspace": {
+          "checks": 19,
+          "passed": true,
+          "receipt": "temp/audit/native-save-worker-loss/audit/migration/scratch/native-workspace/latest-smoke.json"
+        },
+        "native-ui": {
+          "checks": 17,
+          "passed": true,
+          "receipt": "temp/audit/native-save-worker-loss/audit/migration/scratch/native-ui/latest-smoke.json"
+        }
+      },
+      "strictLinuxClippy": "pass",
+      "strictX64MsvcCrossClippy": "pass",
+      "formatAndDiff": "pass",
+      "logs": [
+        "temp/audit/native-save-ci-39823016524/worker-loss-library.log",
+        "temp/audit/native-save-ci-39823016524/worker-loss-linux-clippy.log",
+        "temp/audit/native-save-ci-39823016524/worker-loss-msvc-clippy.log",
+        "temp/audit/gui-performance/native-save-worker-loss-linux.log"
+      ]
+    },
+    "review": "Terminal ownership/error-path correction verified; no further actionable finding in scoped Windows mailbox/reentrancy/fixture paths. New hosted execution remains pending."
+  }
 }

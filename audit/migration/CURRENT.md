@@ -5,6 +5,22 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- Latest launcher requirement: `LAUNCHER/` contains native `WINDOWS.exe`,
+  `UBUNTU` / `UBUNTU_ARM64`, `FEDORA` / `FEDORA_ARM64`, `LINUX_MINT`, executable
+  `MacOS.command` and README, with no `.desktop` shortcuts. Ubuntu and Windows
+  retain existing startup guards; Fedora/Mint/macOS remain availability notices.
+  Native builders and moved-folder/literal-argument fixtures pass on Windows
+  Server AMD64 and Ubuntu AMD64/ARM64 in `39824882032`. Final supplied-binary
+  bundle/header/mode/archive qualification follows in the next CI run. See
+  `../LAUNCHER_EXECUTABLES.json` for exact shipped bytes and scope.
+- The isolated tool-only Compile entry now replaces only the in-process
+  PlatformIO 6.2.0 SCons handoff with a fixed sibling entry, preserving `-I -S -B`
+  and reinstalling package/import/network/subprocess guards before engine import.
+  All 68 fake-tool checks pass, including actual nested fake SCons and modeled
+  Windows vector serialization. Independent scoped review is clean. Complete
+  runtime/loader admission, immutable inputs, finite external process ownership
+  and real native-controlled compilation remain gates; no compiler is run by
+  this slice. See `rust-scons-entry.json` and `desktop/firmware-tools/README.md`.
 - Active native Save continuation: GTK/Win32 Save and Save All now dispatch
   bounded known-document snapshots to a Rust worker and acknowledge exact saved
   baselines without replacing editor models or undo state. Newer edits remain
@@ -15,9 +31,21 @@ needed for the next slice. Preserve historical failures and exact tested sources
   hostile same-user final-use races. Local evidence: 255 library tests
   (1 contracts, 78 core, 148 host, 28 native UI), 32 new Save GUI checks,
   19 unchanged-source workspace checks and 17 detach checks. Strict Linux lint
-  passes. Windows source and expanded native platform execution are being
-  completed; exact final results belong in `native-source-save.json`.
-  Shipping entries and the 67-capability ledger remain unchanged.
+  passes. Exact-source [CI 39823016524](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39823016524)
+  at `bc41c1b` passes all three native GUI jobs: Ubuntu 24.04 AMD64/ARM64 and
+  Windows Server 2022 AMD64 each pass 32 Save, 19 workspace and 17 detach
+  checks. The Ubuntu 26.04 AMD64/ARM64 backend jobs and Windows 11 ARM64
+  contracts/core job also pass. The fixture-only macOS correction at `4a99205`
+  passes both Intel/ARM native core jobs in [CI 39824882032](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39824882032),
+  alongside repeat Ubuntu 26 backend and Windows 11 ARM core passes. Historical
+  macOS failures remain retained. A later worker-loss correction releases the
+  close guard after confirmed worker termination, keeps saving disabled without
+  native authority and warns of possible partial disk changes. That working-tree
+  source passes 29 native UI library checks, strict Linux/MSVC lint and local
+  GTK 32 Save / 19 workspace / 17 detach checks; its hosted GUI rerun is pending.
+  See `native-source-save.json` for separate source hashes, receipts and scope.
+  The 67-capability ledger remains unchanged; production launcher packaging is
+  updated separately above.
 - Current user priority is shipping GUI responsiveness, especially Board/Library
   opening/search/scroll/resize/selection, with permission to rework its backend.
   Close must sleep with loaded state in RAM; no visible Quit or repeated list
@@ -59,10 +87,11 @@ needed for the next slice. Preserve historical failures and exact tested sources
   Fedora x86_64/aarch64 and Linux Mint AMD64. See [required platform coverage](PLATFORM_SUPPORT.md)
   for assumptions, concrete source gaps and per-host release gates. This overrides
   the earlier Windows AMD64 / Ubuntu-only migration scope without changing shipping
-  support. macOS has no native adapter; Windows ARM64 has no native run and is
-  refused by the current AVR host policy; Fedora/Mint still need distribution
-  admission/setup. No new host execution or runtime support is claimed by this
-  documentation amendment. Keep the accepted usable-beta order while beginning
+  support. macOS has no native adapter; Windows 11 ARM64 now passes native
+  contracts/core execution only and is refused by the current AVR host policy;
+  Fedora/Mint still need distribution admission/setup. Both native macOS core
+  jobs now pass after the fixture-only case-collision correction at `4a99205`;
+  no macOS host backend or GUI is enabled. Keep the accepted usable-beta order while beginning
   these host adapters before final packaging; retain all existing exact receipts.
 - Current backend code checkpoint: `29ec2b0`.
   [Backend CI 39541599780](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39541599780)
@@ -234,7 +263,13 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 - Reuse checkout/desktop target; no new worktree/dependency install. Source
   `desktop/dev-env.sh`, offline Cargo and CARGO_BUILD_JOBS=6; retain >=5GiB disk.
-  Around 10GiB was free. Only owned scratch may be cleaned.
+  Free space fell below the reserve during this continuation. Agent-owned Cargo
+  and analyzer build products, the unused older stable Rust toolchain and two
+  superseded prepared fixture trees were removed; pinned Rust 1.99.1, offline
+  registry/SDK, newest prepared AVR payload, reports and the last verified UI
+  executable remain. Around 9.5GiB is free at this checkpoint. Rebuild Cargo
+  outputs only with the reserve rechecked; prefer the pending hosted checks.
+  Cleanup receipt: `temp/audit/gui-performance/rebuildable-storage-cleanup.json`.
 - Build mcu-host bins board_compatibility_probe/recipe_generation_probe; private
   Python -B -W error runs desktop/scripts/verify-{board-compatibility,recipe-generation}.py.
   Existing migration workflow backend_only=true selects native backend hosts;

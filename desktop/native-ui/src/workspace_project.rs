@@ -79,12 +79,21 @@ pub struct ProjectSessions {
     next_save: u64,
 }
 
+pub const SAVE_WORKER_LOST_MESSAGE: &str = "The save worker stopped before returning its result. Source files may have changed partially; editor buffers are retained. Reopen this project before saving again.";
+
 impl ProjectSessions {
     pub fn is_saving(&self) -> bool {
         self.transfer.is_some() || self.worker_id.is_some()
     }
     pub fn save_timed_out(&self) -> bool {
         self.transfer.as_ref().is_some_and(SaveTransfer::timed_out)
+    }
+    pub fn can_save(&self) -> bool {
+        !self.is_saving()
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|session| session.service.is_some())
     }
     pub fn begin_save(&mut self, all: bool) -> Result<String, String> {
         if self.is_saving() {
@@ -177,6 +186,22 @@ impl ProjectSessions {
         let transfer = self.transfer.take()?;
         Some(format!("window.__mcuFinishSave({{requestId:{},saved:[],error:'Save transfer failed or timed out. Your buffer remains unsaved.'}});", transfer.id))
     }
+    /// Call only after the writer has terminated without returning its service,
+    /// proved by a disconnected completion channel or a joined failed worker.
+    /// A deadline alone must never release an ongoing commit's close guard.
+    pub fn save_worker_lost(&mut self) -> Option<String> {
+        let id = self.worker_id.take()?;
+        // The missing service stays missing: do not reconstruct native write
+        // authority from stale snapshots or claim that disk writes rolled back.
+        Some(format!(
+            "window.__mcuFinishSave({});",
+            serde_json::json!({
+                "requestId": id,
+                "saved": [],
+                "error": SAVE_WORKER_LOST_MESSAGE,
+            })
+        ))
+    }
     pub fn stage(&mut self, project: LoadedProject) -> Result<(), String> {
         if self.pending.is_some() || self.active.is_some() {
             return Err("This window already owns a project read. Open another project in an independent window.".into());
@@ -265,6 +290,7 @@ pub fn read_project(selected: &Path) -> Result<LoadedProject, String> {
 #[cfg(test)]
 mod reader_checks {
     use super::*;
+    use crate::workspace_save::SaveDocumentInfo;
     fn fixture() -> PathBuf {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -499,5 +525,110 @@ mod reader_checks {
             CHECK_SOURCE
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lost_save_worker_releases_close_guard_without_recreating_write_authority() {
+        // Exercise both an unwritten source and a completed write whose result
+        // is lost. Losing the worker cannot promise that source bytes rolled back.
+        for saved_before_loss in [false, true] {
+            let root = fixture();
+            std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE).unwrap();
+            let loaded = read_project(&root).unwrap();
+            let ids = loaded
+                .entries()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>();
+            let mut sessions = ProjectSessions::default();
+            sessions.stage(loaded).unwrap();
+            sessions.acknowledge(&ids).unwrap();
+            assert!(sessions.can_save());
+            assert!(sessions.save_worker_lost().is_none());
+            assert!(sessions.can_save());
+            sessions.begin_save(false).unwrap();
+            let request_id = sessions.transfer.as_ref().unwrap().id;
+            // This method must never discard a transfer or pretend that a
+            // still-owned writer has ended because a deadline elapsed.
+            assert!(sessions.save_worker_lost().is_none());
+            assert!(sessions.is_saving());
+            let changed = "// saved before worker result loss: café 日本語\n";
+            assert!(sessions
+                .accept_save_message(&RendererMessage::SaveStarted {
+                    request_id,
+                    documents: vec![SaveDocumentInfo {
+                        document_id: ids[0].clone(),
+                        edit_revision: 2,
+                        bytes: changed.len(),
+                    }],
+                    complete: true,
+                })
+                .unwrap()
+                .is_none());
+            sessions
+                .accept_save_message(&RendererMessage::SaveChunk {
+                    request_id,
+                    document_id: ids[0].clone(),
+                    offset: 0,
+                    content: changed.into(),
+                })
+                .unwrap();
+            let work = sessions
+                .accept_save_message(&RendererMessage::SaveFinished { request_id })
+                .unwrap()
+                .unwrap();
+            assert!(sessions.is_saving());
+            let (sender, receiver) = std::sync::mpsc::sync_channel::<SaveResult>(1);
+            std::thread::spawn(move || {
+                if saved_before_loss {
+                    drop(work.run());
+                } else {
+                    drop(work);
+                }
+                drop(sender);
+            })
+            .join()
+            .unwrap();
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+            ));
+            let script = sessions.save_worker_lost().unwrap();
+            let acknowledgement: serde_json::Value = serde_json::from_str(
+                script
+                    .strip_prefix("window.__mcuFinishSave(")
+                    .unwrap()
+                    .strip_suffix(");")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(acknowledgement["requestId"], request_id);
+            assert_eq!(acknowledgement["saved"], serde_json::json!([]));
+            assert!(acknowledgement["error"]
+                .as_str()
+                .unwrap()
+                .contains("partially"));
+            assert!(!sessions.is_saving());
+            assert!(!sessions.can_save());
+            assert_eq!(
+                sessions.begin_save(false).unwrap_err(),
+                "Native source owner is unavailable."
+            );
+            assert!(sessions.save_worker_lost().is_none());
+            assert_eq!(
+                sessions.active().unwrap().documents()[0].content,
+                CHECK_SOURCE
+            );
+            assert_eq!(
+                std::fs::read(root.join("Sketch.ino")).unwrap(),
+                if saved_before_loss {
+                    changed.as_bytes()
+                } else {
+                    CHECK_SOURCE.as_bytes()
+                }
+            );
+            drop(sessions);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

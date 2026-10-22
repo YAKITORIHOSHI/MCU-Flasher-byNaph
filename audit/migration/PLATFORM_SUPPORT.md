@@ -12,11 +12,11 @@ ARM means 64-bit ARM (`aarch64` / ARM64). No 32-bit platform is implied.
 
 | Required platform | Native architectures | Current Rust evidence and remaining platform work |
 | --- | --- | --- |
-| Windows 10 | AMD64, ARM64 | Hosted Windows Server 2022 AMD64 preview/backend checks pass; Windows 10 desktop qualification is still open. A Windows 11 ARM64 portable-core CI job is configured, with native execution still pending. It cannot qualify Windows 10; the AVR preparer currently refuses ARM64. |
-| Windows 11 | AMD64, ARM64 | The same hosted AMD64 evidence applies only to its tested host. A native ARM64 contracts/core job is configured separately from host services; its result is pending. Native desktop, runtime/tools/drivers and installation remain open. |
-| Ubuntu 24.04 LTS | AMD64, ARM64 | Native hosted preview/backend checks pass on both architectures. Complete services, desktop input/display, packaging and USB/device qualification remain open. |
-| Ubuntu 26.04 LTS | AMD64, ARM64 | Local 26.04.1 AMD64 preview/backend evidence exists. Native backend CI for both architectures is configured; its first result is pending. Complete desktop/device qualification remains open; Python 26.04 CI is separate evidence. |
-| macOS | Intel x86_64, Apple Silicon ARM64 | Native contracts/core CI jobs for both architectures are configured, with execution still pending. No native GUI adapter, native ownership/process implementation, tool-runtime qualification or packaged app is recorded. |
+| Windows 10 | AMD64, ARM64 | Hosted Windows Server 2022 AMD64 preview/backend checks, including native Save/Save All, pass; Windows 10 desktop qualification is still open. Windows 11 ARM64 portable-core execution passes separately. It cannot qualify Windows 10; the AVR preparer currently refuses ARM64. |
+| Windows 11 | AMD64, ARM64 | The same hosted AMD64 evidence applies only to its tested host. Native Windows 11 ARM64 passes contracts/core checks and strict lint at `bc41c1b` and `4a99205`, separately from host services. Native desktop, runtime/tools/drivers and installation remain open. |
+| Ubuntu 24.04 LTS | AMD64, ARM64 | Native hosted preview/backend checks, including 32 Save/Save All checks, pass on both architectures at `bc41c1b`. Complete services, desktop input/display, packaging and USB/device qualification remain open. |
+| Ubuntu 26.04 LTS | AMD64, ARM64 | Local 26.04.1 AMD64 preview/backend evidence exists. Native 26.04.1 backend CI passes on both architectures at `bc41c1b` and `4a99205`; these jobs run no GUI. Complete desktop/device qualification remains open; Python 26.04 CI is separate evidence. |
+| macOS | Intel x86_64, Apple Silicon ARM64 | Native Intel and Apple Silicon contracts/core jobs pass at `4a99205` after a fixture-only case-insensitive filesystem correction; earlier `bc41c1b` failures remain retained. No native GUI adapter, native ownership/process implementation, tool-runtime qualification or packaged app is recorded. |
 | Fedora Linux | x86_64, aarch64 | No Fedora-native Rust execution is recorded. Qualify Fedora's own GTK/WebKit packages, setup, desktop/session, SELinux and USB permissions. |
 | Linux Mint | AMD64 | No Mint-native Rust execution is recorded. Qualify official Ubuntu-based Mint editions independently, including setup, desktop and USB permissions. No official Mint ARM64 target is established. |
 
@@ -33,8 +33,8 @@ These version gaps remain open requirements, not silent exclusions or passes.
 Exact existing receipts remain authoritative: native UI `49ab312` / runtime
 `eb9d13c` in [session evidence](native-project-sessions.json), backend `29ec2b0`
 in [package metadata evidence](rust-avr-package-metadata.json), and the local
-Ubuntu 26.04.1 records linked by [CURRENT.md](CURRENT.md). No new platform was
-built, launched or tested by this requirements amendment.
+Ubuntu 26.04.1 records linked by [CURRENT.md](CURRENT.md). The subsequent
+`bc41c1b` native Save/platform run is recorded separately below.
 
 ## Native coverage continuation
 
@@ -83,6 +83,52 @@ Fedora and Mint still require actual distro-native backend/desktop execution,
 their own release/dependency adapters and all release gates below. An Ubuntu
 job or a pure core job does not establish either distribution's support.
 
+### Recorded execution at `bc41c1b`
+
+[CI 39823016524](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39823016524)
+completed with six passing jobs and two retained macOS fixture failures. All
+three native GUI hosts pass **32 Save/Save All, 19 retained-workspace and 17
+detach checks**. Save uses actual GTK/Win32 callbacks and worker byte checks
+on owned fixtures, with BOM/Unicode, late edits, external conflicts and retained
+models/history/selection. Windows Server AMD64 evidence does not qualify a
+Windows 10/11 desktop or physical USB.
+
+Both Ubuntu 26.04.1 backend jobs pass native Rust units, strict lint, fixed
+process ownership and owned policy/tool fixtures. The Windows 11 ARM64 core job
+passes one contracts, 79 core-library and 12 project-service checks, plus strict
+lint, using native `aarch64-pc-windows-msvc` Rust. It executes no host backend,
+GUI, firmware runtime or driver.
+
+The macOS 15.7.9 Intel and Apple Silicon jobs each pass one contracts and 78
+core-library checks, then fail one of 15 project-service fixtures: creating
+`demo.INO` with an ordinary write aliases existing `Demo.ino` on the runner's
+case-insensitive volume. Runtime source is unchanged. The fixture correction
+uses create-new admission and verifies inode/bytes, while preserving the
+case-sensitive duplicate and device-alias refusal checks. The historical failed
+run remains retained; the successful exact-source follow-up is recorded below.
+Exact receipts and retained failure logs are linked from
+[native Save evidence](native-source-save.json).
+
+### Platform follow-up at `4a99205`
+
+[CI 39824882032](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39824882032)
+passes all eight selected jobs. Both macOS 15 Intel/Apple Silicon jobs pass
+one contracts, 78 core-library and 15 project-service checks plus strict lint
+with their native Rust host triples. Windows 11 ARM64 repeats its one / 79 / 12
+core passes, and both Ubuntu 26.04 backend jobs pass again. The three other
+selected jobs verify launcher executables separately; no native GUI job runs
+in this follow-up. The macOS fixture correction changes no runtime behavior
+and enables no Darwin host backend or GUI.
+
+The later uncommitted worker-loss correction to GTK, Win32 and shared sessions
+has separate local evidence: 29 native UI library checks, strict Linux/MSVC lint
+and GTK 32 Save / 19 workspace / 17 detach checks pass. It keeps saving disabled
+after lost native authority and allows closing once the writer is confirmed
+terminated, while retaining buffers and warning about partial disk changes.
+Exact hashes are in `native-source-save.json`; hosted GUI verification of this
+later source is pending. The `bc41c1b` GUI receipts remain historical evidence,
+and the `4a99205` core/backend run does not qualify later GUI source.
+
 ## Architecture and implementation rules
 
 - Retain native Rust application widgets and services. Keep Monaco/xterm as
@@ -124,7 +170,7 @@ job or a pure core job does not establish either distribution's support.
 | Tool host coverage | `desktop/crates/host/src/prepare_avr_fixture.rs`, `desktop/firmware-tools/` | Extend reviewed host manifests and the complete private-runtime/loader/tool closure for Windows ARM64 and both macOS architectures. The current AVR host enum admits Linux x86_64/aarch64 and Windows x86_64 only. Do not relax its checks to manufacture support. |
 | Windows ARM runtime/drivers | `src/modules/private_python_guard.py`, `src/modules/bootstrap.py` | Existing repair selects an AMD64 Python installer; CP210x driver setup equates a 64-bit host with x64. Add architecture-specific admission and reviewed native ARM64 driver/runtime payloads. Existing ARM64 Node/Arduino CLI choices do not qualify the full closure. Native WebView2 loader/runtime must match the app architecture. |
 | Linux admission/setup | `src/modules/ubuntu_release.py`, `direct/ubuntu/release_guard.sh`, `direct/ubuntu/preflight.py`, `direct/ubuntu/system_setup.py` | Existing production paths deliberately admit only Ubuntu and use Ubuntu package names/apt. Add Rust release/dependency policies and isolated adapter checks for Fedora and Mint before connecting their setup/repair UI. Preserve the working Python release until qualified replacement. |
-| Native CI and evidence | `.github/workflows/migration-prototype.yml`, platform verifier scripts | Execute the configured Ubuntu 26.04 backend pair and the scoped Windows ARM64/macOS Intel/ARM64 core jobs, then retain exact source/results. Complete native host services/GUI on those hosts and add Fedora x86_64/aarch64 and Mint AMD64 execution. Distinguish cross-build, emulated execution, native core, backend, desktop and devices. Hosted Windows Server AMD64 remains separate from Windows 10/11. |
+| Native CI and evidence | `.github/workflows/migration-prototype.yml`, platform verifier scripts | Ubuntu 26.04 backend pair and Windows 11 ARM64 core pass at `bc41c1b` and `4a99205`; both macOS core jobs pass after the fixture-only correction at `4a99205`. Qualify the later worker-loss GUI source on its exact hosted checkpoint. Complete native host services/GUI on those hosts and add Fedora x86_64/aarch64 and Mint AMD64 execution. Distinguish cross-build, emulated execution, native core, backend, desktop and devices. Hosted Windows Server AMD64 remains separate from Windows 10/11. |
 | Distribution | Native launchers/installers and release manifests | Produce host-specific artifacts with matching tool runtimes and notices; verify clean-machine install, update, repair and rollback. macOS needs an app bundle and release signing/notarization; Fedora and Mint need their own dependency/desktop integration. No installer or published artifact is changed by this document. |
 
 ## Required release gates for each matrix row

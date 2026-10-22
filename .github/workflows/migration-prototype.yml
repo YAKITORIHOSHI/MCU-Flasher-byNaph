@@ -57,6 +57,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
+      - name: Verify supplied executable bundle before rebuilding
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p temp/audit/launcher-executables
+          python -m pip install 'psutil>=5.9,<8'
+          python -B direct/verify_launcher_folder.py 2>&1 | tee temp/audit/launcher-executables/supplied-verify.log
+          python -B direct/verify_release_sources.py 2>&1 | tee temp/audit/launcher-executables/release.log
       - name: Build matching native launcher entries
         shell: bash
         run: |
@@ -67,7 +75,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install 'psutil>=5.9,<8'
           python -B direct/verify_launcher_folder.py --native-only 2>&1 | tee temp/audit/launcher-executables/verify.log
       - name: Retain native binaries and verification evidence
         if: always()

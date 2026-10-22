@@ -1,6 +1,6 @@
 # Current application platform verification
 
-22 October 2026, Asia/Manila. This records the shipping Python application;
+23 October 2026, Asia/Manila. This records the shipping Python application;
 the [native Rust replacement requirements](migration/PLATFORM_SUPPORT.md) are
 tracked separately. AMD means x86-64, including compatible Intel processors;
 ARM means ARM64. A launcher, cross-platform toolkit or passing editor fixture
@@ -9,7 +9,7 @@ does not establish a complete working application on another operating system.
 | Requested system | Current application status | Evidence and remaining qualification |
 | --- | --- | --- |
 | Windows 10/11 AMD64 | Existing production entry and backend | Hosted AMD64 browser/editor rendering passes in two Python/Qt ranges; final launcher/archive/resource checks also pass. Hosted Server images do not establish physical Windows 10/11, standard-user/UAC, mixed-monitor DPI or real USB driver/upload behavior. |
-| Windows 10/11 ARM64 | Unavailable | New `LAUNCHER/WINDOWS.vbs` refuses this host. Python repair/release still selects AMD64, CP210x setup selects x64 for any 64-bit host, and native ARM64 terminal/runtime/USB closure remains unqualified. Editor-only ARM checks are separate. |
+| Windows 10/11 ARM64 | Unavailable | New `LAUNCHER/WINDOWS.exe` refuses this host. Python repair/release still selects AMD64, CP210x setup selects x64 for any 64-bit host, and native ARM64 terminal/runtime/USB closure remains unqualified. Editor-only ARM checks are separate. |
 | Ubuntu 24.04 LTS AMD64/ARM64 | Existing production entries and native host policies | Both native CPU families and 64-bit userspace are admitted. Existing CI covers runtime/first-run paths; this performance slice adds focused checks per release/CPU. Xvfb and software-rendered fixtures do not establish actual Wayland/X11 input, compositor or physical USB behavior. |
 | Ubuntu 26.04 LTS AMD64/ARM64 | Existing production entries and native host policies | Focused native browser/editor/PTY checks pass on both hosted CPU families using the release's own Python/Tcl/Tk ABI and native ARM Qt dependencies. Local 26.04.1 AMD64 evidence also exists. Physical desktop, input and USB qualification remain separate. |
 | macOS Intel/Apple Silicon | Unavailable | No Darwin backend, private runtime selection, native PTY/process containment, keychain or app bundle exists. Native offline editor checks alone cannot qualify these services. |

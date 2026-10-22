@@ -41,6 +41,14 @@ The user approved organizing the remaining work around a usable Rust beta:
 
 Run independent GUI/backend/Windows work in parallel where it helps. Measure progress by working end-to-end features and retired Python services, with tests as supporting evidence. Retain completed campaign/CI receipts and storage budgets; do not restart passed work. The detailed tasks below remain the dependency and qualification ledger.
 
+23 October continuation: native Save/Save All passes actual Windows and Ubuntu
+AMD64/ARM64 checks; worker-loss handling has a separate final qualification.
+`LAUNCHER/` now uses executable entries instead of `.desktop` shortcuts, with
+unsupported-platform notices kept explicit. The tool-only PlatformIO-to-SCons
+handoff now preserves isolated startup and guards, with 68 fake-tool checks.
+Neither this handoff nor portable Mac/Windows ARM core checks completes real
+Compile, missing host adapters, the 67-capability ledger or final packaging.
+
 ## Task 1: Complete current Python release compile qualification
 
 **Files:** `direct/board_compile_indexes.py`, `direct/board_compile_campaign.py`, `direct/board_compile_manifest.py`, target/index validators and isolated `direct/verify_*` checks; reports in `audit/migration/`.

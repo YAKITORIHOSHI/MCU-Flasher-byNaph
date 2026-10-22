@@ -36,26 +36,40 @@ REQUIRED_RUNTIME = ('python.exe', 'pythonw.exe', 'python3.dll', 'python314.dll',
                     'Lib/tkinter/__init__.py', 'DLLs/_tkinter.pyd',
                     'DLLs/tcl90.dll', 'DLLs/tcl9tk90.dll',
                     'tcl/libtcl9.0.4.zip', 'tcl/libtk9.0.4.zip')
-REQUIRED_LAUNCHERS = ('LAUNCHER/WINDOWS.vbs', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU.desktop',
-                      'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA.desktop',
-                      'LAUNCHER/LINUX_MINT.desktop', 'LAUNCHER/README.md')
+REQUIRED_LAUNCHERS = ('LAUNCHER/WINDOWS.exe', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU_ARM64',
+                      'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA', 'LAUNCHER/FEDORA_ARM64',
+                      'LAUNCHER/LINUX_MINT', 'LAUNCHER/README.md')
 
 
 def validate_launcher_entries(entries):
     """Check the portable entry folder inside the actual release archive."""
+    if set(entries) != set(REQUIRED_LAUNCHERS):
+        raise RuntimeError('Release launcher folder must contain exactly the named executable entries and README.')
     for name in REQUIRED_LAUNCHERS:
         if name not in entries or not entries[name][0]:
             raise RuntimeError(f'Missing release launcher entry: {name}')
         data, mode = entries[name]
-        if not name.endswith(('.vbs', '.md')) and mode & 0o111 != 0o111:
+        if not name.endswith(('.exe', '.md')) and mode & 0o111 != 0o111:
             raise RuntimeError(f'Release launcher must remain executable: {name}')
-    windows = entries['LAUNCHER/WINDOWS.vbs'][0]
-    try:
-        windows.decode('ascii')
-    except UnicodeDecodeError as error:
-        raise RuntimeError('Windows launcher must use ASCII and CRLF.') from error
-    if not windows or b'\n' in windows.replace(b'\r\n', b'') or b'\r\n' not in windows:
-        raise RuntimeError('Windows launcher must use ASCII and CRLF.')
+    if any(name.startswith('LAUNCHER/') and name.endswith('.desktop') for name in entries):
+        raise RuntimeError('Release launcher folder must contain direct executables, without .desktop entries.')
+    for name, cpu in (('UBUNTU', 62), ('UBUNTU_ARM64', 183), ('FEDORA', 62),
+                      ('FEDORA_ARM64', 183), ('LINUX_MINT', 62)):
+        raw = entries['LAUNCHER/' + name][0]
+        if (len(raw) < 64 or raw[:7] != b'\x7fELF\x02\x01\x01'
+                or int.from_bytes(raw[16:18], 'little') not in (2, 3)
+                or int.from_bytes(raw[18:20], 'little') != cpu):
+            raise RuntimeError(f'Invalid native Linux launcher: {name}')
+    windows = entries['LAUNCHER/WINDOWS.exe'][0]
+    offset = int.from_bytes(windows[60:64], 'little') if len(windows) >= 64 else 0
+    if (windows[:2] != b'MZ' or offset < 64 or offset + 96 > len(windows)
+            or windows[offset:offset + 4] != b'PE\0\0'
+            or int.from_bytes(windows[offset + 4:offset + 6], 'little') != 0x14c
+            or int.from_bytes(windows[offset + 24:offset + 26], 'little') != 0x10b
+            or int.from_bytes(windows[offset + 92:offset + 94], 'little') != 2):
+        raise RuntimeError('Invalid Windows GUI launcher executable.')
+    if not entries['LAUNCHER/MacOS.command'][0].startswith(b'#!/bin/bash\n'):
+        raise RuntimeError('Invalid executable macOS launcher entry.')
 
 
 def digest_file(path):
@@ -230,12 +244,10 @@ def build(output, report_dir):
             if not bundle.read(prefix + 'MCU_Flasher.exe').startswith(b'MZ'):
                 raise RuntimeError('Missing Windows launcher.')
             launcher_entries = {}
-            for name in REQUIRED_LAUNCHERS:
-                try:
-                    item = bundle.getinfo(prefix + name)
-                except KeyError as error:
-                    raise RuntimeError(f'Missing release launcher entry: {name}') from error
-                launcher_entries[name] = bundle.read(item), (item.external_attr >> 16) & 0o777
+            for item in bundle.infolist():
+                if item.filename.startswith(prefix + 'LAUNCHER/'):
+                    name = item.filename.removeprefix(prefix)
+                    launcher_entries[name] = bundle.read(item), (item.external_attr >> 16) & 0o777
             validate_launcher_entries(launcher_entries)
             if json.loads(bundle.read(prefix + 'src/dbs/bootstrap_config.json')) != {'skip_updates': False}:
                 raise RuntimeError('The committed Bootstrap defaults are not fresh.')

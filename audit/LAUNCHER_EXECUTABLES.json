@@ -1,0 +1,82 @@
+{
+  "updated": "2026-10-23 Asia/Manila",
+  "scope": "Direct executable entry packaging for current Python app; no native Rust production switch",
+  "entries": {
+    "WINDOWS.exe": {
+      "sha256": "2c6713083229e3cec8806fce6b1d127ae85fe6e06841b405d4617f380f6e48e3",
+      "bytes": 26112,
+      "mode": "0o644"
+    },
+    "UBUNTU": {
+      "sha256": "4bf7ba38915b3518ab760e73e42185382b08a1ae1d2409f826ffca53120b013d",
+      "bytes": 16776,
+      "mode": "0o755"
+    },
+    "UBUNTU_ARM64": {
+      "sha256": "a3f9ce5d5482a6c4f8af388edfab18391ad42006a967e6cc580771b245b52ba6",
+      "bytes": 71216,
+      "mode": "0o755"
+    },
+    "MacOS.command": {
+      "sha256": "aed97c06aca5456d4a7defc64de4cd44acb58887864d11198962d11d01ca1454",
+      "bytes": 416,
+      "mode": "0o755"
+    },
+    "FEDORA": {
+      "sha256": "4bf7ba38915b3518ab760e73e42185382b08a1ae1d2409f826ffca53120b013d",
+      "bytes": 16776,
+      "mode": "0o755"
+    },
+    "FEDORA_ARM64": {
+      "sha256": "a3f9ce5d5482a6c4f8af388edfab18391ad42006a967e6cc580771b245b52ba6",
+      "bytes": 71216,
+      "mode": "0o755"
+    },
+    "LINUX_MINT": {
+      "sha256": "4bf7ba38915b3518ab760e73e42185382b08a1ae1d2409f826ffca53120b013d",
+      "bytes": 16776,
+      "mode": "0o755"
+    },
+    "README.md": {
+      "sha256": "5f96fcdbd4861cb7553b3a24ef1c461e9e391ddae33fc4233ab98d7689bc2620",
+      "bytes": 2417,
+      "mode": "0o664"
+    }
+  },
+  "sourceSha256": {
+    "src/launcher_folder_linux.c": "1c17ec251a836abb6ae12b17d8f1a2663b62df27dd27b08d24808e6e65c13b99",
+    "src/launcher_folder_windows.cs": "5ab382ebc6cda55910e9ea978888533394ad792eaf0439c76191d74b91d5bec1",
+    "direct/build_launcher_folder.py": "6455edfba3677a317a1fa6c728786f3d05078d357cf6548313bdf976ccdc9f8c",
+    "direct/verify_launcher_folder.py": "b96c355dca83ff0121128a74f67ec4366f603affb51a20e08799de4a350627f2",
+    "direct/build_release.py": "b46a1559117c191e9b9a30e738d23cb94e7c5d8c281958f47971fc2b36ed95af",
+    "direct/verify_release_sources.py": "28940e36083302c7508d091ef6018dd4ea2a22c52938ecd30e9ede739a324b24"
+  },
+  "buildRun": {
+    "id": 39824882032,
+    "source": "4a99205a5eadc02f3351a6310d6f0a17ecf48cac",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39824882032",
+    "result": "success",
+    "nativeBuilds": [
+      "Ubuntu24 AMD64",
+      "Ubuntu24 ARM64",
+      "WindowsServer2022 AMD64"
+    ],
+    "nativeOnlyChecks": {
+      "linuxAmd64": "9 pass /7 other-OS skips",
+      "linuxArm64": "8 pass /8 other-OS or Mint-CPU skips; Fedora ARM subcase passes",
+      "windows": "9 pass /7 Linux skips"
+    }
+  },
+  "finalLocal": {
+    "launcherChecks": "15 pass /7 Windows skips",
+    "releaseChecks": 8,
+    "scope": "Copied native binary fixtures; exact headers/CPU/modes, literal argument and relocation, refused malformed/extra archive entries; no application/setup/hardware launch"
+  },
+  "finalSuppliedBinaryCi": "pending exact-source commit",
+  "remaining": [
+    "Windows ARM application unavailable and refused",
+    "macOS/Fedora/Mint full applications unfinished; executable entries are availability notices",
+    "Physical desktop double-click policy, filesystem noexec/quarantine, native OS input and USB qualification remain separate",
+    "Linux binaries are CPU-specific; choose the matching name, retain Unix executable permission"
+  ]
+}

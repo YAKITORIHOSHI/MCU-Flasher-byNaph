@@ -15,10 +15,10 @@ from direct import build_release
 
 class ReleaseSourceChecks(unittest.TestCase):
     def launcher_entries(self):
-        return {name: ((ROOT / name).read_bytes(), 0o755 if not name.endswith(('.vbs', '.md')) else 0o644)
-                for name in ('LAUNCHER/WINDOWS.vbs', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU.desktop',
-                             'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA.desktop',
-                             'LAUNCHER/LINUX_MINT.desktop', 'LAUNCHER/README.md')}
+        return {name: ((ROOT / name).read_bytes(), 0o644 if name.endswith(('.exe', '.md')) else 0o755)
+                for name in ('LAUNCHER/WINDOWS.exe', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU_ARM64',
+                             'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA', 'LAUNCHER/FEDORA_ARM64',
+                             'LAUNCHER/LINUX_MINT', 'LAUNCHER/README.md')}
 
     def test_release_preserves_complete_launcher_folder_and_native_permissions(self):
         entries = self.launcher_entries()
@@ -27,16 +27,40 @@ class ReleaseSourceChecks(unittest.TestCase):
             with self.subTest(missing=name), self.assertRaisesRegex(RuntimeError, 'launcher'):
                 build_release.validate_launcher_entries({key: value for key, value in entries.items() if key != name})
         for name in entries:
-            if not name.endswith(('.vbs', '.md')):
+            if not name.endswith(('.exe', '.md')):
                 with self.subTest(mode=name), self.assertRaisesRegex(RuntimeError, 'executable'):
                     build_release.validate_launcher_entries({**entries, name: (entries[name][0], 0o644)})
+        for extra in ('LAUNCHER/UBUNTU.desktop', 'LAUNCHER/WINDOWS.vbs', 'LAUNCHER/unknown'):
+            with self.subTest(extra=extra), self.assertRaisesRegex(RuntimeError, 'launcher'):
+                build_release.validate_launcher_entries({**entries, extra: (b'legacy entry', 0o755)})
 
-    def test_release_refuses_damaged_windows_script_encoding(self):
+    def test_release_refuses_damaged_windows_executable(self):
         entries = self.launcher_entries()
-        name = 'LAUNCHER/WINDOWS.vbs'
-        for content in (entries[name][0].replace(b'\r\n', b'\n'), b'\xff\xfeinvalid', b''):
-            with self.subTest(content=content[:12]), self.assertRaisesRegex(RuntimeError, 'launcher'):
+        name = 'LAUNCHER/WINDOWS.exe'
+        original = entries[name][0]
+        offset = int.from_bytes(original[60:64], 'little')
+        mutations = (b'', b'#!/bin/sh\n', b'MZ' + bytes(62), original[:64],
+                     original[:offset] + b'NOPE' + original[offset + 4:],
+                     original[:offset + 4] + b'\x64\x86' + original[offset + 6:],
+                     original[:offset + 92] + b'\x03\x00' + original[offset + 94:])
+        for content in mutations:
+            with self.subTest(content=content[:12]), self.assertRaisesRegex(RuntimeError, '[Ll]auncher'):
                 build_release.validate_launcher_entries({**entries, name: (content, 0o644)})
+
+    def test_release_refuses_shell_substitutes_or_wrong_cpu_linux_executables(self):
+        entries = self.launcher_entries()
+        for name in ('LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU_ARM64', 'LAUNCHER/FEDORA',
+                     'LAUNCHER/FEDORA_ARM64', 'LAUNCHER/LINUX_MINT'):
+            original, mode = entries[name]
+            wrong_cpu = b'\x3e\x00' if name.endswith('_ARM64') else b'\xb7\x00'
+            mutations = (b'', b'#!/bin/bash\n', original[:32],
+                         original[:4] + b'\x01' + original[5:],
+                         original[:6] + b'\x00' + original[7:],
+                         original[:16] + b'\x01\x00' + original[18:],
+                         original[:18] + wrong_cpu + original[20:])
+            for content in mutations:
+                with self.subTest(name=name, content=content[:20]), self.assertRaisesRegex(RuntimeError, '[Ll]auncher'):
+                    build_release.validate_launcher_entries({**entries, name: (content, mode)})
 
     def test_production_sources_and_tool_hook_are_included(self):
         for name in ('MCU_Flasher', 'main/web_bridge.py',

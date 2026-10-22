@@ -8,10 +8,14 @@ import re
 import subprocess
 import sys
 import tempfile
+import textwrap
+import threading
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / "desktop/firmware-tools/platformio_compile.py"
+SCONS_ENTRY = ENTRY.with_name("scons_compile.py")
 OUTPUT = ROOT / "temp/audit/native-compile-inputs"
 CONFIG = (b"[platformio]\nsrc_dir = sources\ninclude_dir = sources\n\n"
           b"[env:native_compile]\nplatform = platformio/atmelavr@5.3.0\n"
@@ -63,6 +67,14 @@ class PlatformPackageManager(BasePackageManager):
         raise AssertionError("Platform-specific preparation/cleanup path was reached")
     def uninstall(self, *args, **kwargs):
         raise AssertionError("Platform uninstall was invoked")
+'''
+FAKE_PROC = '''
+import subprocess
+import sys
+def exec_command(*args, **kwargs):
+    with subprocess.Popen(*args, **kwargs) as child:
+        out, err = child.communicate(timeout=5)
+        return dict(out=out.decode("utf-8"), err=err.decode("utf-8"), returncode=child.returncode)
 '''
 FAKE_MAIN = '''
 import json
@@ -156,6 +168,7 @@ assert not any(name == "main" or name.startswith("main.") or name == "src"
                or name.startswith("src.") for name in sys.modules)
 assert "site" not in sys.modules and "sitecustomize" not in sys.modules
 print(json.dumps(dict(argv=sys.argv, environment=dict(os.environ), path=sys.path,
+                     cwd=os.getcwd(),
                      encoding=[sys.stdout.encoding, sys.stderr.encoding],
                      flags=[sys.flags.isolated, sys.flags.no_site, sys.flags.dont_write_bytecode],
                      package_refusals=refusals)))
@@ -186,7 +199,8 @@ def verify():
     for node in imports:
         modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module]
         assert all(module and module.split(".")[0] in {
-            "sys", "argparse", "os", "pathlib", "re", "runpy", "stat", "tempfile", "platformio"}
+            "sys", "argparse", "base64", "importlib", "inspect", "os", "pathlib", "re", "runpy", "stat",
+            "subprocess", "tempfile", "threading", "platformio", "SCons"}
                    for module in modules), modules
     assert isinstance(tree.body[1], ast.Import) and tree.body[1].names[0].name == "sys"
     assert isinstance(tree.body[2], ast.For), "Set log encoding before startup error messages"
@@ -205,11 +219,58 @@ def verify():
         else:
             raise AssertionError("Protected path was admitted")
     CHECKS.append("protected-components-refused-before-any-path-access")
+    # Exercise the Windows serialized audit form without launching a foreign
+    # OS process. The actual validator/constructor/audit functions run here;
+    # only the final OS executor is replaced by an observation fixture.
+    import inspect
+    recorded = []
+    windows = dict(sys=SimpleNamespace(platform="win32", executable=sys.executable),
+                   Path=Path, re=re, ToolBoundaryError=RuntimeError,
+                   inspect=inspect, _POPEN_CONTEXT=threading.local())
+    class WindowsExecutor:
+        def __init__(self, args, shell=False, executable=None):
+            recorded.append(tuple(args))
+            text = subprocess.list2cmdline(args)
+            windows["_audit"]("subprocess.Popen", (None, text, None, None))
+            try:
+                windows["_audit"]("subprocess.Popen", (None, text + " --extra", None, None))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Mismatched serialized Windows command was accepted")
+    windows["subprocess"] = SimpleNamespace(Popen=WindowsExecutor, list2cmdline=subprocess.list2cmdline)
+    guard_functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                       and node.name in ("_subprocess_vector", "_audit", "_guard_subprocess")]
+    exec(compile(ast.Module(body=guard_functions, type_ignores=[]), str(ENTRY), "exec"), windows)
+    windows["_guard_subprocess"]()
+    literal = [r"C:\owned tools\avr-g++.exe", "café 日本語.cpp", 'quoted"name', "trailing\\"]
+    windows["subprocess"].Popen(literal)
+    assert recorded == [tuple(literal)]
+    CHECKS.append("windows-audit-permits-only-matching-prevalidated-vector-serialization")
+    for command, options in (("avr-g++ serialized", {}), (literal, {"shell": True}),
+                             (literal, {"executable": "pip"}), (["pip", "install"], {})):
+        try:
+            windows["subprocess"].Popen(command, **options)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("Unsafe Windows constructor reached the OS executor")
+    assert recorded == [tuple(literal)]
+    CHECKS.append("windows-string-shell-executable-and-installer-refuse-before-serialization")
+    try:
+        windows["_audit"]("subprocess.Popen", (None, subprocess.list2cmdline(literal), None, None))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Serialized audit permission leaked beyond the constructor")
+    CHECKS.append("windows-serialized-audit-permission-does-not-outlive-constructor")
     OUTPUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="tool-entry café 日本語 ", dir=OUTPUT) as folder:
         owned = Path(folder).resolve()
-        entry = owned / "entry.py"
+        entry = owned / "platformio_compile.py"
         entry.write_bytes(source)
+        if SCONS_ENTRY.exists():
+            (owned / "scons_compile.py").write_bytes(SCONS_ENTRY.read_bytes())
         project, prepared, output = (owned / name for name in ("project", "prepared", "output"))
         core, packages, platforms, site = (output / "core", prepared / "core/packages",
                                           prepared / "core/platforms", prepared / "site-packages")
@@ -238,6 +299,7 @@ def verify():
               "        raise AssertionError('Uninstall was invoked')\n    uninstall_dependencies = uninstall\n")
         write(site / "platformio/package/manager/base.py", FAKE_BASE)
         write(site / "platformio/package/manager/platform.py", FAKE_PLATFORM)
+        write(site / "platformio/proc.py", FAKE_PROC)
         marker_code = "from pathlib import Path; Path(" + repr(str(pth_marker)) + ").write_text('unexpected')\n"
         write(site / "untrusted-startup.pth", "import pathlib; " + marker_code.removeprefix("from pathlib import Path; ").replace("Path(", "pathlib.Path("))
         write(site / "sitecustomize.py", marker_code)
@@ -372,11 +434,120 @@ def verify():
             assert child.returncode == 2 and "requires" in child.stderr, (missing, child.stderr)
             assert not imported.exists() and not pth_marker.exists()
             CHECKS.append("simulated-missing-flag-before-third-party-import:" + missing)
+
+        # This is the real private PlatformIO 6.2.0 _run_scons vector shape,
+        # sent through its proc.exec_command choke point. The owned fake SCons
+        # module observes actual nested interpreter startup and guards.
+        engine = packages / "tool-scons/scons-local-4.11.1"
+        script = packages / "tool-scons/scons.py"
+        builder = site / "platformio/builder/main.py"
+        platform_builder = platforms / "atmelavr/builder/main.py"
+        write(script, "raise AssertionError('Raw unisolated SCons script was dispatched')\n")
+        write(builder, "# Owned placeholder, never executed by this fake.\n")
+        write(platform_builder, "# Owned placeholder, never executed by this fake.\n")
+        write(engine / "SCons/__init__.py", "")
+        write(site / "SCons/__init__.py", "raise AssertionError('Site-packages shadowed the supplied SCons engine')\n")
+        child_marker = owned / "scons-imported"
+        write(engine / "SCons/Script.py",
+              "from pathlib import Path\nPath(" + repr(str(child_marker)) + ").write_text('fixture')\n"
+              "import socket\ntry:\n    socket.socket()\nexcept RuntimeError:\n    pass\n"
+              "else:\n    raise AssertionError('Nested audit was installed after SCons import')\n"
+              "def main():\n" + textwrap.indent(FAKE_MAIN, "    "))
+        nested_main = '''
+import base64
+import json
+import os
+import subprocess
+import sys
+from platformio import proc
+def encoded(value):
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
+project = PROJECT
+command = [sys.executable, SCONS_SCRIPT, "-Q", "--warn=no-no-parallel-support",
+           "--jobs", "1", "--sconstruct", BUILDER,
+           "PIOVERBOSE=0", "ISATTY=0", "PIOENV=" + encoded("native_compile"),
+           "PROJECT_CONFIG=" + encoded(project + os.sep + "platformio.ini"),
+           "PROGRAM_ARGS=W10=", "BUILD_SCRIPT=" + encoded(PLATFORM_BUILDER)]
+os.environ.update(MCU_FLASHER_CHILD_POLICY="unexpected", PLATFORMIO_CORE_DIR="wrong-core",
+                  PYTHONPATH="wrong-import-root")
+MUTATION
+print(json.dumps(proc.exec_command(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)))
+'''
+        nested_main = (nested_main.replace("PROJECT\n", repr(str(project)) + "\n")
+                       .replace("SCONS_SCRIPT", repr(str(script)))
+                       .replace("PLATFORM_BUILDER", repr(str(platform_builder)))
+                       .replace("BUILDER", repr(str(builder))))
+        def nested(mutation="", label=None):
+            child_marker.unlink(missing_ok=True)
+            write(site / "platformio/__main__.py", nested_main.replace("MUTATION", mutation))
+            before = inventory(project), inventory(prepared)
+            child = run(base + arguments(), environment, owned)
+            assert (inventory(project), inventory(prepared)) == before
+            if label:
+                assert child.returncode != 0, (label, child.stdout, child.stderr)
+                assert not child_marker.exists(), (label, "SCons imported before handoff refusal")
+                CHECKS.append(label)
+                return
+            assert child.returncode == 0, (child.stdout, child.stderr)
+            result = json.loads(child.stdout)
+            assert result["returncode"] == 0, result
+            assert result["err"] == "", result
+            nested_result = json.loads(result["out"])
+            assert nested_result["flags"] == [1, 1, 1], nested_result
+            assert nested_result["argv"][:8] == [str(script), "-Q", "--warn=no-no-parallel-support",
+                                                 "--jobs", "1", "--sconstruct", str(builder), "PIOVERBOSE=0"]
+            assert nested_result["path"][-2:] == [str(site), str(engine)]
+            assert nested_result["cwd"] == str(project), nested_result
+            assert nested_result["environment"]["PLATFORMIO_CORE_DIR"] == str(core)
+            assert "PYTHONPATH" not in nested_result["environment"]
+            assert not any(name.startswith("MCU_FLASHER") for name in nested_result["environment"])
+            assert child_marker.exists() and not pth_marker.exists()
+            assert len(nested_result["package_refusals"]) == 23
+            CHECKS.append("nested-scons-starts-isolated-and-reinstalls-guards-before-import")
+        nested()
+        CHECKS.append("nested-scons-import-origin-cannot-be-shadowed-by-site-packages")
+        for mutation, label in (
+                ("command.append('upload')", "nested-upload-target-refused"),
+                ("command[5] = '6'", "nested-job-policy-change-refused"),
+                ("command[7] = project + os.sep + 'other.py'", "nested-builder-switch-refused"),
+                ("command[-1] = 'BUILD_SCRIPT=' + encoded(project + os.sep + 'evil.py')", "nested-platform-hook-switch-refused"),
+                ("command[-2] = 'PROGRAM_ARGS=' + encoded('[\"--upload\"]')", "nested-program-argument-refused"),
+                ("command.append(command[-1])", "nested-duplicate-variable-refused"),
+                ("command = subprocess.list2cmdline(command)", "serialized-vector-refused-before-popen")):
+            nested(mutation, label)
+        child_base = [sys.executable, "-I", "-S", "-B", str(owned / "scons_compile.py")]
+        child_parameters = dict(parameters, **{
+            "--scons-root": str(packages / "tool-scons"),
+            "--builder-root": str(site / "platformio/builder"), "--verbose": "0", "--isatty": "0"})
+        for changes, label in (({"--scons-root": str(platforms)}, "child-scons-root-switch-refused"),
+                               ({"--builder-root": str(site)}, "child-builder-root-switch-refused"),
+                               ({"--verbose": "01"}, "child-nonliteral-verbose-refused"),
+                               ({"--isatty": "2"}, "child-nonliteral-isatty-refused")):
+            child_marker.unlink(missing_ok=True)
+            values = dict(child_parameters, **changes)
+            child = run(child_base + [word for pair in values.items() for word in pair], environment, owned)
+            assert child.returncode == 2, (label, child.stdout, child.stderr)
+            assert not child_marker.exists()
+            CHECKS.append(label)
+        for missing in ("isolated", "no_site", "dont_write_bytecode"):
+            child_marker.unlink(missing_ok=True)
+            flags = {name: name != missing for name in ("isolated", "no_site", "dont_write_bytecode")}
+            launcher = ("import pathlib,sys,types; code=compile(pathlib.Path(sys.argv[1]).read_bytes(), "
+                        "sys.argv[1], 'exec'); sys.flags=types.SimpleNamespace(**" + repr(flags)
+                        + "); exec(code, {'__name__':'__main__', '__file__':sys.argv[1]})")
+            child = run([sys.executable, "-I", "-S", "-B", "-c", launcher,
+                         str(owned / "scons_compile.py")], environment, owned)
+            assert child.returncode == 2 and "requires" in child.stderr
+            assert not child_marker.exists()
+            CHECKS.append("child-simulated-missing-flag-before-tool-import:" + missing)
         assert ENTRY.read_bytes() == source
     report = dict(checks=CHECKS, count=len(CHECKS), real_tools_dispatched=False,
-                  scope="source-isolated fake PlatformIO; startup flag negatives simulated safely",
+                  scope=("source-isolated fake PlatformIO and nested fake SCons; "
+                         "Windows serialization modeled without foreign OS dispatch; "
+                         "startup flag negatives simulated safely"),
                   limitations=["no full runtime/tool provenance", "no immutable tool lifetime",
-                               "no native finite child owner", "nested Python startup unqualified",
+                               "no native finite child owner", "real nested SCons/runtime execution unqualified",
+                               "additional Python child commands are refused",
                                "Windows real compiler and lock behavior unqualified",
                                "Python audit hooks are not an OS network sandbox"])
     (OUTPUT / "tool-only-entry.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

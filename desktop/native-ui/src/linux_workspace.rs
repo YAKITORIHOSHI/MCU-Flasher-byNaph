@@ -14,7 +14,9 @@ use std::{
 };
 use wry::WebView;
 
-use mcu_native_ui_probe::workspace_project::{read_project, ProjectSessions};
+use mcu_native_ui_probe::workspace_project::{
+    read_project, ProjectSessions, SAVE_WORKER_LOST_MESSAGE,
+};
 pub use mcu_native_ui_probe::workspace_project::{CHECK_HEADER, CHECK_SOURCE};
 use mcu_native_ui_probe::workspace_save::{SaveResult, SaveWork};
 type TabStates = BTreeMap<String, (gtk::Label, String, u64, gtk::Button)>;
@@ -741,8 +743,7 @@ impl WorkspaceShell {
     fn sync_save_controls(&self) {
         let projects = self.projects.borrow();
         let saving = projects.is_saving() || self.save_fixture_io.get();
-        let enabled =
-            !self.save_read_only && !self.loading.get() && projects.active().is_some() && !saving;
+        let enabled = !self.save_read_only && !self.loading.get() && projects.can_save() && !saving;
         drop(projects);
         self.save.set_sensitive(enabled);
         self.save_all.set_sensitive(enabled);
@@ -840,12 +841,16 @@ impl WorkspaceShell {
         // glib 0.18's supported channel wakes the UI only for completion. It
         // carries owned Send results; no GTK/WebView/Rc value enters the worker.
         #[allow(deprecated)]
-        let (sender, receiver) = glib::MainContext::channel::<SaveResult>(glib::Priority::DEFAULT);
+        let (sender, receiver) =
+            glib::MainContext::channel::<Result<SaveResult, ()>>(glib::Priority::DEFAULT);
         let weak = Rc::downgrade(self);
         let source = receiver.attach(None, move |result| {
             if let Some(shell) = weak.upgrade() {
                 shell.save_completion.borrow_mut().take();
-                shell.finish_save(result);
+                match result {
+                    Ok(result) => shell.finish_save(result),
+                    Err(()) => shell.save_worker_lost(),
+                }
             }
             glib::ControlFlow::Break
         });
@@ -861,9 +866,14 @@ impl WorkspaceShell {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take();
-                if let Some(work) = work {
-                    let _ = sender.send(work.run());
-                }
+                let result = work.ok_or(()).and_then(|work| {
+                    // A terminated worker cannot return its native authority.
+                    // Report that terminal state without pretending a rollback
+                    // or allowing another save against an unknown baseline.
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.run()))
+                        .map_err(|_| ())
+                });
+                let _ = sender.send(result);
             });
         if let Err(error) = spawned {
             if let Some(source) = self.save_completion.borrow_mut().take() {
@@ -878,6 +888,20 @@ impl WorkspaceShell {
                     work.cancel_before_run(format!("The save worker could not start: {error}")),
                 );
             }
+        }
+    }
+
+    fn save_worker_lost(&self) {
+        let script = self.projects.borrow_mut().save_worker_lost();
+        self.sync_save_controls();
+        self.status.set_text(SAVE_WORKER_LOST_MESSAGE);
+        if let Some(script) = script {
+            if let Err(error) = self.evaluate_save_script(&script) {
+                self.status.set_text(&format!("The save worker stopped; partial disk changes are possible. Buffers remain open, saving is disabled until reopening. Editor acknowledgement failed: {error}"));
+            }
+        }
+        if self.save_check.get() {
+            self.finish_save_check(false);
         }
     }
 

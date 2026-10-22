@@ -65,9 +65,17 @@ dependency is added; no new external crate or runtime is installed.
 two owned files, exact BOM/Unicode disk bytes, retained models/undo/selection,
 a newer edit during Save All, and refusal of an external disk change. The old
 `--workspace-smoke` remains read-only. Local Linux passes 32 Save checks, the
-19 workspace and 17 detach checks, plus 255 combined library tests. Hosted
-Windows and the expanded platform jobs are pending until recorded in
+19 workspace and 17 detach checks, plus 256 combined library tests after the
+worker-loss correction. Hosted Windows and both Ubuntu 24 architectures pass
+the original Save slice (32/19/17 checks each) in run `39823016524`; the later
+worker-loss correction awaits its exact-source run. See
 `audit/migration/native-source-save.json`.
+
+If a worker stops without returning its native owner, buffers remain open and
+the window can close, while further saving requires reopening the project.
+The message explicitly warns that some files may already have changed. A
+lost result never clears dirty state or reconstructs write authority from stale
+snapshots.
 Windows accepts `--project`, `--theme` and `--workspace-smoke`. Its new native
 Project picker cancels without spawning or launches the current Rust executable
 with literal native path/current-theme arguments on a worker; the 16-child cap

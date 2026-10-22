@@ -140,9 +140,47 @@ existing-package lookup. Native admission must certify all required prepared
 dependencies separately; this deliberately skips automatic dependency repair.
 
 Python audit hooks refuse sockets, urllib requests, application/GUI imports,
-known preparation executables and serialized subprocess command strings. These
-hooks are policy checks inside trusted admitted Python code, not an OS sandbox
-against arbitrary package code or native child networking.
+known preparation executables and caller-supplied serialized subprocess command
+strings. These hooks are policy checks inside trusted admitted Python code, not
+an OS sandbox against arbitrary package code or native child networking.
+
+## Isolated SCons handoff
+
+The installed PlatformIO 6.2.0 reference constructs its SCons child as an
+unisolated interpreter plus `tool-scons/scons.py` in
+`platformio/platform/_run.py:70`. Its `proc.exec_command` function forwards that
+vector directly to `subprocess.Popen`. A child started that way would lose this
+entry's startup flags, package guards and audit hook.
+
+The development entry replaces that in-process `proc.exec_command` handoff,
+without editing installed PlatformIO. It accepts only the observed fixed
+SCons vector: the same interpreter, prepared SCons script, jobs value,
+PlatformIO builder, exact `native_compile` environment/config, empty program
+arguments and the pinned AVR platform builder. The six variable names/values
+must match exactly; duplicates, additional targets, hooks, upload/clean/test
+options or another job budget refuse. Only the two literal display flags may
+vary between zero and one.
+
+The accepted vector becomes the same interpreter with `-I -S -B` and the fixed
+sibling `scons_compile.py`. All ten native policy arguments are forwarded
+explicitly, plus `--scons-root`, `--builder-root`, `--verbose` and `--isatty`.
+The child revalidates the policy, exact prepared roots/config, regular builder
+files and output environment, then installs the same network/import/package
+and subprocess guards before loading SCons. It loads the package directly from
+`tool-scons/scons-local-4.11.1`; another `SCons` in site-packages cannot shadow
+that engine. It calls `SCons.Script.main()` with the validated fixed vector and
+does not run upstream `scons.py` or its parent-directory/startup probes. Native
+runtime admission must cover both entry files and the complete engine/site
+closure. Additional Python child commands are refused.
+
+The guarded `Popen` constructor checks the original vector before CPython can
+serialize it on Windows. Caller command strings, shell mode and executable
+overrides refuse before the OS executor. The audit hook permits a Windows
+serialized string only when it exactly equals that constructor's already
+validated vector, for the same thread and active constructor call. It does not
+grant a general serialized-command exception. The fake verifier models this
+Windows audit form; actual Windows process/loader behavior remains a native
+qualification gate.
 
 ## Evidence and unfinished gates
 
@@ -152,13 +190,16 @@ Run the dependency-free source-isolated verifier with standard Python:
 python -I -S -B -W error desktop/scripts/verify-tool-only-entry.py
 ```
 
-Current local result: **49 checks**, including an exact fake BasePackageManager
+Current local result: **68 checks**, retaining the original 49 checks and adding
+an actual nested isolated Python process with a fake SCons package, early guard
+installation, fixed-origin loading, handoff/child-policy refusals and modeled
+Windows pre-serialization checks. The original checks include an exact fake BasePackageManager
 base ordering, platform override, public/private package refusals, fixed argv,
 UTF-8 streams, owned temporary allocation and denied-allocation behavior,
 unchanged input bytes/inventory, protected paths, roots/jobs/config and startup
 flag refusals. The former 5.1.0 target with its matching config is refused, as is
-5.1.0 config supplied with the admitted 5.3.0 target. It copies the entry and
-builds fake PlatformIO modules only under
+5.1.0 config supplied with the admitted 5.3.0 target. It copies both entries and
+builds fake PlatformIO/SCons modules only under
 `temp/audit/native-compile-inputs`; it never imports installed PlatformIO or
 dispatches a compiler, installer or hardware operation. Negative startup flags
 are simulated after safe `-I -S -B` process startup so missing `-S` cannot execute
@@ -183,12 +224,11 @@ provenance, compatibility of another version or a successful real build. Before
 any real invocation, require complete interpreter/site/platform/framework/tool
 byte admission and immutable lifetime, native OS/architecture/resource/storage
 admission, finite child ownership/cancellation/drain/descendant cleanup, and
-fresh output/input checks. `.pth` suppression applies to this entry; nested
-Python command construction and startup remain unqualified.
+fresh output/input checks. Fake nested SCons checks establish the new entry's
+behavior with owned stand-ins; they do not qualify the real runtime or compiler.
 
-Windows real builds remain unavailable: Python's Windows subprocess audit form
-can be a serialized string, which the current list-only audit policy refuses.
-Windows lock behavior, executable access and actual process/loader behavior
-need separate native qualification. No local fake or future CI fixture result
+Windows real builds remain unavailable. Windows lock behavior, executable
+access, compiler shell/vector behavior and actual process/loader behavior need
+separate native qualification. No local fake or future CI fixture result
 closes these gates, BLD-01, upload/reset, GUI Compile integration or release
 replacement.
