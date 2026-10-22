@@ -1,4 +1,5 @@
-//! Native compatibility probes. No serial or arbitrary process command is exposed.
+//! Native host services and compatibility probes. Source saves require an
+//! explicitly retained project; no serial or arbitrary process command is exposed.
 pub mod compile_fixture;
 pub mod compile_process_fixture;
 pub mod file_identity;
@@ -7,6 +8,7 @@ pub mod fixture_registry;
 pub mod prepare_avr_fixture;
 pub mod process_identity;
 pub mod recipe_snapshot;
+pub mod source_save;
 pub mod stream_ack;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;

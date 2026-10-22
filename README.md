@@ -94,6 +94,13 @@ The native project-session continuation now retains the Rust project service
 and original document baselines in each opened window. Exact editor
 acknowledgements commit one project per window; pending failures release their
 read state. See [session evidence](audit/migration/native-project-sessions.json).
+The next native workspace slice enables Save and Save All on GTK/Win32 through
+a retained Rust file owner and background workers. It preserves editor models,
+undo, selection and edits made while saving, and refuses external-file conflicts.
+Save All commits each file separately and reports any partial completion.
+The development preview remains separate from the production launcher; full
+Compile, device services and the required OS ports remain unfinished. See the
+[native preview's Save limits and verification](desktop/native-ui/README.md).
 The native backend now includes owned compile-input preflight: exact pinned
 targets, paired platform/board descriptors, complete root C/C++ source snapshots,
 deterministic config and declared prepared-tool byte copies in fresh files.

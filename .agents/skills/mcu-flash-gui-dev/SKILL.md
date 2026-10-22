@@ -143,11 +143,24 @@ pending or active read belongs to each native window; another project must open
 independently. Exact ordered IDs commit the pending session. Failure/timeouts
 cancel pending state, while accepted state remains through themes/resize/detach.
 Move the pending renderer script out before browser dispatch; never retain a
-session/Evidence borrow across a call that can reenter IPC. The API exposes no
-mutable service or source-write method. Original baselines are not current disk
-identity or a live/coexistence write lease. See `native-project-sessions.json`.
-This is read-only: no live activation/registration, metadata generation, source
-save, settings/cloud/device write or build/package service is enabled. Windows
+session/Evidence borrow across a call that can reenter IPC. Original read-session
+baselines are not current disk identity or a live/coexistence write lease. See
+`native-project-sessions.json` for that read-only checkpoint.
+The subsequent Save continuation adds `host::source_save::NativeProjectSession`,
+bounded known-ID UTF-8 snapshot transfer and worker-only Save/Save All on GTK and
+Win32. Preserve models, undo, selection and newer dirty revisions on acknowledgement.
+Save All commits files sequentially, acknowledges completed files and stops at
+the first failure; it is not project-wide atomic. Recheck native identities,
+exact prior bytes, effective OS write access and preservable metadata. Linux
+ACL/xattr/ownership changes refuse; retain every observed unexpected original
+and block further writes after a recovery conflict. Native leases do not qualify
+legacy Python coexistence or hostile same-user final-use races. Keep full
+recovery messages accessible when compact status labels elide them.
+`--save-smoke` uses actual native Save/Save All callbacks on owned two-file
+fixtures; verify disk bytes, BOM/Unicode, late edits, external conflicts and
+retained history separately from read-only `--workspace-smoke`. No live
+activation/registration, settings/cloud/device write or build/package service
+is enabled by Save. See `native-source-save.json` for exact final checks. Windows
 native Project picker/HICON are implemented in `0e0db8a` with passing native units/GUI.
 The picker launches current Rust EXE with literal OS path/theme arguments on a
 worker, cancel/no-spawn, 16-child cap and retained parent buffers. The bounded

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-10-23 Asia/Manila",
+  "scope": "Native GTK/Win32 development-preview Save and Save All; production Python launchers unchanged",
+  "sourceSha256": {
+    "desktop/crates/host/src/lib.rs": "e9e925786b59f24a4b190ff541b138079d73591cfa2edd683d176b34b49eb3bc",
+    "desktop/crates/host/src/source_save.rs": "af5f77f793377d8ef721ff3a42e3500e3e674263a7f264888d680331fab035b7",
+    "desktop/native-ui/Cargo.toml": "84f158c73b841eb61b2046e009035de4346f79925e65434f4eebf74d3acf80a3",
+    "desktop/Cargo.lock": "b0e82fc38c2cc7f555dc6c93a28f123129cf0db0ef158c7a581f1b7887b1f04f",
+    "desktop/native-ui/assets/probe-editor.js": "f6a273d250ce819498f705c4b3dbd2e168289e5bac53347d705c437a189c5f5b",
+    "desktop/native-ui/src/lib.rs": "2c8d86d3dfd969d633ab868d5f9304601ece1fd9e47002231836a2295f19f3b1",
+    "desktop/native-ui/src/linux.rs": "646b401396115999a905dc126e6cd13745d98029fc81a5b38139ef41d11ee693",
+    "desktop/native-ui/src/linux_workspace.rs": "4766a747b41879c519f59088992fb1007309564243454f01f57022581ac105f5",
+    "desktop/native-ui/src/windows.rs": "458dac25b646da5536aae93374640c0d1e5373257a3c50c45533628cd938d91f",
+    "desktop/native-ui/src/workspace_project.rs": "0bc9fac0bcb9f46181206f1db263cef44cefd0f0914c2fb61a0e0709f0449432",
+    "desktop/native-ui/src/workspace_save.rs": "86855303847e287b19e2960ba6c7b4dba3dc42958e97363c9985b4d7a1baccbf",
+    "desktop/native-ui/verify-smoke.py": "37c7166c66e3fa4aee546b897fae6e59ef3190597ca3ab497df00851d86932bd",
+    ".github/workflows/migration-prototype.yml": "2ba78ec8930e482a5eccf3ae470123ea48b5d4b93fd6c58e914edadd131d0498"
+  },
+  "implemented": [
+    "Native known-document save snapshots, 16 KiB IPC, 8 MiB per source / 32 MiB total / ten-second transfer",
+    "Exclusive worker ownership and event-driven completion; no source I/O on the GUI thread",
+    "Native root/source identity and byte revalidation, effective write admission, atomic per-file replacement, observed recovery retention",
+    "Save All acknowledges files saved before a later failure; no project-wide atomic transaction",
+    "Retained models, undo, selection, BOM/Unicode and newer unsaved edits",
+    "Accessible full recovery text in GTK tooltip/selectable footer and Windows read-only scrolling/copyable footer"
+  ],
+  "local": {
+    "system": "Ubuntu 26.04.1 AMD64",
+    "libraryTests": {
+      "contracts": 1,
+      "core": 78,
+      "host": 148,
+      "nativeUi": 28,
+      "total": 255
+    },
+    "sourceSaveCases": 18,
+    "gtkSave": {
+      "checks": {
+        "disk_bytes_verified": true,
+        "external_change_refused": true,
+        "external_change_reported": true,
+        "late_edit_retained": true,
+        "native_save": true,
+        "native_save_all": true,
+        "native_save_buttons": true,
+        "no_python_application_service": true,
+        "phase_0_dirty": true,
+        "phase_0_models_selection": true,
+        "phase_1_dirty": true,
+        "phase_1_disk_bytes": true,
+        "phase_1_models_selection": true,
+        "phase_1_undo_redo": true,
+        "phase_2_dirty": true,
+        "phase_2_models_selection": true,
+        "phase_2_undo_redo": true,
+        "phase_3_dirty": true,
+        "phase_3_disk_bytes": true,
+        "phase_3_models_selection": true,
+        "phase_3_undo_redo": true,
+        "phase_4_dirty": true,
+        "phase_4_disk_bytes": true,
+        "phase_4_models_selection": true,
+        "phase_4_undo_redo": true,
+        "same_models": true,
+        "save_all_Config_h": true,
+        "save_all_Sketch_ino": true,
+        "save_preserves_other_source": true,
+        "saved_bom_unicode": true,
+        "selection_retained": true,
+        "undo_redo_retained": true
+      },
+      "passed": true,
+      "scope": "Native GTK Save/Save All, owned two-file fixture and worker byte checks; no live project/device/settings operations",
+      "controller": "Python developer verification only",
+      "elapsedSeconds": 1.656,
+      "displayMode": "owned-Xvfb-x11-software-rendering"
+    },
+    "gtkWorkspaceChecks": 19,
+    "gtkDetachChecks": 17,
+    "controllerLifecycleChecks": 5,
+    "controllerPathChecks": 3,
+    "linuxStrictClippy": "pass",
+    "windowsX64MsvcStrictCrossClippy": "pass",
+    "formatAndJavaScriptSyntax": "pass",
+    "windowsArm64CrossBuild": "not run: local target absent; no install attempted",
+    "logs": [
+      "temp/audit/gui-performance/native-save-final-units.log",
+      "temp/audit/gui-performance/native-save-linux-clippy.log",
+      "temp/audit/native-save-windows/x64-status-clippy.log",
+      "temp/audit/native-save-final/audit/migration/scratch/native-save/latest-smoke.json",
+      "temp/audit/gui-performance/native-save-controller.log",
+      "temp/audit/gui-performance/native-save-paths.log"
+    ]
+  },
+  "reviews": {
+    "backendAndSharedSave": "Independent read-only review: no remaining actionable findings after effective permission and metadata refusal fixes",
+    "gtk": "Independent read-only review: recovery-text accessibility finding fixed; build/lint/Save smoke pass",
+    "windows": "Independent review in progress"
+  },
+  "ci": {
+    "status": "pending exact-source commit and native_with_platform_contracts dispatch",
+    "scope": "3 native GUI jobs; Ubuntu 26 AMD64/ARM64 backend; Windows ARM64 and macOS Intel/ARM portable core"
+  },
+  "limits": [
+    "Native leases coordinate native Save sessions only; legacy Python coexistence remains unqualified",
+    "Linux refuses unpreservable owner/group/ACL/xattr metadata and filesystems lacking atomic exchange",
+    "Observed conflicts preserve recovery material; hostile same-user final-use races and old-descriptor writes remain unqualified",
+    "No real Compile, device services, macOS GUI, Fedora/Mint admission or complete Windows ARM application support is enabled",
+    "Hosted native component checks do not qualify physical desktop input, mixed monitors, setup, packaging or USB",
+    "Capability ledger remains 14 partial / 53 pending / zero Python application services retired"
+  ]
+}

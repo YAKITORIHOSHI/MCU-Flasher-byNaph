@@ -12,11 +12,11 @@ ARM means 64-bit ARM (`aarch64` / ARM64). No 32-bit platform is implied.
 
 | Required platform | Native architectures | Current Rust evidence and remaining platform work |
 | --- | --- | --- |
-| Windows 10 | AMD64, ARM64 | Hosted Windows Server 2022 AMD64 preview/backend checks pass; Windows 10 desktop qualification is still open. ARM64 has no recorded build/run and the AVR preparer currently refuses this host. |
-| Windows 11 | AMD64, ARM64 | The same hosted AMD64 evidence applies only to its tested host. Native Windows 11 desktop, ARM64 runtime/tools/drivers and installation remain open. |
+| Windows 10 | AMD64, ARM64 | Hosted Windows Server 2022 AMD64 preview/backend checks pass; Windows 10 desktop qualification is still open. A Windows 11 ARM64 portable-core CI job is configured, with native execution still pending. It cannot qualify Windows 10; the AVR preparer currently refuses ARM64. |
+| Windows 11 | AMD64, ARM64 | The same hosted AMD64 evidence applies only to its tested host. A native ARM64 contracts/core job is configured separately from host services; its result is pending. Native desktop, runtime/tools/drivers and installation remain open. |
 | Ubuntu 24.04 LTS | AMD64, ARM64 | Native hosted preview/backend checks pass on both architectures. Complete services, desktop input/display, packaging and USB/device qualification remain open. |
-| Ubuntu 26.04 LTS | AMD64, ARM64 | Local 26.04.1 AMD64 preview/backend evidence exists. A native Rust 26.04 CI pair and complete desktop/device qualification remain open; Python 26.04 CI is separate evidence. |
-| macOS | Intel x86_64, Apple Silicon ARM64 | No native GUI adapter, native ownership/process implementation, tool-runtime qualification or packaged app is recorded. Both architectures are required. |
+| Ubuntu 26.04 LTS | AMD64, ARM64 | Local 26.04.1 AMD64 preview/backend evidence exists. Native backend CI for both architectures is configured; its first result is pending. Complete desktop/device qualification remains open; Python 26.04 CI is separate evidence. |
+| macOS | Intel x86_64, Apple Silicon ARM64 | Native contracts/core CI jobs for both architectures are configured, with execution still pending. No native GUI adapter, native ownership/process implementation, tool-runtime qualification or packaged app is recorded. |
 | Fedora Linux | x86_64, aarch64 | No Fedora-native Rust execution is recorded. Qualify Fedora's own GTK/WebKit packages, setup, desktop/session, SELinux and USB permissions. |
 | Linux Mint | AMD64 | No Mint-native Rust execution is recorded. Qualify official Ubuntu-based Mint editions independently, including setup, desktop and USB permissions. No official Mint ARM64 target is established. |
 
@@ -35,6 +35,53 @@ Exact existing receipts remain authoritative: native UI `49ab312` / runtime
 in [package metadata evidence](rust-avr-package-metadata.json), and the local
 Ubuntu 26.04.1 records linked by [CURRENT.md](CURRENT.md). No new platform was
 built, launched or tested by this requirements amendment.
+
+## Native coverage continuation
+
+The workflow now offers a focused `platform_contracts_only=true` dispatch on
+`migration-prototype.yml`. With the other inputs left false, it runs exactly
+five native jobs:
+
+- Ubuntu 26.04 AMD64 and ARM64 execute the existing complete backend units,
+  strict lint, bounded compile-process ownership fixture and owned compatibility/
+  fake-tool controllers. They use the same pinned Rust toolchain and backend
+  checks as the existing Ubuntu 24.04 jobs. These crates need no GTK/WebKit or
+  GUI development packages; this dispatch deliberately does not run a desktop.
+- Windows 11 ARM64, macOS 15 Intel and macOS 15 Apple Silicon execute the real
+  `mcu-contracts` and `mcu-core` suites and strict lint. Each selects an explicit
+  native Rust host triple and rejects a mismatched compiler host, runner CPU or
+  operating system. Python 3.14 is used only for the read-only host receipt;
+  the selected official distribution has native binaries on all three hosts.
+  No Python application service or firmware tool is launched.
+
+`native_with_platform_contracts=true` combines those five jobs with the three
+existing Ubuntu 24.04 AMD64/ARM64 and Windows Server native GUI jobs. Each GUI
+job now runs a separate owned Save/Save All check, in addition to retained
+workspace and detach checks. This eight-job dispatch skips separate Python
+editor/browser jobs whose source is unchanged by the native Save slice.
+
+`backend_only=true` without the focused selector retains the existing Ubuntu
+24.04 pair and Windows Server AMD64 jobs, adds the Ubuntu 26.04 pair and runs
+the three scoped core jobs. `windows_only=true` selects Windows Server AMD64
+backend fixtures and Windows 11 ARM64 core contracts. Browser-only dispatches
+remain independent. Each job preserves the actual OS release, runner CPU,
+compiler host, source SHA and scoped test logs as artifacts even when a later
+step fails. Tests, rather than a capability probe or unsupported fallback,
+determine success. This configuration alone is not a recorded native pass.
+
+The three portable-core jobs intentionally do not build or execute `mcu-host`.
+Darwin's native file/process ownership adapters are unimplemented, and the AVR
+archive preparer explicitly admits neither Darwin nor Windows ARM64. Core
+execution establishes portable behavior only; it cannot qualify those missing
+adapters, GUI/PTY integration, private tools, launchers, packaging or devices.
+The official hosted-runner list supplies the selected native architectures;
+macOS's hosted ARM machine also remains below the full app's four-core policy.
+See the [GitHub hosted-runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+and [official Python distribution manifest](https://github.com/actions/python-versions/blob/main/versions-manifest.json).
+
+Fedora and Mint still require actual distro-native backend/desktop execution,
+their own release/dependency adapters and all release gates below. An Ubuntu
+job or a pure core job does not establish either distribution's support.
 
 ## Architecture and implementation rules
 
@@ -77,7 +124,7 @@ built, launched or tested by this requirements amendment.
 | Tool host coverage | `desktop/crates/host/src/prepare_avr_fixture.rs`, `desktop/firmware-tools/` | Extend reviewed host manifests and the complete private-runtime/loader/tool closure for Windows ARM64 and both macOS architectures. The current AVR host enum admits Linux x86_64/aarch64 and Windows x86_64 only. Do not relax its checks to manufacture support. |
 | Windows ARM runtime/drivers | `src/modules/private_python_guard.py`, `src/modules/bootstrap.py` | Existing repair selects an AMD64 Python installer; CP210x driver setup equates a 64-bit host with x64. Add architecture-specific admission and reviewed native ARM64 driver/runtime payloads. Existing ARM64 Node/Arduino CLI choices do not qualify the full closure. Native WebView2 loader/runtime must match the app architecture. |
 | Linux admission/setup | `src/modules/ubuntu_release.py`, `direct/ubuntu/release_guard.sh`, `direct/ubuntu/preflight.py`, `direct/ubuntu/system_setup.py` | Existing production paths deliberately admit only Ubuntu and use Ubuntu package names/apt. Add Rust release/dependency policies and isolated adapter checks for Fedora and Mint before connecting their setup/repair UI. Preserve the working Python release until qualified replacement. |
-| Native CI and evidence | `.github/workflows/migration-prototype.yml`, platform verifier scripts | Add independent Windows ARM64, Ubuntu 26.04 AMD64/ARM64, macOS Intel/ARM64, Fedora x86_64/aarch64 and Mint AMD64 coverage. Record actual runner OS/arch and distinguish cross-build, emulated execution, native backend, desktop and device results. Hosted Windows Server AMD64 remains separate from Windows 10/11. |
+| Native CI and evidence | `.github/workflows/migration-prototype.yml`, platform verifier scripts | Execute the configured Ubuntu 26.04 backend pair and the scoped Windows ARM64/macOS Intel/ARM64 core jobs, then retain exact source/results. Complete native host services/GUI on those hosts and add Fedora x86_64/aarch64 and Mint AMD64 execution. Distinguish cross-build, emulated execution, native core, backend, desktop and devices. Hosted Windows Server AMD64 remains separate from Windows 10/11. |
 | Distribution | Native launchers/installers and release manifests | Produce host-specific artifacts with matching tool runtimes and notices; verify clean-machine install, update, repair and rollback. macOS needs an app bundle and release signing/notarization; Fedora and Mint need their own dependency/desktop integration. No installer or published artifact is changed by this document. |
 
 ## Required release gates for each matrix row

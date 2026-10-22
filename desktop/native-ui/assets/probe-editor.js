@@ -93,6 +93,124 @@
         return true;
       };
       window.__mcuSelectDocument = select;
+      // Native Save owns request IDs and disk baselines. The page supplies only
+      // current known models, with bounded frames and exact UTF-8 byte offsets.
+      let pendingSave;
+      let saveProof;
+      const utf8 = new TextEncoder();
+      window.__mcuRequestSave = (requestId, all) => { void (async () => {
+        if (pendingSave) throw new Error('A save is already running.');
+        const selected = all ? [...documents.entries()].filter(([, item]) => item.model.getValue(undefined, true) !== item.baseline)
+          : [...documents.entries()].filter(([, item]) => item === current);
+        const snapshots = new Map();
+        let total = 0;
+        for (const [id, item] of selected) {
+          const baseline = item.model.getValue(undefined, true);
+          // No-op saves retain original mixed EOL/BOM bytes exactly.
+          const content = baseline === item.baseline ? item.original : baseline;
+          for (let index = 0; index < content.length; index += 1) {
+            const code = content.charCodeAt(index);
+            if (code >= 0xd800 && code <= 0xdbff) {
+              const next = content.charCodeAt(++index);
+              if (!(next >= 0xdc00 && next <= 0xdfff)) throw new Error('Source contains an incomplete Unicode character. The buffer was not saved.');
+            } else if (code >= 0xdc00 && code <= 0xdfff) throw new Error('Source contains an incomplete Unicode character. The buffer was not saved.');
+          }
+          const bytes = utf8.encode(content).length;
+          total += bytes;
+          if (bytes > 8 * 1024 * 1024 || total > 32 * 1024 * 1024) throw new Error('Save source byte budget exceeded.');
+          item.revision += 1;
+          snapshots.set(id, { item, content, baseline, bytes, revision: item.revision });
+        }
+        pendingSave = { id: requestId, snapshots };
+        if (saveProof?.late) {
+          saveProof.late = false;
+          const item = documents.get(saveProof.first);
+          select(saveProof.first);
+          editor.executeEdits('native-save-late-edit', [{ range: item.model.getFullModelRange(), text: item.model.getValue() + '// later unsaved γ\n' }]);
+          editor.setSelection(new monaco.Selection(2, 1, 2, 3));
+        }
+        // Keep headers below the same 16 KiB IPC limit as source chunks.
+        const metadata = [...snapshots].map(([id, snapshot]) =>
+          ({ document_id: id, edit_revision: snapshot.revision, bytes: snapshot.bytes }));
+        for (let index = 0; index < Math.max(1, metadata.length); index += 32) {
+          const header = { kind: 'save_started', request_id: requestId,
+            documents: metadata.slice(index, index + 32), complete: index + 32 >= metadata.length };
+          if (utf8.encode(JSON.stringify(header)).length > 16 * 1024) throw new Error('Save selection header exceeds its frame budget.');
+          send(header);
+        }
+        let frames = 0;
+        for (const [id, snapshot] of snapshots) {
+          let offset = 0;
+          for (let index = 0; index < snapshot.content.length;) {
+            if (pendingSave?.id !== requestId) return;
+            let end = Math.min(snapshot.content.length, index + 2048);
+            const last = snapshot.content.charCodeAt(end - 1);
+            if (end < snapshot.content.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+            const content = snapshot.content.slice(index, end);
+            send({ kind: 'save_chunk', request_id: requestId, document_id: id, offset, content });
+            offset += utf8.encode(content).length;
+            index = end;
+            if (++frames % 8 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+          }
+        }
+        if (pendingSave?.id === requestId) send({ kind: 'save_finished', request_id: requestId });
+      })().catch(error => { pendingSave = undefined;
+        send({ kind: 'save_failed', request_id: requestId, message: String(error?.message ?? error).slice(0, 256) }); }); };
+      window.__mcuFinishSave = result => {
+        if (!pendingSave || result.requestId !== pendingSave.id) return false;
+        for (const saved of result.saved ?? []) {
+          const snapshot = pendingSave.snapshots.get(saved.id);
+          if (!snapshot || snapshot.revision !== saved.editRevision || documents.get(saved.id) !== snapshot.item) continue;
+          const item = snapshot.item;
+          item.original = snapshot.content;
+          item.baseline = snapshot.baseline;
+          // Do not replace the model, reset undo, selection, view or a newer edit.
+          item.revision += 1;
+          send({ kind: 'document_changed', document_id: saved.id, edit_revision: item.revision,
+            dirty: item.model.getValue(undefined, true) !== item.baseline });
+        }
+        pendingSave = undefined;
+        return true;
+      };
+      // Called only by the native owned-fixture Save controller.
+      window.__mcuSaveFixtureStep = async phase => {
+        const entries = [...documents.entries()];
+        if (entries.length !== 2) throw new Error('Save fixture requires its two owned source models.');
+        if (phase === 0) {
+          const [id] = entries.find(([, item]) => item.original.startsWith('\ufeff')) ?? entries[0];
+          saveProof = { first: id, second: entries.find(([key]) => key !== id)[0],
+            models: entries.map(([key, item]) => [key, item.model.id]), history: false, late: false };
+          select(id);
+          editor.pushUndoStop();
+          editor.executeEdits('native-save-proof', [{ range: current.model.getFullModelRange(), text: current.model.getValue() + '// native saved café 日本語\n' }]);
+          editor.pushUndoStop();
+        }
+        if (phase === 1) {
+          const changed = current.model.getValue();
+          await current.model.undo();
+          const restored = current.model.canRedo() && current.model.getValue() !== changed;
+          await current.model.redo();
+          saveProof.history = restored && current.model.getValue() === changed;
+        }
+        if (phase === 2) {
+          for (const id of [saveProof.first, saveProof.second]) {
+            select(id);
+            editor.pushUndoStop();
+            editor.executeEdits('native-save-all-proof', [{ range: current.model.getFullModelRange(), text: current.model.getValue() + '// saved all αβ\n' }]);
+            editor.pushUndoStop();
+          }
+          saveProof.late = true;
+        }
+        select(saveProof.first);
+        editor.setSelection(new monaco.Selection(2, 1, 2, 3));
+        const selection = editor.getSelection();
+        const dirty = id => { const item = documents.get(id); return item.model.getValue(undefined, true) !== item.baseline; };
+        send({ kind: 'save_snapshot', phase,
+          same_models: saveProof.models.every(([id, model]) => documents.get(id)?.model.id === model),
+          history_retained: saveProof.history,
+          selection_retained: selection.startLineNumber === 2 && selection.startColumn === 1 && selection.endColumn === 3,
+          first_dirty: dirty(saveProof.first), second_dirty: dirty(saveProof.second) });
+      };
       window.__mcuApplyTheme = (mode, palette) => {
         currentTheme = mode;
         monaco.editor.defineTheme('mcu-native-workspace', {

@@ -7,6 +7,7 @@ use mcu_native_ui_probe::workspace_icon::{icon_image, APPLICATION_ICON};
 use mcu_native_ui_probe::workspace_project::{
     read_project, LoadedProject, ProjectSessions, CHECK_HEADER, CHECK_SOURCE,
 };
+use mcu_native_ui_probe::workspace_save::{SaveResult, SaveWork};
 use mcu_native_ui_probe::{
     asset_path, checked_scratch_root, parse_message, windows_navigation_allowed, Island,
     RendererMessage, CHANGED_SOURCE, SOURCE,
@@ -28,7 +29,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -42,12 +43,16 @@ use windows_sys::Win32::{
         Threading::GetCurrentProcess,
     },
     UI::{
-        Controls::{CB_SETCUEBANNER, DRAWITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED},
+        Controls::{
+            CB_SETCUEBANNER, DRAWITEMSTRUCT, EM_SETSEL, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
+        },
         HiDpi::{
             GetDpiForWindow, SetProcessDpiAwarenessContext,
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
         },
-        Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture, SetCapture},
+        Input::KeyboardAndMouse::{
+            EnableWindow, GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_MENU, VK_SHIFT,
+        },
         Shell::{
             SHBrowseForFolderW, SHGetPathFromIDListEx, BIF_NEWDIALOGSTYLE, BIF_NONEWFOLDERBUTTON,
             BIF_RETURNONLYFSDIRS, BROWSEINFOW, GPFIDL_DEFAULT,
@@ -66,6 +71,8 @@ const DETACH: usize = 103;
 const THEME: usize = 104;
 const ACTION: usize = 120;
 const PROJECT: usize = ACTION + 8;
+const SAVE: usize = ACTION + 4;
+const SAVE_ALL: usize = ACTION + 5;
 // Keep all 256 source IDs disjoint from tool/action IDs.
 const SOURCE_TAB: usize = 1000;
 const SOURCE_MORE: usize = 403;
@@ -78,6 +85,9 @@ const MORE_ACTIONS: usize = 450;
 const OPTIONS: usize = 451;
 const THEME_ITEM: usize = 600;
 const TIMER: usize = 1;
+const SAVE_TIMER: usize = 2;
+const SAVE_CLOSE_NOTICE: usize = 452;
+const SAVE_COMPLETED: u32 = WM_APP + 17;
 const CLASS: &str = "MCUNativeRustFixture";
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
 
@@ -86,6 +96,109 @@ fn wide(value: &str) -> Vec<u16> {
 }
 fn os_error() -> Box<dyn std::error::Error> {
     std::io::Error::last_os_error().into()
+}
+
+const EXTERNAL_SAVE_FIXTURE: &[u8] = b"// external native-save fixture edit\n";
+
+fn save_fixture_script(phase: u8) -> String {
+    format!("window.__mcuSaveFixtureStep({phase}).catch(error => window.ipc.postMessage(JSON.stringify({{kind:'error',message:String(error).slice(0,1024)}})));")
+}
+
+// Only --save-smoke supplies this atomically created root. No renderer path or
+// user project can reach this helper. Disk reads and the deliberately external
+// edit stay on the fixture worker, outside the native message loop.
+fn save_fixture_io(
+    root: PathBuf,
+    documents: Vec<(String, String)>,
+    phase: u8,
+) -> Result<BTreeMap<String, bool>, String> {
+    use std::io::{Read, Write};
+    use std::os::windows::fs::MetadataExt;
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let scratch = checked_scratch_root(&checkout).map_err(|error| error.to_string())?;
+    let canonical = root.canonicalize().map_err(|error| error.to_string())?;
+    let root_metadata = std::fs::symlink_metadata(&root).map_err(|error| error.to_string())?;
+    if canonical != root
+        || !root.starts_with(&scratch)
+        || root_metadata.file_attributes() & 0x400 != 0
+        || !root_metadata.is_dir()
+        || !root
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name.to_string_lossy().starts_with("native-ui-win-profile-"))
+        || root.file_name() != Some(std::ffi::OsStr::new("project café 日本語"))
+        || documents.len() != 2
+        || !documents.iter().any(|(name, _)| name == "Sketch.ino")
+        || !documents.iter().any(|(name, _)| name == "Config.h")
+        || ![1, 3, 4].contains(&phase)
+    {
+        return Err("Save verification refused an unowned source fixture.".into());
+    }
+    let mut checks = BTreeMap::new();
+    for (name, content) in documents {
+        if !matches!(name.as_str(), "Sketch.ino" | "Config.h") || content.len() > 8192 {
+            return Err("Save fixture source exceeds its fixed name/byte budget.".into());
+        }
+        let source = root.join(&name);
+        let metadata = std::fs::symlink_metadata(&source).map_err(|error| error.to_string())?;
+        if !metadata.is_file()
+            || metadata.file_attributes() & 0x400 != 0
+            || source.canonicalize().map_err(|error| error.to_string())? != source
+        {
+            return Err("Save fixture source is not a regular owned file.".into());
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(&source)
+            .map_err(|error| error.to_string())?
+            .take(8193)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        let expected = if phase == 4 && name == "Sketch.ino" {
+            EXTERNAL_SAVE_FIXTURE
+        } else {
+            content.as_bytes()
+        };
+        if bytes != expected {
+            return Err(format!(
+                "Native save fixture bytes differ for {name}, phase {phase}."
+            ));
+        }
+        if phase == 1 && name == "Sketch.ino" {
+            checks.insert(
+                "saved_bom_unicode".into(),
+                bytes.starts_with(&[0xef, 0xbb, 0xbf])
+                    && content.contains("// native saved café 日本語"),
+            );
+        }
+        if phase == 1 && name == "Config.h" {
+            checks.insert(
+                "save_preserves_other_source".into(),
+                bytes == CHECK_HEADER.as_bytes(),
+            );
+        }
+        if phase == 3 {
+            checks.insert(
+                format!("save_all_{}", name.replace('.', "_")),
+                content.contains("// saved all αβ") && !content.contains("// later unsaved γ"),
+            );
+            if name == "Sketch.ino" {
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&source)
+                    .map_err(|error| error.to_string())?;
+                file.write_all(EXTERNAL_SAVE_FIXTURE)
+                    .and_then(|()| file.sync_all())
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    checks.insert(format!("phase_{phase}_disk_bytes"), true);
+    checks.insert("no_python_application_service".into(), no_python_loaded());
+    Ok(checks)
 }
 
 /// The owning UI thread balances both S_OK and S_FALSE initialization counts.
@@ -279,6 +392,9 @@ struct Events {
     surface: Cell<HBRUSH>,
     tool: Cell<usize>,
     source: Cell<usize>,
+    saving: Cell<bool>,
+    save_tick: Cell<bool>,
+    save_completed: Cell<bool>,
     commands: RefCell<VecDeque<usize>>,
 }
 
@@ -519,6 +635,14 @@ unsafe fn dispatch_window_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
                 events.tick.set(true);
                 0
             }
+            WM_TIMER if w == SAVE_TIMER => {
+                events.save_tick.set(true);
+                0
+            }
+            SAVE_COMPLETED => {
+                events.save_completed.set(true);
+                0
+            }
             WM_COMMAND => {
                 let id = w & 0xffff;
                 let notification = (w >> 16) & 0xffff;
@@ -531,6 +655,10 @@ unsafe fn dispatch_window_message(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
             }
             WM_CLOSE => {
                 if hwnd == events.main.get() {
+                    if events.saving.get() {
+                        events.command(SAVE_CLOSE_NOTICE);
+                        return 0;
+                    }
                     events.closing.set(true);
                     PostQuitMessage(0);
                 } else {
@@ -899,8 +1027,16 @@ impl NativeWindows {
                 0,
                 main,
             )?;
-            windows.status =
-                windows.child("STATIC", "Loading offline editor and terminal…", 0, 0, main)?;
+            // Retain complete recovery paths in a native, keyboard-selectable
+            // value. The existing static/edit color handler also covers a
+            // read-only EDIT's WM_CTLCOLORSTATIC notifications.
+            windows.status = windows.child(
+                "EDIT",
+                "Loading offline editor and terminal…",
+                WS_TABSTOP | ES_READONLY as u32 | ES_AUTOHSCROLL as u32,
+                0,
+                main,
+            )?;
             windows.editor_host = windows.child("STATIC", "", WS_CLIPCHILDREN, 0, main)?;
             windows.terminal_host = windows.child("STATIC", "", WS_CLIPCHILDREN, 0, main)?;
             windows.detached_host =
@@ -1095,11 +1231,24 @@ struct Evidence {
     sources: Vec<SourceTab>,
     source_generation: u64,
     projects: ProjectSessions,
+    save_work: Option<SaveWork>,
+    save_error: Option<String>,
+    save_snapshot: Option<RendererMessage>,
     workspace_snapshot: Option<RendererMessage>,
 }
 fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
     let mut state = state.borrow_mut();
     match parse_message(island, body) {
+        Ok(message @ RendererMessage::SaveStarted { .. })
+        | Ok(message @ RendererMessage::SaveChunk { .. })
+        | Ok(message @ RendererMessage::SaveFinished { .. })
+        | Ok(message @ RendererMessage::SaveFailed { .. }) => {
+            match state.projects.accept_save_message(&message) {
+                Ok(Some(work)) => state.save_work = Some(work),
+                Ok(None) => {}
+                Err(error) => state.save_error = Some(error),
+            }
+        }
         Ok(RendererMessage::DocumentsOpened { documents }) => {
             match state.projects.acknowledge(&documents) {
                 Ok(Some(entries)) => {
@@ -1114,6 +1263,12 @@ fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
                     state.projects.cancel_pending();
                     state.error = Some(error);
                 }
+            }
+        }
+        Ok(message @ RendererMessage::SaveSnapshot { .. }) => {
+            if state.save_snapshot.replace(message).is_some() {
+                state.error =
+                    Some("The save snapshot queue exceeded its one-report budget.".into());
             }
         }
         Ok(message @ RendererMessage::WorkspaceSnapshot { .. }) => {
@@ -1144,7 +1299,12 @@ fn receive(state: &RefCell<Evidence>, island: Island, body: &str) {
         }
         Err(error) => state.error = Some(error),
         Ok(RendererMessage::Error { message }) => {
-            state.error = Some(format!("{island:?}: {message}"))
+            if state.projects.is_saving() {
+                state.save_error = Some(format!("{island:?}: {message}"));
+            } else {
+                state.projects.cancel_pending();
+                state.error = Some(format!("{island:?}: {message}"));
+            }
         }
         Ok(RendererMessage::TerminalSnapshot { text, .. }) => {
             let valid = text.contains("Native Rust fixture") && text.contains("café 日本語 λ");
@@ -1316,6 +1476,14 @@ struct App {
     project_worker: Option<(mpsc::Receiver<Result<LoadedProject, String>>, Instant)>,
     project_deadline: Option<Instant>,
     project_launch: Option<mpsc::Receiver<Result<(), String>>>,
+    save_worker: Option<mpsc::Receiver<SaveResult>>,
+    save_controls: Option<(bool, bool)>,
+    save_smoke: bool,
+    save_check_phase: u8,
+    save_check_started: bool,
+    save_check_done: bool,
+    save_checks: BTreeMap<String, bool>,
+    save_fixture_worker: Option<mpsc::Receiver<Result<BTreeMap<String, bool>, String>>>,
     project_children: Arc<AtomicUsize>,
     workspace_smoke: bool,
     workspace_phase: u8,
@@ -1416,9 +1584,445 @@ fn class_name(hwnd: HWND) -> String {
 }
 
 impl App {
+    fn save_enabled(&self) -> bool {
+        let state = self.evidence.borrow();
+        !self.smoke
+            && !self.workspace_smoke
+            && self.project_deadline.is_none()
+            && self.save_fixture_worker.is_none()
+            && state.projects.active().is_some()
+            && !state.projects.is_saving()
+    }
+
+    fn sync_save_controls(&mut self) {
+        let enabled = self.save_enabled();
+        let saving =
+            self.evidence.borrow().projects.is_saving() || self.save_fixture_worker.is_some();
+        self.native.events.saving.set(saving);
+        if self.save_controls == Some((enabled, saving)) {
+            return;
+        }
+        self.save_controls = Some((enabled, saving));
+        // SAFETY: Only retained native children are enabled/disabled. No view,
+        // source model, keyboard focus or native ownership is replaced.
+        unsafe {
+            for index in [4, 5] {
+                if let Some(button) = self.native.actions.get(index) {
+                    EnableWindow(*button, enabled as i32);
+                }
+            }
+            for button in &self.native.source_tabs {
+                EnableWindow(*button, (!saving) as i32);
+            }
+            EnableWindow(self.native.source_more, (!saving) as i32);
+        }
+    }
+
+    fn stop_save_transfer_timer(&self) {
+        // SAFETY: This is this window's private transfer timer; removing an
+        // absent timer is harmless. It is never used to cancel a file commit.
+        unsafe {
+            KillTimer(self.native.main, SAVE_TIMER);
+        }
+        self.native.events.save_tick.set(false);
+    }
+
+    fn abort_save(&mut self, reason: &str) {
+        let script = self.evidence.borrow_mut().projects.abort_save();
+        self.stop_save_transfer_timer();
+        self.sync_save_controls();
+        self.status(reason);
+        if self.save_smoke {
+            self.evidence.borrow_mut().error = Some(reason.into());
+        }
+        if let Some(script) = script {
+            if let Err(error) = self.editor.evaluate_script(&script) {
+                self.status(&format!("{reason} Editor acknowledgement failed: {error}"));
+            }
+        }
+    }
+
+    fn start_save(&mut self, all: bool) {
+        if self.smoke
+            || self.workspace_smoke
+            || self.project_deadline.is_some()
+            || self.save_fixture_worker.is_some()
+        {
+            self.status(
+                "Saving is unavailable while the read-only fixture or project reader is active.",
+            );
+            return;
+        }
+        let begin = self.evidence.borrow_mut().projects.begin_save(all);
+        let script = match begin {
+            Ok(script) => script,
+            Err(error) => {
+                self.status(&error);
+                return;
+            }
+        };
+        self.sync_save_controls();
+        self.status("Reading changed editor buffers for saving…");
+        // SAFETY: The owned main HWND receives this private timer only during
+        // snapshot transfer; the timer is removed before the writer starts.
+        if unsafe { SetTimer(self.native.main, SAVE_TIMER, 100, None) } == 0 {
+            self.abort_save("The save deadline timer could not start. Buffers remain dirty.");
+            return;
+        }
+        if let Err(error) = self.editor.evaluate_script(&script) {
+            self.abort_save(&format!(
+                "The editor could not provide save buffers: {error}"
+            ));
+        }
+    }
+
+    fn run_save_worker(&mut self, work: SaveWork) {
+        self.stop_save_transfer_timer();
+        self.status("Saving source files…");
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.save_worker = Some(receiver);
+        // Transfer only the owned save work and an integer wake target. The
+        // result stays in a bounded channel; no pointer is posted to Win32.
+        let main = self.native.main as usize;
+        let slot = Arc::new(Mutex::new(Some(work)));
+        let worker_slot = Arc::clone(&slot);
+        let spawned = std::thread::Builder::new()
+            .name("native-source-save".into())
+            .spawn(move || {
+                let work = worker_slot
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                if let Some(work) = work {
+                    let sent = sender.send(work.run()).is_ok();
+                    if sent {
+                        // SAFETY: The UI keeps this main window alive while saving.
+                        // Posting a no-payload wake never accesses HWND-owned data.
+                        unsafe {
+                            PostMessageW(main as HWND, SAVE_COMPLETED, 0, 0);
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            self.save_worker = None;
+            let work = slot
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(work) = work {
+                self.finish_save(
+                    work.cancel_before_run(format!("The save worker could not start: {error}")),
+                );
+            }
+        }
+    }
+
+    fn finish_save(&mut self, result: SaveResult) {
+        let status = result.status_text();
+        if self.save_smoke {
+            match self.save_check_phase {
+                1 => {
+                    self.save_checks
+                        .insert("native_save".into(), status == "1 file(s) saved.");
+                }
+                3 => {
+                    self.save_checks
+                        .insert("native_save_all".into(), status == "2 file(s) saved.");
+                }
+                4 => {
+                    self.save_checks.insert(
+                        "external_change_reported".into(),
+                        status.starts_with("0 file(s) saved. "),
+                    );
+                }
+                _ => {}
+            }
+        }
+        let finished = self.evidence.borrow_mut().projects.finish_save(result);
+        self.sync_save_controls();
+        match finished {
+            Ok(mut script) => {
+                self.status(&status);
+                if self.save_smoke {
+                    script.push_str(&save_fixture_script(self.save_check_phase));
+                }
+                if let Err(error) = self.editor.evaluate_script(&script) {
+                    self.status(&format!("{status} Editor acknowledgement failed: {error}; changed buffers remain dirty."));
+                    if self.save_smoke {
+                        self.evidence.borrow_mut().error = Some(error.to_string());
+                    }
+                }
+            }
+            Err(error) => {
+                self.status(&error);
+                if self.save_smoke {
+                    self.evidence.borrow_mut().error = Some(error);
+                }
+            }
+        }
+    }
+
+    fn handle_save(&mut self) {
+        let error = self.evidence.borrow_mut().save_error.take();
+        if let Some(error) = error {
+            self.abort_save(&error);
+        }
+        let work = self.evidence.borrow_mut().save_work.take();
+        if let Some(work) = work {
+            self.run_save_worker(work);
+        }
+        if self.native.events.save_tick.replace(false)
+            && self.evidence.borrow().projects.save_timed_out()
+        {
+            self.abort_save("The editor save snapshot timed out. Unsaved buffers are retained.");
+        }
+        // Normal delivery is event driven. The existing host tick supplies a
+        // fallback only while a writer exists if Windows rejects its wake.
+        if self.native.events.save_completed.replace(false)
+            || (self.native.events.tick.get() && self.save_worker.is_some())
+        {
+            match self.save_worker.as_ref().map(mpsc::Receiver::try_recv) {
+                Some(Ok(result)) => {
+                    self.save_worker = None;
+                    self.finish_save(result);
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.save_worker = None;
+                    self.abort_save("The save worker stopped before returning the native project session. Buffers remain open.");
+                }
+                _ => {}
+            }
+        }
+        self.sync_save_controls();
+    }
+
+    fn request_save_check(&mut self, phase: u8) -> Result<(), Box<dyn std::error::Error>> {
+        self.save_check_phase = phase;
+        self.editor.evaluate_script(&save_fixture_script(phase))?;
+        Ok(())
+    }
+
+    fn click_save_check(&mut self, phase: u8, all: bool) -> Result<(), Box<dyn std::error::Error>> {
+        self.save_check_phase = phase;
+        let button = *self
+            .native
+            .actions
+            .get(if all { 5 } else { 4 })
+            .ok_or("The native Save action is unavailable.")?;
+        if !self.save_enabled() {
+            return Err("The native Save fixture action is unexpectedly disabled.".into());
+        }
+        // SAFETY: The retained native BUTTON sends its ordinary WM_COMMAND
+        // callback synchronously on this UI thread; no synthetic renderer write.
+        unsafe {
+            SendMessageW(button, BM_CLICK, 0, 0);
+        }
+        Ok(())
+    }
+
+    fn run_save_fixture_io(&mut self, phase: u8) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.save_smoke || self.save_fixture_worker.is_some() {
+            return Err("The owned Save verification worker is unavailable.".into());
+        }
+        let root = self
+            .project_path
+            .clone()
+            .ok_or("The owned Save fixture root is absent.")?;
+        let documents = self
+            .evidence
+            .borrow()
+            .projects
+            .active()
+            .ok_or("The owned Save fixture session is absent.")?
+            .documents()
+            .iter()
+            .map(|document| (document.document.name.clone(), document.content.clone()))
+            .collect::<Vec<_>>();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let main = self.native.main as usize;
+        std::thread::Builder::new()
+            .name("native-save-fixture".into())
+            .spawn(move || {
+                if sender.send(save_fixture_io(root, documents, phase)).is_ok() {
+                    // SAFETY: This is a no-payload wake to the retained main window.
+                    // Only the bounded channel carries owned worker results.
+                    unsafe {
+                        PostMessageW(main as HWND, SAVE_COMPLETED, 0, 0);
+                    }
+                }
+            })?;
+        self.save_fixture_worker = Some(receiver);
+        self.sync_save_controls();
+        Ok(())
+    }
+
+    fn save_smoke_step(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+        if self.save_check_done {
+            return Ok(true);
+        }
+        if self.source_generation == 0 || !self.terminal_initialized {
+            return Ok(false);
+        }
+        if !self.save_check_started {
+            self.save_check_started = true;
+            self.request_save_check(0)?;
+        }
+        match self
+            .save_fixture_worker
+            .as_ref()
+            .map(mpsc::Receiver::try_recv)
+        {
+            Some(Ok(result)) => {
+                self.save_fixture_worker = None;
+                self.sync_save_controls();
+                self.save_checks.extend(result?);
+                match self.save_check_phase {
+                    1 => self.request_save_check(2)?,
+                    3 => self.click_save_check(4, false)?,
+                    4 => {
+                        self.save_check_done = true;
+                        return Ok(true);
+                    }
+                    _ => return Err("The Save fixture worker returned in an invalid phase.".into()),
+                }
+            }
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                self.save_fixture_worker = None;
+                self.sync_save_controls();
+                return Err(
+                    "The Save fixture worker stopped before returning its byte checks.".into(),
+                );
+            }
+            _ => {}
+        }
+        let snapshot = self.evidence.borrow_mut().save_snapshot.take();
+        if let Some(RendererMessage::SaveSnapshot {
+            phase,
+            same_models,
+            history_retained,
+            selection_retained,
+            first_dirty,
+            second_dirty,
+        }) = snapshot
+        {
+            for (key, passed) in [
+                ("same_models", same_models),
+                ("selection_retained", selection_retained),
+            ] {
+                self.save_checks
+                    .entry(key.into())
+                    .and_modify(|value| *value &= passed)
+                    .or_insert(passed);
+            }
+            if phase > 0 {
+                self.save_checks
+                    .entry("undo_redo_retained".into())
+                    .and_modify(|value| *value &= history_retained)
+                    .or_insert(history_retained);
+            }
+            if phase == 3 {
+                self.save_checks
+                    .insert("late_edit_retained".into(), first_dirty && !second_dirty);
+            }
+            self.save_checks.insert(
+                format!("phase_{phase}_models_selection"),
+                phase == self.save_check_phase && same_models && selection_retained,
+            );
+            self.save_checks.insert(
+                format!("phase_{phase}_dirty"),
+                match phase {
+                    0 => first_dirty && !second_dirty,
+                    1 => !first_dirty && !second_dirty,
+                    2 => first_dirty && second_dirty,
+                    3 | 4 => first_dirty && !second_dirty,
+                    _ => false,
+                },
+            );
+            if phase > 0 {
+                self.save_checks
+                    .insert(format!("phase_{phase}_undo_redo"), history_retained);
+            }
+            if !self.save_checks.values().all(|passed| *passed) {
+                return Err(
+                    format!("A native Win32 Save assertion failed in phase {phase}.").into(),
+                );
+            }
+            match phase {
+                0 => self.click_save_check(1, false)?,
+                1 | 3 | 4 => self.run_save_fixture_io(phase)?,
+                2 => self.click_save_check(3, true)?,
+                _ => return Err("The Save fixture received an invalid renderer phase.".into()),
+            }
+        }
+        Ok(false)
+    }
+
+    fn finish_save_receipt(&mut self, done: bool) -> Result<(), Box<dyn std::error::Error>> {
+        // SAFETY: Inspect only retained UI-thread native button ownership.
+        let buttons = unsafe {
+            [4, 5].iter().all(|index| {
+                self.native.actions.get(*index).is_some_and(|button| {
+                    GetParent(*button) == self.native.main
+                        && class_name(*button).eq_ignore_ascii_case("Button")
+                })
+            })
+        };
+        self.save_checks
+            .insert("native_save_buttons".into(), buttons);
+        self.save_checks.insert(
+            "disk_bytes_verified".into(),
+            [1, 3, 4].iter().all(|phase| {
+                self.save_checks.get(&format!("phase_{phase}_disk_bytes")) == Some(&true)
+            }),
+        );
+        let conflict = self.save_checks.get("external_change_reported") == Some(&true)
+            && self.save_checks.get("phase_4_disk_bytes") == Some(&true);
+        self.save_checks
+            .insert("external_change_refused".into(), conflict);
+        let required = [
+            "native_save",
+            "native_save_all",
+            "late_edit_retained",
+            "external_change_refused",
+            "same_models",
+            "undo_redo_retained",
+            "selection_retained",
+            "disk_bytes_verified",
+            "no_python_application_service",
+        ];
+        let error = self.evidence.borrow().error.clone().or_else(|| {
+            (!done).then(|| "Native Save fixture closed before completing its checks.".into())
+        });
+        let passed = done
+            && error.is_none()
+            && self.save_checks.values().all(|passed| *passed)
+            && required
+                .iter()
+                .all(|key| self.save_checks.get(*key) == Some(&true));
+        let receipt = Receipt {
+            schema_version: 1, passed, mode: "isolated_native_save_fixture", os: "windows",
+            architecture: std::env::consts::ARCH, display_backend: "Win32",
+            webview_version: wry::webview_version().unwrap_or_else(|_| "unavailable".into()),
+            widget_types: [4, 5].iter().filter_map(|index| self.native.actions.get(*index))
+                .copied().map(class_name).collect(),
+            checks: self.save_checks.clone(), error,
+            limits: "Native Win32 Save/Save All on an owned two-file fixture; bounded worker byte checks, late edit and external conflict; no live project, device, settings, firmware or Python application service.",
+        };
+        println!("MCU_NATIVE_SAVE={}", serde_json::to_string(&receipt)?);
+        if !passed {
+            return Err(receipt
+                .error
+                .unwrap_or_else(|| "A native Win32 Save assertion failed.".into())
+                .into());
+        }
+        Ok(())
+    }
+
     fn open_project(&mut self) {
         if self.smoke
             || self.workspace_smoke
+            || self.save_smoke
             || self.project_launch.is_some()
             || self.native.events.closing.get()
         {
@@ -1571,6 +2175,7 @@ impl App {
                 }
             }
             self.native.source_tabs = controls;
+            self.save_controls = None;
             self.source_generation = generation;
             self.source_labels = tabs.iter().map(SourceTab::label).collect();
             self.select_source(0)?;
@@ -1678,7 +2283,7 @@ impl App {
             self.evidence.borrow_mut().projects.cancel_pending();
             self.project_worker = None;
             self.project_deadline = None;
-            if !self.smoke && !self.workspace_smoke {
+            if !self.smoke && !self.workspace_smoke && !self.save_smoke {
                 if let Some(error) = self.evidence.borrow_mut().error.take() {
                     self.status(&error);
                 }
@@ -2099,6 +2704,11 @@ impl App {
         for command in commands {
             match command {
                 PROJECT => self.open_project(),
+                SAVE => self.start_save(false),
+                SAVE_ALL => self.start_save(true),
+                SAVE_CLOSE_NOTICE => self.status(
+                    "A source save is still in progress. Wait for it to finish before closing.",
+                ),
                 COMBO => self.evidence.borrow_mut().combo_events += 1,
                 COMPILE if self.smoke => {
                     self.evidence.borrow_mut().compile_events += 1;
@@ -2107,10 +2717,12 @@ impl App {
                         SetWindowTextW(self.native.status, wide("Rust callback passed. Firmware compilation remains a separate migration gate.").as_ptr());
                     }
                 }
-                id if (SOURCE_TAB..SOURCE_TAB + 256).contains(&id) => {
+                id if (SOURCE_TAB..SOURCE_TAB + 256).contains(&id)
+                    && !self.evidence.borrow().projects.is_saving() =>
+                {
                     self.select_source(id - SOURCE_TAB)?
                 }
-                SOURCE_MORE => {
+                SOURCE_MORE if !self.evidence.borrow().projects.is_saving() => {
                     let labels: Vec<_> = self
                         .evidence
                         .borrow()
@@ -2142,7 +2754,11 @@ impl App {
                             (
                                 ACTION + index,
                                 *label,
-                                index == 8 && !self.smoke && !self.workspace_smoke,
+                                (index == 8
+                                    && !self.smoke
+                                    && !self.workspace_smoke
+                                    && !self.save_smoke)
+                                    || ([4, 5].contains(&index) && self.save_enabled()),
                             )
                         })
                         .collect();
@@ -2486,9 +3102,10 @@ fn run_window(
     theme: Theme,
     project: Option<PathBuf>,
     workspace_smoke: bool,
+    save_smoke: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let started = Instant::now();
-    let native = NativeWindows::new(smoke, workspace_smoke)?;
+    let native = NativeWindows::new(smoke, workspace_smoke || save_smoke)?;
     let evidence = Rc::new(RefCell::new(Evidence::default()));
     let mut editor_context = WebContext::new(Some(profile.join("editor")));
     let mut terminal_context = WebContext::new(Some(profile.join("terminal")));
@@ -2535,6 +3152,14 @@ fn run_window(
         project_worker: None,
         project_deadline: None,
         project_launch: None,
+        save_worker: None,
+        save_controls: None,
+        save_smoke,
+        save_check_phase: 0,
+        save_check_started: false,
+        save_check_done: false,
+        save_checks: BTreeMap::new(),
+        save_fixture_worker: None,
         project_children: Arc::new(AtomicUsize::new(0)),
         workspace_smoke,
         workspace_phase: 0,
@@ -2568,6 +3193,49 @@ fn run_window(
         if outcome == 0 {
             break;
         }
+        // Classic single-line Win32 EDIT controls support native Copy and
+        // horizontal keyboard selection, but do not consistently implement
+        // Ctrl+A. Add it only for the owned read-only status value, without
+        // changing editor/terminal shortcuts, focus or clipboard contents.
+        // SAFETY: Read modifiers on this UI thread and select the retained
+        // status child synchronously; EDIT owns and bounds its own text.
+        let select_status = unsafe {
+            message.hwnd == app.native.status
+                && message.message == WM_KEYDOWN
+                && message.wParam == usize::from(b'A')
+                && GetKeyState(i32::from(VK_CONTROL)) < 0
+                && GetKeyState(i32::from(VK_MENU)) >= 0
+        };
+        if select_status {
+            // SAFETY: This live native EDIT interprets -1 as its text end.
+            unsafe {
+                SendMessageW(app.native.status, EM_SETSEL, 0, -1);
+            }
+            continue;
+        }
+        // SAFETY: Read native key state only for a key message addressed to
+        // these owned main/detached windows or their descendants. Consume the
+        // chord before WebView2 can interpret it as browser Save Page.
+        let save_chord = unsafe {
+            message.message == WM_KEYDOWN
+                && message.wParam == usize::from(b'S')
+                && GetKeyState(i32::from(VK_CONTROL)) < 0
+                && GetKeyState(i32::from(VK_MENU)) >= 0
+                && (message.hwnd == app.native.main
+                    || message.hwnd == app.native.detached
+                    || IsChild(app.native.main, message.hwnd) != 0
+                    || IsChild(app.native.detached, message.hwnd) != 0)
+        };
+        if save_chord {
+            if message.lParam & (1 << 30) == 0 {
+                // SAFETY: The modifier belongs to this native key event.
+                let all = unsafe { GetKeyState(i32::from(VK_SHIFT)) < 0 };
+                app.native.events.command(if all { SAVE_ALL } else { SAVE });
+                app.drain_commands()?;
+                app.handle_save();
+            }
+            continue;
+        }
         unsafe {
             // Native controls retain standard Tab/Shift+Tab navigation. WebView
             // child messages bypass dialog traversal so Monaco owns its keys.
@@ -2580,6 +3248,7 @@ fn run_window(
             DispatchMessageW(&message);
         }
         app.drain_commands()?;
+        app.handle_save();
         if app.native.events.panic.get() {
             app.evidence.borrow_mut().error =
                 Some("Native callback queue exceeded its budget.".into());
@@ -2629,13 +3298,15 @@ fn run_window(
             unsafe {
                 EnableWindow(app.native.detach, ready as i32);
             }
-            if smoke || workspace_smoke {
+            if smoke || workspace_smoke || save_smoke {
                 if started.elapsed() > Duration::from_secs(45) {
                     app.evidence.borrow_mut().error =
                         Some("Native Win32 smoke deadline expired.".into());
                 }
                 if app.evidence.borrow().error.is_none() {
-                    match if workspace_smoke {
+                    match if save_smoke {
+                        app.save_smoke_step()
+                    } else if workspace_smoke {
                         app.workspace_smoke_step()
                     } else {
                         app.smoke_step()
@@ -2649,6 +3320,9 @@ fn run_window(
                 }
             }
         }
+    }
+    if save_smoke {
+        app.finish_save_receipt(done)?;
     }
     if workspace_smoke {
         let e = app.evidence.borrow();
@@ -2702,6 +3376,7 @@ fn run_window(
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut smoke = false;
     let mut workspace_smoke = false;
+    let mut save_smoke = false;
     let mut theme = Theme::Glass;
     let mut project = None;
     let mut args = std::env::args_os().skip(1);
@@ -2714,16 +3389,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         match flag.to_str() {
             Some("--smoke") if !smoke => smoke = true,
             Some("--workspace-smoke") if !workspace_smoke => workspace_smoke = true,
+            Some("--save-smoke") if !save_smoke => save_smoke = true,
             Some("--theme") => theme = Theme::parse(args.next().and_then(|value| value.into_string().ok()).as_deref().ok_or("--theme requires a value")?),
             Some("--project") if project.is_none() => {
                 let selected = args.next().ok_or("--project requires a folder")?;
                 if selected.is_empty() { return Err("--project requires a folder".into()); }
                 project = Some(PathBuf::from(selected));
             }
-            _ => return Err("Usage: mcu-native-ui-probe [--smoke | --workspace-smoke | --project FOLDER] [--theme NAME]".into()),
+            _ => return Err("Usage: mcu-native-ui-probe [--smoke | --workspace-smoke | --save-smoke | --project FOLDER] [--theme NAME]".into()),
         }
     }
-    if (smoke && project.is_some()) || (workspace_smoke && (smoke || project.is_some())) {
+    if (save_smoke && count != 1)
+        || (smoke && project.is_some())
+        || (workspace_smoke && (smoke || project.is_some()))
+    {
         return Err("Native smoke verification owns its source fixture.".into());
     }
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2740,14 +3419,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // private data-directory request into a user's normal browser profile.
     std::env::remove_var("WEBVIEW2_USER_DATA_FOLDER");
     let result = (|| {
-        if workspace_smoke {
+        if workspace_smoke || save_smoke {
             let root = profile.join("project café 日本語");
             std::fs::create_dir(&root)?;
             std::fs::write(root.join("Sketch.ino"), CHECK_SOURCE)?;
             std::fs::write(root.join("Config.h"), CHECK_HEADER)?;
             project = Some(root);
         }
-        run_window(smoke, &profile, theme, project, workspace_smoke)
+        run_window(smoke, &profile, theme, project, workspace_smoke, save_smoke)
     })();
     // WebView2 may release profile files shortly after its controllers close.
     // Cleanup is bounded and restricted to this atomically created directory.
@@ -2773,6 +3452,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod source_checks {
     use super::*;
+    #[test]
+    fn save_snapshot_mailbox_refuses_a_second_unconsumed_report() {
+        let state = RefCell::new(Evidence::default());
+        let body = r#"{"kind":"save_snapshot","phase":0,"same_models":true,"history_retained":false,"selection_retained":true,"first_dirty":true,"second_dirty":false}"#;
+        receive(&state, Island::Editor, body);
+        assert!(matches!(
+            state.borrow().save_snapshot,
+            Some(RendererMessage::SaveSnapshot { phase: 0, .. })
+        ));
+        assert!(state.borrow().error.is_none());
+        receive(&state, Island::Editor, body);
+        assert!(state
+            .borrow()
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("one-report budget")));
+    }
     #[test]
     fn native_icon_buffer_aligns_unaligned_original_payload_and_preserves_bytes() {
         for size in [16, 32] {

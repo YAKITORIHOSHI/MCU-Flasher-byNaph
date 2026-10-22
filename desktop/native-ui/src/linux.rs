@@ -175,7 +175,12 @@ fn receive(state: &RefCell<ProbeState>, island: Island, body: &str) {
         message @ (RendererMessage::WorkspaceReady {}
         | RendererMessage::DocumentChanged { .. }
         | RendererMessage::DocumentsOpened { .. }
-        | RendererMessage::WorkspaceSnapshot { .. }),
+        | RendererMessage::WorkspaceSnapshot { .. }
+        | RendererMessage::SaveStarted { .. }
+        | RendererMessage::SaveChunk { .. }
+        | RendererMessage::SaveFinished { .. }
+        | RendererMessage::SaveFailed { .. }
+        | RendererMessage::SaveSnapshot { .. }),
     ) = parse_message(island, body)
     {
         let handler = state.borrow().workspace_events.clone();
@@ -196,7 +201,12 @@ fn receive(state: &RefCell<ProbeState>, island: Island, body: &str) {
             RendererMessage::WorkspaceReady {}
             | RendererMessage::DocumentChanged { .. }
             | RendererMessage::DocumentsOpened { .. }
-            | RendererMessage::WorkspaceSnapshot { .. },
+            | RendererMessage::WorkspaceSnapshot { .. }
+            | RendererMessage::SaveStarted { .. }
+            | RendererMessage::SaveChunk { .. }
+            | RendererMessage::SaveFinished { .. }
+            | RendererMessage::SaveFailed { .. }
+            | RendererMessage::SaveSnapshot { .. },
         ) => {}
         Err(error) => state.error = Some(error),
         Ok(RendererMessage::Error { message }) => {
@@ -272,6 +282,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut smoke = false;
     let mut workspace_smoke = false;
+    let mut save_smoke = false;
     let mut theme = Theme::Glass;
     let mut project = None;
     let mut args = args.iter();
@@ -279,6 +290,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         match flag.as_str() {
             "--smoke" => smoke = true,
             "--workspace-smoke" => workspace_smoke = true,
+            "--save-smoke" => save_smoke = true,
             "--theme" => theme = Theme::parse(args.next().ok_or("--theme requires a value")?),
             "--project" => {
                 project = Some(PathBuf::from(
@@ -296,8 +308,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("The smoke does not read a user project".into());
     }
     let profile = fixture_directory()?;
-    if workspace_smoke {
-        if smoke || project.is_some() {
+    if workspace_smoke || save_smoke {
+        if smoke || project.is_some() || (workspace_smoke && save_smoke) {
             return Err("Workspace verification owns its source fixture".into());
         }
         let root = profile.join("project");
@@ -332,7 +344,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let fontconfig = profile.join("fonts.conf");
     std::fs::write(&fontconfig, format!("<?xml version=\"1.0\"?><!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\"><fontconfig><include ignore_missing=\"yes\">/etc/fonts/fonts.conf</include><dir>{escaped}</dir></fontconfig>"))?;
     std::env::set_var("FONTCONFIG_FILE", &fontconfig);
-    let result = run_window(smoke, &profile, theme, project, workspace_smoke);
+    let result = run_window(smoke, &profile, theme, project, workspace_smoke, save_smoke);
     // Only this process's atomically created private profile is eligible for removal.
     let cleanup = std::fs::remove_dir_all(&profile);
     result?;
@@ -346,6 +358,7 @@ fn run_window(
     theme: Theme,
     project: Option<PathBuf>,
     workspace_smoke: bool,
+    save_smoke: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     gtk::init()?;
     let state = Rc::new(RefCell::new(ProbeState::default()));
@@ -384,6 +397,10 @@ fn run_window(
     status.set_margin_top(6);
     status.set_margin_bottom(6);
     status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    // Keep long save/recovery diagnostics accessible on compact windows.
+    status.set_selectable(true);
+    status.set_tooltip_text(Some(&status.text()));
+    status.connect_label_notify(|label| label.set_tooltip_text(Some(&label.text())));
     let workspace = WorkspaceShell::new(
         &window,
         &boards,
@@ -397,6 +414,9 @@ fn run_window(
         project,
         workspace_smoke,
     )?;
+    if save_smoke {
+        workspace.enable_save_check();
+    }
     let split = workspace.split.clone();
     let workspace_events = workspace.clone();
     state.borrow_mut().workspace_events =
@@ -421,11 +441,15 @@ fn run_window(
         smoke,
     )?);
     workspace.bind_views(editor.clone(), terminal.clone());
-    if workspace_smoke {
+    if workspace_smoke || save_smoke {
         let shell = Rc::downgrade(&workspace);
         glib::timeout_add_local_once(Duration::from_secs(30), move || {
             if let Some(shell) = shell.upgrade() {
-                if !shell.check_passed() {
+                if !(if save_smoke {
+                    shell.save_check_passed()
+                } else {
+                    shell.check_passed()
+                }) {
                     gtk::main_quit();
                 }
             }
@@ -439,6 +463,7 @@ fn run_window(
     detached_window.set_title("Fixture editor — native Rust");
     detached_window.set_icon(Some(&application_icon));
     detached_window.set_default_size(840, 560);
+    workspace.bind_save_shortcuts(&detached_window);
     let detached_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     detached_window.add(&detached_box);
     let detached = Rc::new(Cell::new(false));
@@ -665,6 +690,9 @@ fn run_window(
     state.borrow_mut().workspace_events = None;
     if workspace_smoke && !workspace.check_passed() {
         return Err("Native workspace/source verification failed".into());
+    }
+    if save_smoke && !workspace.save_check_passed() {
+        return Err("Native source Save verification failed".into());
     }
     if smoke {
         let result = receipt

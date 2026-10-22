@@ -28,7 +28,7 @@ the system browser engine remain native dependencies, and the two embedded
 components remain JavaScript. Python is used by developer verification only.
 
 On both hosts, `--project FOLDER` explicitly reads that project's root sources
-through the shared Rust `workspace_project.rs` / `mcu_core::ProjectService` on a
+through the shared Rust `workspace_project.rs` / `mcu_host::NativeProjectSession` on a
 worker. Exact ordered document acknowledgements bind native source controls;
 dirty updates accept only known document IDs and newer revisions. Native source
 tabs select retained Monaco models. On GTK, the native Project picker opens
@@ -39,12 +39,35 @@ read belongs to a window; only exact ordered IDs commit it, and another project
 must open independently. Failed dispatch, editor refusal or acknowledgement
 timeout releases pending read state. An accepted session stays through themes,
 resizing and editor detach/reattach. Renderer scripts move out before browser
-dispatch so native session borrows cannot cross reentrant IPC. Baselines remain
-the original snapshots, including revisions/digests/content; they are not proof
-that the disk is still unchanged. Native session methods expose no writes or
-mutable service access. This adds only an internal `mcu-contracts` dependency.
-This is a read-only filesystem adapter: edits stay in editor memory, Save/Save
-All are disabled, and no live ownership registration or activation runs.
+dispatch so native session borrows cannot cross reentrant IPC.
+
+Save and Save All now use the retained native source owner on a worker. The
+native buttons and Ctrl+S / Ctrl+Shift+S capture bounded editor snapshots;
+Save All commits changed files individually and stops on the first failure,
+retaining acknowledgements for files already saved. It is not one atomic
+transaction across the project. Saved acknowledgements update baselines without
+replacing models, undo history, selection or newer unsaved edits. Opening alone
+does not write project metadata. The first Save creates a native coordination
+file, `.mcu-native-save.lock`, in the selected project.
+
+Each save verifies native root/source identities and exact prior bytes, then
+atomically replaces the source with recovery retention for observed conflicts.
+Read-only files, links, changed source paths/bytes and unavailable atomic
+replacement are refused. Linux also refuses ACL/xattr or ownership metadata it
+cannot preserve. Recovery failures retain the transaction path for inspection
+and block further writes from that session. The native lease coordinates these
+save sessions only; legacy Python coexistence and hostile same-user filesystem
+races remain unqualified. No compile, device, settings or live app registration
+service is enabled by this change. Only the existing internal `mcu-host`
+dependency is added; no new external crate or runtime is installed.
+
+`--save-smoke` independently verifies actual native Save/Save All callbacks on
+two owned files, exact BOM/Unicode disk bytes, retained models/undo/selection,
+a newer edit during Save All, and refusal of an external disk change. The old
+`--workspace-smoke` remains read-only. Local Linux passes 32 Save checks, the
+19 workspace and 17 detach checks, plus 255 combined library tests. Hosted
+Windows and the expanded platform jobs are pending until recorded in
+`audit/migration/native-source-save.json`.
 Windows accepts `--project`, `--theme` and `--workspace-smoke`. Its new native
 Project picker cancels without spawning or launches the current Rust executable
 with literal native path/current-theme arguments on a worker; the 16-child cap
@@ -124,20 +147,23 @@ zero Python application services retired.
   Editor actions explicitly open independent windows.
 - Typed IPC accepts reports from the native-bound editor or terminal island.
   It refuses unknown fields, renderer-supplied ownership, the wrong island and
-  messages over 16 KiB. Renderer messages offer no file, process, serial or
-  settings authority. The shared root-source reader starts only from native
+  messages over 16 KiB. Save payloads carry only known document IDs and bounded
+  UTF-8 bytes after a native request; paths, ownership, process, serial and
+  settings authority remain native. A transfer is limited to 8 MiB per source,
+  32 MiB overall and ten seconds, with one active save per window. The shared root-source reader starts only from native
   `--project` selection, or the GTK native Project picker.
 - The original native main window remains the fixture owner while only the
   editor view moves. No renderer-supplied owner identifier is accepted. This is
-  a UI fixture, not qualification of live project ownership or source writes.
+  a UI fixture, not qualification of legacy app coexistence or device services.
 - WebKit profiles and process-local XDG data/config/cache folders are created
   atomically under `audit/migration/scratch/` and only that owned profile is
   eligible for exit cleanup. WebKit helpers can recreate empty owned profile
   directories after the Rust process exits; normal manual exit is not a claim
   of zero residual directories. The smoke controller stops its captured
   descendants. No user HOME, shell profile, application settings,
-  sketch or protected build cache is changed. Explicit project reading does
-  not create metadata or write the selected project's source files.
+  sketch or protected build cache is changed by verification. Explicit project
+  reading does not write sources; manual Save writes only the selected native
+  documents and its native lease/recovery entries.
 - Selected scratch ancestors must be real directories inside the checkout.
   The developer controller holds no-follow directory handles, refuses existing
   output symlinks, and publishes logs/receipts by atomic leaf replacement. An
@@ -164,6 +190,7 @@ source desktop/dev-env.sh
 CARGO_BUILD_JOBS=2 cargo build --offline --manifest-path desktop/Cargo.toml -p mcu-native-ui-probe
 .venv-linux/bin/python3 desktop/native-ui/verify-smoke.py
 .venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --workspace
+.venv-linux/bin/python3 desktop/native-ui/verify-smoke.py --save
 ```
 
 The controller creates its own private Xvfb display and D-Bus session. It writes

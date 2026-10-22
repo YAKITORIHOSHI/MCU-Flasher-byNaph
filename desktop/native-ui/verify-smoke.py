@@ -25,9 +25,9 @@ REQUIRED = {
 
 
 class OutputDirectory:
-    def __init__(self, root, *, workspace=False):
+    def __init__(self, root, *, workspace=False, save=False):
         root = root.resolve(strict=True)
-        folder = "native-workspace" if workspace else "native-ui"
+        folder = "native-save" if save else "native-workspace" if workspace else "native-ui"
         self.path = root / "audit/migration/scratch" / folder
         self.fd = None
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -221,10 +221,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--current-display", action="store_true", help="Use the caller's display, including native Wayland; otherwise own an isolated Xvfb.")
     parser.add_argument("--workspace", action="store_true", help="Verify the native workspace, Rust source reader and retained manual editor models.")
+    parser.add_argument("--save", action="store_true", help="Verify native Save/Save All against owned source fixtures only.")
     options = parser.parse_args()
+    if options.workspace and options.save:
+        parser.error("Choose workspace preservation or source-save verification separately.")
     binary = ROOT / "desktop/target/debug/mcu-native-ui-probe"
     assert binary.is_file(), "Native Rust widget probe is not built."
-    output_directory = OutputDirectory(ROOT, workspace=options.workspace)
+    output_directory = OutputDirectory(ROOT, workspace=options.workspace, save=options.save)
     try:
         run_fixture(options, binary, output_directory)
     finally:
@@ -233,6 +236,7 @@ def main():
 
 def run_fixture(options, binary, output_directory):
     workspace = getattr(options, "workspace", False)
+    save = getattr(options, "save", False)
     scratch = output_directory.path
     server = None
     started = time.monotonic()
@@ -259,20 +263,22 @@ def run_fixture(options, binary, output_directory):
                     watcher.close()
                 env.update(DISPLAY=":" + display, GDK_BACKEND="x11", LIBGL_ALWAYS_SOFTWARE="1", GALLIUM_DRIVER="llvmpipe", __GLX_VENDOR_LIBRARY_NAME="mesa", WEBKIT_DISABLE_DMABUF_RENDERER="1")
             with output_directory.capture_log() as log:
-                task = spawn_owned(["dbus-run-session", "--", str(binary), "--workspace-smoke" if workspace else "--smoke"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+                task = spawn_owned(["dbus-run-session", "--", str(binary), "--save-smoke" if save else "--workspace-smoke" if workspace else "--smoke"], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
                 try:
                     return_code = task.wait(timeout=70)
                 finally:
                     stop_owned(task)
             output = output_directory.read_log()
-            prefix = "MCU_NATIVE_WORKSPACE=" if workspace else "MCU_NATIVE_PROBE="
+            prefix = "MCU_NATIVE_SAVE=" if save else "MCU_NATIVE_WORKSPACE=" if workspace else "MCU_NATIVE_PROBE="
             receipts = [line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)]
             assert len(receipts) == 1, f"Expected one native receipt, got {len(receipts)}. See {scratch / 'latest-output.log'}"
             receipt = json.loads(receipts[0])
             receipt.update(controller="Python developer verification only", elapsedSeconds=round(time.monotonic() - started, 3), displayMode="current-native-display" if options.current_display else "owned-Xvfb-x11-software-rendering")
             output_directory.publish("latest-smoke.json", (json.dumps(receipt, indent=2) + "\n").encode())
             assert return_code == 0 and receipt["passed"], receipt
-            if workspace:
+            if save:
+                required = {"native_save", "native_save_all", "late_edit_retained", "external_change_refused", "same_models", "undo_redo_retained", "selection_retained", "disk_bytes_verified", "no_python_application_service"}
+            elif workspace:
                 required = {f"phase_{phase}_{kind}" for phase in range(4) for kind in ("models", "dirty_selection", "theme")}
                 required |= {"undo_redo", "native_tools", "native_source_tabs", "native_project_session", "native_owned_source_controls", "no_python_application_service", "source_bytes_unchanged"}
             else:

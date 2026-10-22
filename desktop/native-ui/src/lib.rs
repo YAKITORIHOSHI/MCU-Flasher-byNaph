@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub mod workspace_design;
 pub mod workspace_icon;
 pub mod workspace_project;
+pub mod workspace_save;
 
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 pub const SOURCE: &str = "void setup() {}\nvoid loop() {}\n";
@@ -37,6 +38,32 @@ pub enum RendererMessage {
         document_id: String,
         edit_revision: u64,
         dirty: bool,
+    },
+    SaveStarted {
+        request_id: u64,
+        documents: Vec<workspace_save::SaveDocumentInfo>,
+        complete: bool,
+    },
+    SaveChunk {
+        request_id: u64,
+        document_id: String,
+        offset: usize,
+        content: String,
+    },
+    SaveFinished {
+        request_id: u64,
+    },
+    SaveFailed {
+        request_id: u64,
+        message: String,
+    },
+    SaveSnapshot {
+        phase: u8,
+        same_models: bool,
+        history_retained: bool,
+        selection_retained: bool,
+        first_dirty: bool,
+        second_dirty: bool,
     },
     EditorSnapshot {
         phase: u8,
@@ -86,6 +113,51 @@ pub fn parse_message(island: Island, body: &str) -> Result<RendererMessage, Stri
                 && documents.iter().all(|id| !id.is_empty() && id.len() <= 256)
         }
         RendererMessage::WorkspaceReady {} => island == Island::Editor,
+        RendererMessage::SaveStarted {
+            request_id,
+            documents,
+            ..
+        } => {
+            island == Island::Editor
+                && *request_id > 0
+                && *request_id < (1 << 53)
+                && documents.len() <= 32
+                && documents.iter().all(|document| {
+                    !document.document_id.is_empty()
+                        && document.document_id.len() <= 256
+                        && document.edit_revision > 0
+                        && document.edit_revision < (1 << 53)
+                        && document.bytes <= 8 * 1024 * 1024
+                })
+        }
+        RendererMessage::SaveChunk {
+            request_id,
+            document_id,
+            content,
+            offset,
+        } => {
+            island == Island::Editor
+                && *request_id > 0
+                && *request_id < (1 << 53)
+                && !document_id.is_empty()
+                && document_id.len() <= 256
+                && !content.is_empty()
+                && content.len() <= 8192
+                && *offset <= 8 * 1024 * 1024
+        }
+        RendererMessage::SaveFinished { request_id } => {
+            island == Island::Editor && *request_id > 0 && *request_id < (1 << 53)
+        }
+        RendererMessage::SaveFailed {
+            request_id,
+            message,
+        } => {
+            island == Island::Editor
+                && *request_id > 0
+                && *request_id < (1 << 53)
+                && message.len() <= 1024
+        }
+        RendererMessage::SaveSnapshot { phase, .. } => island == Island::Editor && *phase <= 4,
         RendererMessage::DocumentChanged {
             document_id,
             edit_revision,

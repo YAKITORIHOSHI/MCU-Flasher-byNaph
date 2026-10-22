@@ -9,14 +9,115 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
-    sync::mpsc,
+    sync::{mpsc, Arc, Mutex},
     time::{Duration, Instant},
 };
 use wry::WebView;
 
 use mcu_native_ui_probe::workspace_project::{read_project, ProjectSessions};
 pub use mcu_native_ui_probe::workspace_project::{CHECK_HEADER, CHECK_SOURCE};
+use mcu_native_ui_probe::workspace_save::{SaveResult, SaveWork};
 type TabStates = BTreeMap<String, (gtk::Label, String, u64, gtk::Button)>;
+const EXTERNAL_SAVE_FIXTURE: &[u8] = b"// external native-save fixture edit\n";
+
+// This worker helper is reachable only from the explicit --save-smoke mode.
+// Its root was atomically created by the native fixture launcher, never IPC.
+fn save_fixture_io(
+    root: PathBuf,
+    documents: Vec<(String, String)>,
+    phase: u8,
+) -> Result<BTreeMap<String, bool>, String> {
+    use std::io::{Read, Write};
+    let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let scratch =
+        mcu_native_ui_probe::checked_scratch_root(&checkout).map_err(|e| e.to_string())?;
+    let canonical = root.canonicalize().map_err(|e| e.to_string())?;
+    if canonical != root
+        || !root.starts_with(&scratch)
+        || !root
+            .parent()
+            .and_then(|p| p.file_name())
+            .is_some_and(|name| name.to_string_lossy().starts_with("native-ui-"))
+        || documents.len() != 2
+        || !documents.iter().any(|(name, _)| name == "Sketch.ino")
+        || !documents.iter().any(|(name, _)| name == "Config.h")
+    {
+        return Err("Save verification refused an unowned source fixture.".into());
+    }
+    let mut checks = BTreeMap::new();
+    for (name, content) in documents {
+        if !matches!(name.as_str(), "Sketch.ino" | "Config.h") || content.len() > 8192 {
+            return Err("Save fixture source exceeds its fixed name/byte budget.".into());
+        }
+        let source = root.join(&name);
+        let metadata = std::fs::symlink_metadata(&source).map_err(|e| e.to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("Save fixture source is not a regular owned file.".into());
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(&source)
+            .map_err(|e| e.to_string())?
+            .take(8193)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        let expected = if phase == 4 && name == "Sketch.ino" {
+            EXTERNAL_SAVE_FIXTURE
+        } else {
+            content.as_bytes()
+        };
+        if bytes != expected {
+            return Err(format!(
+                "Native save fixture bytes differ for {name}, phase {phase}."
+            ));
+        }
+        if phase == 1 && name == "Sketch.ino" {
+            checks.insert(
+                "saved_bom_unicode".into(),
+                bytes.starts_with(&[0xef, 0xbb, 0xbf])
+                    && content.contains("// native saved café 日本語"),
+            );
+        }
+        if phase == 1 && name == "Config.h" {
+            checks.insert(
+                "save_preserves_other_source".into(),
+                bytes == CHECK_HEADER.as_bytes(),
+            );
+        }
+        if phase == 3 {
+            checks.insert(
+                format!("save_all_{}", name.replace('.', "_")),
+                content.contains("// saved all αβ") && !content.contains("// later unsaved γ"),
+            );
+            if name == "Sketch.ino" {
+                // Deliberately simulate an external editor only in this owned
+                // developer fixture, after checking the real saved bytes.
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(&source)
+                    .map_err(|e| e.to_string())?;
+                file.write_all(EXTERNAL_SAVE_FIXTURE)
+                    .and_then(|()| file.sync_all())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    checks.insert(format!("phase_{phase}_disk_bytes"), true);
+    let mut maps = String::new();
+    std::fs::File::open("/proc/self/maps")
+        .map_err(|e| e.to_string())?
+        .take(4 * 1024 * 1024)
+        .read_to_string(&mut maps)
+        .map_err(|e| e.to_string())?;
+    checks.insert(
+        "no_python_application_service".into(),
+        !maps.to_ascii_lowercase().contains("libpython"),
+    );
+    Ok(checks)
+}
 
 pub struct WorkspaceShell {
     pub body: gtk::Box,
@@ -30,10 +131,20 @@ pub struct WorkspaceShell {
     terminal: RefCell<Option<Rc<WebView>>>,
     status: gtk::Label,
     project: gtk::Button,
+    save: gtk::Button,
+    save_all: gtk::Button,
+    save_transfer_timer: RefCell<Option<glib::SourceId>>,
+    save_completion: RefCell<Option<glib::SourceId>>,
+    save_check: Cell<bool>,
+    save_check_phase: Cell<u8>,
+    save_check_result: Cell<Option<bool>>,
+    save_checks: RefCell<BTreeMap<String, bool>>,
+    save_fixture_io: Cell<bool>,
     project_path: Option<PathBuf>,
     loading: Cell<bool>,
     projects: RefCell<ProjectSessions>,
     self_check: bool,
+    save_read_only: bool,
     check_phase: Cell<u8>,
     check_result: Cell<Option<bool>>,
     checks: RefCell<BTreeMap<String, bool>>,
@@ -142,11 +253,19 @@ impl WorkspaceShell {
         brand.set_margin_end(18);
         header.insert(&brand, -1);
         let project = action("Project", true);
+        let save = action("Save", false);
+        let save_all = action("Save All", false);
+        save.set_tooltip_text(Some("Save the active source file (Ctrl+S)."));
+        save_all.set_tooltip_text(Some("Save all changed source files (Ctrl+Shift+S)."));
         for text in PRIMARY_ACTIONS {
             if *text == "Compile" {
                 header.insert(compile, -1);
             } else if *text == "Project" {
                 header.insert(&project, -1);
+            } else if *text == "Save" {
+                header.insert(&save, -1);
+            } else if *text == "Save All" {
+                header.insert(&save_all, -1);
             } else {
                 header.insert(&action(text, false), -1);
             }
@@ -306,13 +425,44 @@ impl WorkspaceShell {
             terminal: RefCell::new(None),
             status: status.clone(),
             project,
+            save,
+            save_all,
+            save_transfer_timer: RefCell::new(None),
+            save_completion: RefCell::new(None),
+            save_check: Cell::new(false),
+            save_check_phase: Cell::new(0),
+            save_check_result: Cell::new(None),
+            save_checks: RefCell::new(BTreeMap::new()),
+            save_fixture_io: Cell::new(false),
             project_path,
             loading: Cell::new(false),
             projects: RefCell::new(ProjectSessions::default()),
             self_check,
+            save_read_only: smoke || self_check,
             check_phase: Cell::new(0),
             check_result: Cell::new(None),
             checks: RefCell::new(BTreeMap::new()),
+        });
+        for (button, all) in [(&shell.save, false), (&shell.save_all, true)] {
+            let weak = Rc::downgrade(&shell);
+            button.connect_clicked(move |_| {
+                if let Some(shell) = weak.upgrade() {
+                    shell.start_save(all);
+                }
+            });
+        }
+        shell.bind_save_shortcuts(window);
+        let weak = Rc::downgrade(&shell);
+        window.connect_delete_event(move |_, _| {
+            if let Some(shell) = weak.upgrade() {
+                if shell.projects.borrow().is_saving() || shell.save_fixture_io.get() {
+                    shell.status.set_text(
+                        "A source save is still in progress. Wait for it to finish before closing.",
+                    );
+                    return glib::Propagation::Stop;
+                }
+            }
+            glib::Propagation::Proceed
         });
         shell.apply_theme(theme)?;
         let weak = Rc::downgrade(&shell);
@@ -394,7 +544,17 @@ impl WorkspaceShell {
     pub fn check_passed(&self) -> bool {
         self.check_result.get() == Some(true)
     }
+    pub fn enable_save_check(&self) {
+        self.save_check.set(true);
+    }
+    pub fn save_check_passed(&self) -> bool {
+        self.save_check_result.get() == Some(true)
+    }
     pub fn release_views(&self) {
+        self.stop_save_transfer_timer();
+        if let Some(source) = self.save_completion.borrow_mut().take() {
+            source.remove();
+        }
         // Drop every view reference captured by source-tab callbacks before
         // WebContext destruction. The local native adapter still owns views.
         for child in self.sources.children() {
@@ -406,17 +566,42 @@ impl WorkspaceShell {
     }
     pub fn receive(self: &Rc<Self>, message: &RendererMessage) {
         match message {
+            RendererMessage::SaveStarted { .. }
+            | RendererMessage::SaveChunk { .. }
+            | RendererMessage::SaveFinished { .. }
+            | RendererMessage::SaveFailed { .. } => self.receive_save(message),
+            RendererMessage::SaveSnapshot {
+                phase,
+                same_models,
+                history_retained,
+                selection_retained,
+                first_dirty,
+                second_dirty,
+            } if self.save_check.get() => self.receive_save_check(
+                *phase,
+                *same_models,
+                *history_retained,
+                *selection_retained,
+                *first_dirty,
+                *second_dirty,
+            ),
             RendererMessage::TerminalSnapshot { .. } => {
                 if let Err(error) = self.apply_theme(self.theme.get()) {
                     self.status.set_text(&error.to_string());
                 }
             }
             RendererMessage::Error { message } => {
+                if self.projects.borrow().is_saving() && self.save_completion.borrow().is_none() {
+                    self.abort_save(message);
+                }
                 self.loading.set(false);
                 self.projects.borrow_mut().cancel_pending();
                 self.status.set_text(message);
                 if self.self_check {
                     self.finish_check(false);
+                }
+                if self.save_check.get() {
+                    self.finish_save_check(false);
                 }
             }
             RendererMessage::DocumentsOpened { documents } => {
@@ -425,10 +610,13 @@ impl WorkspaceShell {
                     Ok(Some(entries)) => {
                         self.set_tabs(&entries);
                         self.loading.set(false);
+                        self.sync_save_controls();
                         self.status.set_text(
                             "Project opened. Source files are unchanged; edits stay in memory.",
                         );
-                        if self.self_check {
+                        if self.save_check.get() {
+                            self.request_save_check(0);
+                        } else if self.self_check {
                             self.request_snapshot(0);
                         }
                     }
@@ -523,6 +711,384 @@ impl WorkspaceShell {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Bind native shortcuts to each owning main/detached window. Renderer
+    /// reports supply only the snapshot requested by these native commands.
+    pub fn bind_save_shortcuts(self: &Rc<Self>, window: &gtk::Window) {
+        let weak = Rc::downgrade(self);
+        window.connect_key_press_event(move |_, event| {
+            let modifiers = event.state();
+            if modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                && !modifiers.intersects(
+                    gtk::gdk::ModifierType::MOD1_MASK | gtk::gdk::ModifierType::SUPER_MASK,
+                )
+                && matches!(
+                    event.keyval(),
+                    gtk::gdk::keys::constants::s | gtk::gdk::keys::constants::S
+                )
+            {
+                if let Some(shell) = weak.upgrade() {
+                    shell.start_save(modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+    }
+
+    fn sync_save_controls(&self) {
+        let projects = self.projects.borrow();
+        let saving = projects.is_saving() || self.save_fixture_io.get();
+        let enabled =
+            !self.save_read_only && !self.loading.get() && projects.active().is_some() && !saving;
+        drop(projects);
+        self.save.set_sensitive(enabled);
+        self.save_all.set_sensitive(enabled);
+        for (_, _, _, button) in self.tabs.borrow().values() {
+            button.set_sensitive(!saving);
+        }
+    }
+
+    fn evaluate_save_script(&self, script: &str) -> Result<(), String> {
+        let editor = self
+            .editor
+            .borrow()
+            .clone()
+            .ok_or("The editor is unavailable.")?;
+        editor
+            .evaluate_script(script)
+            .map_err(|error| error.to_string())
+    }
+
+    fn start_save(self: &Rc<Self>, all: bool) {
+        if self.save_read_only || self.loading.get() || self.save_fixture_io.get() {
+            self.status.set_text(
+                "Saving is unavailable while the read-only fixture or project reader is active.",
+            );
+            return;
+        }
+        let begin = self.projects.borrow_mut().begin_save(all);
+        let script = match begin {
+            Ok(script) => script,
+            Err(error) => {
+                self.status.set_text(&error);
+                return;
+            }
+        };
+        self.sync_save_controls();
+        self.status
+            .set_text("Reading changed editor buffers for saving…");
+        let weak = Rc::downgrade(self);
+        let source = glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(shell) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if shell.projects.borrow().save_timed_out() {
+                shell.abort_save(
+                    "The editor save snapshot timed out. Unsaved buffers are retained.",
+                );
+                return glib::ControlFlow::Break;
+            }
+            if !shell.projects.borrow().is_saving() {
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.save_transfer_timer.borrow_mut() = Some(source);
+        if let Err(error) = self.evaluate_save_script(&script) {
+            self.abort_save(&format!(
+                "The editor could not provide save buffers: {error}"
+            ));
+        }
+    }
+
+    fn stop_save_transfer_timer(&self) {
+        if let Some(source) = self.save_transfer_timer.borrow_mut().take() {
+            source.remove();
+        }
+    }
+
+    fn abort_save(&self, reason: &str) {
+        let script = self.projects.borrow_mut().abort_save();
+        self.stop_save_transfer_timer();
+        self.sync_save_controls();
+        self.status.set_text(reason);
+        if let Some(script) = script {
+            if let Err(error) = self.evaluate_save_script(&script) {
+                self.status
+                    .set_text(&format!("{reason} Editor acknowledgement failed: {error}"));
+            }
+        }
+    }
+
+    fn receive_save(self: &Rc<Self>, message: &RendererMessage) {
+        let received = self.projects.borrow_mut().accept_save_message(message);
+        match received {
+            Ok(Some(work)) => {
+                self.stop_save_transfer_timer();
+                self.run_save_worker(work);
+            }
+            Ok(None) => {}
+            Err(error) => self.abort_save(&error),
+        }
+    }
+
+    fn run_save_worker(self: &Rc<Self>, work: SaveWork) {
+        self.status.set_text("Saving source files…");
+        // glib 0.18's supported channel wakes the UI only for completion. It
+        // carries owned Send results; no GTK/WebView/Rc value enters the worker.
+        #[allow(deprecated)]
+        let (sender, receiver) = glib::MainContext::channel::<SaveResult>(glib::Priority::DEFAULT);
+        let weak = Rc::downgrade(self);
+        let source = receiver.attach(None, move |result| {
+            if let Some(shell) = weak.upgrade() {
+                shell.save_completion.borrow_mut().take();
+                shell.finish_save(result);
+            }
+            glib::ControlFlow::Break
+        });
+        *self.save_completion.borrow_mut() = Some(source);
+        // Keep the work recoverable until the OS accepts the thread. The slot
+        // is held only while moving ownership, never during filesystem work.
+        let slot = Arc::new(Mutex::new(Some(work)));
+        let worker_slot = Arc::clone(&slot);
+        let spawned = std::thread::Builder::new()
+            .name("native-source-save".into())
+            .spawn(move || {
+                let work = worker_slot
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                if let Some(work) = work {
+                    let _ = sender.send(work.run());
+                }
+            });
+        if let Err(error) = spawned {
+            if let Some(source) = self.save_completion.borrow_mut().take() {
+                source.remove();
+            }
+            let work = slot
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(work) = work {
+                self.finish_save(
+                    work.cancel_before_run(format!("The save worker could not start: {error}")),
+                );
+            }
+        }
+    }
+
+    fn finish_save(&self, result: SaveResult) {
+        let status = result.status_text();
+        if self.save_check.get() {
+            match self.save_check_phase.get() {
+                1 => {
+                    self.save_checks
+                        .borrow_mut()
+                        .insert("native_save".into(), status == "1 file(s) saved.");
+                }
+                3 => {
+                    self.save_checks
+                        .borrow_mut()
+                        .insert("native_save_all".into(), status == "2 file(s) saved.");
+                }
+                _ => {}
+            }
+        }
+        if self.save_check.get() && self.save_check_phase.get() == 4 {
+            self.save_checks.borrow_mut().insert(
+                "external_change_reported".into(),
+                status.starts_with("0 file(s) saved. "),
+            );
+        }
+        let finished = self.projects.borrow_mut().finish_save(result);
+        self.sync_save_controls();
+        match finished {
+            Ok(mut script) => {
+                self.status.set_text(&status);
+                if self.save_check.get() {
+                    script.push_str(&format!(
+                        "window.__mcuSaveFixtureStep({});",
+                        self.save_check_phase.get()
+                    ));
+                }
+                if let Err(error) = self.evaluate_save_script(&script) {
+                    self.status.set_text(&format!("{status} Editor acknowledgement failed: {error}; changed buffers remain dirty."));
+                }
+            }
+            Err(error) => {
+                self.status.set_text(&error);
+                if self.save_check.get() {
+                    self.finish_save_check(false);
+                }
+            }
+        }
+    }
+
+    fn request_save_check(&self, phase: u8) {
+        self.save_check_phase.set(phase);
+        if let Err(error) =
+            self.evaluate_save_script(&format!("window.__mcuSaveFixtureStep({phase});"))
+        {
+            self.status.set_text(&error);
+            self.finish_save_check(false);
+        }
+    }
+
+    fn receive_save_check(
+        self: &Rc<Self>,
+        phase: u8,
+        same: bool,
+        history: bool,
+        selection: bool,
+        first_dirty: bool,
+        second_dirty: bool,
+    ) {
+        if self.save_check_result.get().is_some() {
+            return;
+        }
+        let mut checks = self.save_checks.borrow_mut();
+        checks
+            .entry("same_models".into())
+            .and_modify(|passed| *passed &= same)
+            .or_insert(same);
+        checks
+            .entry("selection_retained".into())
+            .and_modify(|passed| *passed &= selection)
+            .or_insert(selection);
+        if phase > 0 {
+            checks
+                .entry("undo_redo_retained".into())
+                .and_modify(|passed| *passed &= history)
+                .or_insert(history);
+        }
+        if phase == 3 {
+            checks.insert("late_edit_retained".into(), first_dirty && !second_dirty);
+        }
+        checks.insert(
+            format!("phase_{phase}_models_selection"),
+            phase == self.save_check_phase.get() && same && selection,
+        );
+        checks.insert(
+            format!("phase_{phase}_dirty"),
+            match phase {
+                0 => first_dirty && !second_dirty,
+                1 => !first_dirty && !second_dirty,
+                2 => first_dirty && second_dirty,
+                3 | 4 => first_dirty && !second_dirty,
+                _ => false,
+            },
+        );
+        if phase > 0 {
+            checks.insert(format!("phase_{phase}_undo_redo"), history);
+        }
+        let passed = checks.values().all(|passed| *passed);
+        drop(checks);
+        if !passed {
+            self.finish_save_check(false);
+            return;
+        }
+        match phase {
+            0 => {
+                self.save_check_phase.set(1);
+                self.save.emit_clicked();
+            }
+            1 | 3 | 4 => self.run_save_fixture_io(phase),
+            2 => {
+                self.save_check_phase.set(3);
+                self.save_all.emit_clicked();
+            }
+            _ => self.finish_save_check(false),
+        }
+    }
+
+    fn run_save_fixture_io(self: &Rc<Self>, phase: u8) {
+        let root = self.project_path.clone();
+        let documents = self.projects.borrow().active().map(|session| {
+            session
+                .documents()
+                .iter()
+                .map(|document| (document.document.name.clone(), document.content.clone()))
+                .collect::<Vec<_>>()
+        });
+        let (Some(root), Some(documents)) = (root, documents) else {
+            self.finish_save_check(false);
+            return;
+        };
+        self.save_fixture_io.set(true);
+        self.sync_save_controls();
+        #[allow(deprecated)]
+        let (sender, receiver) = glib::MainContext::channel::<Result<BTreeMap<String, bool>, String>>(
+            glib::Priority::DEFAULT,
+        );
+        let weak = Rc::downgrade(self);
+        let source = receiver.attach(None, move |result| {
+            if let Some(shell) = weak.upgrade() {
+                shell.save_fixture_io.set(false);
+                shell.sync_save_controls();
+                match result {
+                    Ok(checks) => {
+                        shell.save_checks.borrow_mut().extend(checks);
+                        match phase {
+                            1 => shell.request_save_check(2),
+                            3 => {
+                                shell.save_check_phase.set(4);
+                                shell.save.emit_clicked();
+                            }
+                            4 => shell.finish_save_check(true),
+                            _ => shell.finish_save_check(false),
+                        }
+                    }
+                    Err(error) => {
+                        shell.status.set_text(&error);
+                        shell.finish_save_check(false);
+                    }
+                }
+            }
+            glib::ControlFlow::Break
+        });
+        if let Err(error) = std::thread::Builder::new()
+            .name("native-save-fixture".into())
+            .spawn(move || {
+                let _ = sender.send(save_fixture_io(root, documents, phase));
+            })
+        {
+            source.remove();
+            self.save_fixture_io.set(false);
+            self.status
+                .set_text(&format!("Save fixture worker could not start: {error}"));
+            self.finish_save_check(false);
+        }
+    }
+
+    fn finish_save_check(&self, passed: bool) {
+        if self.save_check_result.get().is_some() {
+            return;
+        }
+        let mut checks = self.save_checks.borrow_mut();
+        checks.insert(
+            "native_save_buttons".into(),
+            self.save.parent().is_some() && self.save_all.parent().is_some(),
+        );
+        let disk_bytes_verified = [1, 3, 4]
+            .iter()
+            .all(|phase| checks.get(&format!("phase_{phase}_disk_bytes")) == Some(&true));
+        checks.insert("disk_bytes_verified".into(), disk_bytes_verified);
+        let conflict = checks.get("external_change_reported") == Some(&true)
+            && checks.get("phase_4_disk_bytes") == Some(&true);
+        checks.insert("external_change_refused".into(), conflict);
+        let passed = passed && checks.values().all(|passed| *passed);
+        self.save_check_result.set(Some(passed));
+        println!(
+            "MCU_NATIVE_SAVE={}",
+            serde_json::json!({"passed":passed,"checks":&*checks,
+            "scope":"Native GTK Save/Save All, owned two-file fixture and worker byte checks; no live project/device/settings operations"})
+        );
+        if gtk::main_level() > 0 {
+            gtk::main_quit();
         }
     }
     fn set_tabs(self: &Rc<Self>, entries: &[(String, String)]) {

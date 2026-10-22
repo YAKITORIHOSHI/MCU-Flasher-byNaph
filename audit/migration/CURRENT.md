@@ -1,10 +1,23 @@
 # Current migration handoff
 
-Updated: 22 October 2026, Asia/Manila. Read this first, then only the reports
+Updated: 23 October 2026, Asia/Manila. Read this first, then only the reports
 needed for the next slice. Preserve historical failures and exact tested sources.
 
 ## State and evidence
 
+- Active native Save continuation: GTK/Win32 Save and Save All now dispatch
+  bounded known-document snapshots to a Rust worker and acknowledge exact saved
+  baselines without replacing editor models or undo state. Newer edits remain
+  dirty; external changes refuse. Save All is sequential per-file replacement,
+  with successful acknowledgements retained before a later failure. Linux
+  permission/ACL/xattr/ownership refusals and observed recovery retention are
+  explicit. Native save leases do not qualify legacy Python coexistence or
+  hostile same-user final-use races. Local evidence: 255 library tests
+  (1 contracts, 78 core, 148 host, 28 native UI), 32 new Save GUI checks,
+  19 unchanged-source workspace checks and 17 detach checks. Strict Linux lint
+  passes. Windows source and expanded native platform execution are being
+  completed; exact final results belong in `native-source-save.json`.
+  Shipping entries and the 67-capability ledger remain unchanged.
 - Current user priority is shipping GUI responsiveness, especially Board/Library
   opening/search/scroll/resize/selection, with permission to rework its backend.
   Close must sleep with loaded state in RAM; no visible Quit or repeated list
@@ -111,8 +124,9 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## Implemented scope and next slice
 
-- GTK/Win32 ProjectService workers read explicit projects; ordered/native IDs
-  govern source tabs. No live activation/save/metadata/real build dispatch yet.
+- GTK/Win32 native project workers read explicit projects; ordered/native IDs
+  govern source tabs. Save/Save All now use retained native file owners.
+  No live app activation/metadata/real build dispatch yet.
   Original 117 palette values/Montserrat and native icon assets are reused.
   Native Project selection opens independent Rust processes retaining buffers.
   Keep actual desktop input/IME/chooser/child/mixed-DPI/Explorer packaging gates.
@@ -213,7 +227,7 @@ needed for the next slice. Preserve historical failures and exact tested sources
   and private runtime admission remains unqualified; no dependency was copied.
 - Continue this work using the accepted delivery
   order in the plan; integrate usable features instead of stopping at probes.
-- Source-save leases/recovery, catalog/build integration, serial/PTY, settings/
+- Legacy source-save coexistence, catalog/build integration, serial/PTY, settings/
   packages/setup/cloud/vault, complete screens and release/device gates remain.
 
 ## Work boundaries and focused commands

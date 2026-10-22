@@ -388,8 +388,17 @@ independent window. Script dispatch moves its owned payload out before browser
 calls, and no session borrow crosses reentrant IPC. Errors/timeouts release
 pending state. Local evidence: 23 native library tests, 19 workspace/17 detach
 checks and strict Linux/MSVC-target linting/formatting. This is a direct native
-workspace foundation for Save, not a live/coexistence write lease or source-save
-implementation. See `native-project-sessions.json`.
+workspace foundation at that checkpoint. See `native-project-sessions.json`.
+The subsequent Save continuation adds native worker transactions, bounded editor
+snapshot transfer and Save/Save All actions while preserving model/undo/selection
+and newer dirty revisions. It verifies effective source write permission and
+preservable metadata, refuses changed identities/bytes and retains observed
+recovery conflicts. Native leases do not establish legacy Python coexistence;
+Save All is per-file, not a project-wide atomic transaction. Local Linux has
+255 library and 32 Save GUI checks, plus the retained 19 workspace/17 detach
+checks. Hosted execution and final source digests will be recorded in
+`native-source-save.json`; Compile/runtime admission and all remaining service
+and platform gates continue after this slice.
 
 Complete native CI `39539221917` at `49ab312` now passes all five jobs. Runtime
 source equals `eb9d13c`; the follow-up changes only the Windows workflow contract

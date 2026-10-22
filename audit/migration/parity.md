@@ -14,8 +14,13 @@ is 23 library tests and 19 workspace/17 detach checks. Complete native CI
 architectures, 28 on Windows, 19 workspace/17 detach checks on all three hosts
 and both Windows Python editor jobs. Runtime source equals `eb9d13c`; the
 follow-up fixes only the workflow's required 19-check workspace contract.
-Save, live/coexistence ownership, real Compile and service retirement remain
-open. The capability totals stay **14 partial / 53 pending / 0 retired**.
+The 23 October continuation integrates native worker Save/Save All, including
+exact saved acknowledgements, late-edit retention, native lease/replacement and
+observed recovery conflicts. See [Save evidence](native-source-save.json).
+PRJ-03 remains partial: legacy coexistence, complete recovery/metadata parity,
+actual desktop qualification and the remaining project operations are open.
+Real Compile and service retirement also remain open. The capability totals
+stay **14 partial / 53 pending / 0 retired**.
 The subsequent [native package record slice](rust-avr-package-metadata.json)
 adds four exact owned lookup records and preserves every original prepared
 package byte. Local 226 backend tests and exact Linux payload checks pass;

@@ -1,9 +1,14 @@
-//! Native read-only project sessions shared by GTK and Win32.
+//! Native retained project sessions shared by GTK and Win32.
 //! The selected path reaches ProjectService unchanged so aliases fail closed.
 //! All filesystem work runs in read_project on the existing reader worker.
 //! Acknowledgement and session retention are memory-only on the window thread.
-//! No mutable service accessor, source save, live registry or write lease exists.
+//! Explicit save commands move the native file owner to a bounded worker.
+use crate::{
+    workspace_save::{SaveResult, SaveTransfer, SaveWork, OWNER},
+    RendererMessage,
+};
 use mcu_contracts::DocumentSnapshot;
+use mcu_host::source_save::NativeProjectSession;
 use serde::Serialize;
 use std::path::Path;
 #[cfg(test)]
@@ -20,7 +25,7 @@ struct SourceDocument<'a> {
 /// This is process-local read state, not interprocess project ownership or
 /// proof that paths/bytes are unchanged after the worker's reads.
 pub struct ProjectSession {
-    _service: mcu_core::ProjectService,
+    service: Option<NativeProjectSession>,
     workspace_id: String,
     documents: Vec<DocumentSnapshot>,
 }
@@ -69,9 +74,109 @@ impl LoadedProject {
 pub struct ProjectSessions {
     pending: Option<LoadedProject>,
     active: Option<ProjectSession>,
+    transfer: Option<SaveTransfer>,
+    worker_id: Option<u64>,
+    next_save: u64,
 }
 
 impl ProjectSessions {
+    pub fn is_saving(&self) -> bool {
+        self.transfer.is_some() || self.worker_id.is_some()
+    }
+    pub fn save_timed_out(&self) -> bool {
+        self.transfer.as_ref().is_some_and(SaveTransfer::timed_out)
+    }
+    pub fn begin_save(&mut self, all: bool) -> Result<String, String> {
+        if self.is_saving() {
+            return Err("A save is already running.".into());
+        }
+        let session = self
+            .active
+            .as_ref()
+            .ok_or("Open a project before saving.")?;
+        if session.service.is_none() {
+            return Err("Native source owner is unavailable.".into());
+        }
+        self.next_save = self
+            .next_save
+            .checked_add(1)
+            .filter(|id| *id < (1 << 53))
+            .ok_or("Save request limit reached.")?;
+        self.transfer = Some(SaveTransfer::new(
+            self.next_save,
+            session
+                .documents
+                .iter()
+                .map(|document| document.document.document_id.0.clone())
+                .collect(),
+        ));
+        Ok(format!(
+            "window.__mcuRequestSave({},{});",
+            self.next_save, all
+        ))
+    }
+    pub fn accept_save_message(
+        &mut self,
+        message: &RendererMessage,
+    ) -> Result<Option<SaveWork>, String> {
+        let response_id = match message {
+            RendererMessage::SaveStarted { request_id, .. }
+            | RendererMessage::SaveChunk { request_id, .. }
+            | RendererMessage::SaveFinished { request_id }
+            | RendererMessage::SaveFailed { request_id, .. } => *request_id,
+            _ => return Err("Unexpected save response.".into()),
+        };
+        if self
+            .transfer
+            .as_ref()
+            .is_none_or(|transfer| transfer.id != response_id)
+        {
+            return Ok(None);
+        }
+        if let RendererMessage::SaveFailed { message, .. } = message {
+            return Err(message.clone());
+        }
+        let transfer = self
+            .transfer
+            .as_mut()
+            .ok_or("There is no active native save request.")?;
+        let Some(inputs) = transfer.accept(message)? else {
+            return Ok(None);
+        };
+        let id = transfer.id;
+        let service = self
+            .active
+            .as_mut()
+            .and_then(|session| session.service.take())
+            .ok_or("Native source owner is unavailable.")?;
+        self.transfer = None;
+        self.worker_id = Some(id);
+        Ok(Some(SaveWork {
+            id,
+            service,
+            inputs,
+        }))
+    }
+    pub fn finish_save(&mut self, result: SaveResult) -> Result<String, String> {
+        let script = result.script();
+        let id_matches = self.worker_id == Some(result.id);
+        let session = self
+            .active
+            .as_mut()
+            .ok_or("Native project closed during save.")?;
+        session.documents = result.service.documents().to_vec();
+        session.service = Some(result.service);
+        self.worker_id = None;
+        if !id_matches {
+            return Err("Stale native save completion; buffers remain unsaved.".into());
+        }
+        script
+    }
+    /// Transfer failure only. A worker already committing cannot be cancelled.
+    pub fn abort_save(&mut self) -> Option<String> {
+        let transfer = self.transfer.take()?;
+        Some(format!("window.__mcuFinishSave({{requestId:{},saved:[],error:'Save transfer failed or timed out. Your buffer remains unsaved.'}});", transfer.id))
+    }
     pub fn stage(&mut self, project: LoadedProject) -> Result<(), String> {
         if self.pending.is_some() || self.active.is_some() {
             return Err("This window already owns a project read. Open another project in an independent window.".into());
@@ -127,30 +232,17 @@ pub fn read_project(selected: &Path) -> Result<LoadedProject, String> {
     let application = application_spelling
         .canonicalize()
         .map_err(|error| error.to_string())?;
-    // Only read APIs are reachable from the native workspace. Source saves and
-    // live-write/ownership activation remain outside this adapter.
-    let mut service = if selected.starts_with(application.join("audit/migration/scratch"))
+    // The native worker retains exact root/source handles and disk baselines.
+    // No path from the editor can change this selected root or document set.
+    let service = if selected.starts_with(application.join("audit/migration/scratch"))
         || selected.starts_with(application_spelling.join("audit/migration/scratch"))
     {
-        mcu_core::ProjectService::fixture(&application, selected)
+        NativeProjectSession::open_fixture(&application, selected, OWNER)
     } else {
-        mcu_core::ProjectService::new(&application)
+        NativeProjectSession::open(&application, selected, OWNER)
     }
     .map_err(|error| error.message)?;
-    let workspace = service
-        .register_project("native-workspace-reader", selected)
-        .map_err(|error| error.message)?;
-    let mut documents = Vec::new();
-    for file in workspace.manifest.files {
-        let document = service
-            .read_document(
-                "native-workspace-reader",
-                &workspace.workspace_id,
-                &file.document_id,
-            )
-            .map_err(|error| error.message)?;
-        documents.push(document);
-    }
+    let documents = service.documents().to_vec();
     let payload = documents
         .iter()
         .map(|snapshot| SourceDocument {
@@ -162,8 +254,8 @@ pub fn read_project(selected: &Path) -> Result<LoadedProject, String> {
     let json = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     Ok(LoadedProject {
         session: ProjectSession {
-            _service: service,
-            workspace_id: workspace.workspace_id.0,
+            workspace_id: service.workspace_id().0.clone(),
+            service: Some(service),
             documents,
         },
         script: Some(format!("window.__mcuOpenDocuments({json});")),

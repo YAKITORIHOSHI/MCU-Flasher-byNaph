@@ -15,6 +15,14 @@ on:
         description: Run Rust backend fixtures without GUI or editor setup
         type: boolean
         default: false
+      platform_contracts_only:
+        description: Run new Ubuntu 26 backend and macOS/Windows ARM core contracts only
+        type: boolean
+        default: false
+      native_with_platform_contracts:
+        description: Run native GUI and new platform contracts without Python editor checks
+        type: boolean
+        default: false
       browser_performance_only:
         description: Run isolated current-app browser and resource checks only
         type: boolean
@@ -40,7 +48,7 @@ jobs:
       regressions_only: ${{ inputs.browser_regressions_only }}
 
   native-prototype:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.backend_only && !inputs.browser_performance_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.browser_performance_only && (inputs.native_with_platform_contracts || (!inputs.backend_only && !inputs.platform_contracts_only))) }}
     strategy:
       fail-fast: false
       matrix:
@@ -162,6 +170,17 @@ jobs:
           xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display
           xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display --workspace
           xvfb-run -a cargo test --manifest-path desktop/Cargo.toml --locked -p mcu-native-ui-probe wide_source_manifest_keeps_native_window_bounded_and_all_tabs -- --ignored
+      - name: Native Ubuntu Save and Save All verification
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        env:
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+          __GLX_VENDOR_LIBRARY_NAME: mesa
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+        shell: bash
+        run: xvfb-run -a python -B -W error desktop/native-ui/verify-smoke.py --current-display --save
       - name: Native Ubuntu webview/editor/PTY verification
         if: runner.os == 'Linux'
         timeout-minutes: 2
@@ -208,6 +227,24 @@ jobs:
           foreach ($name in $required) {
             if ($workspace.checks.$name -ne $true) { throw "Missing native Win32 workspace check: $name" }
           }
+      - name: Native Windows Save and Save All verification
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          $capture = @(& desktop/target/debug/mcu-native-ui-probe.exe --save-smoke 2>&1)
+          $nativeExit = $LASTEXITCODE
+          $capture | Set-Content -Encoding utf8 audit/migration/logs/native-save-windows-output.log
+          $receipts = @($capture | Where-Object { "$_".StartsWith('MCU_NATIVE_SAVE=') })
+          if ($receipts.Count -ne 1) { throw 'Expected one native Win32 Save receipt.' }
+          $receipt = "$($receipts[0])".Substring('MCU_NATIVE_SAVE='.Length) | ConvertFrom-Json
+          $receipt | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 audit/migration/logs/native-save-windows.json
+          if ($nativeExit -ne 0 -or $receipt.passed -isnot [bool] -or !$receipt.passed) { throw 'Native Win32 Save fixture failed.' }
+          $required = @('native_save', 'native_save_all', 'late_edit_retained', 'external_change_refused', 'same_models', 'undo_redo_retained', 'selection_retained', 'disk_bytes_verified', 'no_python_application_service')
+          foreach ($name in $required) {
+            if ($receipt.checks.$name -isnot [bool] -or !$receipt.checks.$name) { throw "Missing native Win32 Save check: $name" }
+          }
+          if (@($receipt.checks.PSObject.Properties | Where-Object { $_.Value -isnot [bool] -or !$_.Value }).Count) { throw 'Native Win32 Save contains failed checks.' }
       - name: Collect native fixture evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -231,15 +268,19 @@ jobs:
             audit/migration/logs/native-ui-windows-output.log
             audit/migration/logs/native-workspace-windows.json
             audit/migration/logs/native-workspace-windows-output.log
+            audit/migration/logs/native-save-windows.json
+            audit/migration/logs/native-save-windows-output.log
             audit/migration/scratch/native-ui/latest-smoke.json
             audit/migration/scratch/native-ui/latest-output.log
             audit/migration/scratch/native-workspace/latest-smoke.json
             audit/migration/scratch/native-workspace/latest-output.log
+            audit/migration/scratch/native-save/latest-smoke.json
+            audit/migration/scratch/native-save/latest-output.log
             desktop/ui/public/vendor/manifest.json
           if-no-files-found: warn
 
   editor-review:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only && !inputs.browser_performance_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only && !inputs.platform_contracts_only && !inputs.native_with_platform_contracts && !inputs.browser_performance_only) }}
     name: Windows editor review (Python ${{ matrix.python }})
     runs-on: windows-latest
     timeout-minutes: 12
@@ -291,11 +332,11 @@ jobs:
 # physical input/IME, mixed-monitor behavior or complete application parity.
 
   backend-fixtures:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_only && !inputs.browser_performance_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.backend_only || inputs.platform_contracts_only || inputs.native_with_platform_contracts) && !inputs.browser_performance_only }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.windows_only && '["windows-2022"]' || '["ubuntu-24.04","ubuntu-24.04-arm","windows-2022"]') }}
+        os: ${{ fromJSON(inputs.windows_only && '["windows-2022"]' || (inputs.platform_contracts_only || inputs.native_with_platform_contracts) && '["ubuntu-26.04","ubuntu-26.04-arm"]' || '["ubuntu-24.04","ubuntu-24.04-arm","ubuntu-26.04","ubuntu-26.04-arm","windows-2022"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -310,6 +351,33 @@ jobs:
       - name: Prepare pinned Rust
         shell: bash
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Record actual backend host and compiler
+        shell: bash
+        env:
+          MCU_RUNNER_LABEL: ${{ matrix.os }}
+          MCU_RUNNER_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit/migration/logs
+          python - <<'PY'
+          import json, os, platform, subprocess
+          from pathlib import Path
+          compiler = subprocess.check_output(["rustc", "-vV"], text=True)
+          target = next(line.removeprefix("host: ") for line in compiler.splitlines() if line.startswith("host: "))
+          expected_arch = {"X64": "x86_64", "ARM64": "aarch64"}[os.environ["MCU_RUNNER_ARCH"]]
+          expected_os = "windows" if platform.system() == "Windows" else "linux"
+          release = platform.freedesktop_os_release() if platform.system() == "Linux" else {}
+          receipt = {"scope": "native Rust backend fixtures; no GUI or device qualification", "source": os.environ["GITHUB_SHA"],
+                     "runnerLabel": os.environ["MCU_RUNNER_LABEL"], "runnerArchitecture": os.environ["MCU_RUNNER_ARCH"],
+                     "system": platform.system(), "systemRelease": platform.release(), "machine": platform.machine(),
+                     "osRelease": release, "rustcHost": target, "rustc": compiler}
+          Path("audit/migration/logs/backend-host.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(receipt))
+          assert target.startswith(expected_arch + "-") and expected_os in target, (target, expected_arch, expected_os)
+          if os.environ["MCU_RUNNER_LABEL"].startswith("ubuntu-"):
+              assert release.get("ID") == "ubuntu", release
+              assert release.get("VERSION_ID") == os.environ["MCU_RUNNER_LABEL"].removeprefix("ubuntu-").removesuffix("-arm"), release
+          PY
       - name: Rust backend units and strict checks
         shell: bash
         run: |
@@ -341,9 +409,82 @@ jobs:
           name: migration-backend-${{ matrix.os }}
           path: |
             audit/migration/logs/backend-unit.log
+            audit/migration/logs/backend-host.json
             audit/migration/logs/board-recipe-rust.json
             audit/migration/logs/board-compatibility-rust.json
             audit/migration/logs/recipe-generation-rust.json
             temp/audit/native-compile-inputs/tool-only-entry.json
             audit/migration/logs/compile-process.json
           if-no-files-found: warn
+
+  portable-core-contracts:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.backend_only || inputs.platform_contracts_only || inputs.native_with_platform_contracts) && !inputs.browser_performance_only }}
+    name: Native core contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.windows_only && '[{"os":"windows-11-arm","target":"aarch64-pc-windows-msvc","python_arch":"arm64","runner_arch":"ARM64"}]' || '[{"os":"windows-11-arm","target":"aarch64-pc-windows-msvc","python_arch":"arm64","runner_arch":"ARM64"},{"os":"macos-15-intel","target":"x86_64-apple-darwin","python_arch":"x64","runner_arch":"X64"},{"os":"macos-15","target":"aarch64-apple-darwin","python_arch":"arm64","runner_arch":"ARM64"}]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: '4'
+      RUSTUP_TOOLCHAIN: 1.99.1-${{ matrix.target }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/desktop/target
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          architecture: ${{ matrix.python_arch }}
+      - name: Prepare native pinned Rust
+        shell: bash
+        run: rustup toolchain install '1.99.1-${{ matrix.target }}' --profile minimal --component clippy --no-self-update
+      - name: Require the native host and retain its scope
+        shell: bash
+        env:
+          MCU_EXPECTED_TARGET: ${{ matrix.target }}
+          MCU_RUNNER_LABEL: ${{ matrix.os }}
+          MCU_RUNNER_ARCH: ${{ runner.arch }}
+          MCU_EXPECTED_RUNNER_ARCH: ${{ matrix.runner_arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p audit/migration/logs
+          python - <<'PY'
+          import json, os, platform, subprocess
+          from pathlib import Path
+          compiler = subprocess.check_output(["rustc", "-vV"], text=True)
+          target = next(line.removeprefix("host: ") for line in compiler.splitlines() if line.startswith("host: "))
+          receipt = {"scope": "native mcu-contracts/mcu-core execution only; no host adapters, GUI, tool runtimes or devices",
+                     "source": os.environ["GITHUB_SHA"], "runnerLabel": os.environ["MCU_RUNNER_LABEL"],
+                     "runnerArchitecture": os.environ["MCU_RUNNER_ARCH"], "system": platform.system(),
+                     "systemRelease": platform.release(), "systemVersion": platform.version(), "machine": platform.machine(),
+                     "macVersion": platform.mac_ver()[0], "rustcHost": target, "rustc": compiler}
+          Path("audit/migration/logs/portable-core-host.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(receipt))
+          assert target == os.environ["MCU_EXPECTED_TARGET"], target
+          assert platform.system() == ("Darwin" if target.endswith("-apple-darwin") else "Windows"), platform.system()
+          assert os.environ["MCU_RUNNER_ARCH"] == os.environ["MCU_EXPECTED_RUNNER_ARCH"], os.environ["MCU_RUNNER_ARCH"]
+          expected_machine = {"ARM64": {"arm64", "aarch64"}, "X64": {"x86_64", "amd64"}}[os.environ["MCU_RUNNER_ARCH"]]
+          assert platform.machine().lower() in expected_machine, platform.machine()
+          PY
+      - name: Execute portable contracts and project core natively
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path desktop/Cargo.toml --locked -p mcu-contracts -p mcu-core 2>&1 | tee audit/migration/logs/portable-core-unit.log
+          cargo clippy --manifest-path desktop/Cargo.toml --locked -p mcu-contracts -p mcu-core --all-targets -- -D warnings 2>&1 | tee audit/migration/logs/portable-core-clippy.log
+      - name: Collect scoped native contract evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: migration-portable-core-${{ matrix.os }}
+          path: |
+            audit/migration/logs/portable-core-host.json
+            audit/migration/logs/portable-core-unit.log
+            audit/migration/logs/portable-core-clippy.log
+          if-no-files-found: warn
+
+# Portable core execution intentionally excludes mcu-host on these three hosts.
+# Darwin has no native retained-identity/process implementation; the AVR archive
+# preparer refuses Darwin and Windows ARM64. A passing core job does not qualify
+# those missing services, native application startup, GUI, packaging or USB.
