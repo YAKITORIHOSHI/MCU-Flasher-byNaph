@@ -27,6 +27,10 @@ on:
         description: Build and verify the native LAUNCHER executables
         type: boolean
         default: false
+      native_ubuntu26_only:
+        description: Verify native GUI and services on Ubuntu 26 AMD64 and ARM64 only
+        type: boolean
+        default: false
       browser_performance_only:
         description: Run isolated current-app browser and resource checks only
         type: boolean
@@ -99,11 +103,11 @@ jobs:
       regressions_only: ${{ inputs.browser_regressions_only }}
 
   native-prototype:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.browser_performance_only && (inputs.native_with_platform_contracts || (!inputs.backend_only && !inputs.platform_contracts_only))) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.browser_performance_only && (inputs.native_ubuntu26_only || inputs.native_with_platform_contracts || (!inputs.backend_only && !inputs.platform_contracts_only))) }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.windows_only && '["windows-2022"]' || '["ubuntu-24.04","ubuntu-24.04-arm","windows-2022"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.native_ubuntu26_only && '["ubuntu-26.04","ubuntu-26.04-arm"]' || github.event_name == 'workflow_dispatch' && inputs.windows_only && '["windows-2022"]' || '["ubuntu-24.04","ubuntu-24.04-arm","windows-2022"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -331,7 +335,7 @@ jobs:
           if-no-files-found: warn
 
   editor-review:
-    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only && !inputs.platform_contracts_only && !inputs.native_with_platform_contracts && !inputs.browser_performance_only) }}
+    if: ${{ github.event_name != 'workflow_dispatch' || (!inputs.windows_only && !inputs.backend_only && !inputs.platform_contracts_only && !inputs.native_with_platform_contracts && !inputs.native_ubuntu26_only && !inputs.browser_performance_only) }}
     name: Windows editor review (Python ${{ matrix.python }})
     runs-on: windows-latest
     timeout-minutes: 12
