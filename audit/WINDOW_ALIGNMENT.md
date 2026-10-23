@@ -64,6 +64,29 @@ cancelled setup, not a failed or passing Wayland assertion. A focused follow-up
 uses Ubuntu's official HTTPS archive on ephemeral CI runners. Results will be
 appended when known.
 
+The mirror follow-up
+[39980910741](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39980910741)
+completed dependency preparation on both hosts, then stopped before assertions:
+Weston's socket path under the long checkout/artifact folder exceeded Linux's
+108-byte AF_UNIX limit. Both compositor logs confirm its Pixman/headless renderer
+initialized. The transient owned socket directory now uses a short, private
+`/tmp` path; logs remain in the artifact folder. A real standard-library socket
+probe reproduced failure at 158 bytes and success at 39 bytes. The final native
+[follow-up 39981399892](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39981399892)
+at `38ba74492603c8019cfe115b45bbe0b82cc08716` passed both Ubuntu Wayland jobs:
+five fresh scales and four alignment cases per scale, 10 processes / 40 cases.
+The actual Qt platform and nonzero horizontal decoration are mandatory. Weston
+13 on Ubuntu 24.04 and Weston 14 on Ubuntu 26.04 use owned headless Pixman
+surfaces. No earlier infrastructure failure is relabeled as a passing test.
+
+Across the original four Windows/xcb hosts and this two-host Wayland follow-up,
+all 58 selected fixture processes passed (48 + 10), including 120 native
+alignment case executions. These hosted surfaces remain separate from real
+GNOME keyboard snapping, monitor transitions and physical Windows input.
+The user authorized updating GitHub `main`; guarded atomic pushes synced it with
+the development branch without dropping any commits. README and release notes
+now identify v11. The existing published release asset was not replaced.
+
 ## Fresh preparation and manual compression
 
 The user requested Fresh cleanup and manual zipping. Native Ubuntu Fresh ran
