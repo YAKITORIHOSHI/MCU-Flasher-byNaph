@@ -1248,6 +1248,8 @@ def application_agent_guidance(project_dir) -> str:
         "- Measure toolbar and panel content against their allocated logical widths, including "
         "native margins and spacing. Keep Project and Resources reachable through native toolbar "
         "overflow and resize/theme changes; verify real QMainWindow containers, not only ordinary layouts.\n"
+        "- Accepted workspace closes must retire owned browser pages while Qt runs; preserve "
+        "close vetoes and other workspaces. Verify normal process exit with `direct/verify_shutdown.py`.\n"
         "- With behavior changes, update README, RELEASE_NOTES, relevant SKILL.md instructions "
         "and descriptions, and existing agent metadata. Keep this application guidance template "
         "and the checkout's AGENTS.md aligned without regenerating live project/cache metadata.\n\n"

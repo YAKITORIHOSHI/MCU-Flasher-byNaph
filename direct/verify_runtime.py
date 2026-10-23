@@ -753,7 +753,10 @@ def qt_smoke(app, render_dir=None):
             if error:
                 capture_errors.append(error)
             backend.modified_files.clear()
-            window.close()
+            # Isolate the close-side download-manager trigger as well as all
+            # mocked settings/hardware operations in this owned preview.
+            with patch("main.qt.main_window._project_root", backend.sketch_dir_path):
+                window.close()
             board_catalog.SUPPORTED_BOARDS.replace(original)
             app.quit()
 
@@ -1053,6 +1056,9 @@ def qt_smoke(app, render_dir=None):
         app.exec()
         if capture_errors:
             raise capture_errors[0]
+        from shiboken6 import isValid
+        assert not isValid(window) and not isValid(page), "Accepted workspace close retained its WebEngine page"
+        print("Accepted workspace close destroys its owned WebEngine page before process exit: OK")
 
 
 

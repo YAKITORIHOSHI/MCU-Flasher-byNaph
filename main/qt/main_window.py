@@ -71,6 +71,11 @@ class MCUMainWindow(QMainWindow):
 
     def __init__(self, backend=None):
         super().__init__()
+        # An accepted close must retire the owned WebEngine pages before Qt's
+        # application/profile shutdown, even when Python callbacks retain us.
+        # Qt defers deletion until the current event/callback has unwound and
+        # leaves the window alive when closeEvent refuses the close.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._backend = backend
         self._ai_visible = False
         self._editor_pane_visible = True

@@ -1338,7 +1338,10 @@ class TkResponsiveChecks(DownloaderChecks):
             canvas = app.board_tab.detail_canvas
             content = app.board_tab._detail_content
             self.assertTrue(canvas.winfo_ismapped(), 'Board details canvas must be visible')
-            bounds = canvas.bbox('all')
+            # The full-owner material image moves to continue the backdrop
+            # after scrolling; it is not part of the scrollable detail body.
+            # Use the same owned window as the production scrollregion.
+            bounds = canvas.bbox(app.board_tab._content_window)
             self.assertIsNotNone(bounds, 'Board details need a scrollable content region')
             content_height = max(1, bounds[3] - bounds[1])
             viewport_height = max(1, canvas.winfo_height())

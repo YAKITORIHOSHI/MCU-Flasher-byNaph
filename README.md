@@ -1700,6 +1700,10 @@ Firebase administrative credentials or changes server rules automatically.
   - **Cache Cleaning**: Ensures directory purges finish cleanly.
 - If a close attempt is made during these critical operations, a descriptive warning dialog explains what is running and safely ignores the close event.
 - Pure compilation (`op == "compile"`) is safely cancellable upon closing.
+- An accepted close destroys that workspace's embedded browser components while
+  Qt is still running. Refused closes retain the workspace and editor; closing
+  one workspace preserves other open windows. `direct/verify_shutdown.py` checks
+  real renderer ownership and normal process exit without launching services.
 
 ### 7. Offline Monaco Code Editor
 

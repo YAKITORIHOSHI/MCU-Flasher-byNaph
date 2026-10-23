@@ -12,7 +12,7 @@ on:
       layout_group:
         description: UI surfaces to verify
         type: choice
-        options: [all, responsive, workspace, resources, auxiliary, portal]
+        options: [all, responsive, edgecases, workspace, resources, auxiliary, portal]
         default: all
 
 permissions:

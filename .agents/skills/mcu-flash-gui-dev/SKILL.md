@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, responsive layouts, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, responsive layouts, safe shutdown, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -1574,6 +1574,13 @@ MCU Flasher by Naph/
   changes, even at the same outer width. Verify `direct/verify_toolbar_sizing.py`
   and `direct/verify_responsive.py`; use the native UI `responsive` group for all
   five scales. Preserve saved content fonts, keyboard focus and dirty buffers.
+- Accepted workspace closes must destroy owned WebEngine views/pages while Qt
+  still runs; keep refused closes alive and preserve other open workspaces and
+  their shared profile. Verify normal exit with `direct/verify_shutdown.py`,
+  including attached/detached/reattached editors and close vetoes. A successful
+  renderer assertion followed by `os._exit` does not establish normal shutdown.
+  Tk scroll fixtures use the embedded content window's bounds, excluding the
+  moving full-owner material backdrop, without weakening visibility assertions.
 - Main windows have a minimum width of half the current monitor's available width in Qt logical pixels. Allow wider resizing and normal maximization, including saved maximized state. Recalculate the minimum on monitor changes and fit normal window frames to the work area. Detached editor and explicit dialog sizing keep their own contracts.
 - Verify screen changes and 100/125/150/175/200% scale in fresh processes with `direct/verify_responsive.py`. Couple physical screen dimensions with each scale and taskbar/work-area reservation; convert once to Qt logical pixels. Include half-monitor and full-width windows, portrait and short laptop areas, and chosen content fonts. Assert effective rendered fonts, complete button visibility through ancestors and a complete padded text line. Keep the same hardware-free persistence mocks as the controls verifier. Check full baud digits beside combo padding/arrows and footer visibility. Narrow, short Controls use fewer rows; very short windows retain Timestamps/Skip Compile in Options. Serial Options retains collapsed display/Copy/Clear actions, and all layouts restore when space returns. Reserve Build/Serial output using the document's chosen font, reading margin and scrollbar/frame chrome, and refit after font changes.
 - Short-screen pane budgets use the active tool's minimum size hint. Keep log views shrinkable while preserving headers and serial send controls. Check every tool tab in the runtime preview. Mock terminal session creation for layout probes; real PTY checks belong in `direct/verify_terminal.py`.

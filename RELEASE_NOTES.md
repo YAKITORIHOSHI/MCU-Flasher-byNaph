@@ -35,6 +35,11 @@ budgets even when the main window width is unchanged. Native toolbar fixtures
 cover 1080p at 150%, narrow/wide transitions and long project names. Auxiliary
 Project and downloader windows retain their existing scrollable layouts.
 
+Accepted workspace closes now release their owned browser components before Qt
+shuts down. Close protection remains active during cloud refresh and hardware
+writes. A separate real-renderer check verifies normal process exit, including
+attached and detached editors; the native matrix records the supported hosts.
+
 ## October 23 Source Update: Executable Launchers and Responsive Editing
 
 Open `LAUNCHER` and use `WINDOWS.exe`, `UBUNTU` or `UBUNTU_ARM64` for the matching

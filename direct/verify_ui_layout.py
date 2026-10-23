@@ -23,12 +23,23 @@ def checks(group, scale, output):
     def render(script, folder, *args):
         return script, ["--render-dir", str(output / folder), *args]
 
+    if group == "edgecases":
+        yield render("verify_toolbar_sizing", "toolbar")
+        if scale in ("1", "2"):
+            yield "verify_shutdown", ["--repeat", "3"]
+            yield render("verify_runtime", "workspace", "--no-finalize")
+            yield render("verify_responsive", "responsive")
+        if scale == "1" and sys.platform == "win32":
+            yield "verify_terminal", []
+        return
+
     if group in ("all", "portal"):
         yield render("verify_owner_tickets", "developer")
     if group in ("all", "workspace", "responsive"):
         yield render("verify_toolbar_sizing", "toolbar")
         yield render("verify_responsive", "responsive")
         if scale in ("1", "2"):
+            yield "verify_shutdown", ["--repeat", "3"]
             yield render("verify_runtime", "workspace", "--no-finalize")
     if group in ("all", "resources", "responsive"):
         yield render("verify_downloader_appearance", "resources", "--scale", scale)
@@ -60,7 +71,7 @@ def checks(group, scale, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--render-dir", type=Path, default=ROOT / "temp/audit/layout-native")
-    parser.add_argument("--group", choices=("all", "portal", "workspace", "resources", "auxiliary", "responsive"), default="all")
+    parser.add_argument("--group", choices=("all", "portal", "workspace", "resources", "auxiliary", "responsive", "edgecases"), default="all")
     parser.add_argument("--scale", choices=SCALES, action="append")
     args = parser.parse_args()
     output = args.render_dir.resolve()
