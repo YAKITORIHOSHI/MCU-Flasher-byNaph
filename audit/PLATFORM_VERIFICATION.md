@@ -16,6 +16,21 @@ does not establish a complete working application on another operating system.
 | Fedora x86_64/aarch64 | Unavailable | Production release validation intentionally rejects Fedora before Ubuntu setup/repair. A Fedora package/dependency, process, credentials and desktop adapter is required. |
 | Linux Mint AMD64 | Unavailable | Exact Ubuntu release validation rejects Mint even when `ID_LIKE` mentions Ubuntu. Its own reviewed admission/setup and desktop qualification are required. LMDE and any ARM port need separate policies. |
 
+## Direct executable launcher continuation
+
+The 23 October launcher folder contains `WINDOWS.exe`, native `UBUNTU` /
+`UBUNTU_ARM64`, native `FEDORA` / `FEDORA_ARM64` and `LINUX_MINT` entries, executable
+`MacOS.command` and README. It contains no `.desktop` shortcuts. Fedora/Mint/macOS
+entries remain availability notices; Windows ARM remains refused. The native
+executables preserve the existing startup/repair and platform guards.
+
+[CI 39826385795](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795)
+at `e4f7c27` passes supplied-binary headers/CPU/modes, moved-folder/literal-argument
+and 8 archive contract checks on Windows Server AMD64 and Ubuntu AMD64/ARM64.
+Native rebuilds and repeated dispatch fixtures also pass. These checks use owned
+fake dispatchers and never launch setup or hardware. See
+[exact executable hashes and limitations](LAUNCHER_EXECUTABLES.json).
+
 ## Source evidence
 
 - `main/platforms/__init__.py` selects only Windows and Linux backends.

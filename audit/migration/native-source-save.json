@@ -1,7 +1,8 @@
 {
   "schemaVersion": 1,
   "updated": "2026-10-23 Asia/Manila",
-  "scope": "Native GTK/Win32 development-preview Save and Save All; production Python launchers unchanged",
+  "scope": "Native GTK/Win32 development-preview Save and Save All; production Python application retained, executable launcher packaging recorded separately",
+  "sourceSha256Scope": "Initial Save checkpoint; later worker-loss runtime hashes and exact CI sources are recorded in workerLossFollowup and finalNativeCi. Subsequent workflow-only changes do not alter these runtime bytes.",
   "sourceSha256": {
     "desktop/crates/host/src/lib.rs": "e9e925786b59f24a4b190ff541b138079d73591cfa2edd683d176b34b49eb3bc",
     "desktop/crates/host/src/source_save.rs": "af5f77f793377d8ef721ff3a42e3500e3e674263a7f264888d680331fab035b7",
@@ -10,12 +11,12 @@
     "desktop/native-ui/assets/probe-editor.js": "f6a273d250ce819498f705c4b3dbd2e168289e5bac53347d705c437a189c5f5b",
     "desktop/native-ui/src/lib.rs": "2c8d86d3dfd969d633ab868d5f9304601ece1fd9e47002231836a2295f19f3b1",
     "desktop/native-ui/src/linux.rs": "646b401396115999a905dc126e6cd13745d98029fc81a5b38139ef41d11ee693",
-    "desktop/native-ui/src/linux_workspace.rs": "4766a747b41879c519f59088992fb1007309564243454f01f57022581ac105f5",
-    "desktop/native-ui/src/windows.rs": "458dac25b646da5536aae93374640c0d1e5373257a3c50c45533628cd938d91f",
-    "desktop/native-ui/src/workspace_project.rs": "0bc9fac0bcb9f46181206f1db263cef44cefd0f0914c2fb61a0e0709f0449432",
+    "desktop/native-ui/src/linux_workspace.rs": "07bafbd2a71d41550a12f4d7dc8f1e21d336db79466f85d34e40eb21cd8d8195",
+    "desktop/native-ui/src/windows.rs": "c9ad400a08370a282f78bd7e828c6aa6c5c2e4ed509a69d03b1ba5288e426b2b",
+    "desktop/native-ui/src/workspace_project.rs": "b123c383ff1e2aaea66af8bdabec6e3739e3abd2712f35da87c9441c1014867b",
     "desktop/native-ui/src/workspace_save.rs": "86855303847e287b19e2960ba6c7b4dba3dc42958e97363c9985b4d7a1baccbf",
     "desktop/native-ui/verify-smoke.py": "37c7166c66e3fa4aee546b897fae6e59ef3190597ca3ab497df00851d86932bd",
-    ".github/workflows/migration-prototype.yml": "2ba78ec8930e482a5eccf3ae470123ea48b5d4b93fd6c58e914edadd131d0498"
+    ".github/workflows/migration-prototype.yml": "e30a9762ab96c2588e5aca91efcb21405aa155c0dc7e33d8edc86b1b21388e5b"
   },
   "implemented": [
     "Native known-document save snapshots, 16 KiB IPC, 8 MiB per source / 32 MiB total / ten-second transfer",
@@ -26,6 +27,7 @@
     "Accessible full recovery text in GTK tooltip/selectable footer and Windows read-only scrolling/copyable footer"
   ],
   "local": {
+    "checkpoint": "Initial bc41c1b evidence before worker-loss handling; current 256/29 library totals and GUI receipts are recorded in workerLossFollowup and finalNativeCi",
     "system": "Ubuntu 26.04.1 AMD64",
     "libraryTests": {
       "contracts": 1,
@@ -96,7 +98,7 @@
   "reviews": {
     "backendAndSharedSave": "Independent read-only review: no remaining actionable findings after effective permission and metadata refusal fixes",
     "gtk": "Independent read-only review: recovery-text accessibility finding fixed; build/lint/Save smoke pass",
-    "windows": "Read-only Windows review found a terminal worker-loss close-guard issue; fixed with shared authority-loss handling and a two-case real-file/channel regression. Other examined mailbox/reentrancy/fixture paths have no actionable finding; hosted rerun of the fix remains pending."
+    "windows": "Read-only Windows review found terminal worker-loss close-guard issue; fixed with shared authority-loss handling and real-file/channel regression. No further actionable finding in scoped mailbox/reentrancy/fixture paths; exact-source Windows hosted units and 32/19/17 GUI checks pass at e4f7c27."
   },
   "ci": {
     "status": "Historical completed run: all three native GUI jobs, both Ubuntu 26 backend jobs and Windows 11 ARM core pass; both macOS fixture failures are retained and corrected by successful follow-up 39824882032",
@@ -399,7 +401,22 @@
     "logs": "temp/audit/native-save-ci-39823016524",
     "summary": "temp/audit/native-save-ci-39823016524/summary.json",
     "sourceReceiptMatchesCi": true,
-    "fixtureCorrection": "Fixture-only correction committed at 4a99205; successful native macOS Intel/ARM core rerun 39824882032 preserves original bytes/identity on case-insensitive volumes and retains case-sensitive collision/device refusal"
+    "fixtureCorrection": "Fixture-only correction committed at 4a99205; successful native macOS Intel/ARM core rerun 39824882032 preserves original bytes/identity on case-insensitive volumes and retains case-sensitive collision/device refusal",
+    "sourceSha256": {
+      "desktop/crates/host/src/lib.rs": "e9e925786b59f24a4b190ff541b138079d73591cfa2edd683d176b34b49eb3bc",
+      "desktop/crates/host/src/source_save.rs": "af5f77f793377d8ef721ff3a42e3500e3e674263a7f264888d680331fab035b7",
+      "desktop/native-ui/Cargo.toml": "84f158c73b841eb61b2046e009035de4346f79925e65434f4eebf74d3acf80a3",
+      "desktop/Cargo.lock": "b0e82fc38c2cc7f555dc6c93a28f123129cf0db0ef158c7a581f1b7887b1f04f",
+      "desktop/native-ui/assets/probe-editor.js": "f6a273d250ce819498f705c4b3dbd2e168289e5bac53347d705c437a189c5f5b",
+      "desktop/native-ui/src/lib.rs": "2c8d86d3dfd969d633ab868d5f9304601ece1fd9e47002231836a2295f19f3b1",
+      "desktop/native-ui/src/linux.rs": "646b401396115999a905dc126e6cd13745d98029fc81a5b38139ef41d11ee693",
+      "desktop/native-ui/src/linux_workspace.rs": "4766a747b41879c519f59088992fb1007309564243454f01f57022581ac105f5",
+      "desktop/native-ui/src/windows.rs": "458dac25b646da5536aae93374640c0d1e5373257a3c50c45533628cd938d91f",
+      "desktop/native-ui/src/workspace_project.rs": "0bc9fac0bcb9f46181206f1db263cef44cefd0f0914c2fb61a0e0709f0449432",
+      "desktop/native-ui/src/workspace_save.rs": "86855303847e287b19e2960ba6c7b4dba3dc42958e97363c9985b4d7a1baccbf",
+      "desktop/native-ui/verify-smoke.py": "37c7166c66e3fa4aee546b897fae6e59ef3190597ca3ab497df00851d86932bd",
+      ".github/workflows/migration-prototype.yml": "2ba78ec8930e482a5eccf3ae470123ea48b5d4b93fd6c58e914edadd131d0498"
+    }
   },
   "limits": [
     "Native leases coordinate native Save sessions only; legacy Python coexistence remains unqualified",
@@ -409,7 +426,7 @@
     "Hosted native component checks do not qualify physical desktop input, mixed monitors, setup, packaging or USB",
     "Capability ledger remains 14 partial / 53 pending / zero Python application services retired"
   ],
-  "sourceCheckpoint": "Historical native Save GUI runtime source bc41c1bd143432ae154a1df2d68bbf23d5284926; worker-loss source changes are separately hashed below and await hosted execution",
+  "sourceCheckpoint": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
   "platformFollowupCi": {
     "run": 39824882032,
     "source": "4a99205a5eadc02f3351a6310d6f0a17ecf48cac",
@@ -478,7 +495,7 @@
     "macFixtureCorrection": "Fixture-only create_new/identity/byte preservation correction passes both native macOS runners. Historical failed run 39823016524 is retained."
   },
   "workerLossFollowup": {
-    "status": "Uncommitted source on 4a99205; local verification passes, exact-source hosted GUI rerun pending",
+    "status": "Committed at e4f7c27; exact-source native hosted GUI verification passes on Ubuntu 24 AMD64/ARM64 and Windows Server AMD64 in CI 39826385795",
     "sourceSha256": {
       "desktop/native-ui/src/workspace_project.rs": "b123c383ff1e2aaea66af8bdabec6e3739e3abd2712f35da87c9441c1014867b",
       "desktop/native-ui/src/windows.rs": "c9ad400a08370a282f78bd7e828c6aa6c5c2e4ed509a69d03b1ba5288e426b2b",
@@ -519,6 +536,352 @@
         "temp/audit/gui-performance/native-save-worker-loss-linux.log"
       ]
     },
-    "review": "Terminal ownership/error-path correction verified; no further actionable finding in scoped Windows mailbox/reentrancy/fixture paths. New hosted execution remains pending."
+    "review": "Terminal ownership/error-path correction verified by local regression and exact-source native hosted units/GUI. No further actionable finding in scoped Windows mailbox/reentrancy/fixture paths. Worker-loss injection itself is a library/channel fixture; GUI checks separately verify retained Save/Save All/workspace/detach behavior.",
+    "source": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
+    "hostedCi": {
+      "run": 39826385795,
+      "source": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
+      "conclusion": "success",
+      "nativeGui": {
+        "ubuntu-24.04": {
+          "nativeUiLibraryTests": 29,
+          "windowsBinaryTests": 0,
+          "checks": {
+            "save": 32,
+            "workspace": 19,
+            "detach": 17
+          },
+          "scope": "Native GTK/WebKitGTK owned fixtures under Xvfb"
+        },
+        "ubuntu-24.04-arm": {
+          "nativeUiLibraryTests": 29,
+          "windowsBinaryTests": 0,
+          "checks": {
+            "save": 32,
+            "workspace": 19,
+            "detach": 17
+          },
+          "scope": "Native GTK/WebKitGTK owned fixtures under Xvfb"
+        },
+        "windows-2022": {
+          "nativeUiLibraryTests": 27,
+          "windowsBinaryTests": 8,
+          "checks": {
+            "save": 32,
+            "workspace": 19,
+            "detach": 17
+          },
+          "scope": "Native Win32/WebView2 owned fixtures"
+        }
+      }
+    }
+  },
+  "finalNativeCi": {
+    "run": 39826385795,
+    "source": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795",
+    "conclusion": "success",
+    "selectedJobs": 11,
+    "scope": "3 native development-preview GUI jobs, 5 scoped backend/core jobs, 3 separate launcher-build jobs; no full application/device qualification",
+    "nativeGui": {
+      "ubuntu-24.04": {
+        "conclusion": "success",
+        "scope": "Native GTK/WebKitGTK owned fixtures under Xvfb",
+        "nativeUiLibraryTests": 29,
+        "windowsBinaryTests": 0,
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "saveChecks": {
+          "disk_bytes_verified": true,
+          "external_change_refused": true,
+          "external_change_reported": true,
+          "late_edit_retained": true,
+          "native_save": true,
+          "native_save_all": true,
+          "native_save_buttons": true,
+          "no_python_application_service": true,
+          "phase_0_dirty": true,
+          "phase_0_models_selection": true,
+          "phase_1_dirty": true,
+          "phase_1_disk_bytes": true,
+          "phase_1_models_selection": true,
+          "phase_1_undo_redo": true,
+          "phase_2_dirty": true,
+          "phase_2_models_selection": true,
+          "phase_2_undo_redo": true,
+          "phase_3_dirty": true,
+          "phase_3_disk_bytes": true,
+          "phase_3_models_selection": true,
+          "phase_3_undo_redo": true,
+          "phase_4_dirty": true,
+          "phase_4_disk_bytes": true,
+          "phase_4_models_selection": true,
+          "phase_4_undo_redo": true,
+          "same_models": true,
+          "save_all_Config_h": true,
+          "save_all_Sketch_ino": true,
+          "save_preserves_other_source": true,
+          "saved_bom_unicode": true,
+          "selection_retained": true,
+          "undo_redo_retained": true
+        },
+        "receipts": {
+          "save": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-save/latest-smoke.json",
+          "workspace": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-workspace/latest-smoke.json",
+          "detach": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04/audit/migration/scratch/native-ui/latest-smoke.json"
+        },
+        "unitLog": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04/audit/migration/logs/native-ui-protocol.log"
+      },
+      "ubuntu-24.04-arm": {
+        "conclusion": "success",
+        "scope": "Native GTK/WebKitGTK owned fixtures under Xvfb",
+        "nativeUiLibraryTests": 29,
+        "windowsBinaryTests": 0,
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "saveChecks": {
+          "disk_bytes_verified": true,
+          "external_change_refused": true,
+          "external_change_reported": true,
+          "late_edit_retained": true,
+          "native_save": true,
+          "native_save_all": true,
+          "native_save_buttons": true,
+          "no_python_application_service": true,
+          "phase_0_dirty": true,
+          "phase_0_models_selection": true,
+          "phase_1_dirty": true,
+          "phase_1_disk_bytes": true,
+          "phase_1_models_selection": true,
+          "phase_1_undo_redo": true,
+          "phase_2_dirty": true,
+          "phase_2_models_selection": true,
+          "phase_2_undo_redo": true,
+          "phase_3_dirty": true,
+          "phase_3_disk_bytes": true,
+          "phase_3_models_selection": true,
+          "phase_3_undo_redo": true,
+          "phase_4_dirty": true,
+          "phase_4_disk_bytes": true,
+          "phase_4_models_selection": true,
+          "phase_4_undo_redo": true,
+          "same_models": true,
+          "save_all_Config_h": true,
+          "save_all_Sketch_ino": true,
+          "save_preserves_other_source": true,
+          "saved_bom_unicode": true,
+          "selection_retained": true,
+          "undo_redo_retained": true
+        },
+        "receipts": {
+          "save": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-save/latest-smoke.json",
+          "workspace": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-workspace/latest-smoke.json",
+          "detach": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/scratch/native-ui/latest-smoke.json"
+        },
+        "unitLog": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04-arm/audit/migration/logs/native-ui-protocol.log"
+      },
+      "windows-2022": {
+        "conclusion": "success",
+        "scope": "Native Win32/WebView2 owned fixtures",
+        "nativeUiLibraryTests": 27,
+        "windowsBinaryTests": 8,
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "saveChecks": {
+          "disk_bytes_verified": true,
+          "external_change_refused": true,
+          "external_change_reported": true,
+          "late_edit_retained": true,
+          "native_save": true,
+          "native_save_all": true,
+          "native_save_buttons": true,
+          "no_python_application_service": true,
+          "phase_0_dirty": true,
+          "phase_0_models_selection": true,
+          "phase_1_dirty": true,
+          "phase_1_disk_bytes": true,
+          "phase_1_models_selection": true,
+          "phase_1_undo_redo": true,
+          "phase_2_dirty": true,
+          "phase_2_models_selection": true,
+          "phase_2_undo_redo": true,
+          "phase_3_dirty": true,
+          "phase_3_disk_bytes": true,
+          "phase_3_models_selection": true,
+          "phase_3_undo_redo": true,
+          "phase_4_dirty": true,
+          "phase_4_disk_bytes": true,
+          "phase_4_models_selection": true,
+          "phase_4_undo_redo": true,
+          "same_models": true,
+          "save_all_Config_h": true,
+          "save_all_Sketch_ino": true,
+          "save_preserves_other_source": true,
+          "saved_bom_unicode": true,
+          "selection_retained": true,
+          "undo_redo_retained": true
+        },
+        "receipts": {
+          "save": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-save-windows.json",
+          "workspace": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-workspace-windows.json",
+          "detach": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-ui-windows.json"
+        },
+        "unitLog": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-windows-2022/audit/migration/logs/native-ui-protocol.log"
+      }
+    },
+    "platform": {
+      "ubuntu-26.04": {
+        "conclusion": "success",
+        "scope": "Native backend fixtures only; no GUI",
+        "rustcHost": "x86_64-unknown-linux-gnu",
+        "actualRelease": "Ubuntu 26.04.1 LTS",
+        "hostReceipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-backend-ubuntu-26.04/audit/migration/logs/backend-host.json"
+      },
+      "ubuntu-26.04-arm": {
+        "conclusion": "success",
+        "scope": "Native backend fixtures only; no GUI",
+        "rustcHost": "aarch64-unknown-linux-gnu",
+        "actualRelease": "Ubuntu 26.04.1 LTS",
+        "hostReceipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-backend-ubuntu-26.04-arm/audit/migration/logs/backend-host.json"
+      },
+      "windows-11-arm": {
+        "conclusion": "success",
+        "scope": "Native contracts/core only; no host adapters or GUI",
+        "rustcHost": "aarch64-pc-windows-msvc",
+        "contractsChecks": 1,
+        "coreLibraryChecks": 79,
+        "projectServiceChecks": 12,
+        "strictClippy": "pass",
+        "hostReceipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-portable-core-windows-11-arm/portable-core-host.json",
+        "unitLog": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-portable-core-windows-11-arm/portable-core-unit.log"
+      },
+      "macos-15": {
+        "conclusion": "success",
+        "scope": "Native contracts/core only; no host adapters or GUI",
+        "rustcHost": "aarch64-apple-darwin",
+        "contractsChecks": 1,
+        "coreLibraryChecks": 78,
+        "projectServiceChecks": 15,
+        "strictClippy": "pass",
+        "hostReceipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-portable-core-macos-15/portable-core-host.json",
+        "unitLog": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-portable-core-macos-15/portable-core-unit.log"
+      },
+      "macos-15-intel": {
+        "conclusion": "success",
+        "scope": "Native contracts/core only; no host adapters or GUI",
+        "rustcHost": "x86_64-apple-darwin",
+        "contractsChecks": 1,
+        "coreLibraryChecks": 78,
+        "projectServiceChecks": 15,
+        "strictClippy": "pass",
+        "hostReceipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-portable-core-macos-15-intel/portable-core-host.json",
+        "unitLog": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-portable-core-macos-15-intel/portable-core-unit.log"
+      }
+    },
+    "toolOnlyFixtures": {
+      "ubuntu-24.04": {
+        "checks": 68,
+        "realToolsDispatched": false,
+        "receipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04/temp/audit/native-compile-inputs/tool-only-entry.json"
+      },
+      "ubuntu-24.04-arm": {
+        "checks": 68,
+        "realToolsDispatched": false,
+        "receipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-ubuntu-24.04-arm/temp/audit/native-compile-inputs/tool-only-entry.json"
+      },
+      "windows-2022": {
+        "checks": 68,
+        "realToolsDispatched": false,
+        "receipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-windows-2022/temp/audit/native-compile-inputs/tool-only-entry.json"
+      },
+      "ubuntu-26.04": {
+        "checks": 68,
+        "realToolsDispatched": false,
+        "receipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-backend-ubuntu-26.04/temp/audit/native-compile-inputs/tool-only-entry.json"
+      },
+      "ubuntu-26.04-arm": {
+        "checks": 68,
+        "realToolsDispatched": false,
+        "receipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-backend-ubuntu-26.04-arm/temp/audit/native-compile-inputs/tool-only-entry.json"
+      }
+    }
+  },
+  "ubuntu26NativeGui": {
+    "runtimeCheckpoint": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
+    "scope": "Additional native GTK/WebKitGTK owned Xvfb fixtures on Ubuntu 26.04.1 AMD64/ARM64; no full application, physical desktop or device qualification",
+    "hosts": {
+      "ubuntu-26.04-arm": {
+        "run": 39827591406,
+        "source": "81de4152820ec78c03b4292469ea9ba224808878",
+        "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39827591406",
+        "job": 119994908117,
+        "jobConclusion": "success",
+        "operatingSystem": "Ubuntu 26.04.1 LTS",
+        "architecture": "aarch64",
+        "nativeUiLibraryTests": 29,
+        "gtkDisplaySourceRowChecks": 1,
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "fakeToolChecks": 68,
+        "realToolsDispatched": false,
+        "verifiedReceipt": "temp/audit/native-save-ubuntu26-ci-39827591406/ubuntu26-arm64-verified-receipt.json",
+        "verifiedReceiptSha256": "14caeb7f3fa0a4f7fdb2971ce7ae9ef7c333216fd5e7b0970b1b1ac11f874cc5",
+        "hostProof": "temp/audit/native-save-ubuntu26-ci-39827591406/ubuntu26-arm64-host-proof.json",
+        "sourceDifferenceFromRuntimeCheckpoint": [
+          ".github/workflows/migration-prototype.yml"
+        ],
+        "retainedAttempt2Job": 120154306098,
+        "overallRunConclusion": "cancelled; this ARM job succeeded before AMD download cancellation"
+      },
+      "ubuntu-26.04": {
+        "run": 39874766179,
+        "source": "deeed652acfa72a9db347e68a3fe2c900cd2f0c4",
+        "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39874766179",
+        "job": 120157561764,
+        "jobConclusion": "success",
+        "operatingSystem": "Ubuntu 26.04.1 LTS",
+        "architecture": "x86_64",
+        "nativeUiLibraryTests": 29,
+        "gtkDisplaySourceRowChecks": 1,
+        "checks": {
+          "save": 32,
+          "workspace": 19,
+          "detach": 17
+        },
+        "fakeToolChecks": 68,
+        "realToolsDispatched": false,
+        "verifiedReceipt": "temp/audit/native-save-ubuntu26-ci-39874766179/ubuntu26-amd64-verified-receipt.json",
+        "verifiedReceiptSha256": "dd65073dd48d3a285fa1db27d4d12beb90726d6b5ac2da33eaf54c47073061e3",
+        "hostProof": "temp/audit/native-save-ubuntu26-ci-39874766179/ubuntu26-amd64-host-proof.json",
+        "sourceDifferenceFromRuntimeCheckpoint": [
+          ".github/workflows/migration-prototype.yml"
+        ],
+        "overallRunConclusion": "success"
+      }
+    },
+    "hostProofScope": "Actual hosted runner OS block, matching installed native Rust triple and compiled architecture receipt; /etc/os-release and rustc -vV command outputs were not emitted",
+    "historicalAmd64Attempts": {
+      "run": 39827591406,
+      "jobs": [
+        119994908410,
+        120154303906
+      ],
+      "classification": "Canceled during slow Azure archive package downloads; no application checks executed",
+      "logs": "temp/audit/native-save-ubuntu26-ci-39827591406"
+    },
+    "ciOnlyCorrection": "deeed65 selects AMD64 alone, uses Ubuntu main HTTPS archive for that hosted CPU and sets a 12-minute prerequisite timeout; working ARM ports mirror remains unchanged",
+    "skippedJobsCountedAsPassed": false
   }
 }

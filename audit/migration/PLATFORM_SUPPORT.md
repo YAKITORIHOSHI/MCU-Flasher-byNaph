@@ -13,10 +13,10 @@ ARM means 64-bit ARM (`aarch64` / ARM64). No 32-bit platform is implied.
 | Required platform | Native architectures | Current Rust evidence and remaining platform work |
 | --- | --- | --- |
 | Windows 10 | AMD64, ARM64 | Hosted Windows Server 2022 AMD64 preview/backend checks, including native Save/Save All, pass; Windows 10 desktop qualification is still open. Windows 11 ARM64 portable-core execution passes separately. It cannot qualify Windows 10; the AVR preparer currently refuses ARM64. |
-| Windows 11 | AMD64, ARM64 | The same hosted AMD64 evidence applies only to its tested host. Native Windows 11 ARM64 passes contracts/core checks and strict lint at `bc41c1b` and `4a99205`, separately from host services. Native desktop, runtime/tools/drivers and installation remain open. |
-| Ubuntu 24.04 LTS | AMD64, ARM64 | Native hosted preview/backend checks, including 32 Save/Save All checks, pass on both architectures at `bc41c1b`. Complete services, desktop input/display, packaging and USB/device qualification remain open. |
-| Ubuntu 26.04 LTS | AMD64, ARM64 | Local 26.04.1 AMD64 preview/backend evidence exists. Native 26.04.1 backend CI passes on both architectures at `bc41c1b` and `4a99205`; these jobs run no GUI. Complete desktop/device qualification remains open; Python 26.04 CI is separate evidence. |
-| macOS | Intel x86_64, Apple Silicon ARM64 | Native Intel and Apple Silicon contracts/core jobs pass at `4a99205` after a fixture-only case-insensitive filesystem correction; earlier `bc41c1b` failures remain retained. No native GUI adapter, native ownership/process implementation, tool-runtime qualification or packaged app is recorded. |
+| Windows 11 | AMD64, ARM64 | The same hosted AMD64 evidence applies only to its tested host. Native Windows 11 ARM64 passes contracts/core checks and strict lint through `e4f7c27`, separately from host services. Native desktop, runtime/tools/drivers and installation remain open. |
+| Ubuntu 24.04 LTS | AMD64, ARM64 | Native hosted preview/backend checks, including 32 Save/Save All checks after the worker-loss correction, pass on both architectures at `e4f7c27`. Complete services, desktop input/display, packaging and USB/device qualification remain open. |
+| Ubuntu 26.04 LTS | AMD64, ARM64 | Native 26.04.1 backend CI passes through `e4f7c27`. Separate native GTK GUI jobs now pass on ARM64 at workflow-only `81de415` and AMD64 at workflow-only `deeed65`: each has 32 Save / 19 workspace / 17 detach checks with unchanged `e4f7c27` runtime bytes. Complete desktop/device qualification remains open; Python 26.04 CI is separate evidence. |
+| macOS | Intel x86_64, Apple Silicon ARM64 | Native Intel and Apple Silicon contracts/core jobs pass at `4a99205` and `e4f7c27` after a fixture-only case-insensitive filesystem correction; earlier `bc41c1b` failures remain retained. No native GUI adapter, native ownership/process implementation, tool-runtime qualification or packaged app is recorded. |
 | Fedora Linux | x86_64, aarch64 | No Fedora-native Rust execution is recorded. Qualify Fedora's own GTK/WebKit packages, setup, desktop/session, SELinux and USB permissions. |
 | Linux Mint | AMD64 | No Mint-native Rust execution is recorded. Qualify official Ubuntu-based Mint editions independently, including setup, desktop and USB permissions. No official Mint ARM64 target is established. |
 
@@ -120,14 +120,46 @@ selected jobs verify launcher executables separately; no native GUI job runs
 in this follow-up. The macOS fixture correction changes no runtime behavior
 and enables no Darwin host backend or GUI.
 
-The later uncommitted worker-loss correction to GTK, Win32 and shared sessions
-has separate local evidence: 29 native UI library checks, strict Linux/MSVC lint
-and GTK 32 Save / 19 workspace / 17 detach checks pass. It keeps saving disabled
-after lost native authority and allows closing once the writer is confirmed
-terminated, while retaining buffers and warning about partial disk changes.
-Exact hashes are in `native-source-save.json`; hosted GUI verification of this
-later source is pending. The `bc41c1b` GUI receipts remain historical evidence,
-and the `4a99205` core/backend run does not qualify later GUI source.
+### Final Save checkpoint at `e4f7c27`
+
+[CI 39826385795](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795)
+passes all 11 selected jobs, including the worker-loss correction to GTK, Win32
+and shared sessions. Both Ubuntu 24.04 hosts pass 29 native UI library checks;
+Windows Server AMD64 passes 27 shared library plus eight Windows binary checks.
+Each of the three GUI hosts passes **32 Save / 19 retained-workspace / 17 detach
+checks**. The shared worker-loss regression covers an ended worker both before
+a write and after a real write with its result lost; it does not assume rollback.
+Saving stays disabled after native authority loss, closing becomes available
+once termination is confirmed, and the status warns of possible partial disk
+changes. Actual GUI loss injection remains distinct from these library/channel
+checks and the retained-behavior GUI fixture.
+
+The Ubuntu 26 backend pair, Windows 11 ARM64 core and both macOS core jobs also
+pass again at this exact source. Three separate launcher-build jobs pass in the
+same run. None of these results enables macOS/Fedora/Mint application ports,
+qualifies a Windows 10/11 desktop, or exercises USB. Exact hashes, compact logs
+and source-specific receipts are in `native-source-save.json`. The earlier
+`bc41c1b` failures and `4a99205` correction receipts remain retained.
+
+### Additional Ubuntu 26 native GUI execution
+
+Ubuntu 26.04.1 ARM64 job `119994908117` passes in
+[CI 39827591406](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39827591406)
+at `81de415`. Ubuntu 26.04.1 AMD64 passes in
+[CI 39874766179](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39874766179)
+at `deeed65`. Both sources differ from `e4f7c27` only in the workflow; all
+native Save/runtime bytes match. Each host passes 29 native UI library checks,
+32 Save / 19 workspace / 17 detach checks and 68 fake-tool checks, plus the
+separately executed GTK source-row display check. Runner OS blocks, matching
+native Rust triples and compiled architecture receipts establish the tested
+host; neither run printed `/etc/os-release` or `rustc -vV` command output.
+
+The earlier AMD64 attempts in `39827591406` were canceled during slow package
+downloads and executed no application checks. Their logs and the successful
+ARM64 receipts are retained. The final AMD64 workflow selects only that CPU,
+uses Ubuntu's main HTTPS archive and bounds prerequisite installation to
+12 minutes. These hosted GTK/Xvfb fixtures qualify the recorded native preview
+behavior; physical desktop/input, Wayland, full services and devices stay open.
 
 ## Architecture and implementation rules
 
@@ -170,7 +202,7 @@ and the `4a99205` core/backend run does not qualify later GUI source.
 | Tool host coverage | `desktop/crates/host/src/prepare_avr_fixture.rs`, `desktop/firmware-tools/` | Extend reviewed host manifests and the complete private-runtime/loader/tool closure for Windows ARM64 and both macOS architectures. The current AVR host enum admits Linux x86_64/aarch64 and Windows x86_64 only. Do not relax its checks to manufacture support. |
 | Windows ARM runtime/drivers | `src/modules/private_python_guard.py`, `src/modules/bootstrap.py` | Existing repair selects an AMD64 Python installer; CP210x driver setup equates a 64-bit host with x64. Add architecture-specific admission and reviewed native ARM64 driver/runtime payloads. Existing ARM64 Node/Arduino CLI choices do not qualify the full closure. Native WebView2 loader/runtime must match the app architecture. |
 | Linux admission/setup | `src/modules/ubuntu_release.py`, `direct/ubuntu/release_guard.sh`, `direct/ubuntu/preflight.py`, `direct/ubuntu/system_setup.py` | Existing production paths deliberately admit only Ubuntu and use Ubuntu package names/apt. Add Rust release/dependency policies and isolated adapter checks for Fedora and Mint before connecting their setup/repair UI. Preserve the working Python release until qualified replacement. |
-| Native CI and evidence | `.github/workflows/migration-prototype.yml`, platform verifier scripts | Ubuntu 26.04 backend pair and Windows 11 ARM64 core pass at `bc41c1b` and `4a99205`; both macOS core jobs pass after the fixture-only correction at `4a99205`. Qualify the later worker-loss GUI source on its exact hosted checkpoint. Complete native host services/GUI on those hosts and add Fedora x86_64/aarch64 and Mint AMD64 execution. Distinguish cross-build, emulated execution, native core, backend, desktop and devices. Hosted Windows Server AMD64 remains separate from Windows 10/11. |
+| Native CI and evidence | `.github/workflows/migration-prototype.yml`, platform verifier scripts | Ubuntu 26.04 backend pair, Windows 11 ARM64 core and both macOS core jobs pass through `e4f7c27`. The exact worker-loss GUI runtime passes Ubuntu 24/26 AMD64/ARM64 and Windows Server AMD64; Ubuntu 26 uses the two additional GUI runs above. Complete native host services/GUI on those hosts and add Fedora x86_64/aarch64 and Mint AMD64 execution. Distinguish cross-build, emulated execution, native core, backend, desktop and devices. Hosted Windows Server AMD64 remains separate from Windows 10/11. |
 | Distribution | Native launchers/installers and release manifests | Produce host-specific artifacts with matching tool runtimes and notices; verify clean-machine install, update, repair and rollback. macOS needs an app bundle and release signing/notarization; Fedora and Mint need their own dependency/desktop integration. No installer or published artifact is changed by this document. |
 
 ## Required release gates for each matrix row

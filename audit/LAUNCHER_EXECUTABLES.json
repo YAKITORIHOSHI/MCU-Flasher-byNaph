@@ -72,7 +72,19 @@
     "releaseChecks": 8,
     "scope": "Copied native binary fixtures; exact headers/CPU/modes, literal argument and relocation, refused malformed/extra archive entries; no application/setup/hardware launch"
   },
-  "finalSuppliedBinaryCi": "pending exact-source commit",
+  "finalSuppliedBinaryCi": {
+    "run": 39826385795,
+    "source": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795",
+    "result": "success",
+    "nativeHosts": [
+      "WindowsServer2022 AMD64",
+      "Ubuntu24 AMD64",
+      "Ubuntu24 ARM64"
+    ],
+    "checks": "All22 launcher cases selected per host, with only other-OS/unsupported-Mint-CPU cases skipped explicitly; 8 release checks pass per host; supplied binaries verified before native rebuild and repeated native16 checks",
+    "scope": "Exact committed executable bundle, isolated dispatchers and archive contracts; no actual application/setup/hardware launch"
+  },
   "remaining": [
     "Windows ARM application unavailable and refused",
     "macOS/Fedora/Mint full applications unfinished; executable entries are availability notices",

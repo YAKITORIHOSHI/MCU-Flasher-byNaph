@@ -11,7 +11,8 @@ needed for the next slice. Preserve historical failures and exact tested sources
   retain existing startup guards; Fedora/Mint/macOS remain availability notices.
   Native builders and moved-folder/literal-argument fixtures pass on Windows
   Server AMD64 and Ubuntu AMD64/ARM64 in `39824882032`. Final supplied-binary
-  bundle/header/mode/archive qualification follows in the next CI run. See
+  bundle/header/mode/archive qualification passes on those three hosts in
+  [CI 39826385795](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795). See
   `../LAUNCHER_EXECUTABLES.json` for exact shipped bytes and scope.
 - The isolated tool-only Compile entry now replaces only the in-process
   PlatformIO 6.2.0 SCons handoff with a fixed sibling entry, preserving `-I -S -B`
@@ -28,7 +29,7 @@ needed for the next slice. Preserve historical failures and exact tested sources
   with successful acknowledgements retained before a later failure. Linux
   permission/ACL/xattr/ownership refusals and observed recovery retention are
   explicit. Native save leases do not qualify legacy Python coexistence or
-  hostile same-user final-use races. Local evidence: 255 library tests
+  hostile same-user final-use races. Initial local evidence: 255 library tests
   (1 contracts, 78 core, 148 host, 28 native UI), 32 new Save GUI checks,
   19 unchanged-source workspace checks and 17 detach checks. Strict Linux lint
   passes. Exact-source [CI 39823016524](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39823016524)
@@ -38,14 +39,29 @@ needed for the next slice. Preserve historical failures and exact tested sources
   contracts/core job also pass. The fixture-only macOS correction at `4a99205`
   passes both Intel/ARM native core jobs in [CI 39824882032](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39824882032),
   alongside repeat Ubuntu 26 backend and Windows 11 ARM core passes. Historical
-  macOS failures remain retained. A later worker-loss correction releases the
-  close guard after confirmed worker termination, keeps saving disabled without
-  native authority and warns of possible partial disk changes. That working-tree
-  source passes 29 native UI library checks, strict Linux/MSVC lint and local
-  GTK 32 Save / 19 workspace / 17 detach checks; its hosted GUI rerun is pending.
-  See `native-source-save.json` for separate source hashes, receipts and scope.
+  macOS failures remain retained. The later worker-loss correction at `e4f7c27`
+  releases the close guard after confirmed worker termination, keeps saving
+  disabled without native authority and warns of possible partial disk changes.
+  Exact-source [CI 39826385795](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795)
+  passes all 11 selected jobs. Both Ubuntu 24 hosts pass 29 native UI library
+  checks; Windows passes 27 library plus eight Windows binary checks. Each of
+  those three hosts passes 32 Save / 19 workspace / 17 detach checks. All five
+  scoped platform backend/core jobs pass again. Worker-loss injection itself is
+  a library/channel regression; separate GUI fixtures verify retained behavior.
+  See `native-source-save.json` for exact source hashes, receipts and scope.
   The 67-capability ledger remains unchanged; production launcher packaging is
   updated separately above.
+- Additional native Ubuntu 26.04.1 GUI qualification now passes on both CPUs:
+  ARM64 job `119994908117` in [39827591406](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39827591406)
+  and AMD64 in [39874766179](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39874766179).
+  Each passes 29 native UI library checks, 32 Save / 19 workspace / 17 detach
+  checks and 68 fake-tool checks. The run sources `81de415` / `deeed65` change
+  only the workflow from runtime checkpoint `e4f7c27`. Earlier AMD64 attempts
+  were canceled during slow dependency downloads before application checks;
+  they are retained as infrastructure evidence. The final AMD64 retry uses
+  Ubuntu's main HTTPS archive and an AMD64-only matrix selection. Hosted OS,
+  native compiler and compiled architecture evidence are retained separately
+  from physical desktop, Wayland, USB and complete-application qualification.
 - Current user priority is shipping GUI responsiveness, especially Board/Library
   opening/search/scroll/resize/selection, with permission to rework its backend.
   Close must sleep with loaded state in RAM; no visible Quit or repeated list
@@ -93,13 +109,13 @@ needed for the next slice. Preserve historical failures and exact tested sources
   jobs now pass after the fixture-only case-collision correction at `4a99205`;
   no macOS host backend or GUI is enabled. Keep the accepted usable-beta order while beginning
   these host adapters before final packaging; retain all existing exact receipts.
-- Current backend code checkpoint: `29ec2b0`.
+- Historical backend code checkpoint before native Save: `29ec2b0`.
   [Backend CI 39541599780](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39541599780)
   passes Ubuntu AMD64/ARM64 226 tests and Windows 218, with 49 fake-tool checks
   on all three. The owned package metadata slice has separate exact-source
   evidence in `rust-avr-package-metadata.json`; actual package payload preparation
   remains local Linux x86_64 only. Native UI sources retain the checkpoint below.
-- Native UI code checkpoint: `49ab312` on `codex/rust-tauri-migration`.
+- Historical native UI checkpoint before Save: `49ab312` on `codex/rust-tauri-migration`.
   [Complete native CI 39539221917](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39539221917)
   passes all five jobs: native Ubuntu AMD64/ARM64 and Windows plus both Windows
   editor jobs. Each native host passes 19 workspace/17 detach checks, including
@@ -177,11 +193,12 @@ needed for the next slice. Preserve historical failures and exact tested sources
   separate. Only explicit `temp/audit/native-compile-inputs` fixtures are admitted;
   original/staged aliases and protected components refuse. No live target/store,
   `.ino` conversion, library discovery or Compile callback is integrated.
-- The separate development `desktop/firmware-tools` entry accepts native roots,
+- The initial separate development `desktop/firmware-tools` entry accepted native roots,
   pinned AVR policy and jobs with mandatory `-I -S -B`; it imports no app settings
   or backend adapters. Its 47 fake-PlatformIO checks pass locally, including
   actual 6.2.0 mixin-shape guard fixtures, output/temp isolation and UTF-8 errors.
-  This is not real PlatformIO/runtime qualification. The shipping Python wrapper
+  These historical 47 checks precede the current 68-check isolated SCons handoff
+  recorded above. This is not real PlatformIO/runtime qualification. The shipping Python wrapper
   remains unchanged. Nested startup, complete third-party provenance, native
   compiler processes/Windows tool locks and immutable input lifetime stay gates.
 - A separate `compile_process_probe` owns only fixed self-child roles. Linux
@@ -191,9 +208,13 @@ needed for the next slice. Preserve historical failures and exact tested sources
   incomplete cleanup poisons the single-probe lease. This does not adopt external
   compiler images, prove Windows pre-pin running-image equality or qualify
   detached external tool descendants. Exact checks/source follow in the receipt.
-- Next: qualify admitted prepared runtime/byte lifetime and finite process
-  ownership, then integrate one real native-controlled already-prepared C++
-  sample on Windows/Ubuntu. Keep compiler dispatch unavailable until those gates
+- Next deliverable: one real native-controlled already-prepared Uno C++ compile
+  with verified AVR artifacts, followed by the native Compile callback. Implement
+  admitted runtime staging and finite process ownership as part of that path:
+  use a bounded streaming snapshot and a dedicated external build worker, rather
+  than raising the full-buffer fixture's limits or adding another standalone
+  probe. Start with the retained Linux AMD64 payload, then qualify matching
+  Windows inputs. Keep compiler dispatch unavailable until those gates
   pass. A verified native recipe with no override remains separate from the
   positive-only recipe service's NoRecipe refusal. See Task 3 in [the plan](NATIVE_RUST_PLAN.md).
 - Prepared-sample investigation found the campaign work/package roots were
@@ -226,12 +247,14 @@ needed for the next slice. Preserve historical failures and exact tested sources
   Native loader closure, nested startup and tool lifetime remain gates. The
   complete candidate exceeds existing compile-fixture file/byte limits; those
   limits have not been relaxed before actual runtime admission.
-- Native workspace continuation now retains one process-local project service,
+- Historical read-only workspace continuation retained one process-local project service,
   workspace ID and original document snapshots per window. Exact ordered editor
   IDs commit pending state; refusal/timeout/dispatch errors discard pending state
   without a source write. Scripts move out before browser calls to avoid
-  retaining native state borrows across IPC. Source saves and live/coexistence
-  ownership remain disabled. Local evidence: 23 native library tests, 19 workspace
+  retaining native state borrows across IPC. At that checkpoint source saves and
+  live/coexistence ownership remained disabled; the current `e4f7c27` Save
+  implementation and its separate limitations are recorded above. Historical local
+  evidence: 23 native library tests, 19 workspace
   plus 17 detach checks, strict Linux/MSVC-target linting and formatting. See
   [session evidence](native-project-sessions.json); the complete matrix above
   now passes. Intermediate runs `39538717552` and `39539003082` were canceled

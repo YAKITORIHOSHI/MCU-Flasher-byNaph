@@ -97,6 +97,22 @@
     "temp/audit/native-compile-inputs/scons-entry-root-final.log",
     "temp/audit/compile-boundary-independent-review.log"
   ],
-  "nativeCi": "pending exact-source commit; existing workflow invokes fake verifier on native backend hosts",
+  "nativeCi": {
+    "run": 39826385795,
+    "source": "e4f7c270ce39b9a09b560ee5ab75e61e95557f9f",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795",
+    "result": "success",
+    "checksPerHost": 68,
+    "hosts": [
+      "WindowsServer2022 AMD64",
+      "Ubuntu24 AMD64",
+      "Ubuntu24 ARM64",
+      "Ubuntu26 AMD64",
+      "Ubuntu26 ARM64"
+    ],
+    "scope": "Owned fake PlatformIO/nested fake SCons verifier runs natively on listed hosts. No real compiler/tool runtime qualified.",
+    "realToolsDispatched": false,
+    "windowsReceipt": "temp/audit/native-save-final-ci-39826385795/artifacts/migration-prototype-windows-2022/temp/audit/native-compile-inputs/tool-only-entry.json"
+  },
   "pythonApplicationServicesRetired": 0
 }

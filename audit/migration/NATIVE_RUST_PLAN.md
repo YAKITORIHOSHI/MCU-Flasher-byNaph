@@ -41,8 +41,13 @@ The user approved organizing the remaining work around a usable Rust beta:
 
 Run independent GUI/backend/Windows work in parallel where it helps. Measure progress by working end-to-end features and retired Python services, with tests as supporting evidence. Retain completed campaign/CI receipts and storage budgets; do not restart passed work. The detailed tasks below remain the dependency and qualification ledger.
 
-23 October continuation: native Save/Save All passes actual Windows and Ubuntu
-AMD64/ARM64 checks; worker-loss handling has a separate final qualification.
+23 October continuation: native Save/Save All and the worker-loss correction
+pass Windows Server AMD64 and Ubuntu 24 AMD64/ARM64 checks at `e4f7c27` in
+[CI 39826385795](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39826385795).
+Each native GUI host passes 32 Save, 19 workspace and 17 detach checks; the
+worker-loss injection itself is a separate library/channel regression.
+The same runtime also passes Ubuntu 26.04.1 ARM64 GUI checks in `39827591406`
+and AMD64 in `39874766179`; those source checkpoints change only the workflow.
 `LAUNCHER/` now uses executable entries instead of `.desktop` shortcuts, with
 unsupported-platform notices kept explicit. The tool-only PlatformIO-to-SCons
 handoff now preserves isolated startup and guards, with 68 fake-tool checks.

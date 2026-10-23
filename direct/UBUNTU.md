@@ -5,7 +5,7 @@ in `env`. Ubuntu 24.04/26.04 uses native Linux launchers and its separately
 prepared `.venv-linux`. Preserve both Windows directories when cleaning Ubuntu
 or distributing one folder for both hosts. Linux runtime selection rejects
 Windows `env` even if copied files resemble a Linux environment. Windows starts
-through `MCU_Flasher.exe` or `direct/windows/run.vbs`, whose native path repair
+through `LAUNCHER/WINDOWS.exe` or `direct/windows/run.vbs`, whose native path repair
 updates a moved Windows environment before Bootstrap proceeds.
 
 The application supports Windows and native Ubuntu 24.04 or newer. Windows
@@ -26,6 +26,17 @@ host implementation through `main/core/toolchain.py`:
 | `direct/ubuntu/arm_qt5.py` | ARM64-only access to Ubuntu's ABI-matched Qt5 sample-viewer package |
 | `direct/ubuntu/launch.py` / `preflight.py` | First-run Bootstrap handoff, desktop launch and dependency diagnostics |
 | `direct/ubuntu/install_desktop.py` | Local desktop shortcut and optional per-user Applications entry |
+
+## Direct executable folder — 2026-10-23
+
+Open `LAUNCHER` and double-click `UBUNTU` on AMD64 or `UBUNTU_ARM64` on ARM64.
+These are native ELF executables and forward literal arguments to the same
+Ubuntu Bootstrap path. `WINDOWS.exe` is the matching Windows GUI entry. No
+`.desktop` file is required in `LAUNCHER`; retain Unix executable permissions
+when copying. The older root entries and optional menu shortcut remain
+compatible. See [the launcher guide](../LAUNCHER/README.md) and
+[exact verification](../audit/LAUNCHER_EXECUTABLES.json). Other named OS entries
+remain availability notices while their full application ports are pending.
 
 ## Native launcher correction — 2026-10-16
 

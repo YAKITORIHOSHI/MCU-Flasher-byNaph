@@ -1068,7 +1068,7 @@ is bounded. Use `direct/verify_performance.py` for isolated regression checks.
 
 ## 🚀 Quick Start
 
-**Ubuntu 24.04 or newer:** double-click **`MCU_Flasher` on 64-bit Intel/AMD**, or **`MCU_Flasher-arm64` on Raspberry Pi/ARM64**. These are compiled native Linux executables in the project root beside `MCU_Flasher.exe`. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. Both executables accept `--check` for read-only readiness diagnostics and `--repair` for dependency repair. `bash direct/ubuntu/run.sh` works on either CPU; the generated **`MCU Flasher.desktop`** shortcut is optional.
+**Ubuntu 24.04 or newer:** open **`LAUNCHER`** and double-click **`UBUNTU` on 64-bit Intel/AMD**, or **`UBUNTU_ARM64` on Raspberry Pi/ARM64**. These are compiled native Linux executables. The older root `MCU_Flasher` / `MCU_Flasher-arm64` entries remain compatible. Keep the application folder together. Bootstrap automatically detects and installs missing [Ubuntu system prerequisites](direct/UBUNTU.md#install-on-ubuntu) through a visible administrator prompt, then creates or repairs `.venv-linux` and opens the app. First-run progress appears in a terminal; healthy desktop launches open the workspace directly. Both executables accept `--check` for read-only readiness diagnostics and `--repair` for dependency repair. `bash direct/ubuntu/run.sh` works on either CPU; the generated **`MCU Flasher.desktop`** shortcut is optional.
 
 Ubuntu detects `amd64`/`x86_64` or `arm64`/`aarch64` within the same launch/setup
 path. Raspberry Pi 5 and other capable Pis need **64-bit Ubuntu Desktop 24.04 LTS
@@ -1085,7 +1085,7 @@ stop with “MCU Flasher requires Ubuntu 24.04 or newer.” Missing or malformed
 release information also stops explicitly, preserving all local resources.
 
 Windows 10/11 and Ubuntu 24.04/26.04 share application source but use
-separate Python environments. Windows launches through `MCU_Flasher.exe` or
+separate Python environments. Windows launches through `LAUNCHER/WINDOWS.exe` or
 `direct/windows/run.vbs`, using downloaded Python in `src/_python` and Windows
 dependencies in `env`. Ubuntu's Bash setup builds `.venv-linux` with native Linux
 packages; it never selects the Windows runtime or `env`. Windows health checks
@@ -1175,8 +1175,8 @@ Windows files live in `direct/windows/`. Host toolchain implementations are sepa
 ### Launching the Application
 
 ```cmd
-# Double-click the compiled native Windows launcher:
-MCU_Flasher.exe
+# Open LAUNCHER and double-click the Windows executable:
+LAUNCHER\WINDOWS.exe
 
 # Or launch via the bootstrap launcher (runs under standard user privileges):
 direct\windows\run.vbs
@@ -1224,7 +1224,11 @@ Below is the complete architectural layout of the MCU Flasher ecosystem:
 
 ```
 MCU Flasher by Naph/
-├── MCU_Flasher.exe                   # Native Windows launcher (compiled from src/launcher.cs)
+├── LAUNCHER/                         # Preferred executable entries; no .desktop shortcuts
+│   ├── WINDOWS.exe                   # Windows AMD64 GUI launcher
+│   ├── UBUNTU / UBUNTU_ARM64          # Native Linux executables for each CPU
+│   └── FEDORA / FEDORA_ARM64 / LINUX_MINT / MacOS.command  # Availability notices
+├── MCU_Flasher.exe                   # Compatible older Windows launcher
 ├── MCU_Flasher                       # Compiled native Ubuntu amd64 launcher
 ├── MCU_Flasher-arm64                 # Compiled native Ubuntu ARM64 / Raspberry Pi launcher
 ├── MCU Flasher.desktop               # Movable local Ubuntu shortcut (keep beside the app)
@@ -1386,7 +1390,7 @@ MCU Flasher by Naph/
 ## 📘 User Guide & How to Use
 
 ### 1. Launching & First-Run Auto-Bootstrap
-- Launch the application by double-clicking **`MCU_Flasher.exe`** (or running **`direct\runThisOnWindows.vbs`**).
+- Open **`LAUNCHER`** and double-click **`WINDOWS.exe`** on Windows, or the matching **`UBUNTU` / `UBUNTU_ARM64`** executable on Ubuntu. The older root launchers remain compatible.
 - **Private Python Runtime Enforcer**: Handled transparently by `src/modules/private_python_guard.py`. Windows uses its bundled private runtime. Linux uses `.venv-linux` (or a valid local Linux `env` virtual environment) and provides a setup command when it is missing.
 - **Session Sentinel & Crash Detection**: `src/modules/crash_detector.py` monitors runtime integrity, providing unhandled exception logging and clean startup recovery markers.
 - Bootstrap verifies the selected online/offline preparation mode before opening the app. Compile, Upload and Reset use installed packages only. An additional window of the same healthy installation bypasses Bootstrap while respecting explicit repair and pending mode changes. Session markers, child logs and native crash diagnostics are separate per process.
@@ -1813,6 +1817,8 @@ verification; board compilation/upload still requires separate target checks.
 
 ### Root Entry Points & Launchers
 
+- **`LAUNCHER/WINDOWS.exe`** and **`LAUNCHER/UBUNTU` / `UBUNTU_ARM64`** are the preferred executable entries. Their sources are `src/launcher_folder_windows.cs` and `src/launcher_folder_linux.c`; `direct/build_launcher_folder.py` rebuilds the matching host files. There are no `.desktop` files in this folder. Other named OS entries remain availability notices until their application ports are qualified.
+
 - **`MCU_Flasher.exe`**: Native C# wrapper compiled from `src/launcher.cs`. Starts `direct\runThisOnWindows.vbs` silently without prompting for unnecessary Administrator elevation.
 - **`direct/windows/run.vbs`**: Windows VBScript bootstrapper that checks drive storage type and launches `src/modules/launcher.py`. Requests targeted UAC elevation only for machine-level driver installations. `direct/runThisOnWindows.vbs` forwards here for existing executable launchers.
 - **`direct/ubuntu/setup.py` / `run.sh`**: Native Ubuntu setup and launch. Create/repair `.venv-linux`, preserve project arguments and keep system Python unchanged; `run.sh --repair` explicitly repairs the runtime.
@@ -1962,7 +1968,7 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 (64-bit) or native Ubuntu 24.04 or newer (amd64 or ARM64). Ubuntu 24.04/26.04 have x86-64 and ARM64 CI targets; check the completed results for the revision being used. X11/Xvfb checks do not certify native Wayland, keyring or USB behavior.
+- **Operating System**: Windows 10/11 (AMD64) or native Ubuntu 24.04 or newer (amd64 or ARM64). Windows ARM64 startup is currently refused. Ubuntu 24.04/26.04 have x86-64 and ARM64 CI targets; check the completed results for the revision being used. X11/Xvfb checks do not certify native Wayland, keyring or USB behavior.
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
 - **Python**: Ubuntu source setup uses native Python 3.10+ and creates `.venv-linux`. ARM64 uses Ubuntu's release-matched `/usr/bin/python3` for the native sample-viewer packages. Windows uses its private runtime and bundled installer; no system Python is required.
 - **Version Control**: Git with Git LFS (`git lfs install`)
