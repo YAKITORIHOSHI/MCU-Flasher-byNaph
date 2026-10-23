@@ -26,6 +26,15 @@ workflow checks these contracts; hosted fixture timings do not establish a full
 cold Bootstrap time on the reported Windows PC. Existing public ZIPs must be
 rebuilt before these source changes are included.
 
+Workspace responsiveness also corrects a native toolbar overflow that could hide
+the entire Project/Resources group after resizing. Toolbar and Controls layouts
+use measured content budgets, rather than fixed 1,200/1,350-pixel compact cutoffs.
+Primary chrome and tool-tab padding are reduced while reading fonts and usable
+targets are retained. Side-panel and theme changes refresh the actual child-pane
+budgets even when the main window width is unchanged. Native toolbar fixtures
+cover 1080p at 150%, narrow/wide transitions and long project names. Auxiliary
+Project and downloader windows retain their existing scrollable layouts.
+
 ## October 23 Source Update: Executable Launchers and Responsive Editing
 
 Open `LAUNCHER` and use `WINDOWS.exe`, `UBUNTU` or `UBUNTU_ARM64` for the matching

@@ -172,7 +172,7 @@ QToolBar#primary-toolbar {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
     border: none;
     border-bottom: 1px solid {rim};
-    padding: 7px 10px;
+    padding: 4px 8px;
     spacing: 4px;
 }}
 
@@ -1021,7 +1021,7 @@ QTabWidget#workspace-tabs QTabBar {{
 QTabWidget#workspace-tabs QTabBar::tab {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
     color: {text_dim}; border: 1px solid {rim}; border-radius: 9px;
-    padding: 6px 12px; margin-right: 4px; margin-bottom: 4px;
+    padding: 4px 9px; margin-right: 3px; margin-bottom: 2px;
     font-size: 12px; font-weight: 600;
 }}
 QTabWidget#workspace-tabs QTabBar::tab:selected {{

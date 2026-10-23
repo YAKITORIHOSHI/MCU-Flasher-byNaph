@@ -32,7 +32,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QToolBar, QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QBoxLayout,
     QPushButton, QLabel, QComboBox, QCheckBox,
-    QSizePolicy, QFrame, QStyleOptionComboBox, QStylePainter, QStyle,
+    QSizePolicy, QFrame, QStyleOptionComboBox, QStyleOptionButton, QStylePainter, QStyle,
     QMessageBox, QApplication, QScrollArea,
 )
 
@@ -92,6 +92,7 @@ def _make_action_btn(text: str, tooltip: str, object_name: str,
     btn.setObjectName(object_name)
     btn.setToolTip(tooltip)
     btn.setFixedHeight(30)
+    btn.setStyleSheet("padding: 3px 8px;")
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     return btn
 
@@ -269,6 +270,10 @@ class PrimaryToolbar(QToolBar):
         self._logo_click_timer.setSingleShot(True)
         self._logo_click_timer.timeout.connect(self._on_logo_click_timeout)
         self._owner_dialog: QWidget | None = None
+        self._reflow_timer = QTimer(self)
+        self._reflow_timer.setSingleShot(True)
+        self._reflow_timer.timeout.connect(lambda: self.set_responsive_width(self.width()))
+        self._in_reflow = False
         self._setup_widgets()
 
     def _setup_widgets(self) -> None:
@@ -287,7 +292,7 @@ class PrimaryToolbar(QToolBar):
         self.addWidget(self.sp_left)
 
         # ── 3. Centered Actions Container ───────────────────────────────────
-        self.actions_container = QWidget()
+        self.actions_container = QWidget(self)
         self.actions_container.setStyleSheet("background: transparent;")
         ac_layout = QHBoxLayout(self.actions_container)
         ac_layout.setContentsMargins(0, 0, 0, 0)
@@ -351,14 +356,13 @@ class PrimaryToolbar(QToolBar):
         self.btn_modify.clicked.connect(self._do_modify)
         ac_layout.addWidget(self.btn_modify)
 
-        # Compact Actions dropdown button (visible when width < 1200)
+        # Secondary actions collapse only when their measured content cannot fit.
         self.btn_actions_dropdown = _make_action_btn(
             "Actions ",
             "More actions (Stop, Clean, Save, Reload, Modify)",
             "btn-actions-dropdown",
             "#2d3748", "#3a4a60"
         )
-        self.btn_actions_dropdown.setMinimumWidth(100)
         self.btn_actions_dropdown.clicked.connect(self._toggle_actions_menu)
         self.btn_actions_dropdown.setVisible(False)
         ac_layout.addWidget(self.btn_actions_dropdown)
@@ -374,7 +378,7 @@ class PrimaryToolbar(QToolBar):
         self.addWidget(self.sp_right)
 
         # ── 5. Right Container (Sketch path + Project + Download) ────────────
-        self.right_container = QWidget()
+        self.right_container = QWidget(self)
         self.right_container.setStyleSheet("background: transparent;")
         rc_layout = QHBoxLayout(self.right_container)
         rc_layout.setContentsMargins(0, 0, 0, 0)
@@ -420,48 +424,34 @@ class PrimaryToolbar(QToolBar):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._balance_spacers()
+        if hasattr(self, "_reflow_timer"):
+            self._reflow_timer.start(0)
+
+    def event(self, event):
+        result = super().event(event)
+        if (hasattr(self, "_reflow_timer") and not self._in_reflow
+                and event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.FontChange,
+                                     QEvent.Type.StyleChange, QEvent.Type.Show)):
+            self._reflow_timer.start(0)
+        return result
 
     def _balance_spacers(self) -> None:
         """Dynamically position the left spacer to keep Actions centered."""
         if not hasattr(self, "actions_container") or not hasattr(self, "logo") or not hasattr(self, "right_container"):
             return
         tb_w = self.width()
-        pad_left = 12
-        spacing = 4
+        margins = self.layout().contentsMargins()
+        spacing = max(0, self.layout().spacing())
         left_w = self.logo.sizeHint().width()
         right_w = self.right_container.sizeHint().width()
         center_w = self.actions_container.sizeHint().width()
-
-        target_center_x = (tb_w - center_w) / 2.0
-        min_left_space = pad_left + left_w + spacing + 8
-        min_right_space = pad_left + right_w + spacing + 8
-
-        avail_for_spacer = tb_w - (pad_left + left_w + center_w + right_w + 32)
-        if avail_for_spacer <= 8:
-            self.sp_left.setFixedWidth(8)
-            self.sp_right.setFixedWidth(8)
-            return
-
-        if target_center_x >= min_left_space and (target_center_x + center_w) <= (tb_w - min_right_space):
-            # Perfect mathematical center
-            sp_left_w = int(target_center_x - pad_left - left_w - spacing)
-            sp_left_w = min(sp_left_w, max(8, avail_for_spacer))
-            self.sp_left.setFixedWidth(max(8, sp_left_w))
-        elif (target_center_x + center_w) > (tb_w - min_right_space) and (tb_w - min_right_space - center_w) >= min_left_space:
-            # Optimal shift near center without pushing right items
-            start_x = tb_w - min_right_space - center_w
-            sp_left_w = int(start_x - pad_left - left_w - spacing)
-            sp_left_w = min(sp_left_w, max(8, avail_for_spacer))
-            self.sp_left.setFixedWidth(max(8, sp_left_w))
-        else:
-            # Narrow window: allow sp_left to shrink
-            self.sp_left.setMinimumWidth(8)
-            self.sp_left.setMaximumWidth(max(8, avail_for_spacer))
-
-        # sp_right flexibly absorbs remaining space to push right_container flush right
-        self.sp_right.setMinimumWidth(8)
-        self.sp_right.setMaximumWidth(16777215)
+        spare = max(16, tb_w - margins.left() - margins.right()
+                    - 4 * spacing - left_w - center_w - right_w)
+        desired = round((tb_w - center_w) / 2 - margins.left() - left_w - 2 * spacing)
+        left = max(8, min(spare - 8, desired))
+        for widget, width in ((self.sp_left, left), (self.sp_right, spare - left)):
+            if widget.minimumWidth() != width or widget.maximumWidth() != width:
+                widget.setFixedWidth(width)
 
     def _add_separator(self) -> None:
         sep = QFrame()
@@ -693,7 +683,7 @@ class PrimaryToolbar(QToolBar):
             self.lbl_sketch.setToolTip("Project switching is unavailable while an action is running")
         else:
             self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: choose where a project opens" if path else "Current sketch folder — left-click: open in Explorer • right-click: choose where a project opens")
-        self._balance_spacers()
+        self.set_responsive_width(self.width())
 
     @Slot(dict)
     def on_operation_phase(self, payload: dict) -> None:
@@ -881,103 +871,142 @@ class PrimaryToolbar(QToolBar):
             )
         if self._owner_dialog is not None:
             self._owner_dialog.apply_theme(theme_name)
+        self._reflow_timer.start(0)
         self.update()
 
     def is_compact(self) -> bool:
         return getattr(self, "_is_compact", False)
 
+    @staticmethod
+    def _button_width(button, text: str, *, plain_icon: bool = False) -> int:
+        """Measure a candidate independently of hidden widgets and old constraints."""
+        button.ensurePolished()
+        option = QStyleOptionButton()
+        button.initStyleOption(option)
+        option.text = text
+        if plain_icon:
+            option.icon = QIcon()
+        content = QSize(option.fontMetrics.horizontalAdvance(text), option.fontMetrics.height())
+        if not option.icon.isNull():
+            content.setWidth(content.width() + option.iconSize.width() + 6)
+            content.setHeight(max(content.height(), option.iconSize.height()))
+        measured = button.style().sizeFromContents(
+            QStyle.ContentsType.CT_PushButton, option, content, button).width()
+        # Candidate text buttons always use 8px horizontal padding, including
+        # while the currently painted button uses the 4px icon-only padding.
+        return measured + (8 if button.styleSheet() == "padding: 3px 4px;" else 0)
+
     def set_responsive_width(self, width: int) -> None:
-        """Dynamically adapt primary toolbar actions, logo, and download button based on width."""
-        compact = width < 1200
+        """Fit intrinsic action groups inside the toolbar's actual logical allocation."""
+        if self._in_reflow:
+            return
+        self._in_reflow = True
         try:
-            if not getattr(self, "_wide_req_width", 0):
-                self._wide_req_width = self.actions_container.sizeHint().width()
-            side_req = self.logo.sizeHint().width() + self.right_container.sizeHint().width()
-            title_available = max(0, width - side_req)
-            if title_available < (self._wide_req_width + 24):
-                compact = True
-        except Exception:
-            pass
+            # QToolBar's stylesheet padding is flattened by some native styles.
+            # Keep the intended asymmetric chrome explicit in logical pixels.
+            desired_margins = (8, 0, 8, 0) if self.property("shortScreen") else (8, 4, 8, 4)
+            margins = self.layout().contentsMargins()
+            if (margins.left(), margins.top(), margins.right(), margins.bottom()) != desired_margins:
+                self.layout().setContentsMargins(*desired_margins)
+            width = min(max(1, int(width)), self.width()) if self.isVisible() else max(1, int(width))
+            build = (self.btn_compile, self.btn_upload)
+            secondary = (self.btn_stop, self.btn_clean, self.btn_save, self.btn_save_all,
+                         self.btn_reload, self.btn_modify)
+            named = (*build, self.btn_project, self.btn_cloud)
+            # Busy captions come from the operation state machine. A tiny layout
+            # may hide them, but restoring width must restore that same caption.
+            labels = getattr(self, "_responsive_labels", {})
+            for button, fallback in zip(named, ("Compile", "Upload", "Project", "Cloud")):
+                labels[button] = button.text() or labels.get(button, fallback)
+            self._responsive_labels = labels
+            spacing = max(0, self.layout().spacing())
+            chrome = desired_margins[0] + desired_margins[2] + 4 * spacing + 16
+            action_spacing = self.actions_container.layout().spacing()
+            right_spacing = self.right_container.layout().spacing()
 
-        self._is_compact = compact
-        if compact:
-            self.btn_stop.setVisible(False)
-            self.btn_clean.setVisible(False)
-            if hasattr(self, "_action_sep"):
-                self._action_sep.setVisible(False)
-            self.btn_save.setVisible(False)
-            self.btn_save_all.setVisible(False)
-            self.btn_reload.setVisible(False)
-            self.btn_modify.setVisible(False)
-            self.btn_actions_dropdown.setVisible(True)
-
-            if width < 1000:
-                self.lbl_sketch.setVisible(False)
-                self.btn_download.set_icon("download")
-                self.btn_download.setText("")
-                self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
-                self.btn_download.setFixedWidth(28)
-                if width < 520:
-                    self.logo.setText("MCU")
-                elif width < 680:
-                    self.logo.setText("MCU Flasher")
+            def required(compact, sketch, resource_text, logo, tiny):
+                actions = [30 if tiny else self._button_width(button, labels[button]) for button in build]
+                if compact:
+                    actions.append(30 if tiny else self._button_width(self.btn_actions_dropdown, "Actions", plain_icon=True))
                 else:
-                    self.logo.setText("MCU Flasher by Naph")
-            elif width < 1250:
-                self.lbl_sketch.setVisible(True)
-                self.btn_download.set_icon("download")
-                self.btn_download.setText("Resources")
-                self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
-                self.btn_download.setMinimumWidth(0)
-                self.btn_download.setMaximumWidth(16777215)
-                self.logo.setText("MCU Flasher by Naph")
-            else:
-                self.lbl_sketch.setVisible(True)
-                self.btn_download.set_icon("download")
-                self.btn_download.setText("Resources")
-                self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
-                self.btn_download.setMinimumWidth(0)
-                self.btn_download.setMaximumWidth(16777215)
-                self.logo.setText("MCU Flasher by Naph")
-        else:
-            self.btn_stop.setVisible(True)
-            self.btn_clean.setVisible(True)
-            if hasattr(self, "_action_sep"):
-                self._action_sep.setVisible(True)
-            self.btn_save.setVisible(True)
-            self.btn_save_all.setVisible(True)
-            self.btn_reload.setVisible(True)
-            self.btn_modify.setVisible(True)
-            self.btn_actions_dropdown.setVisible(False)
-            if hasattr(self, "_actions_popup") and self._actions_popup and self._actions_popup.isVisible():
+                    actions.extend(self._button_width(button, button.text()) for button in secondary[:2])
+                    actions.append(max(0, self._action_sep.sizeHint().width()))
+                    actions.extend(self._button_width(button, button.text()) for button in secondary[2:])
+                right = [30 if tiny else self._button_width(button, labels[button])
+                         for button in (self.btn_project, self.btn_cloud)]
+                right.append(self._button_width(self.btn_download, "Resources") if resource_text else 28)
+                if sketch:
+                    right[:0] = [self.lbl_sketch_icon.sizeHint().width(), self.lbl_sketch.sizeHint().width()]
+                return (self.logo.fontMetrics().horizontalAdvance(logo) + sum(actions)
+                        + action_spacing * (len(actions) - 1) + sum(right)
+                        + right_spacing * (len(right) - 1) + chrome)
+
+            # The optional project caption yields before application actions.
+            # Each candidate is measured afresh, never from a collapsed layout.
+            candidates = (
+                (False, True, True, "MCU Flasher by Naph", False),
+                (False, False, True, "MCU Flasher by Naph", False),
+                (True, True, True, "MCU Flasher by Naph", False),
+                (True, False, True, "MCU Flasher by Naph", False),
+                (True, False, False, "MCU Flasher by Naph", False),
+                (True, False, False, "MCU Flasher", False),
+                (True, False, False, "MCU", False),
+                (True, False, False, "MCU", True),
+            )
+            requirements = tuple(required(*candidate) for candidate in candidates)
+            state = next((candidate for candidate, needed in zip(candidates, requirements)
+                          if needed <= width), candidates[-1])
+            signature = (width, desired_margins, requirements, state, tuple(labels.values()))
+            if signature == getattr(self, "_responsive_signature", None):
+                return
+            self._responsive_signature = signature
+            compact, sketch, resource_text, logo, tiny = state
+            self._is_compact = compact
+            for button in secondary:
+                button.setVisible(not compact)
+            self._action_sep.setVisible(not compact)
+            self.btn_actions_dropdown.setVisible(compact)
+            if not compact and self._actions_popup is not None:
                 self._actions_popup.close()
                 self._actions_popup = None
-
-            self.lbl_sketch.setVisible(True)
-            self.btn_download.set_icon("download")
-            self.btn_download.setText("Resources")
-            self.btn_download.setToolTip("Download and manage Arduino boards and libraries")
-            self.btn_download.setMinimumWidth(0)
-            self.btn_download.setMaximumWidth(16777215)
-            self.logo.setText("MCU Flasher by Naph")
-
-        # Keep Project and Download directly reachable on very narrow screens.
-        tiny = width < 560
-        for button, label in ((self.btn_compile, "Compile"), (self.btn_upload, "Upload"),
-                              (self.btn_project, "Project"), (self.btn_cloud, "Cloud")):
-            desired = "" if tiny else label
-            if button.text() != desired:
-                button.setText(desired)
-            button.setMinimumWidth(30 if tiny else 0)
-            button.setMaximumWidth(30 if tiny else 16777215)
-        self.lbl_sketch_icon.setVisible(width >= 680)
-        # A half-screen workspace can be narrower than 400 logical pixels.
-        micro = width < 420
-        self.btn_actions_dropdown.setText("" if micro else "Actions ")
-        self.btn_actions_dropdown.setIcon(icon("settings") if micro else QIcon())
-        self.btn_actions_dropdown.setMinimumWidth(30 if micro else 100)
-        self.btn_actions_dropdown.setMaximumWidth(30 if micro else 16777215)
-        self._balance_spacers()
+            self.logo.setText(logo)
+            self.lbl_sketch.setVisible(sketch)
+            self.lbl_sketch_icon.setVisible(sketch)
+            for button in named:
+                text = "" if tiny else labels[button]
+                if button.text() != text:
+                    button.setText(text)
+                minimum, maximum = (30, 30) if tiny else (0, 16777215)
+                if (button.minimumWidth(), button.maximumWidth()) != (minimum, maximum):
+                    button.setMinimumWidth(minimum)
+                    button.setMaximumWidth(maximum)
+                padding = "padding: 3px 4px;" if tiny else "padding: 3px 8px;"
+                if button.styleSheet() != padding:
+                    button.setStyleSheet(padding)
+            text = "Resources" if resource_text else ""
+            if self.btn_download.text() != text:
+                self.btn_download.setText(text)
+            minimum, maximum = (0, 16777215) if resource_text else (28, 28)
+            if (self.btn_download.minimumWidth(), self.btn_download.maximumWidth()) != (minimum, maximum):
+                self.btn_download.setMinimumWidth(minimum)
+                self.btn_download.setMaximumWidth(maximum)
+            download_padding = "padding: 3px 8px;" if resource_text else "padding: 3px 4px;"
+            if self.btn_download.styleSheet() != download_padding:
+                self.btn_download.setStyleSheet(download_padding)
+            self.btn_actions_dropdown.setText("" if tiny else "Actions")
+            self.btn_actions_dropdown.setIcon(icon("settings") if tiny else QIcon())
+            self.btn_actions_dropdown.setAccessibleName("More actions")
+            minimum, maximum = (30, 30) if tiny else (0, 16777215)
+            self.btn_actions_dropdown.setMinimumWidth(minimum)
+            self.btn_actions_dropdown.setMaximumWidth(maximum)
+            action_padding = "padding: 3px 4px;" if tiny else "padding: 3px 8px;"
+            if self.btn_actions_dropdown.styleSheet() != action_padding:
+                self.btn_actions_dropdown.setStyleSheet(action_padding)
+            self.actions_container.layout().invalidate()
+            self.right_container.layout().invalidate()
+            self._balance_spacers()
+        finally:
+            self._in_reflow = False
 
     def _toggle_actions_menu(self) -> None:
         """Show popup containing secondary actions that are collapsed in compact mode."""
@@ -1488,6 +1517,10 @@ class ControlsBar(QWidget):
         super().__init__(parent)
         self._backend = backend
         self._upload_phase_locked = False
+        self._updating_responsive = False
+        self._controls_reflow_timer = QTimer(self)
+        self._controls_reflow_timer.setSingleShot(True)
+        self._controls_reflow_timer.timeout.connect(lambda: self.set_responsive_width(self.width()))
         self.setObjectName("controls-bar")
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._setup_ui()
@@ -1633,7 +1666,7 @@ class ControlsBar(QWidget):
         self.btn_ai.clicked.connect(self._toggle_ai_panel)
         opt_row.addWidget(self.btn_ai)
 
-        # Compact Options dropdown button (visible when width < 1350)
+        # Workspace actions collapse when their measured row cannot fit.
         self.btn_opt_dropdown = QPushButton("Options ")
         self.btn_opt_dropdown.setObjectName("btn-options-dropdown")
         self.btn_opt_dropdown.setFixedHeight(26)
@@ -2151,6 +2184,7 @@ class ControlsBar(QWidget):
             self.board_selector.update()
         if hasattr(self, "port_combo"):
             self.port_combo.update()
+        self._controls_reflow_timer.start(0)
         self.update()
 
     def _get_adaptive_upload_speed_width(self, width: int | None = None) -> int:
@@ -2172,6 +2206,14 @@ class ControlsBar(QWidget):
         if hasattr(self, "_groups"):
             self.set_responsive_width(event.size().width())
 
+    def event(self, event):
+        result = super().event(event)
+        if (hasattr(self, "_groups") and not self._updating_responsive
+                and event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.FontChange,
+                                     QEvent.Type.StyleChange, QEvent.Type.Show)):
+            self._controls_reflow_timer.start(0)
+        return result
+
     def _reflow(self, width: int) -> None:
         # Use actual content hints so translated labels and system fonts fit too.
         groups = self._groups
@@ -2188,8 +2230,10 @@ class ControlsBar(QWidget):
             self.port_combo.setMinimumWidth(100)
         self._grid.setContentsMargins(*(8, 2, 8, 2) if short else (10, 4, 10, 4))
         self._grid.setSpacing(3 if short else 6)
-        self.btn_opt_dropdown.setText("" if short else "Options ")
-        self.btn_opt_dropdown.setIcon(icon("settings") if short else QIcon())
+        if getattr(self, "_options_short", None) != short:
+            self.btn_opt_dropdown.setText("" if short else "Options ")
+            self.btn_opt_dropdown.setIcon(icon("settings") if short else QIcon())
+            self._options_short = short
         self.btn_opt_dropdown.setAccessibleName("Workspace options")
         self.btn_opt_dropdown.setMinimumWidth(30 if short else 0)
         self.btn_opt_dropdown.setMaximumWidth(30 if short else 16777215)
@@ -2236,67 +2280,65 @@ class ControlsBar(QWidget):
         return getattr(self, "_is_compact", False)
 
     def set_responsive_width(self, width: int) -> None:
-        """Dynamically adapt controls bar buttons, labels, and input fields based on width."""
-        self._current_width = width
-        compact_buttons = width < 1350
-        self._is_compact = compact_buttons
+        """Choose a stable row from current logical font and native style metrics."""
+        if self._updating_responsive:
+            return
+        self._updating_responsive = True
+        try:
+            width = min(max(1, int(width)), self.width()) if self.isVisible() else max(1, int(width))
+            self._current_width = width
+            for widget in (self.board_selector, self.port_combo, self.upload_speed_combo,
+                           self.cb_timestamp, self.cb_skip_compile):
+                widget.ensurePolished()
+            board_width = max(140, self.board_selector._get_adaptive_width())
+            port_width = max(140, self.port_combo.fontMetrics().horizontalAdvance("Select serial port") + 42)
+            tiny = self._tiny_window and width < 900
+            if tiny:
+                board_width, port_width = 70, 100
+            speed_width = self._get_adaptive_upload_speed_width()
+            actions = (self.btn_detach_editor, self.btn_toggle_editor, self.btn_toggle_monitors,
+                       self.btn_settings, self.btn_ai)
 
-        if compact_buttons:
-            self.btn_detach_editor.setVisible(False)
-            self.btn_toggle_editor.setVisible(False)
-            self.btn_toggle_monitors.setVisible(False)
-            self.btn_settings.setVisible(False)
-            self.btn_ai.setVisible(False)
-            self.btn_opt_dropdown.setVisible(True)
-        else:
-            self.btn_detach_editor.setVisible(True)
-            self.btn_toggle_editor.setVisible(True)
-            self.btn_toggle_monitors.setVisible(True)
-            self.btn_settings.setVisible(True)
-            self.btn_ai.setVisible(True)
-            self.btn_opt_dropdown.setVisible(False)
-            if hasattr(self, "_opt_popup") and self._opt_popup and self._opt_popup.isVisible():
+            def checkbox_width(widget, text):
+                fm = widget.fontMetrics()
+                return widget.sizeHint().width() + fm.horizontalAdvance(text) - fm.horizontalAdvance(widget.text())
+
+            checkboxes = (checkbox_width(self.cb_timestamp, "Timestamps")
+                          + checkbox_width(self.cb_skip_compile, "Skip Compile") + 3)
+            workspace = checkboxes + sum(button.sizeHint().width() for button in actions) + 18
+            fields = board_width + (0 if tiny else self.btn_search_board.width() + 4) + port_width + max(
+                speed_width, self.lbl_spd.fontMetrics().horizontalAdvance("Upload speed"))
+            compact = tiny or width < fields + workspace + 38
+            compact_workspace = checkboxes + PrimaryToolbar._button_width(
+                self.btn_opt_dropdown, "Options", plain_icon=True) + 6
+            abbreviate = compact and width < fields + compact_workspace + 38
+            signature = (width, board_width, port_width, speed_width, fields, workspace,
+                         compact, abbreviate, self._short_window, self._tiny_window, self.font().toString())
+            if signature == getattr(self, "_controls_signature", None):
+                return
+            self._controls_signature = signature
+            self.board_selector.setMinimumWidth(board_width)
+            self.port_combo.setMinimumWidth(port_width)
+            self.upload_speed_combo.setFixedWidth(speed_width)
+            self._is_compact = compact
+            for button in actions:
+                button.setVisible(not compact)
+            self.btn_opt_dropdown.setVisible(compact)
+            if not compact and self._opt_popup is not None:
                 self._opt_popup.close()
                 self._opt_popup = None
 
-        # Upload speed combo responsive width
-        if hasattr(self, "upload_speed_combo") and hasattr(self, "_get_adaptive_upload_speed_width"):
-            self.upload_speed_combo.setFixedWidth(self._get_adaptive_upload_speed_width(width))
-
-        # Checkboxes & SPD label adaptation
-        if width < 1100:
-            self.cb_timestamp.setText("TS")
-            self.cb_skip_compile.setText("Skip")
-            if hasattr(self, "lbl_spd"):
-                self.lbl_spd.setText("SPD")
-        elif width < 1350:
-            self.cb_timestamp.setText("Timestamps")
-            self.cb_skip_compile.setText("Skip")
-            if hasattr(self, "lbl_spd"):
-                self.lbl_spd.setText("Upload speed")
-        else:
-            self.cb_timestamp.setText("Timestamps")
-            self.cb_skip_compile.setText("Skip Compile")
-            if hasattr(self, "lbl_spd"):
-                self.lbl_spd.setText("Upload speed")
-
-        # Board and port adaptive widths
-        if hasattr(self, "board_selector") and hasattr(self.board_selector, "_get_adaptive_width"):
-            adaptive_w = self.board_selector._get_adaptive_width()
-            if width < 950:
-                self.board_selector.setMinimumWidth(max(140, int(adaptive_w * 0.75)))
-                self.port_combo.setMinimumWidth(140)
-            elif width < 1200:
-                self.board_selector.setMinimumWidth(max(150, int(adaptive_w * 0.85)))
-                self.port_combo.setMinimumWidth(170)
-            elif width < 1400:
-                self.board_selector.setMinimumWidth(max(160, int(adaptive_w * 0.95)))
-                self.port_combo.setMinimumWidth(200)
-            else:
-                self.board_selector.setMinimumWidth(max(175, adaptive_w))
-                self.port_combo.setMinimumWidth(230)
-
-        self._reflow(width)
+            # Abbreviate only if even the compact single row needs the space.
+            for widget, label in ((self.cb_timestamp, "TS" if abbreviate else "Timestamps"),
+                                  (self.cb_skip_compile, "Skip" if abbreviate else "Skip Compile"),
+                                  (self.lbl_spd, "SPD" if abbreviate else "Upload speed")):
+                if widget.text() != label:
+                    widget.setText(label)
+            for group in self._groups:
+                group.invalidate()
+            self._reflow(width)
+        finally:
+            self._updating_responsive = False
 
     def _toggle_options_menu(self) -> None:
         """Show popup containing option buttons that are collapsed in compact mode."""

@@ -80,6 +80,14 @@ three arguments and must not produce callback warnings or errors.
 
 ## MCU Flasher workspace contract
 
+Measure toolbar candidates with their actual font, native margins, spacing and
+mandatory action widths. In a real QMainWindow, require Project and Resources to
+remain visible through shrink/grow, long project names and same-width theme
+changes; inspect every ancestor and the native overflow extension. A QToolBar in
+a plain vertical layout does not exercise native action overflow. Use actual
+pane allocations for tool tabs and refresh after splitters/sidebars change them.
+Keep chrome compact through spacing before reducing text or usable targets.
+
 Developer Access has its own neobrutalist identity on Windows and Ubuntu.
 Use solid cream backdrops, white paper cards, thick black borders, hard offset
 shadows and pink/yellow/blue accent fills throughout login, dashboard, ticket

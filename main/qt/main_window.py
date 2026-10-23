@@ -235,6 +235,7 @@ class MCUMainWindow(QMainWindow):
                     toolbar.layout().setContentsMargins(margins)
                 toolbar.layout().invalidate()
                 toolbar.layout().activate()
+        self._apply_responsive_layout(self.width())
         self._fit_panes_for_height()
         if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
             if hasattr(self._editor_panel, "force_layout"):
@@ -329,19 +330,18 @@ class MCUMainWindow(QMainWindow):
 
     def _apply_responsive_layout(self, w: int) -> None:
         """Propagate responsive width changes to all window components and child panels."""
-        if getattr(self, "_last_responsive_width", None) == w:
-            return
-        self._last_responsive_width = w
+        # Native toolbar chrome, splitters, font/theme changes and side panes
+        # can change child budgets without changing the outer window width.
         if hasattr(self, "_primary_toolbar") and self._primary_toolbar:
-            self._primary_toolbar.set_responsive_width(w)
+            self._primary_toolbar.set_responsive_width(self._primary_toolbar.width())
         if hasattr(self, "_controls_bar") and self._controls_bar:
-            self._controls_bar.set_responsive_width(w)
-        self._update_tab_titles_responsive(w)
+            self._controls_bar.set_responsive_width(self._controls_bar.width())
 
         # Panel content width (accounting for open AI side panel or splitters)
         panel_w = w
         if hasattr(self, "_bottom_tabs") and self._bottom_tabs and self._bottom_tabs.width() > 100:
             panel_w = self._bottom_tabs.width()
+        self._update_tab_titles_responsive(panel_w)
 
         if hasattr(self, "_console_container") and hasattr(self._console_container, "set_responsive_width"):
             self._console_container.set_responsive_width(panel_w)

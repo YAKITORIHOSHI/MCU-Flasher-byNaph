@@ -28,7 +28,7 @@ from PySide6.QtGui import QIcon, QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
                               QLineEdit, QToolButton, QStyle,
-                              QApplication)
+                              QApplication, QMainWindow, QHBoxLayout, QTabWidget)
 from main.qt.toolbar import ControlsBar, PrimaryToolbar, CompactDropdownPopup
 from main.qt.serial_panel import SerialPanel
 from main.qt.theme import build_stylesheet, register_fonts, get_palette
@@ -85,6 +85,70 @@ class QtResponsiveChecks(ControlChecks):
             self.stack.enter_context(patch.object(panel, name))
         sent = self.stack.enter_context(patch.object(panel, '_send_control'))
         return panel, sent
+
+    def test_tool_tabs_follow_allocated_pane_width_when_sidebar_changes(self):
+        from main.qt.main_window import MCUMainWindow
+        host = self.own(QMainWindow())
+        host.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.X11BypassWindowManagerHint)
+        central = QWidget(host)
+        host.setCentralWidget(central)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        tabs = QTabWidget(central)
+        for name in ('Build Console', 'Serial Monitor', 'Compatible Devices',
+                     'Notifications', 'Syntax Check', 'Terminal', 'AI Changes'):
+            tabs.addTab(QWidget(), name)
+        layout.addWidget(tabs, 1)
+        sidebar = QWidget(central)
+        sidebar.setFixedWidth(600)
+        layout.addWidget(sidebar)
+        sidebar.hide()
+        host._bottom_tabs = tabs
+        host._update_tab_titles_responsive = lambda width: MCUMainWindow._update_tab_titles_responsive(host, width)
+        host.resize(1280, 640)
+        host.show()
+        pump()
+        MCUMainWindow._apply_responsive_layout(host, host.width())
+        self.assertEqual(tabs.tabText(0), 'Build Console')
+        original_width = host.width()
+        sidebar.show()
+        pump()
+        self.assertEqual(host.width(), original_width)
+        self.assertLess(tabs.width(), 850)
+        MCUMainWindow._apply_responsive_layout(host, host.width())
+        self.assertEqual(tabs.tabText(0), 'Build', 'Tool labels must follow their own pane after a sidebar opens')
+        sidebar.hide()
+        pump()
+        MCUMainWindow._apply_responsive_layout(host, host.width())
+        self.assertEqual(tabs.tabText(0), 'Build Console')
+
+    def test_workspace_navigation_preserves_readable_targets_without_excess_chrome(self):
+        from main.qt.glass import WorkspaceTabBar
+        for mode in ('default', 'light', 'solarized_dark'):
+            APP.setStyleSheet(build_stylesheet(mode))
+            host = self.own(QMainWindow())
+            toolbar = PrimaryToolbar(self.backend, host)
+            host.addToolBar(toolbar)
+            tabs = QTabWidget(host)
+            tabs.setObjectName('workspace-tabs')
+            tabs.setTabBar(WorkspaceTabBar(tabs))
+            for name in ('Build', 'Serial', 'Devices', 'Alerts', 'Syntax', 'Terminal', 'AI Changes'):
+                tabs.addTab(QWidget(), name)
+            host.setCentralWidget(tabs)
+            host.resize(1280, 640)
+            host.show()
+            pump()
+            with self.subTest(theme=mode):
+                self.assertLessEqual(toolbar.height(), toolbar.btn_compile.height() + 10,
+                                     'Toolbar padding should leave room for workspace content at scaled sizes')
+                bar = tabs.tabBar()
+                self.assertGreaterEqual(bar.height(), 28, 'Keep usable navigation targets')
+                self.assertLessEqual(bar.height(), max(28, bar.fontMetrics().lineSpacing() + 16),
+                                     'Tool tabs should not spend excessive height on padding')
+                for index in range(bar.count()):
+                    self.assertGreaterEqual(bar.tabRect(index).height(), bar.fontMetrics().height())
+            host.hide()
 
     def test_native_embeds_fill_actual_client_bounds_at_every_scale(self):
         from main.qt import terminal_panel, ai_panel

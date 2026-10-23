@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, responsive layouts, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -1565,6 +1565,15 @@ MCU Flasher by Naph/
   must explicitly refresh full text/tooltips/timer policy without changing data.
 - Settings' legacy `graphics_acceleration` key controls continuous splitter resize, not the GPU. Unsaved defaults use divider previews on constrained devices; preserve explicit choices. Save a complete preference set once and report persistence failure. Reset controls must revalidate target/framework/port and busy state in their callbacks.
 - `main/qt/responsive.py` owns current-monitor work-area fitting and coalesced screen/font signals. Qt screen geometry and font widths are logical pixels: never multiply them by DPI/DPR. Use `ui_metrics.py` for coordinate arithmetic, including negative monitor origins and frame clearance. Reflow Controls, serial headers and dialog fields; do not let wide size hints lock compact windows. Preserve saved editor/terminal fonts. Tk uses its own native point/pixel scale, coalesced panes and scrollable installed details; cancel bound callbacks on destruction.
+- Toolbar candidates include native margins/spacing and mandatory action widths;
+  choose from actual content budgets and recalculate after label/font/theme
+  changes. Keep Project and Resources visible through native QMainWindow toolbar
+  overflow, including 1280/1320 logical widths, narrow-to-wide transitions and
+  long project names. A plain VBox toolbar fixture cannot establish that.
+  Tool-tab and panel budgets follow allocated pane widths after splitter/sidebar
+  changes, even at the same outer width. Verify `direct/verify_toolbar_sizing.py`
+  and `direct/verify_responsive.py`; use the native UI `responsive` group for all
+  five scales. Preserve saved content fonts, keyboard focus and dirty buffers.
 - Main windows have a minimum width of half the current monitor's available width in Qt logical pixels. Allow wider resizing and normal maximization, including saved maximized state. Recalculate the minimum on monitor changes and fit normal window frames to the work area. Detached editor and explicit dialog sizing keep their own contracts.
 - Verify screen changes and 100/125/150/175/200% scale in fresh processes with `direct/verify_responsive.py`. Couple physical screen dimensions with each scale and taskbar/work-area reservation; convert once to Qt logical pixels. Include half-monitor and full-width windows, portrait and short laptop areas, and chosen content fonts. Assert effective rendered fonts, complete button visibility through ancestors and a complete padded text line. Keep the same hardware-free persistence mocks as the controls verifier. Check full baud digits beside combo padding/arrows and footer visibility. Narrow, short Controls use fewer rows; very short windows retain Timestamps/Skip Compile in Options. Serial Options retains collapsed display/Copy/Clear actions, and all layouts restore when space returns. Reserve Build/Serial output using the document's chosen font, reading margin and scrollbar/frame chrome, and refit after font changes.
 - Short-screen pane budgets use the active tool's minimum size hint. Keep log views shrinkable while preserving headers and serial send controls. Check every tool tab in the runtime preview. Mock terminal session creation for layout probes; real PTY checks belong in `direct/verify_terminal.py`.

@@ -208,6 +208,16 @@ reads from three to two. Small packages and Windows retain the native copier;
 Windows file attributes and alternate data streams keep their existing behavior.
 The warm local benchmark did not establish a wall-time speedup.
 
+Workspace sizing uses the space actually allocated to each toolbar and tool pane.
+Project and Resources remain directly reachable when the window shrinks or grows,
+including a 1080p screen at 150% scale. Secondary actions collapse only when their
+measured content cannot fit; a monitor's physical resolution does not force one
+layout. Compact padding preserves navigation space without changing saved reading
+fonts. Tool tabs follow their own pane when the AI sidebar opens or a splitter moves.
+`direct/verify_toolbar_sizing.py` exercises real native toolbar containers through
+resize, project-label and theme changes; `direct/verify_responsive.py` checks pane
+budgets. The native UI workflow's `responsive` group captures all five display scales.
+
 Ubuntu amd64/ARM64 setup prepares both `libsecret-tools` and `gnome-keyring`.
 Cloud credentials require an unlocked keyring in the current desktop session.
 Vault errors remain visible for saved account credentials.

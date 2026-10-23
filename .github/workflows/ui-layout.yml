@@ -9,6 +9,11 @@ on:
         description: Run only the two Windows display-layout jobs
         type: boolean
         default: false
+      layout_group:
+        description: UI surfaces to verify
+        type: choice
+        options: [all, responsive, workspace, resources, auxiliary, portal]
+        default: all
 
 permissions:
   contents: read
@@ -57,12 +62,12 @@ jobs:
         if: runner.os == 'Windows'
         env:
           QT_QPA_PLATFORM: windows
-        run: env/Scripts/python.exe -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
+        run: env/Scripts/python.exe -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native --group '${{ inputs.layout_group || 'all' }}'
       - name: Ubuntu screens, validation states and display scales
         if: runner.os == 'Linux'
         env:
           QT_QPA_PLATFORM: xcb
-        run: xvfb-run -a -s '-screen 0 1920x1080x24' .venv-linux/bin/python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' .venv-linux/bin/python -B direct/verify_ui_layout.py --render-dir temp/audit/layout-native --group '${{ inputs.layout_group || 'all' }}'
       - name: Native screen captures and logs
         if: always()
         uses: actions/upload-artifact@v6

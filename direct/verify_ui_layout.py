@@ -25,11 +25,12 @@ def checks(group, scale, output):
 
     if group in ("all", "portal"):
         yield render("verify_owner_tickets", "developer")
-    if group in ("all", "workspace"):
+    if group in ("all", "workspace", "responsive"):
+        yield render("verify_toolbar_sizing", "toolbar")
         yield render("verify_responsive", "responsive")
         if scale in ("1", "2"):
             yield render("verify_runtime", "workspace", "--no-finalize")
-    if group in ("all", "resources"):
+    if group in ("all", "resources", "responsive"):
         yield render("verify_downloader_appearance", "resources", "--scale", scale)
         yield render("verify_bootstrap_headers", "setup")
         yield render("verify_svg_icons", "icons")
@@ -43,6 +44,10 @@ def checks(group, scale, output):
                 ("verify_package_progress", "package-progress")):
             yield render(script, folder)
         yield "verify_package_coverage", []
+    if group == "responsive" and scale in ("1", "1.5", "2"):
+        yield render("verify_projects", "projects")
+    if group == "responsive" and scale == "1" and sys.platform == "win32":
+        yield "verify_terminal", []
     if group == "all" and scale == "1":
         if sys.platform == "win32":
             yield "verify_terminal", []
@@ -55,7 +60,7 @@ def checks(group, scale, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--render-dir", type=Path, default=ROOT / "temp/audit/layout-native")
-    parser.add_argument("--group", choices=("all", "portal", "workspace", "resources", "auxiliary"), default="all")
+    parser.add_argument("--group", choices=("all", "portal", "workspace", "resources", "auxiliary", "responsive"), default="all")
     parser.add_argument("--scale", choices=SCALES, action="append")
     args = parser.parse_args()
     output = args.render_dir.resolve()
