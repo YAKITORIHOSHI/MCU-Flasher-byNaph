@@ -1,11 +1,11 @@
 # MCU Flasher by Naph — Release Notes
 
-> **Version:** v10 — Stable Release<br>
+> **Version:** v11 — Stable Release<br>
 > **Release Codename:** *Quantum Bridge & Core Shield*<br>
 > **Target Platforms:** Windows 10/11 (AMD64) · Native Ubuntu 24.04 or newer (amd64 / ARM64)<br>
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
-> **GitHub Release Published:** October 6, 2026<br>
+> **GitHub Release Published:** October 23, 2026<br>
 > **Notes Updated:** October 23, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
@@ -157,7 +157,7 @@ upload or live provider account was used.
 This source update does not rebuild or replace the published release ZIP.
 Earlier CI results below remain scoped to their recorded source revisions.
 
-## A More Expressive Workspace, With More Reliable Board Preparation
+## Earlier v10 Workspace Update
 
 MCU Flasher v10 refines the glass workspace for editing, compiling, flashing, and monitoring firmware. This update adds original SVG artwork, completes the Developer Access redesign, restores the Library & Board Browser's glass appearance, and improves setup and recovery on Windows and Ubuntu.
 

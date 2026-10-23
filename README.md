@@ -1,14 +1,30 @@
-# 🛠️ MCU Flasher by Naph
+# 🛠️ MCU Flasher by Naph v11
 
 > **A glass desktop workspace for compiling, flashing, monitoring, and coding microcontrollers on Windows and Ubuntu, including Ubuntu ARM64 on Raspberry Pi.**
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Ubuntu-blue)
+![Version](https://img.shields.io/badge/version-v11-brightgreen)
 ![Architecture](https://img.shields.io/badge/architecture-PySide6%20%7C%20Qt%20for%20Python-41CD52)
 ![Python](https://img.shields.io/badge/python-3.10%2B%20(Private%20Runtime)-blue)
 ![Toolchain](https://img.shields.io/badge/toolchain-PlatformIO%20%2B%20Arduino%20CLI-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-[v10 release notes and verification limits](RELEASE_NOTES.md)
+[v11 release notes and verification limits](RELEASE_NOTES.md)
+
+The current v11 source fixes quiet Bootstrap retries, disappearing Project and
+Resources actions, oversized navigation padding and half-screen window sizing.
+Native frame margins are included in the minimum width, including after
+maximize/restore. Accepted workspace closes release their embedded browser pages
+while Qt is running. See the [responsive verification](audit/RESPONSIVE_CONTROLS.md)
+and [window alignment evidence](audit/WINDOW_ALIGNMENT.md) for exact host results
+and remaining desktop checks.
+
+Fresh distribution folders use committed first-run defaults and retain the
+complete private Windows runtime. Personal settings, accounts, histories,
+development environments and project caches stay outside that distribution.
+Open the matching executable in [`LAUNCHER/`](LAUNCHER/README.md) after extraction;
+first launch prepares missing dependencies through Bootstrap. Updating source on
+GitHub does not replace the existing release download automatically.
 
 The v11 Bootstrap correction preserves packages with damaged PlatformIO metadata
 under the configured core's `.mcu-package-recovery` folder before installing
