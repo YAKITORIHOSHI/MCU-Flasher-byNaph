@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Developer and troubleshooting guide for MCU Flasher on Windows and Ubuntu. Use for the PySide6 glass workspace, offline Monaco editor, coding CLI terminals, serial monitor, exact board/framework pipelines, bounded recovery, resource budgets and native launchers."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, native Rust preview, embedded editor/terminals, performance and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -16,9 +16,11 @@ For explicitly requested assistant delegation, use the local
 
 ## Native Rust migration
 
-The final application uses native Rust GUI widgets with Monaco and xterm as
-embedded components, and Rust application backend services. Private Python may
-remain only for approved firmware tools. The older Tauri application web shell
+The shipping application still uses Python/PySide6. Its planned replacement uses
+native Rust GUI widgets with Monaco and xterm as embedded components and Rust
+application backend services; the native preview is not a complete replacement.
+In that replacement, private Python may remain only for approved firmware tools.
+The older Tauri application web shell
 is a reference prototype. Read `audit/migration/NATIVE_RUST_PLAN.md` for this
 requirement amendment and `desktop/native-ui/README.md` for the GTK and Win32
 feasibility adapters and their desktop/Wayland/input gates. Never promote fixture
@@ -51,6 +53,12 @@ replace this with a shell command or loose command-line concatenation. Keep
 Linux ELF CPU IDs, PE GUI format and Git 100755 Unix permissions in release
 validation; archives must reject extra legacy launcher entries. Verify supplied
 binaries before native rebuild checks with `direct/verify_launcher_folder.py`.
+For public release preparation, follow the
+[hygiene skill](../mcu-flash-project-hygiene/SKILL.md)'s Fresh and distribution
+workflow: finish private-runtime integrity checks before removing native runtime
+dependencies, then package the intended committed revision. Preserve the complete
+private Windows runtime and local settings. A source push or launcher binary does
+not establish that the packaged application has passed on every named OS.
 macOS/Fedora/Mint entries currently show availability notices and Windows ARM
 refuses. Keep this distinction explicit. Native editor component checks do not
 qualify application startup, setup, tools, drivers or USB. Current Windows ARM
@@ -178,8 +186,19 @@ recovery messages accessible when compact status labels elide them.
 fixtures; verify disk bytes, BOM/Unicode, late edits, external conflicts and
 retained history separately from read-only `--workspace-smoke`. No live
 activation/registration, settings/cloud/device write or build/package service
-is enabled by Save. See `native-source-save.json` for exact final checks. Windows
-native Project picker/HICON are implemented in `0e0db8a` with passing native units/GUI.
+is enabled by Save. See `native-source-save.json` for exact final checks.
+
+The Save checkpoint at runtime source `e4f7c270` passes 29 Linux native library
+units or 27 Windows library plus eight Windows binary units, with 32 Save,
+19 workspace and 17 detach GUI checks on each qualified host. CI `39826385795`
+covers Windows Server AMD64 and Ubuntu 24.04 AMD64/ARM64; Ubuntu 26.04 ARM64
+passes in `39827591406` and AMD64 in `39874766179`. The Ubuntu 26 follow-ups
+change workflow qualification only. Keep these native preview results separate
+from shipping Python and Windows 10/11 desktop, physical-device and Wayland
+qualification. A lost Save worker disables further writes, retains dirty buffers
+and requires reopening; completed files may already be on disk.
+
+Windows native Project picker/HICON are implemented in `0e0db8a` with passing native units/GUI.
 The picker launches current Rust EXE with literal OS path/theme arguments on a
 worker, cancel/no-spawn, 16-child cap and retained parent buffers. The bounded
 original-ICO parser has three pure tests; main/detached own small/large HICONs.
@@ -194,8 +213,9 @@ detach smoke without `--workspace`. The workspace fixture proves retained
 models, dirty state/selection, themes, undo and unchanged source bytes; its
 default receipt lives under `audit/migration/scratch/native-workspace/`. Put
 continuation captures/receipts in `temp/` by supplying the developer controller
-an `OutputDirectory` rooted in an owned temp folder. Current Linux native units
-total 23, alongside GTK 36 GUI and strict Linux/MSVC-target Clippy. Full CI
+an `OutputDirectory` rooted in an owned temp folder. The historical read-only
+workspace checkpoint has 23 Linux native units, GTK 36 GUI and strict
+Linux/MSVC-target Clippy. Its full CI
 `39539221917` at `49ab312` also passes Windows 28 native units/36 GUI and both
 Windows Python editor jobs. Runtime source equals `eb9d13c`; the follow-up changes
 only the workflow's expected workspace contract. Retain the five controller

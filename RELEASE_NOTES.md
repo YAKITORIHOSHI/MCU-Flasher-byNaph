@@ -2,14 +2,44 @@
 
 > **Version:** v10 — Stable Release<br>
 > **Release Codename:** *Quantum Bridge & Core Shield*<br>
-> **Target Platforms:** Windows 10/11 (64-bit) · Native Ubuntu 24.04 or newer (amd64 / ARM64)<br>
+> **Target Platforms:** Windows 10/11 (AMD64) · Native Ubuntu 24.04 or newer (amd64 / ARM64)<br>
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 6, 2026<br>
-> **Notes Updated:** October 16, 2026<br>
+> **Notes Updated:** October 23, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
+
+## October 23 Source Update: Executable Launchers and Responsive Editing
+
+Open `LAUNCHER` and use `WINDOWS.exe`, `UBUNTU` or `UBUNTU_ARM64` for the matching
+host. These are executable entries with no `.desktop` shortcuts in that folder;
+the older root launchers remain compatible. Moved-folder, literal-argument,
+architecture, executable-permission and release archive checks pass on their
+recorded native Windows/Ubuntu hosts. See the [launcher guide](LAUNCHER/README.md).
+
+The Board/Library browser now sleeps with its loaded state retained in memory.
+Warm reopening preserves its catalog, search, selection and scroll position;
+unchanged lists avoid repeated publication. Editor syntax uses the documented
+Arduino-inspired palette, AI additions/removals use green/red, and terminal
+theme/fit and bounded Linux PTY readiness work address rendering and idle load.
+See [GUI performance evidence](audit/GUI_PERFORMANCE.md) and
+[shipping platform verification](audit/PLATFORM_VERIFICATION.md) for exact checks.
+
+The shipping application remains Python/PySide6. The separate native Rust preview
+has verified Save/Save All on hosted Windows Server AMD64 and Ubuntu 24/26
+AMD64/ARM64; it is excluded from the public application ZIP. Full native Compile
+and replacement parity remain unfinished. Windows ARM64 startup is refused;
+macOS/Fedora/Mint entries are availability notices. These are not completed
+application ports or physical desktop/USB qualifications.
+
+Public packages use committed fresh defaults, verified installer hashes and the
+complete private Windows runtime. Personal settings, logs, development runtimes,
+protected caches and audit fixtures are excluded without deleting user material.
+Build with `direct/build_release.py` and verify its per-file manifest before
+distributing the ZIP. Source updates do not automatically replace an existing
+GitHub release download.
 
 > **Source update and download status:** These notes include the October 15 source fixes and October 16 native-launcher correction. As checked on October 15, the [published Windows ZIP](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/tag/latest) was last updated on October 14, and the `latest` tag points to `e68e813`, an earlier revision. Rebuild and verify the release assets before describing these new fixes as included in that download. The verification limits below still apply.
 

@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: Audit MCU Flasher project hygiene on Windows and Ubuntu, including Windows hidden attributes, safe writable metadata, exact-board caches, generated agent instructions, Clean targets and protection of user sketches. Use for metadata generation, file utilities or cache cleanup changes.
+description: "Maintain MCU Flasher's generated metadata, protected caches, Fresh cleanup and public release integrity on Windows and Ubuntu. Use for file-utility, cleanup, packaging or publication-preparation changes; preserve user sketches, settings and recovery journals."
 ---
 
 # MCU Flasher Project Hygiene
@@ -144,7 +144,11 @@ Classify paths before changing attributes or deleting anything:
 - Keep `cleaner/windows/maintenance.ps1` and `cleaner/ubuntu/maintenance.py`
   separate. Compatibility wrappers in `cleaner/` and `DANGER-ZONE/` resolve
   from their own location, preserve exit codes and default to a read-only plan.
-  Mutation requires `-Apply` / `--apply` and exact typed acknowledgement.
+  Mutation requires `-Apply` / `--apply`. Interactive use asks for the exact typed
+  acknowledgement; intentional automation after an explicit Fresh request may use
+  Ubuntu `--apply --yes` or Windows `-Apply -Force` without asking again. These
+  flags retain ownership, changed-plan and running-process checks; they do not
+  authorize broader Runtime, shared-store, Stop or system-reset operations.
 - Maintenance preserves sketches, all settings, generic logs, protected project
   build/IDE caches and every AI recovery journal. Do not describe it as a
   complete user-state wipe. Source bytecode scans prune protected/runtime trees
@@ -194,6 +198,14 @@ Classify paths before changing attributes or deleting anything:
 
 ## File distribution conventions
 
+For a public Fresh request, run the needed private-runtime integrity verifiers
+before applying cleanup: Ubuntu Fresh removes `.venv-linux`. Review the native
+cleanup plan, apply only its authorized owned targets and retain the process
+guard. If active application/package work blocks cleanup, report the blocker;
+do not kill it or bypass the guard. Cleanup and public packaging are separate:
+Fresh preserves settings, accounts and recovery data, while archive selection
+excludes them without deleting their working copies.
+
 Packaged Windows releases require the complete `src/_python/` private Python
 distribution and its installed packages. Preserve it during fresh release
 preparation; do not classify it with disposable `env` / `.venv-linux` or omit it
@@ -204,6 +216,25 @@ Windows runtime, then verifies every archived file. Missing runtime files must
 stop packaging. GitHub source archives alone are not a packaged Windows release.
 Keep user state, package stores, protected caches and audit fixtures out of
 release ZIPs without deleting them from the working checkout.
+
+Before a requested Git push, inspect the intended source diff and tracked ignored
+files, check repository integrity and verify installer bytes against committed
+LFS SHA-256/size receipts. Keep materialized installers out of ordinary Git blobs;
+an unavailable LFS filter can make unchanged hydrated files appear modified.
+Check tracked state and credential findings without printing secret values; the
+fixed public Firebase client configuration alone is not a credential. Update
+release descriptions and agent guidance when behavior changes, preserving actual
+platform and preview limits. Build the ZIP from the intended committed revision,
+verify every archived file and retain its SHA-256 manifest before distribution.
+
+The public `LAUNCHER/` folder contains `WINDOWS.exe`, `UBUNTU`, `UBUNTU_ARM64`,
+`FEDORA`, `FEDORA_ARM64`, `LINUX_MINT`, `MacOS.command` and `README.md`, without
+`.desktop` entries. Preserve Unix executable modes and matching ELF CPUs/Windows
+GUI PE headers. Fedora/Mint/macOS entries currently show availability notices;
+Windows ARM64 and those application ports remain unqualified. The shipping GUI
+is Python/PySide6; native Rust preview receipts do not expand shipping support.
+Use `direct/verify_launcher_folder.py` and `direct/verify_release_sources.py` for
+isolated launcher and archive-selection checks before Fresh removes their runtime.
 
 Files generated at runtime or holding user-specific state belong in dedicated
 subdirectories, not the project root:
