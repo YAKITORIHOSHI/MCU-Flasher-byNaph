@@ -1,0 +1,56 @@
+name: Bootstrap performance contracts
+
+on:
+  push:
+    paths:
+      - '.github/workflows/bootstrap-performance.yml'
+      - 'src/modules/bootstrap*.py'
+      - 'src/modules/offline_bootstrap.py'
+      - 'direct/verify_bootstrap*.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  isolated-bootstrap:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04, ubuntu-26.04, ubuntu-24.04-arm, ubuntu-26.04-arm]
+        python: ['3.14']
+        include:
+          - os: windows-latest
+            python: '3.11'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Isolated fixture dependencies
+        run: python -m pip install 'platformio==6.2.0' 'click>=8.1.8,<8.2' 'psutil>=5.9,<8'
+      - name: Quiet downloads, cancellation, package integrity and timing
+        run: |
+          python -B direct/verify_bootstrap_pip_monitor.py
+          python -B direct/verify_bootstrap_package_recovery.py
+          python -B direct/verify_bootstrap_timing.py
+          python -B direct/verify_bootstrap_archives.py
+          python -B direct/verify_bootstrap_processes.py
+      - name: Owned package I/O benchmark
+        run: python -B direct/verify_bootstrap_io_performance.py --output temp/audit/bootstrap-performance/io.json
+      - name: Retain benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: bootstrap-performance-${{ matrix.os }}-${{ matrix.python }}
+          path: temp/audit/bootstrap-performance
+          if-no-files-found: ignore

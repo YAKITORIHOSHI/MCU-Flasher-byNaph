@@ -960,6 +960,7 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
     """
     from src.modules.bootstrap_seed import missing_packages, import_missing, reject_unresolved_collisions
     from src.modules.offline_bootstrap import requested_plan
+    from src.modules.bootstrap_timing import timed_stage
     if sys.platform != "win32":
         raise RuntimeError("The prebuilt seed contains Windows packages; Ubuntu uses native package setup.")
     root = Path(script_dir or SCRIPT_DIR)
@@ -967,8 +968,9 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
         plan, _ = requested_plan()
     core = root / "src" / ".platformio-mcu-gui"
     from src.modules.bootstrap_package_recovery import recover_packages
-    recover_packages(core, log=status)
-    missing = missing_packages(core, plan)
+    with timed_stage(status, "release seed local package check"):
+        recover_packages(core, log=status)
+        missing = missing_packages(core, plan)
     if not any(missing.values()):
         ok("Configured PlatformIO packages are verified locally; release seed download skipped.")
         return True
@@ -979,8 +981,9 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
     zip_dest = root / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
     verified = False
     if zip_dest.is_file():
-        verified, reason = _download_matches_expectations(
-            zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
+        with timed_stage(status, "cached release seed checksum"):
+            verified, reason = _download_matches_expectations(
+                zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
         if not verified:
             raise RuntimeError(f"Existing release archive was retained because verification failed: {zip_dest}: {reason}")
     if verified:
@@ -994,18 +997,20 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
         if gui:
             gui.set_status("Downloading pre-built PlatformIO toolchains...")
         try:
-            _download_file(seed_url or _PLATFORMIO_PREBUILT_GITHUB_URL, zip_dest,
-                           timeout=120, attempts=attempts,
-                           expected_size=_PLATFORMIO_PREBUILT_EXPECTED_SIZE,
-                           expected_sha256=_PLATFORMIO_PREBUILT_EXPECTED_SHA256,
-                           preserve_failed=True)
+            with timed_stage(status, "release seed download and checksum"):
+                _download_file(seed_url or _PLATFORMIO_PREBUILT_GITHUB_URL, zip_dest,
+                               timeout=120, attempts=attempts,
+                               expected_size=_PLATFORMIO_PREBUILT_EXPECTED_SIZE,
+                               expected_sha256=_PLATFORMIO_PREBUILT_EXPECTED_SHA256,
+                               preserve_failed=True)
         except Exception as exc:
             _record_bootstrap_exception("Release seed download failed; artifacts retained")
             warn(f"Release seed download failed: {exc}. Archive/partial checkpoints were retained; normal setup will resolve missing packages.")
             reject_unresolved_collisions(core, missing)
             return False
-    verified, reason = _download_matches_expectations(
-        zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
+    with timed_stage(status, "release seed verification before import"):
+        verified, reason = _download_matches_expectations(
+            zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
     if not verified:
         raise RuntimeError(f"Release seed verification failed; archive retained at {zip_dest}: {reason}")
     status("Importing only missing package groups from the verified release...")
@@ -1021,17 +1026,19 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
                 f"  Importing missing release packages...\n  {copied / 1048576:.1f} MiB copied • {member}")
 
     try:
-        result = import_missing(zip_dest, core, missing,
-                                staging_parent=root / "temp" / "audit" / "asset-seed",
-                                log=status, progress=progress)
+        with timed_stage(status, "release seed extraction and publication"):
+            result = import_missing(zip_dest, core, missing,
+                                    staging_parent=root / "temp" / "audit" / "asset-seed",
+                                    log=status, progress=progress)
         if missing["platforms"] and result["imported"]:
             # Newly imported platform definitions reveal their exact selected
             # board/framework variants. Offer those missing packages the same
             # verified seed before any online manager fallback.
-            discovered = missing_packages(core, plan)
-            second = import_missing(zip_dest, core, discovered,
-                                    staging_parent=root / "temp" / "audit" / "asset-seed",
-                                    log=status, progress=progress)
+            with timed_stage(status, "release seed toolchain discovery and import"):
+                discovered = missing_packages(core, plan)
+                second = import_missing(zip_dest, core, discovered,
+                                        staging_parent=root / "temp" / "audit" / "asset-seed",
+                                        log=status, progress=progress)
             result["imported"].extend(second["imported"])
     finally:
         if gui:
@@ -1794,7 +1801,12 @@ def _pip_latest_version(pkg_name: str) -> str | None:
 
 
 def _pip_upgrade(pkg_name: str) -> bool:
-    """Upgrade a pip package, return True on success."""
+    """Upgrade a pip package with the same finite large-Qt budget as setup."""
+    from src.modules.bootstrap_pip_monitor import install_timeout
+    normalized = re.sub(r"[-_.]+", "-", pkg_name).lower()
+    if normalized in {"pyside6", "pyqt5", "qscintilla"}:
+        return _run_pip_install(["--upgrade", pkg_name], timeout=install_timeout({
+            "pyside6" if normalized == "pyside6" else "pyqt5_qscintilla"}))
     return _run_pip_install(["--upgrade", pkg_name])
 
 
@@ -3160,9 +3172,11 @@ def ensure_pip_packages_parallel(
     wheelhouse = temp_root / "wheelhouse"
     wheelhouse.mkdir(parents=True, exist_ok=True)
 
-    # ── Stall detection & retry constants for pip download ──────────────
-    _DOWNLOAD_STALL_TIMEOUT = 45   # seconds with zero output → stalled
-    _DOWNLOAD_MAX_RETRIES   = 2    # retry up to 2 times (3 attempts total)
+    from src.modules import bootstrap_pip_monitor
+    pip_abort = threading.Event()
+    preserve_temporary = False
+    # Retry genuine absolute-deadline failures, never quiet pip output.
+    _DOWNLOAD_MAX_RETRIES = 2
 
     def _download_one(spec):
         sid = spec["id"]
@@ -3199,14 +3213,9 @@ def ensure_pip_packages_parallel(
             # atomically.
         ]
 
-        # Critical bootstrap packages are small wheel installs and should
-        # fail visibly rather than leave the UI in a fake 64–75% phase for
-        # eight minutes.  Keep a longer budget only for an explicitly
-        # requested optional feature or the PlatformIO package.
-        timeout_limit = (
-            600 if not spec.get("critical", True)
-            else (360 if sid == "platformio" else 180)
-        )
+        from src.modules import bootstrap_pip_monitor
+        timeout_limit = bootstrap_pip_monitor.download_timeout(
+            sid, critical=spec.get("critical", True))
 
         last_detail = ""
 
@@ -3234,152 +3243,59 @@ def ensure_pip_packages_parallel(
                 _update_bottom_from_rows()
                 status(f"Downloading {spec['name']} ({', '.join(spec['pip_args'])})...")
 
-            output_lines = []
             phase_events = 0
-            proc = None
-            try:
-                from src.modules.windows_tool_paths import pip_environment
-                proc = subprocess.Popen(
-                    cmd,
-                    env=pip_environment(),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    bufsize=1,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                )
 
-                import queue as _queue
-                output_queue = _queue.Queue()
-                reader_done = threading.Event()
-
-                def _reader(_proc=proc):
-                    try:
-                        if _proc.stdout is not None:
-                            for raw in iter(_proc.stdout.readline, ""):
-                                output_queue.put(raw)
-                    except Exception:
-                        pass
-                    finally:
-                        try:
-                            if _proc.stdout is not None:
-                                _proc.stdout.close()
-                        except Exception:
-                            pass
-                        reader_done.set()
-
-                threading.Thread(
-                    target=_reader,
-                    daemon=True,
-                    name=f"BootstrapPipDownloadReader-{sid}-{attempt}",
-                ).start()
-
-                started = time.time()
-                last_output_time = started   # ← stall detection anchor
-                timed_out = False
-                stalled = False
-
-                while True:
-                    try:
-                        raw = output_queue.get(timeout=0.15)
-                        line = raw.rstrip("\r\n")
-                        output_lines.append(line)
-                        last_output_time = time.time()   # reset stall clock
-                        low = line.strip().lower()
-                        if low:
-                            # pip does not expose a stable byte-progress API to a
-                            # non-interactive subprocess, so the classic row reflects
-                            # real resolver/download phases and never claims fake bytes.
-                            if low.startswith("collecting "):
-                                phase_events += 1
-                                _set_state(sid, status_text="Resolving...", pct=min(28, 10 + phase_events * 2))
-                                status(f"{spec['name']}: {line.strip()}")
-                            elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
-                                phase_events += 1
-                                _set_state(sid, status_text="Reading metadata...", pct=min(38, 24 + phase_events * 2))
-                                status(f"{spec['name']}: {line.strip()}")
-                            elif low.startswith("downloading ") or low.startswith("using cached "):
-                                phase_events += 1
-                                _set_state(sid, status_text="Downloading...", pct=min(68, 34 + phase_events * 3))
-                                status(f"{spec['name']}: {line.strip()}")
-                            elif low.startswith("saved "):
-                                _set_state(sid, status_text="Saving packages...", pct=70)
-                                status(f"{spec['name']}: {line.strip()}")
-                            elif low.startswith("successfully downloaded"):
-                                _set_state(sid, status_text="Downloaded", pct=75)
-                                ok(f"Downloaded {spec['name']} successfully.")
-                            _update_bottom_from_rows()
-                    except _queue.Empty:
-                        pass
-
-                    if proc.poll() is not None and reader_done.is_set() and output_queue.empty():
-                        break
-
-                    now = time.time()
-
-                    # Stall detection: no output for _DOWNLOAD_STALL_TIMEOUT seconds
-                    if now - last_output_time > _DOWNLOAD_STALL_TIMEOUT:
-                        stalled = True
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                        output_lines.append(
-                            f"bootstrap: download stalled ({_DOWNLOAD_STALL_TIMEOUT}s with no output)"
-                        )
-                        break
-
-                    # Absolute wall-clock timeout
-                    if now - started > timeout_limit:
-                        timed_out = True
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                        output_lines.append("bootstrap timeout while downloading")
-                        break
-
-                try:
-                    return_code = proc.wait(timeout=10)
-                except Exception:
-                    return_code = -1
-
-                if timed_out or stalled:
-                    return_code = -1
-
-                if return_code == 0:
+            def _download_line(line):
+                nonlocal phase_events
+                low = line.strip().lower()
+                # These are resolver phases, not fabricated byte progress.
+                if low.startswith("collecting "):
+                    phase_events += 1
+                    _set_state(sid, status_text="Resolving...", pct=min(28, 10 + phase_events * 2))
+                    status(f"{spec['name']}: {line.strip()}")
+                elif ".metadata" in low and (low.startswith("downloading ") or low.startswith("using cached ")):
+                    phase_events += 1
+                    _set_state(sid, status_text="Reading metadata...", pct=min(38, 24 + phase_events * 2))
+                    status(f"{spec['name']}: {line.strip()}")
+                elif low.startswith("downloading ") or low.startswith("using cached "):
+                    phase_events += 1
+                    _set_state(sid, status_text="Downloading...", pct=min(68, 34 + phase_events * 3))
+                    status(f"{spec['name']}: {line.strip()}")
+                elif low.startswith("saved "):
+                    _set_state(sid, status_text="Saving packages...", pct=70)
+                    status(f"{spec['name']}: {line.strip()}")
+                elif low.startswith("successfully downloaded"):
                     _set_state(sid, status_text="Downloaded", pct=75)
-                    _update_bottom_from_rows()
-                    ok(f"Downloaded {spec['name']} successfully.")
-                    return sid, True, worker_dir, ""
+                _update_bottom_from_rows()
 
-                # Download failed on this attempt — store detail for potential retry.
-                last_detail = "\n".join(output_lines[-80:]).strip()
+            from src.modules.windows_tool_paths import pip_environment
+            try:
+                result = bootstrap_pip_monitor.run(
+                    cmd, env=pip_environment(), timeout=timeout_limit,
+                    cancelled=lambda: pip_abort.is_set() or bool(gui and getattr(gui, "_closed", False)),
+                    on_line=_download_line,
+                    log_path=SCRIPT_DIR / "logs" / "bootstrap_pip.log",
+                    label=f"pip download {sid}, attempt {attempt + 1}/{max_attempts}",
+                    on_cleanup_failure=lambda detail: _record_bootstrap_log(
+                        "FAIL", f"Python download {sid}: cleanup incomplete; setup is waiting for owned writers to stop: {detail}"),
+                )
+            except bootstrap_pip_monitor.PipCleanupError:
+                pip_abort.set()
+                raise
+            _record_bootstrap_log("OK" if result.ok else "WARN",
+                                  f"Python download {sid}: {result.summary}")
+            if result.ok:
+                _set_state(sid, status_text="Downloaded", pct=75)
+                _update_bottom_from_rows()
+                ok(f"Downloaded {spec['name']} successfully.")
+                return sid, True, worker_dir, ""
 
-                # If this was a stall/timeout and we have retries left, loop.
-                if (stalled or timed_out) and attempt < max_attempts - 1:
-                    continue
-
-                # Non-stall failure or last attempt — give up.
+            last_detail = f"{result.summary}\n{result.output}".strip()
+            if result.reason.startswith("cancelled"):
                 return sid, False, worker_dir, last_detail
-
-            except Exception as exc:
-                try:
-                    if proc is not None and proc.poll() is None:
-                        proc.kill()
-                except Exception:
-                    pass
-                last_detail = "\n".join(output_lines[-80:]).strip()
-                if last_detail:
-                    last_detail += "\n"
-                last_detail += str(exc)
-
-                # Retry on exception only if attempts remain.
-                if attempt < max_attempts - 1:
-                    continue
-                return sid, False, worker_dir, last_detail
+            if (result.reason.startswith("absolute deadline") or result.reason == "could not start") and attempt < max_attempts - 1:
+                continue
+            return sid, False, worker_dir, last_detail
 
         # Should not reach here, but safety net.
         return sid, False, worker_dir, last_detail
@@ -3398,6 +3314,9 @@ def ensure_pip_packages_parallel(
                 sid = spec["id"]
                 try:
                     result_sid, downloaded_ok, worker_dir, detail = future.result()
+                except bootstrap_pip_monitor.PipCleanupError:
+                    pip_abort.set()
+                    raise
                 except Exception as exc:
                     result_sid, downloaded_ok, worker_dir, detail = sid, False, temp_root / f"download_{sid}", str(exc)
 
@@ -3442,6 +3361,9 @@ def ensure_pip_packages_parallel(
                         pct=65,
                     )
                 _update_bottom_from_rows()
+
+        if gui and getattr(gui, "_closed", False):
+            return False
 
         # Build one top-level install argument list.  Deduplicate while preserving
         # specification order.
@@ -3495,9 +3417,11 @@ def ensure_pip_packages_parallel(
         if not download_failures:
             first_install_args.insert(0, "--no-index")
 
-        install_timeout = 600 if (
-            download_failures or any(not spec.get("critical", True) for spec in missing_specs)
-        ) else 300
+        from src.modules import bootstrap_pip_monitor
+        missing_ids = {spec["id"] for spec in missing_specs}
+        install_timeout = bootstrap_pip_monitor.install_timeout(
+            missing_ids, recovery=bool(download_failures or any(
+                not spec.get("critical", True) for spec in missing_specs)))
         install_ok = _run_pip_install(
             first_install_args,
             timeout=install_timeout,
@@ -3507,6 +3431,9 @@ def ensure_pip_packages_parallel(
             progress_end=95,
             line_callback=_install_line_callback,
         )
+
+        if gui and getattr(gui, "_closed", False):
+            return False
 
         # Recovery is reserved for a real pip failure (for example a damaged
         # or permission-locked shared cache).  Retry once without cache rather
@@ -3525,13 +3452,16 @@ def ensure_pip_packages_parallel(
             ]
             install_ok = _run_pip_install(
                 retry_install_args,
-                timeout=600,
+                timeout=bootstrap_pip_monitor.install_timeout(missing_ids, recovery=True),
                 use_cache=False,
                 only_binary=False,
                 progress_start=90,
                 progress_end=96,
                 line_callback=_install_line_callback,
             )
+
+        if gui and getattr(gui, "_closed", False):
+            return False
 
         # Verify all missing packages after the single transaction.
         # PathFinder retains negative directory results from the initial check.
@@ -3556,6 +3486,8 @@ def ensure_pip_packages_parallel(
         # combined transaction succeeded incompletely or a package-specific
         # post-install/import issue remains (notably pywin32 on Windows).
         for spec in remaining:
+            if gui and getattr(gui, "_closed", False):
+                return False
             sid = spec["id"]
             status(f"Repairing {spec['name']} via pip...")
             if gui:
@@ -3569,7 +3501,8 @@ def ensure_pip_packages_parallel(
                     str(wheelhouse),
                     *spec["pip_args"],
                 ],
-                timeout=720 if sid == "platformio" else 480,
+                timeout=max(720 if sid == "platformio" else 480,
+                            bootstrap_pip_monitor.install_timeout({sid})),
                 use_cache=False,
                 only_binary=False,
                 progress_start=95,
@@ -3581,6 +3514,8 @@ def ensure_pip_packages_parallel(
                 ),
             )
 
+            if gui and getattr(gui, "_closed", False):
+                return False
             importlib.invalidate_caches()
             _ensure_pywin32_system32_dlls()
             verified = repair_ok and _check(spec)
@@ -3628,12 +3563,16 @@ def ensure_pip_packages_parallel(
             gui.log_ok("All required pip package dependencies installed & verified!")
         return True
 
+    except bootstrap_pip_monitor.PipCleanupError:
+        preserve_temporary = True
+        _record_bootstrap_log("FAIL", f"Python setup stopped after an owned-child cleanup failure; temporary files retained at {temp_root}.")
+        raise
     finally:
-        # Never leave temporary wheelhouses behind on the user's machine.
-        try:
-            shutil.rmtree(temp_root, ignore_errors=True)
-        except Exception:
-            pass
+        if not preserve_temporary:
+            try:
+                shutil.rmtree(temp_root, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def _sync_private_python_site_packages() -> None:
@@ -7168,6 +7107,7 @@ def _run_pip_install(
     30-cell progress bars without exposing resolver noise to the user.
     """
     global _LAST_PIP_ERROR
+    from src.modules.bootstrap_pip_monitor import PipCleanupError
 
     if _gui:
         if progress_start is not None:
@@ -7199,127 +7139,32 @@ def _run_pip_install(
     if only_binary:
         cmd.extend(["--only-binary", ":all:"])
 
-    proc = None
-    output_lines = []
-    timed_out = False
-
     try:
-        import queue as _queue
+        from src.modules import bootstrap_pip_monitor
         from src.modules.windows_tool_paths import pip_environment
 
-        proc = subprocess.Popen(
-            cmd,
-            env=pip_environment(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-
-        q = _queue.Queue()
-        reader_done = threading.Event()
-
-        def _reader():
-            try:
-                if proc.stdout is not None:
-                    for raw_line in iter(proc.stdout.readline, ""):
-                        q.put(raw_line)
-            except Exception:
-                pass
-            finally:
-                try:
-                    if proc.stdout is not None:
-                        proc.stdout.close()
-                except Exception:
-                    pass
-                reader_done.set()
-
-        threading.Thread(target=_reader, daemon=True, name="BootstrapPipReader").start()
-
-        started = time.time()
-        last_output_time = started  # ← stall detection anchor
-        # Stall threshold for unified install is longer than download (90s vs
-        # 45s) because pip's dependency resolver can legitimately spend a
-        # minute between output lines on first-run machines.
-        _INSTALL_STALL_TIMEOUT = 90
-        while True:
-            try:
-                raw_line = q.get(timeout=0.15)
-                line = raw_line.rstrip("\r\n")
-                output_lines.append(line)
-                last_output_time = time.time()   # reset stall clock
-                if line_callback is not None:
-                    try:
-                        line_callback(line)
-                    except Exception:
-                        pass
-                else:
-                    low = line.strip().lower()
-                    if low:
-                        if low.startswith("installing collected packages:") or low.startswith("successfully installed"):
-                            status(line.strip())
-                        elif any(low.startswith(p) for p in ("collecting ", "downloading ", "using cached ", "running setup.py", "building wheel")):
-                            status(f"  {line.strip()}")
-            except _queue.Empty:
-                pass
-
-            if proc.poll() is not None and reader_done.is_set() and q.empty():
-                break
-
-            now = time.time()
-
-            # Stall detection: no output for _INSTALL_STALL_TIMEOUT seconds
-            if now - last_output_time > _INSTALL_STALL_TIMEOUT:
-                timed_out = True
-                output_lines.append(
-                    f"bootstrap: pip install stalled ({_INSTALL_STALL_TIMEOUT}s with no output)"
-                )
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                break
-
-            # Absolute wall-clock timeout
-            if now - started > timeout:
-                timed_out = True
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                break
-
-        if proc.poll() is None:
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                pass
-
-        # Drain lines that arrived between poll() and reader shutdown.
-        while True:
-            try:
-                raw_line = q.get_nowait()
-            except _queue.Empty:
-                break
-            line = raw_line.rstrip("\r\n")
-            output_lines.append(line)
+        def _install_line(line):
             if line_callback is not None:
-                try:
-                    line_callback(line)
-                except Exception:
-                    pass
+                line_callback(line)
+                return
+            low = line.strip().lower()
+            if low.startswith("installing collected packages:") or low.startswith("successfully installed"):
+                status(line.strip())
+            elif any(low.startswith(prefix) for prefix in
+                     ("collecting ", "downloading ", "using cached ", "running setup.py", "building wheel")):
+                status(f"  {line.strip()}")
 
-        output = "\n".join(output_lines)
-
-        if timed_out:
-            _LAST_PIP_ERROR = f"pip timed out after {timeout} seconds"
-            return False
-
-        returncode = proc.returncode if proc.returncode is not None else -1
-        if returncode == 0:
+        result = bootstrap_pip_monitor.run(
+            cmd, env=pip_environment(), timeout=timeout,
+            cancelled=lambda: bool(_gui and getattr(_gui, "_closed", False)),
+            on_line=_install_line,
+            log_path=SCRIPT_DIR / "logs" / "bootstrap_pip.log",
+            label="pip install",
+            on_cleanup_failure=lambda detail: _record_bootstrap_log(
+                "FAIL", f"Python install: cleanup incomplete; setup is waiting for owned writers to stop: {detail}"),
+        )
+        _record_bootstrap_log("OK" if result.ok else "WARN", f"Python install: {result.summary}")
+        if result.ok:
             _LAST_PIP_ERROR = ""
             if _gui and progress_end is not None:
                 _gui.set_progress_percent(progress_end)
@@ -7327,34 +7172,20 @@ def _run_pip_install(
                 ok(quiet_ok_msg)
             return True
 
-        lines = [line.strip() for line in output_lines if line.strip()]
-        error_lines = [line for line in lines if line.lower().startswith("error:")]
-        _LAST_PIP_ERROR = (
-            error_lines[-1]
-            if error_lines
-            else (lines[-1] if lines else f"pip exited with code {returncode}")
-        )
-
-        try:
-            log_dir = SCRIPT_DIR / "logs"
-            log_dir.mkdir(parents=True, exist_ok=True)
-            with (log_dir / "bootstrap_pip.log").open("a", encoding="utf-8") as stream:
-                stream.write("\n=== pip failure ===\n")
-                stream.write("command: " + subprocess.list2cmdline(cmd) + "\n")
-                stream.write(output)
-                if output and not output.endswith("\n"):
-                    stream.write("\n")
-        except Exception:
-            pass
+        if result.reason != "completed":
+            _LAST_PIP_ERROR = f"pip {result.summary}"
+        else:
+            lines = [line.strip() for line in result.output.splitlines() if line.strip()]
+            error_lines = [line for line in lines if line.lower().startswith("error:")]
+            detail = error_lines[-1] if error_lines else (lines[-1] if lines else "")
+            _LAST_PIP_ERROR = f"{detail + '; ' if detail else ''}{result.summary}"
         return False
-
+    except PipCleanupError as exc:
+        _LAST_PIP_ERROR = str(exc)
+        raise
     except Exception as exc:
         _LAST_PIP_ERROR = f"pip could not start: {exc}"
-        try:
-            if proc is not None and proc.poll() is None:
-                proc.kill()
-        except Exception:
-            pass
+        _record_bootstrap_log("WARN", "Python install could not start; no package transaction completed.")
         return False
     finally:
         if _gui:

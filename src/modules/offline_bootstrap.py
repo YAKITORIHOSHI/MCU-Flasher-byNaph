@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from src.modules.bootstrap_timing import timed_stage
 SCHEMA = 4
 MARKER = ".mcu-offline-ready.json"
 ASSETS = (
@@ -622,9 +623,10 @@ def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets
     from src.modules.bootstrap_platformio import archive_paths
     from src.modules.bootstrap_package_recovery import atomic_package_writes
     from src.modules.platformio_locks import package_locks
-    with _bootstrap_http_timeouts(), package_locks(), archive_paths(), atomic_package_writes(core):
-        return _prepare(core, plan, log, jobs=jobs, event=event,
-                        requested_targets=requested_targets, board_sources=board_sources)
+    with timed_stage(log, "complete offline package preparation"):
+        with _bootstrap_http_timeouts(), package_locks(), archive_paths(), atomic_package_writes(core):
+            return _prepare(core, plan, log, jobs=jobs, event=event,
+                            requested_targets=requested_targets, board_sources=board_sources)
 
 
 def refresh_board_coverage(core, sources, *, plan=None, log=print, jobs=None):
@@ -651,8 +653,10 @@ def refresh_board_coverage(core, sources, *, plan=None, log=print, jobs=None):
     marker.unlink()
     source_preparation = None
     if "frameworks" not in actual_plan or "arduino" in actual_plan["frameworks"]:
-        source_preparation = prepare_sources(core, sources, emit=lambda stage, **details: log(details.get("message", stage)), jobs=jobs)
-    return _publish_board_coverage(core, sources, data, log=log, source_preparation=source_preparation)
+        with timed_stage(log, "Arduino source preparation using certified packages"):
+            source_preparation = prepare_sources(core, sources, emit=lambda stage, **details: log(details.get("message", stage)), jobs=jobs)
+    with timed_stage(log, "board coverage refresh using certified packages"):
+        return _publish_board_coverage(core, sources, data, log=log, source_preparation=source_preparation)
 
 
 def _publish_board_coverage(core, sources, data, *, log=print, source_preparation=None):
@@ -742,12 +746,14 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     # Do not retain a prior success certificate after a partial repair.
     (core / MARKER).unlink(missing_ok=True)
     from src.modules.bootstrap_package_recovery import recover_packages
-    recover_packages(core, log=log)
+    with timed_stage(log, "package recovery scan"):
+        recover_packages(core, log=log)
     platform_manager = PlatformPackageManager(str(core / "platforms"))
     tools = ToolPackageManager(str(core / "packages"))
     libraries = LibraryPackageManager(str(core / "lib"))
     report("preparing", message="Preparing the offline build tools", progress=None)
-    prepare_scons(core, manager=tools, log=log)
+    with timed_stage(log, "SCons preparation"):
+        prepare_scons(core, manager=tools, log=log)
     files = set()
     board_manifests = {}
     platform_sources = {}
@@ -765,7 +771,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         scope = ", ".join(sorted(allowed_frameworks)) if allowed_frameworks is not None else "all declared frameworks"
         log(f"Bootstrap offline pack: {name} ({scope}; upload/debug tools)")
         report("preparing", message=f"Preparing {name} ({scope})", platform=name, progress=None)
-        package = platform_manager.install(name, skip_dependencies=True)
+        with timed_stage(log, f"platform download/extraction/verification: {name}"):
+            package = platform_manager.install(name, skip_dependencies=True)
         platform = PlatformFactory.new(package)
         # Preserve the exact requested owner/version/source while exposing the
         # installed platform's real target name. External URLs are not names.
@@ -774,13 +781,17 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         if prior:
             raise RuntimeError(f"Multiple PlatformIO specifications resolve to {platform.name}; select one exact source")
         platform_sources[name] = platform.name
-        specs, probes = package_plan(package, platform.get_boards(), log=log, allowed_frameworks=allowed_frameworks)
+        with timed_stage(log, f"package plan: {platform.name}"):
+            specs, probes = package_plan(package, platform.get_boards(), log=log, allowed_frameworks=allowed_frameworks)
+        log(f"Bootstrap plan: {platform.name}: {len(specs)} package specifications; "
+            f"{len(probes)} initial builder probes")
         files.add(str((Path(package.path) / "platform.json").relative_to(core)))
         for spec in specs:
             log(f"Preparing {spec.humanize()}")
             report("preparing", message=f"Preparing {spec.humanize()}", platform=name, progress=None)
-            installed = tools.install(spec)
-            verify_package_dependencies(tools, installed)
+            with timed_stage(log, f"package download/extraction/verification: {spec.humanize()}"):
+                installed = tools.install(spec)
+                verify_package_dependencies(tools, installed)
             files.add(str((Path(installed.path) / "package.json").relative_to(core)))
             files.add(str((Path(installed.path) / ".piopm").relative_to(core)))
         unavailable = _unavailable_frameworks(platform)
@@ -855,8 +866,9 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     for spec in plan.get("libraries", []):
         log(f"Preparing offline sketch library {spec}")
         report("preparing", message=f"Preparing sketch library {spec}", progress=None)
-        installed = libraries.install(spec)
-        verify_package_dependencies(libraries, installed)
+        with timed_stage(log, f"library download/extraction/verification: {spec}"):
+            installed = libraries.install(spec)
+            verify_package_dependencies(libraries, installed)
         files.add(str((Path(installed.path) / ".piopm").relative_to(core)))
     if isolated_probes:
         worker_count = max(1, min(jobs, len(isolated_probes)))
@@ -870,8 +882,9 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
             except BaseException:
                 probe_cancel.set()
                 raise
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            list(executor.map(run_isolated, isolated_probes))
+        with timed_stage(log, "reviewed concurrent builder probes"):
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                list(executor.map(run_isolated, isolated_probes))
     # Include all builder-created host packages, not only manifest defaults.
     for manifest in (core / "packages").glob("*/package.json"):
         files.add(str(manifest.relative_to(core)))
@@ -879,9 +892,10 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         for metadata in folder.glob("*/.piopm"):
             files.add(str(metadata.relative_to(core)))
     report("refreshing", message="Verifying the installed board catalog", progress=None)
-    catalog = subprocess.run(command() + ["boards", "--json-output"],
-                             capture_output=True, text=True, env=env, check=True, timeout=120,
-                             creationflags=0x08000000 if sys.platform == "win32" else 0)
+    with timed_stage(log, "installed board catalog"):
+        catalog = subprocess.run(command() + ["boards", "--json-output"],
+                                 capture_output=True, text=True, env=env, check=True, timeout=120,
+                                 creationflags=0x08000000 if sys.platform == "win32" else 0)
     records = json.loads(catalog.stdout)
     if not isinstance(records, list):
         raise RuntimeError("PlatformIO returned an invalid offline board catalog")
@@ -906,10 +920,12 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
             report(stage, **details)
             if details.get("message"):
                 log(str(details["message"]))
-        source_preparation = prepare_sources(core, board_sources, emit=emit_source_preparation, jobs=jobs)
+        with timed_stage(log, "Arduino source preparation"):
+            source_preparation = prepare_sources(core, board_sources, emit=emit_source_preparation, jobs=jobs)
     report("refreshing", message="Checking Arduino declaration coverage against prepared definitions", progress=None)
-    coverage = report_coverage(core, board_sources, plan=plan, platform_sources=platform_sources,
-                               board_manifests=board_manifests, log=log, source_preparation=source_preparation)
+    with timed_stage(log, "Arduino declaration coverage"):
+        coverage = report_coverage(core, board_sources, plan=plan, platform_sources=platform_sources,
+                                   board_manifests=board_manifests, log=log, source_preparation=source_preparation)
     files.add(REPORT)
     native_files, native_guards = required_native_files(core, coverage)
     files.update(native_files)

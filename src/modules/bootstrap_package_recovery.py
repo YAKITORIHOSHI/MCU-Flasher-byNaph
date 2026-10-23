@@ -16,6 +16,11 @@ from uuid import uuid4
 KINDS = ("packages", "platforms", "lib")
 MARKER = ".mcu-offline-ready.json"
 LIMIT = 524288
+COPY_BUFFER = 1024 * 1024
+# Small-file trees benefit from the platform's native copier. Stream only a
+# substantial payload whose average file size amortizes the identity checks.
+STREAM_MIN_BYTES = 16 * 1024 * 1024
+STREAM_MIN_AVERAGE = 256 * 1024
 
 
 def _bootstrap_only():
@@ -207,6 +212,141 @@ def _tree_signature(folder, *, sync=False):
     return result
 
 
+def _file_identity(info):
+    # Access times change when we read. Keep change/write times, file identity,
+    # size and permissions instead; no timestamp-only payload reuse is allowed.
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns,
+            getattr(info, "st_file_attributes", None), getattr(info, "st_reparse_tag", None))
+
+
+def _source_inventory(folder):
+    """Observe source identities/structure without another payload read."""
+    from src.modules.bootstrap_platformio import extended_windows_path
+    folder = Path(extended_windows_path(folder))
+    info = folder.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"Package copy source is not a directory: {folder}")
+    result = {"": ("directory", _file_identity(info))}
+
+    def failed(error):
+        raise error
+
+    for root, dirs, files in os.walk(folder, followlinks=False, onerror=failed):
+        for name in dirs + files:
+            path = Path(root) / name
+            info = path.lstat()
+            relative = str(path.relative_to(folder))
+            identity = _file_identity(info)
+            if stat.S_ISLNK(info.st_mode):
+                result[relative] = ("link", identity, os.readlink(path))
+            elif stat.S_ISDIR(info.st_mode):
+                result[relative] = ("directory", identity)
+            elif stat.S_ISREG(info.st_mode):
+                result[relative] = ("file", identity)
+            else:
+                raise RuntimeError(f"Unsupported package payload entry: {path}")
+    return result
+
+
+def _stream_copy_options(args, kwargs, copy2):
+    """Preserve custom copier/filter semantics through the original slow path."""
+    # Python's native Windows copy2 uses CopyFile2, including attributes and
+    # alternate data streams which copystat alone cannot preserve. Keep that
+    # native copier and the original two-hash verification until a matching
+    # Windows streaming metadata contract is independently qualified.
+    if sys.platform == "win32":
+        return None
+    names = ("symlinks", "ignore", "copy_function", "ignore_dangling_symlinks", "dirs_exist_ok")
+    if len(args) > len(names) or set(kwargs) - set(names):
+        return None
+    options = dict(zip(names, args))
+    if set(options) & set(kwargs):
+        return None  # Let the original copytree report duplicate arguments.
+    options.update(kwargs)
+    if (options.get("copy_function", copy2) is not copy2 or options.get("ignore") is not None
+            or options.get("ignore_dangling_symlinks", False) is not False
+            or options.get("dirs_exist_ok", False) is not False
+            or type(options.get("symlinks", False)) is not bool):
+        return None
+    return options
+
+
+def _copy_package_stream(source, staging, copier, args, kwargs):
+    """Hash the exact source copy stream, then independently verify staged bytes.
+
+    Source staging belongs to the installer. Identity checks detect ordinary
+    writes/replacements while copying and before publication; they are not an
+    immutable snapshot against another process restoring all native metadata.
+    Unsupported/custom copy policies retain the two independent tree hashes.
+    """
+    def original_copy():
+        copier.copytree(source, str(staging), *args, **kwargs)
+        if _tree_signature(Path(source)) != _tree_signature(staging, sync=True):
+            raise RuntimeError(f"Package copy bytes failed verification; staging retained: {staging}")
+        return None
+
+    options = _stream_copy_options(args, kwargs, copier.copy2)
+    if options is None:
+        return original_copy()
+    from src.modules.bootstrap_platformio import extended_windows_path
+    source_root = Path(extended_windows_path(source))
+    root_info = source_root.lstat()
+    if not stat.S_ISDIR(root_info.st_mode) or getattr(root_info, "st_reparse_tag", 0):
+        return original_copy()
+    inventory = _source_inventory(source_root)
+    file_sizes = [item[1][3] for item in inventory.values() if item[0] == "file"]
+    total = sum(file_sizes)
+    if (not file_sizes or total < STREAM_MIN_BYTES
+            or total < len(file_sizes) * STREAM_MIN_AVERAGE):
+        return original_copy()
+
+    expected = {}
+    for relative, item in inventory.items():
+        if relative and item[0] == "directory":
+            expected[relative] = ("directory", stat.S_IMODE(item[1][2]))
+        elif item[0] == "link":
+            expected[relative] = ("link", item[2])
+
+    def changed():
+        raise RuntimeError(f"Package source changed during copying; staging retained: {staging}")
+
+    def copy_file(src, dst):
+        src = Path(extended_windows_path(src))
+        dst = Path(extended_windows_path(dst))
+        relative = str(src.relative_to(source_root))
+        item = inventory.get(relative)
+        if not item or item[0] != "file" or _file_identity(src.lstat()) != item[1]:
+            changed()
+        identity = item[1]
+        digest, copied = hashlib.sha256(), 0
+        with src.open("rb") as input_stream, dst.open("xb") as output_stream:
+            if _file_identity(os.fstat(input_stream.fileno())) != identity:
+                changed()
+            while data := input_stream.read(COPY_BUFFER):
+                if output_stream.write(data) != len(data):
+                    raise OSError(f"Incomplete package staging write: {dst}")
+                digest.update(data)
+                copied += len(data)
+            if copied != identity[3] or _file_identity(os.fstat(input_stream.fileno())) != identity:
+                changed()
+        if _file_identity(src.lstat()) != identity:
+            changed()
+        copier.copystat(src, dst)  # Retain copy2 permissions/timestamps/xattrs.
+        expected[relative] = ("file", copied, stat.S_IMODE(identity[2]), digest.hexdigest())
+        return str(dst)
+
+    options["copy_function"] = copy_file
+    # Keep the captured archive_paths proxy: it owns native Windows spellings.
+    copier.copytree(source, str(staging), **options)
+    if _source_inventory(source_root) != inventory:
+        changed()
+    if (expected != _tree_signature(staging, sync=True)
+            or stat.S_IMODE(staging.lstat().st_mode) != stat.S_IMODE(inventory[""][1][2])):
+        raise RuntimeError(f"Package copy bytes failed verification; staging retained: {staging}")
+    return source_root, inventory
+
+
 def _publish_absent(source, destination):
     if os.path.lexists(destination):
         raise RuntimeError(f"Package destination appeared; existing files retained: {destination}")
@@ -257,10 +397,10 @@ def atomic_package_writes(core):
         stage_parent.mkdir(exist_ok=True)
         staging = stage_parent / uuid4().hex
         # Upstream handles native extended Windows paths via its captured proxy.
-        original_shutil.copytree(source, str(staging), *args, **kwargs)
-        if _tree_signature(Path(source)) != _tree_signature(staging, sync=True):
-            raise RuntimeError(f"Package copy bytes failed verification; staging retained: {staging}")
+        source_receipt = _copy_package_stream(source, staging, original_shutil, args, kwargs)
         _sync_dir(stage_parent)
+        if source_receipt and _source_inventory(source_receipt[0]) != source_receipt[1]:
+            raise RuntimeError(f"Package source changed before publication; staging retained: {staging}")
         _publish_absent(staging, destination_path)
         _sync_dir(stage_parent)
         return destination

@@ -11,6 +11,21 @@
 
 ---
 
+## October 23 Source Update: Bootstrap Delays
+
+Python dependency setup no longer retries healthy downloads or installs solely
+because console output is quiet. Large Qt wheels receive a larger finite budget;
+failures retain the real stop reason, elapsed time and diagnostic output. Setup
+cancellation stops owned children even before optional process libraries exist.
+Package publication avoids redundant source reads where copy semantics permit,
+while independently verifying staged bytes before publication. Detailed phase
+timings identify package, plan, builder and coverage work without changing the
+offline plan or certifying incomplete packages. Windows still uses the verified
+1.79 GB release seed when configured packages are missing. A targeted native
+workflow checks these contracts; hosted fixture timings do not establish a full
+cold Bootstrap time on the reported Windows PC. Existing public ZIPs must be
+rebuilt before these source changes are included.
+
 ## October 23 Source Update: Executable Launchers and Responsive Editing
 
 Open `LAUNCHER` and use `WINDOWS.exe`, `UBUNTU` or `UBUNTU_ARM64` for the matching

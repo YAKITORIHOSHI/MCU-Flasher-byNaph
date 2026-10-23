@@ -186,6 +186,28 @@ check. This avoids false missing-package errors on coarse-timestamp storage whil
 retaining dependency and native-architecture checks. Windows package checks use at
 most three concurrent workers to limit cold-start load.
 
+Bootstrap performance: Python-package downloads and installs may be quiet while
+working. Bootstrap uses finite elapsed-time budgets, with a larger budget for Qt
+wheels, rather than restarting them for a lack of console output. Closing Setup
+stops its owned installers. Detailed logs retain the actual elapsed time and
+stop reason, and time the package, planning, builder and coverage phases separately.
+The Windows release seed is about 1.79 GB before extraction; stable Wi-Fi alone
+does not determine the time to download it or publish its many files. A complete
+configured store skips that download, and certified packages retain the existing
+coverage-only refresh. The default offline plan includes AVR, ESP32 and ESP8266
+Arduino variants and their upload/debug tools. These changes preserve that scope.
+
+`direct/verify_bootstrap_pip_monitor.py` checks quiet children, finite deadlines
+and cancellation without running pip. `direct/verify_bootstrap_io_performance.py`
+compares package publication in disposable local fixtures and reports bytes read
+as well as elapsed time; warm fixture results do not predict a cold HDD, antivirus
+scan or real network download. The **Bootstrap performance contracts** workflow
+runs these focused checks on native Windows and Ubuntu AMD64/ARM64 hosts.
+Large POSIX payloads hash their source while copying, reducing logical payload
+reads from three to two. Small packages and Windows retain the native copier;
+Windows file attributes and alternate data streams keep their existing behavior.
+The warm local benchmark did not establish a wall-time speedup.
+
 Ubuntu amd64/ARM64 setup prepares both `libsecret-tools` and `gnome-keyring`.
 Cloud credentials require an unlocked keyring in the current desktop session.
 Vault errors remain visible for saved account credentials.

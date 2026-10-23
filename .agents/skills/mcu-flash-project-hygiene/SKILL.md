@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher's generated metadata, protected caches, Fresh cleanup and public release integrity on Windows and Ubuntu. Use for file-utility, cleanup, packaging or publication-preparation changes; preserve user sketches, settings and recovery journals."
+description: "Maintain MCU Flasher's generated metadata, protected caches, package publication, Fresh cleanup and public release integrity on Windows and Ubuntu. Use for file-utility, cleanup, packaging or publication-preparation changes; preserve user sketches, settings and recovery journals."
 ---
 
 # MCU Flasher Project Hygiene
@@ -106,6 +106,12 @@ Classify paths before changing attributes or deleting anything:
 
 ## Keep cache and Clean behavior safe
 
+- Package publication optimizations must preserve independent staged-byte
+  verification, source-change detection, native copy metadata semantics,
+  same-filesystem absent-destination publication and retained interrupted stages.
+  Preserve custom copier behavior and Windows extended-path composition. Measure
+  I/O only in owned temp fixtures; never benchmark by rewriting live stores,
+  protected caches or recovery receipts.
 - Keep each exact board under its canonical
   `.mcu_flasher_build_cache/boards/<host-architecture>/<board-key>/` workspace.
   Keep generated INI, staged sources, `.pio/build/mcu_env` objects/output and

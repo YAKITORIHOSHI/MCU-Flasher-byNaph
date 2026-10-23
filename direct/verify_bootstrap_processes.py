@@ -223,7 +223,7 @@ class BootstrapProcessChecks(unittest.TestCase):
             self.assertIs(os.path.relpath, original)
             resolve.assert_not_called()
 
-    def test_offline_activation_installs_idf_adapter_once_and_keeps_download_guard(self):
+    def test_offline_activation_installs_idf_adapter_once_and_keeps_install_guard(self):
         original = os.path.relpath
         with patch.object(paths.sys, "platform", "win32"), patch.object(paths.os.path, "relpath", original), \
                 patch.object(sys, "meta_path", list(sys.meta_path)), \
@@ -234,8 +234,10 @@ class BootstrapProcessChecks(unittest.TestCase):
             offline_runtime.activate()
             self.assertIs(os.path.relpath, adapted)
             audit.assert_called_once_with(offline_runtime._audit)
+            # Offline package preparation does not disable app networking.
+            offline_runtime._audit("socket.connect", (None, ("example.invalid", 443)))
             with self.assertRaises(offline_runtime.OfflineDependencyError):
-                offline_runtime._audit("socket.connect", (None, ("example.invalid", 443)))
+                offline_runtime._audit("subprocess.Popen", ("pip", ["pip", "install", "fixture"], None, {}))
             self.assertEqual(os.environ["PIP_NO_INDEX"], "1")
 
     def test_offline_role_refuses_bootstrap_without_changing_hooks(self):

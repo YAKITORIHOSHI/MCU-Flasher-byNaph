@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, native Rust preview, embedded editor/terminals, performance and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -924,6 +924,15 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   stops, even if termination is delayed or denied. Verify local children,
   effective manager HTTP calls and restoration with
   `direct/verify_bootstrap_interruption.py` and Windows board setup fixtures.
+- Python dependency downloads/installs can be quiet with progress disabled.
+  Use package-aware finite monotonic budgets, never stdout-silence retries.
+  Cancellation must stop owned descendants before retry or package-store release,
+  including fresh Windows runtimes without psutil. Retain bounded diagnostics,
+  actual elapsed time and stop reasons; keep PlatformIO phase timings separate.
+  Verify real quiet/deadline/cancelled children with
+  `direct/verify_bootstrap_pip_monitor.py` on native Windows and Ubuntu. Benchmark
+  only owned package fixtures using `direct/verify_bootstrap_io_performance.py`;
+  byte-read reductions or warm local timing are not full cold-start qualification.
 - Install `GuiGarbageCollector` before backend/window construction. Disable
   automatic cyclic GC for the workspace lifetime; collect only on the GUI thread
   between events, outside modal/nested loops, at bounded intervals. Ordinary
