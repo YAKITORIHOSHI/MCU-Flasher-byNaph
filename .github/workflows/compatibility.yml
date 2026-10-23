@@ -284,6 +284,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_ubuntu_ports.py
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_ubuntu_event_filters.py --no-finalize
           .venv-linux/bin/python -B direct/verify_offline.py
+          .venv-linux/bin/python -B direct/verify_bootstrap_package_recovery.py
           .venv-linux/bin/python -B direct/verify_target_resolution.py
           .venv-linux/bin/python -B direct/verify_board_families.py
           .venv-linux/bin/python -B direct/verify_board_search.py --no-finalize
@@ -414,6 +415,8 @@ jobs:
           & env/Scripts/python.exe -B direct/verify_bootstrap_cold_cache.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_offline.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_bootstrap_package_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_target_resolution.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

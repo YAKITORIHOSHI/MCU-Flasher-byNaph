@@ -144,6 +144,43 @@ class OfflineChecks(unittest.TestCase):
         manifest.unlink()
         self.assertFalse(setup.ready(self.core, plan))
 
+    def test_ready_rejects_corrupt_unrelated_package_metadata_without_changing_it(self):
+        plan = {"schema": 1, "platforms": ["demo"], "libraries": []}
+        (self.core / REPORT).write_text("{}")
+        payload = {"schema": setup.SCHEMA, "plan": setup.plan_hash(plan),
+                   "default_plan": setup.plan_hash(plan), "host": sys.platform,
+                   "architecture": platform.machine(), "files": [REPORT],
+                   "board_coverage": {"schema": 1, "path": REPORT, "total": 0,
+                                      "ready_count": 0, "unavailable_count": 0}}
+        marker = self.core / setup.MARKER
+        marker.write_text(json.dumps(payload))
+        folder = self.core / "packages/toolchain-xtensa-esp-elf"
+        folder.mkdir(parents=True)
+        manifest = folder / "package.json"
+        manifest.write_text('{"name":"toolchain-xtensa-esp-elf","version":"1.0.0"}')
+        metadata = folder / ".piopm"
+        valid = {"type": "tool", "name": "toolchain-xtensa-esp-elf", "version": "1.0.0",
+                 "spec": {"owner": "platformio", "name": "toolchain-xtensa-esp-elf"}}
+        for damaged in (b"", b'{"type":', b"[]", b"null", b'{}',
+                        json.dumps(dict(valid, spec=[])).encode(),
+                        json.dumps(dict(valid, spec={})).encode(),
+                        json.dumps(dict(valid, version="1..0")).encode()):
+            with self.subTest(metadata=damaged):
+                metadata.write_bytes(damaged)
+                stamp = metadata.stat().st_mtime_ns
+                self.assertFalse(setup.ready(self.core, plan))
+                self.assertEqual(metadata.read_bytes(), damaged)
+                self.assertEqual(metadata.stat().st_mtime_ns, stamp)
+                self.assertTrue(marker.is_file())
+        metadata.write_text(json.dumps(valid))
+        self.assertTrue(setup.ready(self.core, plan))
+        manifest.write_bytes(b"")
+        self.assertFalse(setup.ready(self.core, plan))
+        manifest.write_text('{"name":"toolchain-xtensa-esp-elf","version":"1.0.0"}')
+        folder.rename(folder.with_name(".damaged-package"))
+        (folder.with_name(".damaged-package") / ".piopm").write_bytes(b"")
+        self.assertFalse(setup.ready(self.core, plan))
+
     def test_certificate_rejects_missing_child_guard_and_editor_assets(self):
         manifest = self.core / "package.json"
         manifest.write_text("{}")
@@ -1075,9 +1112,12 @@ class OfflineChecks(unittest.TestCase):
                 builder = stack.enter_context(patch.object(bootstrap_builders, "run_builder"))
                 run = stack.enter_context(patch.object(subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="[]")))
                 setup.prepare(alias, {"schema": 1, "platforms": ["demo"], "libraries": []}, log=lambda *args: None)
-                manager.assert_called_once_with(str(alias / "platforms"))
-                tools.assert_called_once_with(str(alias / "packages"))
-                libraries.assert_called_once_with(str(alias / "lib"))
+                # Recovery and preparation both construct managers. Every
+                # construction must retain the short application core alias.
+                for constructor, kind in ((manager, "platforms"), (tools, "packages"), (libraries, "lib")):
+                    self.assertTrue(constructor.call_args_list)
+                    for call in constructor.call_args_list:
+                        self.assertEqual(call.args, (str(alias / kind),))
                 for call in [*run.call_args_list, *builder.call_args_list]:
                     self.assertEqual(call.kwargs["env"]["PLATFORMIO_CORE_DIR"], str(alias))
                     self.assertTrue(call.args[0][2].endswith("bootstrap_platformio.py"))

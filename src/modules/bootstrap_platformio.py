@@ -103,6 +103,8 @@ def archive_paths():
             parts = os.path.relpath(target, base).split(os.sep)
             if len(parts) >= 2 and parts[0] in ("packages", "platforms", "lib"):
                 return parts[1] not in ("", os.curdir, os.pardir)
+            if len(parts) >= 2 and parts[0] == ".mcu-package-staging":
+                return parts[1] not in ("", os.curdir, os.pardir)
             return (len(parts) >= 3 and parts[:2] == [".cache", "tmp"]
                     and parts[2].startswith("pkg-installing-"))
         except (OSError, TypeError, ValueError):
@@ -179,7 +181,8 @@ def command():
 if __name__ == "__main__":
     import runpy
     from src.modules.platformio_locks import package_locks
-    with archive_paths(), builder_processes(), package_locks():
+    from src.modules.bootstrap_package_recovery import atomic_package_writes
+    with archive_paths(), builder_processes(), package_locks(), atomic_package_writes(os.environ.get("PLATFORMIO_CORE_DIR")):
         if len(sys.argv) > 2 and sys.argv[1] == "--script":
             script = sys.argv[2]
             sys.argv = [script, *sys.argv[3:]]

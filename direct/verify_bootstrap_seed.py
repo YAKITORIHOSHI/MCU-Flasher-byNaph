@@ -36,7 +36,9 @@ def bootstrap_scope(root):
     nodes = [node for node in ast.parse(source).body
              if isinstance(node, ast.FunctionDef) and node.name in names]
     logs = []
-    scope = {"Path": Path, "sys": sys, "os": os, "time": time, "shutil": shutil,
+    # These selected helpers exercise the Windows seed policy on every host;
+    # keep PlatformIO and filesystem modules on their actual native platform.
+    scope = {"Path": Path, "sys": SimpleNamespace(**dict(vars(sys), platform="win32")), "os": os, "time": time, "shutil": shutil,
              "re": __import__("re"), "_gui": None, "SCRIPT_DIR": root,
              "status": logs.append, "warn": logs.append, "ok": logs.append,
              "_record_bootstrap_exception": logs.append,

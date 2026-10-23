@@ -201,6 +201,72 @@ def plan_hash(plan):
     return hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
 
 
+def _store_metadata_readable(core):
+    """Bounded read-only check of metadata PIO enumerates, including new entries.
+
+    A certificate cannot hide damaged metadata in an unrelated package: PIO
+    reads every installed entry before resolving even a single tool request.
+    Payload qualification still belongs to Bootstrap's actual builder probes.
+    """
+    from platformio.package.meta import PackageMetadata, PackageSpec
+    core = Path(core)
+    for kind, expected_type in (("packages", "tool"), ("platforms", "platform"), ("lib", "library")):
+        store = core / kind
+        if store.is_symlink():
+            return False
+        if not store.exists():
+            continue
+        for folder in store.iterdir():
+            if folder.name.startswith("_tmp_installing"):
+                continue
+            if folder.is_symlink():
+                return False
+            if not folder.is_dir():
+                continue
+            metadata = next((folder / relative for relative in
+                             (".git/.piopm", ".hg/.piopm", ".svn/.piopm", ".piopm")
+                             if (folder / relative).exists() or (folder / relative).is_symlink()), None)
+            if metadata is None:
+                continue  # Unknown local folders are never repaired by startup.
+            if metadata.is_symlink() or not metadata.resolve().is_relative_to(folder.resolve()):
+                return False
+            with metadata.open("rb") as stream:
+                raw = stream.read(524289)
+            if len(raw) > 524288:
+                return False
+            value = json.loads(raw)
+            if (not isinstance(value, dict) or value.get("type") != expected_type
+                    or not isinstance(value.get("name"), str) or not value["name"]
+                    or not isinstance(value.get("version"), str) or not value["version"]
+                    or not isinstance(value.get("spec"), dict) or not value["spec"]):
+                return False
+            spec = dict(value["spec"])
+            if "url" in spec:  # PlatformIO's legacy metadata compatibility.
+                spec["uri"] = spec.pop("url")
+            value["spec"] = PackageSpec(**spec)
+            parsed = PackageMetadata(**value)  # Validate versions and PIO fields.
+            manifests = {"packages": ("package.json",), "platforms": ("platform.json",),
+                         "lib": ("library.json", "library.properties", "module.json", "package.json")}[kind]
+            manifest = next((folder / name for name in manifests if (folder / name).is_file()), None)
+            if manifest is None or manifest.is_symlink():
+                return False
+            with manifest.open("rb") as stream:
+                raw = stream.read(524289)
+            if not raw or len(raw) > 524288:
+                return False
+            if manifest.suffix == ".json":
+                declared = json.loads(raw)
+                if not isinstance(declared, dict):
+                    return False
+                if declared.get("name") and declared["name"] != parsed.name:
+                    return False
+                if declared.get("version"):
+                    from platformio.package.version import cast_version_to_semver
+                    if cast_version_to_semver(declared["version"]) != parsed.version:
+                        return False
+    return True
+
+
 def ready(core, plan=None):
     """Read-only launch gate; changed/deleted packages require bootstrap repair."""
     try:
@@ -225,8 +291,9 @@ def ready(core, plan=None):
         if (any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts)
                 or counts[0] != counts[1] + counts[2] or REPORT not in data["files"]):
             return False
-        return all((Path(core) / item).is_file() for item in data["files"]) and bool(data["files"])
-    except (OSError, ValueError, KeyError, TypeError):
+        return (all((Path(core) / item).is_file() for item in data["files"])
+                and bool(data["files"]) and _store_metadata_readable(core))
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, AssertionError, AttributeError, ImportError):
         return False
 
 
@@ -553,8 +620,9 @@ def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
+    from src.modules.bootstrap_package_recovery import atomic_package_writes
     from src.modules.platformio_locks import package_locks
-    with _bootstrap_http_timeouts(), package_locks(), archive_paths():
+    with _bootstrap_http_timeouts(), package_locks(), archive_paths(), atomic_package_writes(core):
         return _prepare(core, plan, log, jobs=jobs, event=event,
                         requested_targets=requested_targets, board_sources=board_sources)
 
@@ -673,6 +741,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     core.mkdir(parents=True, exist_ok=True)
     # Do not retain a prior success certificate after a partial repair.
     (core / MARKER).unlink(missing_ok=True)
+    from src.modules.bootstrap_package_recovery import recover_packages
+    recover_packages(core, log=log)
     platform_manager = PlatformPackageManager(str(core / "platforms"))
     tools = ToolPackageManager(str(core / "packages"))
     libraries = LibraryPackageManager(str(core / "lib"))
@@ -846,6 +916,7 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     guards = install_runtime_guard(core)
     guards.extend(["src/modules/zephyr_compat.py", "src/modules/zephyr_board_aliases.cmake", "src/modules/mbed_compat.py",
                    "src/modules/platformio_locks.py", "src/modules/board_index_targets.py",
+                   "src/modules/bootstrap_package_recovery.py",
                    "src/modules/arduino_cli_support.py", "src/modules/arduino_board_selection.py",
                    "src/modules/bootstrap_board_coverage.py",
                    "src/modules/bootstrap_arduino_sources.py",
@@ -878,14 +949,16 @@ def prepare_runtime(core, log=print):
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
         raise RuntimeError("Runtime preparation belongs to Bootstrap, outside the workspace process")
     from src.modules.bootstrap_platformio import archive_paths
+    from src.modules.bootstrap_package_recovery import atomic_package_writes, recover_packages
     from src.modules.bootstrap_seed import prepare_scons
     from src.modules.platformio_locks import package_locks
     core = Path(os.path.abspath(core))
-    with _bootstrap_http_timeouts(), package_locks(), archive_paths():
+    with _bootstrap_http_timeouts(), package_locks(), archive_paths(), atomic_package_writes(core):
         core.mkdir(parents=True, exist_ok=True)
         for name, directory in (("CORE", core), ("PACKAGES", core / "packages"),
                                 ("PLATFORMS", core / "platforms"), ("GLOBALLIB", core / "lib")):
             os.environ[f"PLATFORMIO_{name}_DIR"] = str(directory)
+        recover_packages(core, log=log)
         prepare_scons(core, log=log)
         install_runtime_guard(core)
     log("Online runtime prepared. Additional boards use explicit Bootstrap preparation when requested.")

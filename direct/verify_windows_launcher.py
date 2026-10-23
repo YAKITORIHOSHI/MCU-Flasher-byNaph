@@ -226,7 +226,7 @@ WScript.Quit exitCode
 
 
 def verify(report_dir: Path) -> dict:
-    source = ROOT / "MCU_Flasher.exe"
+    source = ROOT / "LAUNCHER/WINDOWS.exe"
     original_hash = digest(source)
     report_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="launcher-", dir=report_dir) as temporary:
@@ -234,12 +234,13 @@ def verify(report_dir: Path) -> dict:
         # Spaces and Unicode are part of both the executable and recorder paths.
         application = fixture / "relocated app 日本語 café"
         (application / "src/modules").mkdir(parents=True)
-        (application / "direct").mkdir()
+        (application / "direct/windows").mkdir(parents=True)
         unrelated = fixture / "unrelated working directory"
         unrelated.mkdir()
-        executable = application / "MCU_Flasher.exe"
+        (application / "LAUNCHER").mkdir()
+        executable = application / "LAUNCHER/WINDOWS.exe"
         shutil.copyfile(source, executable)
-        script = application / "direct/runThisOnWindows.vbs"
+        script = application / "direct/windows/run.vbs"
         # WSH does not reliably recognize UTF-8 script source; use its native
         # UTF-16 BOM format. Recorder output uses the same explicit encoding.
         script.write_text(RECORDER.replace("\n", "\r\n"), encoding="utf-16", newline="")

@@ -15,7 +15,7 @@
 
 Open `LAUNCHER` and use `WINDOWS.exe`, `UBUNTU` or `UBUNTU_ARM64` for the matching
 host. These are executable entries with no `.desktop` shortcuts in that folder;
-the older root launchers remain compatible. Moved-folder, literal-argument,
+duplicate root launchers have been removed in favor of this folder. Moved-folder, literal-argument,
 architecture, executable-permission and release archive checks pass on their
 recorded native Windows/Ubuntu hosts. See the [launcher guide](LAUNCHER/README.md).
 

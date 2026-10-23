@@ -139,13 +139,9 @@ def _copy_source(destination: Path) -> None:
         shutil.copy2(source, database / source.name)
     # AGENTS.md is generated local guidance, ignored by Git. A clean checkout
     # must not require it or inherit another sketch's live hardware state.
-    for name in ("MCU_Flasher", "mcu_flash_gui.py", "README.md"):
+    for name in ("mcu_flash_gui.py", "README.md"):
         shutil.copy2(ROOT / name, destination / name)
-    # Ship/copy both CPU-specific native launchers without requiring an ARM
-    # artifact in older extracted-source fixtures. Select the host below.
-    arm64_launcher = ROOT / "MCU_Flasher-arm64"
-    if arm64_launcher.is_file():
-        shutil.copy2(arm64_launcher, destination / arm64_launcher.name)
+    shutil.copytree(ROOT / "LAUNCHER", destination / "LAUNCHER")
     (destination / "src/__init__.py").write_text(HOME_ISOLATION, encoding="utf-8")
     # Direct verifiers can import main before src. Redirect home first there too.
     for name in ("verify_runtime.py", "verify_target_resolution.py"):
@@ -270,7 +266,7 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     app.mkdir()
     _copy_source(app)
     architecture = host_architecture()
-    launcher = app / ("MCU_Flasher-arm64" if architecture == "arm64" else "MCU_Flasher")
+    launcher = app / "LAUNCHER" / ("UBUNTU_ARM64" if architecture == "arm64" else "UBUNTU")
     if not elf_matches_host(launcher) or not os.access(launcher, os.X_OK):
         raise RuntimeError(f"The first-launch fixture needs the executable for this host CPU: {launcher}")
     env = _environment(fixture)

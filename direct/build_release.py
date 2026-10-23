@@ -92,6 +92,8 @@ def include_committed_source(name):
     path = PurePosixPath(name)
     if path.is_absolute() or '..' in path.parts:
         raise RuntimeError(f'Unsafe source entry: {path}')
+    if name in {'MCU_Flasher', 'MCU_Flasher-arm64', 'MCU_Flasher.exe', 'MCU Flasher.desktop'}:
+        raise RuntimeError(f'Duplicate root launcher must be removed: {name}')
     if path.parts and path.parts[0] in DEVELOPER_ROOTS:
         return False
     if any(part in EXCLUDED for part in path.parts):
@@ -235,14 +237,6 @@ def build(output, report_dir):
                         digest.update(chunk)
                 if digest.hexdigest() != entry['sha256']:
                     raise RuntimeError(f"Archive bytes changed: {entry['path']}")
-            for name, cpu in (('MCU_Flasher', 62), ('MCU_Flasher-arm64', 183)):
-                info = bundle.getinfo(prefix + name)
-                raw = bundle.read(info)
-                if (raw[:6] != b'\x7fELF\x02\x01' or int.from_bytes(raw[18:20], 'little') != cpu
-                        or (info.external_attr >> 16) & 0o111 != 0o111):
-                    raise RuntimeError(f'Invalid native Ubuntu launcher: {name}')
-            if not bundle.read(prefix + 'MCU_Flasher.exe').startswith(b'MZ'):
-                raise RuntimeError('Missing Windows launcher.')
             launcher_entries = {}
             for item in bundle.infolist():
                 if item.filename.startswith(prefix + 'LAUNCHER/'):

@@ -21,7 +21,7 @@ host implementation through `main/core/toolchain.py`:
 | `main/platforms/windows.py` | Windows executable discovery, guarded package commands and short-path aliases |
 | `main/core/build_resources.py` | Shared CPU, RAM and storage budgets |
 | `direct/ubuntu/requirements.txt` | Native Linux dependencies, without Windows terminal/WebView packages |
-| `MCU_Flasher` / `MCU_Flasher-arm64` / `src/launcher_ubuntu.c` | Compiled native amd64 and ARM64 launchers and their C source |
+| `LAUNCHER/UBUNTU` / `LAUNCHER/UBUNTU_ARM64` / `src/launcher_folder_linux.c` | Compiled native amd64 and ARM64 launchers and their C source |
 | `direct/ubuntu/architecture_guard.sh` / `src/modules/ubuntu_architecture.py` | Early 64-bit CPU admission and native ELF identity checks |
 | `direct/ubuntu/arm_qt5.py` | ARM64-only access to Ubuntu's ABI-matched Qt5 sample-viewer package |
 | `direct/ubuntu/launch.py` / `preflight.py` | First-run Bootstrap handoff, desktop launch and dependency diagnostics |
@@ -40,8 +40,8 @@ remain availability notices while their full application ports are pending.
 
 ## Native launcher correction — 2026-10-16
 
-The project root now contains actual compiled Linux executables: double-click
-**`MCU_Flasher` on Intel/AMD** or **`MCU_Flasher-arm64` on Raspberry Pi/ARM64**.
+The application now contains compiled Linux executables under `LAUNCHER`: double-click
+**`LAUNCHER/UBUNTU` on Intel/AMD** or **`LAUNCHER/UBUNTU_ARM64` on Raspberry Pi/ARM64**.
 The earlier root Bash script did not provide the requested native executable.
 Both binaries enter the existing Ubuntu Bootstrap path; the local desktop
 shortcut is optional. The amd64 file is recognized locally as
@@ -121,7 +121,7 @@ recovery, runtime, performance, downloader appearance/workflow/preparation,
 maintenance and native PTY/OpenCode renderer verifiers passed. The full responsive
 suite passed at 100/125/150/175/200%; the changed Tk cases were rechecked at every
 scale. Captures and logs are under `temp/audit/ubuntu-parity-2026-10-13/`.
-Read-only `./MCU_Flasher --check` passes native host admission but reports missing
+Read-only `./LAUNCHER/UBUNTU --check` passes native host admission but reports missing
 native tool/board preparation. No live installer, AI request, cloud mutation,
 hardware operation or live-cache metadata generation ran. Windows-only checks
 were skipped on this host. Current 24.04/26.04 CI, native Windows, real provider
@@ -159,7 +159,7 @@ on 26.04. Check the completed compatibility run for the revision being used;
 first-launch, runtime and compile results are separate jobs. CI uses X11/Xvfb
 and does not replace on-device Wayland, keyring or USB checks.
 
-Double-click `MCU_Flasher` on Intel/AMD, or `MCU_Flasher-arm64` on Raspberry
+Double-click `LAUNCHER/UBUNTU` on Intel/AMD, or `LAUNCHER/UBUNTU_ARM64` on Raspberry
 Pi/ARM64. Bootstrap detects missing desktop
 dependencies, opens a setup terminal and asks for Ubuntu administrator
 authentication. It refreshes package indexes and installs the detected packages,
@@ -215,9 +215,9 @@ From the project directory:
 
 ```bash
 # Intel/AMD: double-click the supplied native executable, or run:
-./MCU_Flasher
+./LAUNCHER/UBUNTU
 # Raspberry Pi/ARM64: double-click the matching native executable, or run:
-./MCU_Flasher-arm64
+./LAUNCHER/UBUNTU_ARM64
 # Check prerequisites/readiness on either CPU without setup or GUI:
 bash direct/ubuntu/run.sh --check
 # Register an Applications menu entry and generate the local desktop shortcut:
@@ -235,12 +235,12 @@ bash direct/ubuntu/run.sh --project "/home/you/Arduino/AnotherSketch" --new-wind
 bash direct/ubuntu/run.sh --repair
 ```
 
-`MCU_Flasher` is the compiled native amd64 executable; `MCU_Flasher-arm64` is
+`LAUNCHER/UBUNTU` is the compiled native amd64 executable; `LAUNCHER/UBUNTU_ARM64` is
 the compiled native ARM64 executable for Raspberry Pi and other ARM64 computers.
-Use the file matching the host CPU. Keep both beside `direct/`, `main/` and
+Use the file matching the host CPU. Keep `LAUNCHER` beside `direct/`, `main/` and
 `src/`; the application still needs those folders and its runtime/toolchains.
 Executable permissions are supplied; if a copy loses them, use
-`chmod +x MCU_Flasher MCU_Flasher-arm64`. A filesystem
+`chmod +x LAUNCHER/UBUNTU LAUNCHER/UBUNTU_ARM64`. A filesystem
 mounted with `noexec` can use `bash direct/ubuntu/run.sh` to enter setup, but the
 private runtime and native tools still need executable storage. The generated
 folder shortcut resolves the application beside the shortcut at click time and
@@ -272,16 +272,15 @@ The running Qt application uses the matching `mcu-flasher` desktop identity;
 the X11 entry also declares its measured window class.
 
 The icon update needs no executable reset, runtime repair or recompilation.
-The native wrappers load the current Python application from the folder beside
-them. Rebuild a wrapper when `src/launcher_ubuntu.c` changes, using the matching
-CPU's build environment. Keep the production launchers while the Rust/Tauri
-migration remains a prototype.
+The public wrappers load the current Python application from the parent of
+`LAUNCHER`. Keep that folder together with `main`, `src` and `direct`.
 
-`bash direct/ubuntu/build_launcher.sh` rebuilds `src/launcher_ubuntu.c` into
-`MCU_Flasher` on amd64 or `MCU_Flasher-arm64` on ARM64 by default. Pass an
-explicit output path as its first argument to choose another Linux filename;
-Windows `.exe` outputs are rejected. The supplied executables and the Bash
-fallback need no compilation on the user's computer.
+`python3 direct/build_launcher_folder.py` rebuilds the matching host's public
+entries from `src/launcher_folder_linux.c` into `LAUNCHER`. Its `--output`
+option accepts another existing output folder. The supplied executables and
+Bash fallback need no compilation on the user's computer. The older
+`direct/ubuntu/build_launcher.sh` remains a developer fixture for the legacy
+root-wrapper source; it is not the public launcher builder.
 
 ## Raspberry Pi and ARM64
 
@@ -369,7 +368,7 @@ the prefix only on Windows, and verification checks extraction containment.
 The residue is not required to launch the app. Inspect its contents before
 removing anything; preserve unrecognized user files and protected caches.
 
-Use the matching Linux `MCU_Flasher` / `MCU_Flasher-arm64` or Bash entry. The `.exe`, bundled Windows Python and
+Use the matching Linux `LAUNCHER/UBUNTU` / `LAUNCHER/UBUNTU_ARM64` or Bash entry. The `.exe`, bundled Windows Python and
 copied Windows board tools cannot serve as Ubuntu's runtime. A writable native
 Linux filesystem with execution enabled is recommended for the application and
 its runtime; a `noexec` mount can also prevent `.venv-linux/bin/python` and
@@ -863,7 +862,7 @@ run installers or firmware operations; separate isolated native first-run and
 ESP32 Compile probes are described below. Other Wayland desktop environments
 and actual hardware remain separate checks.
 Windows driver installers and UNC mappings remain Windows-specific. The root
-`MCU_Flasher` and `MCU_Flasher-arm64` now supply the native Ubuntu amd64 and
+`LAUNCHER/UBUNTU` and `LAUNCHER/UBUNTU_ARM64` now supply the native Ubuntu amd64 and
 ARM64 executables, sharing the existing Bash Bootstrap path.
 
 The missing **ESP32 Dev Module** definition was traced to Ubuntu's earlier

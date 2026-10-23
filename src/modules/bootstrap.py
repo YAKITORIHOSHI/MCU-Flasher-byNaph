@@ -954,7 +954,8 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
 
     Complete configured stores bypass the release download. Missing packages
     absent from the release are resolved by normal PlatformIO setup afterwards.
-    Invalid existing destinations remain untouched and fail with diagnostics.
+    Proven damaged packages are preserved outside the active stores before
+    lookup; normal setup then resolves missing packages from verified sources.
     Optional arguments support retained, hardware-free seed fixtures.
     """
     from src.modules.bootstrap_seed import missing_packages, import_missing, reject_unresolved_collisions
@@ -965,6 +966,8 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
     if plan is None:
         plan, _ = requested_plan()
     core = root / "src" / ".platformio-mcu-gui"
+    from src.modules.bootstrap_package_recovery import recover_packages
+    recover_packages(core, log=status)
     missing = missing_packages(core, plan)
     if not any(missing.values()):
         ok("Configured PlatformIO packages are verified locally; release seed download skipped.")
@@ -3876,13 +3879,16 @@ def ensure_platformio_scons(
 ) -> bool:
     """Resolve/install genuine SCons metadata without pruning existing packages."""
     from src.modules.bootstrap_seed import prepare_scons
+    from src.modules.bootstrap_package_recovery import atomic_package_writes, recover_packages
     core = Path(pio_core_dir or os.environ.get("PLATFORMIO_CORE_DIR")
                 or _get_safe_platformio_core_dir(SCRIPT_DIR))
     os.environ["PLATFORMIO_CORE_DIR"] = str(core)
     try:
         if gui:
             gui.set_status("Checking PlatformIO SCons build engine...")
-        prepare_scons(core, log=status)
+        recover_packages(core, log=status)
+        with atomic_package_writes(core):
+            prepare_scons(core, log=status)
         return True
     except Exception as exc:
         warn(f"Could not prepare PlatformIO SCons package: {exc}")

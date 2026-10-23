@@ -63,11 +63,18 @@ class ReleaseSourceChecks(unittest.TestCase):
                     build_release.validate_launcher_entries({**entries, name: (content, mode)})
 
     def test_production_sources_and_tool_hook_are_included(self):
-        for name in ('MCU_Flasher', 'main/web_bridge.py',
+        for name in ('LAUNCHER/UBUNTU', 'main/web_bridge.py',
                      'src/modules/arduinoq_link_paths.py', 'src/dbs/bootstrap_config.json',
                      'installers/CH34x/CH341SER.exe', '.agents/skills/mcu-flash-gui-dev/SKILL.md'):
             with self.subTest(name=name):
                 self.assertTrue(include_committed_source(name))
+
+    def test_duplicate_root_launchers_are_absent_and_refused_by_packager(self):
+        for name in ('MCU_Flasher', 'MCU_Flasher-arm64', 'MCU_Flasher.exe', 'MCU Flasher.desktop'):
+            with self.subTest(name=name):
+                self.assertFalse((ROOT / name).exists())
+                with self.assertRaisesRegex(RuntimeError, 'Duplicate root launcher'):
+                    include_committed_source(name)
 
     def test_only_top_level_developer_trees_are_omitted(self):
         for name in ('desktop/', 'desktop/crates/core/tests/project_service.rs',
