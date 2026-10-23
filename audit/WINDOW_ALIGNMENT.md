@@ -57,8 +57,12 @@ Runtime source: `414b4d2ad3fb8707fc3004b65efbc6f7db712343`.
 [Run 39978943884](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39978943884)
 passes all four Windows/xcb jobs, 12 fixture processes per host (48 total).
 Each host covers alignment and toolbar checks at five scales, plus full runtime
-and responsive checks at 100%. The separate native Wayland jobs are pending
-while installing display dependencies; results will be appended when known.
+and responsive checks at 100%. The separate native Wayland jobs were cancelled during dependency download,
+before any app checks. Logs show the hosted Azure Ubuntu mirror delivering
+roughly 40 KiB/s; package installation had not completed. This is retained as
+cancelled setup, not a failed or passing Wayland assertion. A focused follow-up
+uses Ubuntu's official HTTPS archive on ephemeral CI runners. Results will be
+appended when known.
 
 ## Fresh preparation and manual compression
 
