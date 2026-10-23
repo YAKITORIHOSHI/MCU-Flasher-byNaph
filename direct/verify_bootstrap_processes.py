@@ -201,7 +201,16 @@ class BootstrapProcessChecks(unittest.TestCase):
                                  ("source.c", "C:/sdk/framework-espidf/components"),
                                  ("C:/sdk/file.c", "components"),
                                  (b"C:/sdk/file.c", b"C:/sdk/framework-espidf/components")):
-                self.assertEqual(os.path.relpath(source, base), original(source, base))
+                # Relative inputs use the runner's current drive. A native
+                # cross-drive error is also behavior the adapter must retain.
+                try:
+                    expected = original(source, base)
+                except ValueError as native_error:
+                    with self.assertRaises(ValueError) as caught:
+                        os.path.relpath(source, base)
+                    self.assertEqual(str(caught.exception), str(native_error))
+                else:
+                    self.assertEqual(os.path.relpath(source, base), expected)
             self.assertEqual(os.path.relpath("source.c"), original("source.c"))
             resolve.assert_not_called()
 
