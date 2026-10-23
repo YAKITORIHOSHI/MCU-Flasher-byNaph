@@ -79,7 +79,7 @@ def clamp_window(widget, screen=None):
 
 
 class ScreenWatcher(QObject):
-    """Coalesce monitor/work-area/font changes; no polling or idle timer."""
+    """Coalesce monitor, frame-state and font changes without idle polling."""
 
     def __init__(self, widget, callback=None):
         super().__init__(widget)
@@ -94,7 +94,8 @@ class ScreenWatcher(QObject):
     def eventFilter(self, obj, event):
         if event.type() in (QEvent.Type.Show, QEvent.Type.FontChange,
                             QEvent.Type.DevicePixelRatioChange,
-                            QEvent.Type.ScreenChangeInternal):
+                            QEvent.Type.ScreenChangeInternal,
+                            QEvent.Type.WindowStateChange):
             self._schedule()
         return False
 

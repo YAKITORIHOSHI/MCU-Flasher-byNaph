@@ -1288,14 +1288,26 @@ class ProjectChecks(unittest.TestCase):
             _get_active_screen = lambda self: None
             _apply_responsive_layout = lambda self, width: None
         window = Window()
+
+        def assert_half_frame_minimum(width):
+            frame_width = max(0, window.frameGeometry().width() - window.geometry().width())
+            handle = window.windowHandle()
+            if handle is not None:
+                margins = handle.frameMargins()
+                frame_width = max(frame_width, margins.left() + margins.right())
+            self.assertLessEqual(window.minimumWidth() + frame_width, width // 2,
+                                 "A minimum-sized decorated window must fit its half-monitor frame")
+            self.assertGreaterEqual(window.minimumWidth() + frame_width, width // 2 - 1,
+                                    "Native frame clearance must preserve the half-monitor minimum")
+
         try:
             for width, height in ((1920, 1080), (1280, 720), (960, 540), (640, 480)):
                 area = WorkArea(-width, 20, width, height)
                 with patch("main.qt.main_window.work_area", return_value=area):
                     window._update_minimum_window_size()
-                    self.assertEqual(window.minimumWidth(), width // 2)
+                    assert_half_frame_minimum(width)
                     window.resize(width // 4, 400)
-                    self.assertEqual(window.width(), width // 2)
+                    self.assertEqual(window.width(), window.minimumWidth())
                     window.resize(width * 3 // 4, 400)
                     self.assertEqual(window.width(), width * 3 // 4)
                     self.assertLessEqual(window.minimumWidth(), window.maximumWidth())
@@ -1307,7 +1319,7 @@ class ProjectChecks(unittest.TestCase):
                  patch("main.qt.responsive.work_area", return_value=WorkArea(-1920, 20, 1920, 1080)), \
                  patch("main.qt.main_window.QGuiApplication.screens", return_value=[screen]):
                 window._restore_geometry()
-                self.assertEqual(window.minimumWidth(), 960)
+                assert_half_frame_minimum(1920)
                 self.assertEqual(window.width(), 1800)
                 self.assertFalse(window.isMaximized())
                 settings["window_maximized"] = True

@@ -313,9 +313,11 @@ ignore rules, proven MCU Flasher IDE metadata and first-use sentinels are hidden
 too. Metadata updates preserve hidden attributes and replace files atomically;
 user sources, documents and user-authored instructions/settings remain visible
 and are not overwritten by instruction generation.
-Each main window has a minimum width of half the current monitor's available
-width. It can resize wider and maximize normally; saved maximized state is
-restored. Minimum sizing follows the current monitor in Qt logical pixels.
+Each main window permits a complete framed width of half the current monitor's
+available width. The client minimum subtracts measured native borders, so desktop
+half-screen snapping can fit the complete window. It can resize wider and
+maximize normally; saved maximized state is restored. Minimum sizing follows the
+current monitor in Qt logical pixels, including native Wayland decorations.
 Tabs map to exact root filenames rather than loading order, and Ubuntu paths
 retain case. Startup project loading is coalesced to avoid duplicate models.
 The project selector uses the same cached static glass header and cards in all

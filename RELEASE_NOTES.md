@@ -40,6 +40,13 @@ shuts down. Close protection remains active during cloud refresh and hardware
 writes. A separate real-renderer check verifies normal process exit, including
 attached and detached editors; the native matrix records the supported hosts.
 
+The main window's half-screen minimum now includes native window borders. On
+Ubuntu Wayland, those borders could make an exact half-screen tile too small for
+the declared client minimum, leaving the snapped window partly off-screen.
+Sizing uses measured Qt logical frame margins and refreshes after native show
+and maximize/restore transitions; ordinary resizing and maximization remain
+available.
+
 ## October 23 Source Update: Executable Launchers and Responsive Editing
 
 Open `LAUNCHER` and use `WINDOWS.exe`, `UBUNTU` or `UBUNTU_ARM64` for the matching

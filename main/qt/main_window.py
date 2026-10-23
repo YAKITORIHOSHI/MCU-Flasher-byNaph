@@ -137,20 +137,29 @@ class MCUMainWindow(QMainWindow):
     def _minimum_width_for_display(
         screen_width: int, screen_height: int, display_scale: float = 1.0
     ) -> int:
-        """Use logical work-area width; Qt already applies the OS display scale."""
+        """Return the half-monitor frame budget; Qt already applies display scale."""
         screen_width = max(1, int(screen_width))
         screen_height = max(1, int(screen_height))
         return max(1, screen_width // 2)
 
     def _update_minimum_window_size(self, screen: QScreen | None = None) -> None:
-        """Fit minimum dimensions to the current logical work area."""
+        """Fit the complete normal-window minimum to the logical work area."""
         if screen is None:
             screen = self._get_active_screen()
         area = work_area(self, screen)
         avail = QRect(area.x, area.y, area.width, area.height)
         sw = avail.width()
         sh = avail.height()
-        new_min_w = self._minimum_width_for_display(sw, sh)
+        # Native tiling gives half the monitor to the complete decorated frame,
+        # while QWidget's minimumWidth constrains only its client area. On
+        # Wayland, QWindow can expose its client-side margins before QWidget's
+        # cached frameGeometry catches up with the first native resize.
+        frame_width = max(0, self.frameGeometry().width() - self.geometry().width())
+        handle = self.windowHandle()
+        if handle is not None:
+            margins = handle.frameMargins()
+            frame_width = max(frame_width, margins.left() + margins.right())
+        new_min_w = max(1, self._minimum_width_for_display(sw, sh) - frame_width)
         new_min_h = min(380, max(1, sh - 48))
         self.setMaximumWidth(16777215)
         self.setMinimumSize(new_min_w, new_min_h)
