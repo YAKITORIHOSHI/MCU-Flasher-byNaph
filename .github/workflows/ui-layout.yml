@@ -164,7 +164,10 @@ jobs:
 
           signal.signal(signal.SIGTERM, interrupted)
 
-          with tempfile.TemporaryDirectory(prefix='weston-runtime-', dir=output) as runtime:
+          # AF_UNIX socket paths have a 108-byte limit, which the hosted checkout
+          # plus artifact path exceeds. Only the owned transient socket goes in
+          # /tmp; captures, compositor and dependency logs remain in output.
+          with tempfile.TemporaryDirectory(prefix='mcu-weston-', dir='/tmp') as runtime:
               os.chmod(runtime, 0o700)
               environment = os.environ.copy()
               environment.update(XDG_RUNTIME_DIR=runtime, WAYLAND_DISPLAY='mcu-alignment',
