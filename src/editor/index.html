@@ -1993,8 +1993,13 @@
             }
           } else if (key === 's') {
             e.preventDefault();
-            e.stopPropagation();
-            if (typeof window.saveAllFilesSafe === 'function') {
+            e.stopImmediatePropagation();
+            const api = window.pywebview && window.pywebview.api;
+            if (api && typeof api.request_workspace_save === 'function') {
+              // The native workspace owns Save As for an unsaved Ghost Sketch.
+              // Build/Upload still call saveAllFilesSafe to flush its cache only.
+              api.request_workspace_save(!!e.shiftKey);
+            } else if (typeof window.saveAllFilesSafe === 'function') {
               window.saveAllFilesSafe();
             } else if (typeof window.saveAllFiles === 'function') {
               window.saveAllFiles();

@@ -43,6 +43,7 @@ jobs:
           python -B direct/verify_bootstrap_pip_monitor.py
           python -B direct/verify_bootstrap_package_recovery.py
           python -B direct/verify_bootstrap_timing.py
+          python -B direct/verify_bootstrap_seed.py
           python -B direct/verify_bootstrap_archives.py
           python -B direct/verify_bootstrap_processes.py
       - name: Owned package I/O benchmark

@@ -177,6 +177,7 @@ exact versions and qualification limits.
 
 `direct/build_release.py` packages the current Python application from committed
 sources, verified installer files and the private Windows Python distribution.
+Project files are directly at the ZIP root, with no enclosing checkout folder.
 Its release ZIP omits the developer-only `desktop/` Rust prototype and `audit/`
 evidence trees; both remain in the repository. The release manifest records those
 omissions and verifies every shipped file, launcher architecture and executable
@@ -213,6 +214,12 @@ configured store skips that download, and certified packages retain the existing
 coverage-only refresh. The default offline plan includes AVR, ESP32 and ESP8266
 Arduino variants and their upload/debug tools. These changes preserve that scope.
 
+Cached Windows seed archives now receive one complete checksum immediately
+before import, avoiding a second 1.79 GB read. Completed Python downloads move
+within Bootstrap's temporary storage instead of being copied into the wheelhouse
+again; locked or cross-volume transfers keep the native copy fallback. This
+reduces disk traffic without changing the package checks or board coverage.
+
 `direct/verify_bootstrap_pip_monitor.py` checks quiet children, finite deadlines
 and cancellation without running pip. `direct/verify_bootstrap_io_performance.py`
 compares package publication in disposable local fixtures and reports bytes read
@@ -229,7 +236,9 @@ Project and Resources remain directly reachable when the window shrinks or grows
 including a 1080p screen at 150% scale. Secondary actions collapse only when their
 measured content cannot fit; a monitor's physical resolution does not force one
 layout. Compact padding preserves navigation space without changing saved reading
-fonts. Tool tabs follow their own pane when the AI sidebar opens or a splitter moves.
+fonts. Symmetric native action-toolbar insets keep its bottom divider clear of
+buttons, including in short windows and after resize or theme changes. Tool tabs
+follow their own pane when the AI sidebar opens or a splitter moves.
 `direct/verify_toolbar_sizing.py` exercises real native toolbar containers through
 resize, project-label and theme changes; `direct/verify_responsive.py` checks pane
 budgets. The native UI workflow's `responsive` group captures all five display scales.
@@ -354,10 +363,24 @@ entry-point reading run off the UI thread.
 Foreground retries stop when the selector closes and respect active modal
 prompts, preserving keyboard focus.
 
+Choose **Ghost Sketch** in the project selector to start without choosing a
+folder. It uses owned temporary application storage; **Compile** and **Upload**
+save their inputs there without asking for a permanent location. **Save**,
+**Ctrl+S** or **Save All** asks for an empty project folder, confirms every editor
+buffer was saved, copies the supported root source files and updates the open
+models to their saved paths. Editing stays locked until that update completes;
+tab order and undo history are retained. Autosave stays off while the sketch is
+temporary. Closing or switching projects offers **Save**, **Discard** and
+**Cancel**, including after a successful compile.
+Saving retains the temporary copy when it has an AI recovery-history directory;
+the permanent folder receives only supported root source files.
+
 Startup opens the main workspace. The compact **Actions** menu belongs to its
 toolbar; it does not create a separate desktop window. **Detach Editor** opens
-the full code editor only on request. Closing it attaches the same editor and
-its unsaved buffers back to the main workspace.
+the full code editor with the same primary action row and keyboard shortcuts.
+Board and port Controls remain in the main workspace, which continues to own
+project callbacks and busy-state checks. Closing the detached window returns the
+same editor, unsaved buffers, action row and shortcuts to the main workspace.
 Use **View → Toolbars** to show or hide **Primary Actions** and **Controls**.
 If both bars are hidden, **View → Show All Toolbars** restores them.
 Settings reset and system-theme fallback resolve the current glass theme names.
@@ -727,7 +750,8 @@ After committing the release sources, build the distribution with
 The builder includes the complete local private Windows runtime, checks required
 Python files, verifies the bundled installers against their committed LFS
 receipts, and preserves both native Ubuntu executables. It packages committed
-defaults rather than local settings, checks every archived file's SHA256, and
+defaults rather than local settings, checks every archived file's name, size,
+permissions and SHA256, and
 refuses a missing runtime or an existing output ZIP. Its manifest stays under
 `temp/audit/release/`; distribute the resulting root `MCU-Flasher-*-fresh.zip`.
 

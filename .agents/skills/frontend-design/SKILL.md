@@ -87,6 +87,13 @@ changes; inspect every ancestor and the native overflow extension. A QToolBar in
 a plain vertical layout does not exercise native action overflow. Use actual
 pane allocations for tool tabs and refresh after splitters/sidebars change them.
 Keep chrome compact through spacing before reducing text or usable targets.
+Use symmetric native action-toolbar insets so the bottom divider stays clear of
+buttons through resizing, theme changes and short-window layouts.
+Detach the existing action row and shortcuts with the editor, returning them
+above Controls on attachment; board/port Controls stay in the main workspace.
+Keep Ghost Sketch's temporary status clear. Explicit Save chooses an empty
+permanent folder; show Save/Discard/Cancel before leaving, and preserve tab/undo
+state through the locked save and model-path update.
 
 Developer Access has its own neobrutalist identity on Windows and Ubuntu.
 Use solid cream backdrops, white paper cards, thick black borders, hard offset

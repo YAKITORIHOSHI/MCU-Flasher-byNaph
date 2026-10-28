@@ -12,6 +12,10 @@ Ground every conclusion in the current source and preserve user projects and har
 - Work in `main/mcu_flash_gui.py` (and `main/` modular package), `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`), Windows helpers (`win_subprocess_hide.py`, `bootstrap.py`), and focused tests when the request authorizes implementation.
 - Do not run a real flash, upload, reset, destructive Clean, installer, or COM port operation during automated verification.
 - Preserve unrelated working-tree changes. Never delete or rewrite a user sketch to test app behavior.
+- Verify cached toolchain seeds once immediately before import; move completed pip artifacts only inside owned temporary storage with native copy fallback. Preserve independent package-store verification, coverage and elapsed-time budgets. Public ZIPs put project files directly at their root and retain the complete private Windows runtime.
+- Keep native action-toolbar insets symmetric and its bottom divider clear of buttons through resize, theme and short-window transitions. Verify real QMainWindow containers and preserve button sizes and action callbacks.
+- Move the same primary action row and shortcuts with the detached editor and restore them above Controls. Keep board/port Controls in the main window and callbacks/busy state bound to the original workspace.
+- Preserve Ghost Sketch's marked temporary ownership. Compile/Upload flush temporary inputs; Save/Ctrl+S/Save All chooses an empty permanent folder, locks editing through acknowledged source copy/model remap and preserves undo/tab state. Keep autosave off until permanent save and offer Save/Discard/Cancel on close/switch even after a clean compile. Use hardware-free fixtures; do not infer a native Windows or hardware pass from other hosts.
 
 ## Project Model
 

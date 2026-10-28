@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Check Python release source selection without runtime or settings access."""
+"""Check release selection and flat ZIPs without live runtime or settings access."""
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import hashlib
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -108,6 +115,160 @@ class ReleaseSourceChecks(unittest.TestCase):
         self.assertIn('desktop/crates/core/tests/project_service.rs', omitted)
         self.assertIn('audit/migration/source-inventory.json', omitted)
         print(f'Committed source selection: {len(included)} included, {len(omitted)} developer files omitted.')
+
+
+class ReleaseArchiveChecks(unittest.TestCase):
+    """Build tiny releases from an owned repository, never the live runtime."""
+
+    def setUp(self):
+        scratch = ROOT / 'temp/audit'
+        scratch.mkdir(parents=True, exist_ok=True)
+        fixture = tempfile.TemporaryDirectory(prefix='release-sources-', dir=scratch)
+        self.addCleanup(fixture.cleanup)
+        self.fixture = Path(fixture.name)
+        self.project = self.fixture / 'project with spaces'
+        self.project.mkdir()
+        self.output = self.fixture / 'release.zip'
+        self.reports = self.fixture / 'reports'
+        self.sources = {
+            'README.md': b'Owned release fixture.\n',
+            'main/gui.py': b'print("committed source")\n',
+            'src/dbs/bootstrap_config.json': b'{"skip_updates": false}\n',
+            'src/launch.vbs': b"' Windows fixture\n",
+        }
+        self.sources.update({name: (ROOT / name).read_bytes()
+                             for name in build_release.REQUIRED_LAUNCHERS})
+        self.installer = b'hydrated installer fixture\x00\x01\xff'
+        self.installer_path = 'installers/fixture.exe'
+        receipt = ('version https://git-lfs.github.com/spec/v1\n'
+                   f'oid sha256:{hashlib.sha256(self.installer).hexdigest()}\n'
+                   f'size {len(self.installer)}\n').encode()
+        committed = {**self.sources, self.installer_path: receipt,
+                     'desktop/private-preview.rs': b'// developer-only fixture\n',
+                     'audit/private-report.json': b'{"fixture": true}\n'}
+        for name, data in committed.items():
+            path = self.project / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            if name in build_release.REQUIRED_LAUNCHERS and not name.endswith(('.exe', '.md')):
+                path.chmod(0o755)
+        self.git('init', '-q')
+        self.git('config', 'core.autocrlf', 'false')
+        self.git('add', '--force', '--', *committed)
+        # Force Unix launcher modes even when this verifier runs on Windows.
+        for name in build_release.REQUIRED_LAUNCHERS:
+            if not name.endswith(('.exe', '.md')):
+                self.git('update-index', '--chmod=+x', '--', name)
+        hooks = self.fixture / 'empty-hooks'
+        hooks.mkdir()
+        self.git('-c', 'user.name=Release Fixture', '-c', 'user.email=fixture@localhost',
+                 '-c', 'commit.gpgsign=false', '-c', f'core.hooksPath={hooks}',
+                 'commit', '-qm', 'Owned release fixture')
+        (self.project / self.installer_path).write_bytes(self.installer)
+        # Local settings and sketches remain present but never enter git archive.
+        (self.project / 'gui_config.json').write_bytes(b'private fixture settings')
+        (self.project / 'user.ino').write_bytes(b'private fixture sketch')
+        (self.project / 'main/gui.py').write_bytes(b'print("uncommitted edit")\n')
+        header = bytearray(70)
+        header[:2] = b'MZ'
+        header[60:64] = (64).to_bytes(4, 'little')
+        header[64:70] = b'PE\0\0\x64\x86'
+        self.runtime = {name: b'private runtime fixture\n'
+                        for name in build_release.REQUIRED_RUNTIME}
+        for name in ('python.exe', 'pythonw.exe', 'python3.dll', 'python314.dll'):
+            self.runtime[name] = bytes(header)
+        self.runtime['Lib/site-packages/example/__init__.py'] = b'# installed package\n'
+        self.runtime['Lib/site-packages/example/resources/data.bin'] = bytes(range(256))
+        for name, data in self.runtime.items():
+            path = self.project / 'src/_python' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+    def git(self, *arguments):
+        return subprocess.check_output(['git', *arguments], cwd=self.project,
+                                       stderr=subprocess.PIPE, timeout=30)
+
+    def build(self):
+        with patch.object(build_release, 'ROOT', self.project), redirect_stdout(io.StringIO()):
+            return build_release.build(self.output, self.reports)
+
+    def test_zip_has_project_files_at_root_and_exact_verified_manifest(self):
+        manifest = self.build()
+        expected = {**self.sources, self.installer_path: self.installer,
+                    **{'src/_python/' + name: data for name, data in self.runtime.items()}}
+        expected['src/launch.vbs'] = expected['src/launch.vbs'].replace(b'\n', b'\r\n')
+        with zipfile.ZipFile(self.output) as bundle:
+            self.assertEqual(set(bundle.namelist()), set(expected))
+            self.assertIn('LAUNCHER/WINDOWS.exe', bundle.namelist())
+            self.assertIn('README.md', bundle.namelist())
+            for name, data in expected.items():
+                with self.subTest(path=name):
+                    self.assertEqual(bundle.read(name), data)
+            launchers = {name: (bundle.read(name), bundle.getinfo(name).external_attr >> 16 & 0o777)
+                         for name in build_release.REQUIRED_LAUNCHERS}
+            build_release.validate_launcher_entries(launchers)
+        self.assertEqual(manifest['archive_layout'], 'project-files-at-root')
+        self.assertEqual(manifest['files'], len(expected))
+        self.assertEqual(manifest['windows_private_runtime_files'], len(self.runtime))
+        self.assertEqual(manifest['windows_private_runtime_bytes'], sum(map(len, self.runtime.values())))
+        self.assertEqual(manifest['sha256'], hashlib.sha256(self.output.read_bytes()).hexdigest())
+        self.assertEqual(manifest['bytes'], self.output.stat().st_size)
+        self.assertEqual({entry['path']: (entry['sha256'], entry['size']) for entry in manifest['entries']},
+                         {name: (hashlib.sha256(data).hexdigest(), len(data))
+                          for name, data in expected.items()})
+        self.assertEqual(manifest['verified_lfs_installers'][0]['path'], self.installer_path)
+        self.assertEqual(manifest['omitted_developer_roots']['desktop']['committed_files'], 1)
+        self.assertEqual(manifest['omitted_developer_roots']['audit']['committed_files'], 1)
+        self.assertEqual(json.loads((self.reports / 'release-manifest.json').read_text()), manifest)
+        self.assertEqual((self.project / 'gui_config.json').read_bytes(), b'private fixture settings')
+        self.assertEqual((self.project / 'user.ino').read_bytes(), b'private fixture sketch')
+        for name, data in self.runtime.items():
+            with self.subTest(retained_runtime=name):
+                self.assertEqual((self.project / 'src/_python' / name).read_bytes(), data)
+
+    def test_incomplete_runtime_refuses_publication(self):
+        (self.project / 'src/_python' / build_release.REQUIRED_RUNTIME[-1]).unlink()
+        with self.assertRaisesRegex(RuntimeError, 'Incomplete private Windows runtime'):
+            self.build()
+        self.assertFalse(self.output.exists())
+
+    def test_changed_installer_refuses_publication(self):
+        (self.project / self.installer_path).write_bytes(b'damaged installer')
+        with self.assertRaisesRegex(RuntimeError, 'committed LFS receipt'):
+            self.build()
+        self.assertFalse(self.output.exists())
+
+    def test_archive_verification_refuses_wrapped_paths_or_changed_file_contract(self):
+        original_zip = zipfile.ZipFile
+        for mutation, error in (('paths', 'ZIP root'), ('bytes', 'Archive bytes changed'),
+                                ('size', 'Archive size or permissions changed'),
+                                ('mode', 'Archive size or permissions changed')):
+            with self.subTest(mutation=mutation):
+                def changed_archive(path, mode='r', *arguments, **options):
+                    if mode == 'r':
+                        # Mutate only this completed disposable ZIP before the
+                        # packager's independent archive verification opens it.
+                        with original_zip(path) as source:
+                            content = [(item, source.read(item)) for item in source.infolist()]
+                        with original_zip(path, 'w') as destination:
+                            for item, data in content:
+                                if mutation == 'paths':
+                                    item.filename = 'unexpected-wrapper/' + item.filename
+                                elif item.filename == 'main/gui.py':
+                                    if mutation == 'bytes':
+                                        data = b'#' + data[1:]
+                                    elif mutation == 'size':
+                                        data += b'\n'
+                                    elif mutation == 'mode':
+                                        item.external_attr ^= 0o111 << 16
+                                destination.writestr(item, data)
+                    return original_zip(path, mode, *arguments, **options)
+
+                with patch.object(build_release.zipfile, 'ZipFile', side_effect=changed_archive):
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        self.build()
+                self.assertFalse(self.output.exists())
+                self.assertFalse((self.reports / 'release-manifest.json').exists())
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 
 Uses only the standard library. Never cleans or modifies the working runtime,
 settings, sketches or caches. Run with Python 3.10+ from either supported host.
+Project files sit directly at the ZIP root, without a checkout-name wrapper.
 """
 from __future__ import annotations
 
@@ -141,7 +142,6 @@ def windows_runtime_files():
 def build(output, report_dir):
     runtime_files = windows_runtime_files()  # Refuse omission before creating any ZIP.
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
-    prefix = ROOT.name + '/'
     output = output or ROOT / f'MCU-Flasher-{commit[:7]}-fresh.zip'
     if output.exists():
         raise FileExistsError(f'Release output already exists: {output}')
@@ -154,7 +154,7 @@ def build(output, report_dir):
         if name.casefold() in seen:
             raise RuntimeError(f'Windows case collision in release: {name}')
         seen.add(name.casefold())
-        info = zipfile.ZipInfo(prefix + name, (2026, 1, 1, 0, 0, 0))
+        info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
         info.create_system = 3
         info.external_attr = (stat.S_IFREG | mode) << 16
         info.compress_type = zipfile.ZIP_DEFLATED
@@ -228,22 +228,27 @@ def build(output, report_dir):
 
         print('Verifying every archived file and the native launchers...', flush=True)
         with zipfile.ZipFile(temporary) as bundle:
-            if len(bundle.infolist()) != len(entries):
-                raise RuntimeError('Unexpected release entry count.')
+            inventory = bundle.infolist()
+            if (len(inventory) != len(entries)
+                    or {item.filename for item in inventory} != {entry['path'] for entry in entries}):
+                raise RuntimeError('Unexpected release entries; project files must be at the ZIP root.')
             for entry in entries:
+                archived = bundle.getinfo(entry['path'])
+                if (archived.file_size != entry['size']
+                        or (archived.external_attr >> 16) != (stat.S_IFREG | int(entry['mode'], 8))):
+                    raise RuntimeError(f"Archive size or permissions changed: {entry['path']}")
                 digest = hashlib.sha256()
-                with bundle.open(prefix + entry['path']) as stream:
+                with bundle.open(archived) as stream:
                     for chunk in iter(lambda: stream.read(1024 * 1024), b''):
                         digest.update(chunk)
                 if digest.hexdigest() != entry['sha256']:
                     raise RuntimeError(f"Archive bytes changed: {entry['path']}")
             launcher_entries = {}
-            for item in bundle.infolist():
-                if item.filename.startswith(prefix + 'LAUNCHER/'):
-                    name = item.filename.removeprefix(prefix)
-                    launcher_entries[name] = bundle.read(item), (item.external_attr >> 16) & 0o777
+            for item in inventory:
+                if item.filename.startswith('LAUNCHER/'):
+                    launcher_entries[item.filename] = bundle.read(item), (item.external_attr >> 16) & 0o777
             validate_launcher_entries(launcher_entries)
-            if json.loads(bundle.read(prefix + 'src/dbs/bootstrap_config.json')) != {'skip_updates': False}:
+            if json.loads(bundle.read('src/dbs/bootstrap_config.json')) != {'skip_updates': False}:
                 raise RuntimeError('The committed Bootstrap defaults are not fresh.')
         if runtime_files != windows_runtime_files():
             raise RuntimeError('Private Windows runtime inventory changed during packaging.')
@@ -272,6 +277,7 @@ def build(output, report_dir):
 
     manifest = {'commit': commit, 'archive': str(output), 'bytes': output.stat().st_size,
                 'sha256': digest_file(output), 'files': len(entries),
+                'archive_layout': 'project-files-at-root',
                 'windows_private_runtime_files': len(runtime_files),
                 'windows_private_runtime_bytes': sum(item['size'] for item in runtime_entries.values()),
                 'verified_lfs_installers': installers, 'windows_crlf_entries': normalizations,

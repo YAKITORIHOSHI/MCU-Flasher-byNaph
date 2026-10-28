@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, responsive layouts and window snapping, safe shutdown, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, responsive layouts and window snapping, detached action rows, temporary Ghost Sketch saves, safe shutdown, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -1565,15 +1565,39 @@ MCU Flasher by Naph/
   must explicitly refresh full text/tooltips/timer policy without changing data.
 - Settings' legacy `graphics_acceleration` key controls continuous splitter resize, not the GPU. Unsaved defaults use divider previews on constrained devices; preserve explicit choices. Save a complete preference set once and report persistence failure. Reset controls must revalidate target/framework/port and busy state in their callbacks.
 - `main/qt/responsive.py` owns current-monitor work-area fitting and coalesced screen/font signals. Qt screen geometry and font widths are logical pixels: never multiply them by DPI/DPR. Use `ui_metrics.py` for coordinate arithmetic, including negative monitor origins and frame clearance. Reflow Controls, serial headers and dialog fields; do not let wide size hints lock compact windows. Preserve saved editor/terminal fonts. Tk uses its own native point/pixel scale, coalesced panes and scrollable installed details; cancel bound callbacks on destruction.
+- Bootstrap's cached Windows seed receives one full checksum immediately before
+  import. Completed pip downloads may move within their owned temporary root;
+  retain copy2 fallback/link materialization and independent installed-package
+  verification. Do not apply this wheelhouse shortcut to package-store publication
+  or claim a cold Windows setup duration from warm local I/O fixtures.
 - Toolbar candidates include native margins/spacing and mandatory action widths;
   choose from actual content budgets and recalculate after label/font/theme
-  changes. Keep Project and Resources visible through native QMainWindow toolbar
-  overflow, including 1280/1320 logical widths, narrow-to-wide transitions and
+  changes. Keep the primary toolbar's native layout insets symmetric: Qt's
+  horizontal toolbar row position uses the left inset vertically. Reserve bottom
+  divider clearance in normal and short-window layouts, including after native
+  polish and resize/theme changes. Keep Project and Resources visible through
+  native QMainWindow toolbar overflow, including 1280/1320 logical widths, narrow-to-wide transitions and
   long project names. A plain VBox toolbar fixture cannot establish that.
   Tool-tab and panel budgets follow allocated pane widths after splitter/sidebar
   changes, even at the same outer width. Verify `direct/verify_toolbar_sizing.py`
   and `direct/verify_responsive.py`; use the native UI `responsive` group for all
   five scales. Preserve saved content fonts, keyboard focus and dirty buffers.
+- Detach the same primary toolbar and keyboard shortcuts with the editor; restore
+  them above the separate Controls row on attachment. Keep board/port Controls in
+  the main window and callbacks/busy state bound to the original workspace.
+  Preserve hidden-toolbar keyboard access, focus, buffers and native visibility.
+  Verify `direct/verify_detached_actions.py` without live hardware or persistence.
+- Ghost Sketch starts in owned temporary application storage. Compile/Upload
+  flush temporary inputs without a location prompt; Save/Ctrl+S/Save All choose
+  an empty permanent project folder. Lock editing through acknowledged buffer
+  flush, supported root-source copy and model-path remap, preserving undo/tab
+  state. Disable autosave until permanent save; require Save/Discard/Cancel on
+  close or project switch even after a clean compile. After acknowledged save,
+  retain the temporary original if an AI recovery-history directory exists;
+  check only directory existence, never backup contents or `.state`. Keep this
+  automatic retention separate from explicit discard. Verify the isolated
+  `direct/verify_ghost_sketch.py`, `direct/verify_ghost_ui.py` and
+  `direct/verify_ghost_renderer.py`; these do not qualify hardware operations.
 - Accepted workspace closes must destroy owned WebEngine views/pages while Qt
   still runs; keep refused closes alive and preserve other open workspaces and
   their shared profile. Verify normal exit with `direct/verify_shutdown.py`,

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QIcon, QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton
 
@@ -26,10 +26,14 @@ class DetachedEditorWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("MCU Flasher — Code Editor")
         self.setObjectName("detached-editor-window")
+        self._primary_toolbar = None
+        self._toolbar_layout_timer = QTimer(self)
+        self._toolbar_layout_timer.setSingleShot(True)
+        self._toolbar_layout_timer.timeout.connect(self._refresh_toolbar)
 
         from main.qt.responsive import fit_dialog, ScreenWatcher
         fit_dialog(self, (1040, 680), (360, 280))
-        self._screen_watcher = ScreenWatcher(self)
+        self._screen_watcher = ScreenWatcher(self, self._refresh_toolbar)
 
         # Set window icon matching the application icon
         try:
@@ -41,14 +45,45 @@ class DetachedEditorWindow(QMainWindow):
         except Exception:
             pass
 
+    def set_action_toolbar(self, toolbar) -> None:
+        self._primary_toolbar = toolbar
+        toolbar.move_to_window(self)
+        self._toolbar_layout_timer.start(0)
+
+    def release_action_toolbar(self) -> None:
+        self._toolbar_layout_timer.stop()
+        self._primary_toolbar = None
+
+    def _refresh_toolbar(self, _screen=None) -> None:
+        toolbar = self._primary_toolbar
+        if toolbar is None or toolbar.window() is not self:
+            return
+        short = self.height() < 350
+        if bool(toolbar.property("shortScreen")) != short:
+            toolbar.setProperty("shortScreen", short)
+            toolbar.style().unpolish(toolbar)
+            toolbar.style().polish(toolbar)
+        toolbar.set_responsive_width(toolbar.width())
+
+    def event(self, event):
+        result = super().event(event)
+        if (hasattr(self, "_toolbar_layout_timer")
+                and event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange,
+                                     QEvent.Type.LayoutRequest)):
+            self._toolbar_layout_timer.start(0)
+        return result
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        if hasattr(self, "_toolbar_layout_timer"):
+            self._toolbar_layout_timer.start(0)
         cw = self.centralWidget()
         if cw and hasattr(cw, "force_layout"):
             cw.force_layout()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._toolbar_layout_timer.start(0)
         cw = self.centralWidget()
         if cw and hasattr(cw, "force_layout"):
             cw.force_layout()

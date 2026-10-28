@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher's generated metadata, protected caches, package publication, Fresh cleanup and public release integrity on Windows and Ubuntu. Use for file-utility, cleanup, packaging or publication-preparation changes; preserve user sketches, settings and recovery journals."
+description: "Maintain MCU Flasher's generated metadata, protected caches, temporary Ghost Sketch ownership and saves, package publication, Fresh cleanup and public release integrity on Windows and Ubuntu. Use for file-utility, cleanup, packaging or publication-preparation changes; preserve user sketches, settings and recovery journals."
 ---
 
 # MCU Flasher Project Hygiene
@@ -19,6 +19,22 @@ Modify file operations advance the project source revision and refresh current
 AI guidance through the existing serialized metadata writer. They must not reset
 terminal/assistant sessions, unrelated panels or hardware choices. Keep root
 source enumeration current and all verification writes inside disposable fixtures.
+
+Ghost Sketch owns a marked temporary project in application cache storage.
+Compile/Upload flush inputs there; explicit Save/Ctrl+S/Save All chooses an empty
+permanent folder and copies only supported root `.ino`, `.cpp`, `.c`, `.h`,
+`.hpp` and `.txt` sources after editor acknowledgement. Keep build caches and
+journals out of that copy. Lock editing through copy and model-path remap;
+preserve undo/tab state and leave autosave disabled until permanent save.
+Save/Discard/Cancel is required on close or switch even after a clean build.
+Retain the temporary original through failed publication or remap. After
+acknowledged permanent save, retain it if an AI recovery-history directory
+exists; check only directory existence, never backup contents or `.state`.
+Automatic saved-session cleanup is separate from explicit discard. Release only
+the exact marked session when eligible; copy no recovery history into the saved
+project.
+Never clean another project or unrelated temporary storage. Verify with isolated
+Ghost fixtures, without generating metadata against live projects.
 
 Saved hardware `upload_speed` describes the current target through
 `serial_upload_speed`, never the last ESP upload. Store null for unknown recipe
@@ -105,6 +121,12 @@ Classify paths before changing attributes or deleting anything:
   while constructing the project selector. Mock it in all Qt startup verifiers.
 
 ## Keep cache and Clean behavior safe
+
+- Avoid duplicate cached-seed hash passes by verifying once immediately before
+  import. Finished pip artifacts may move only between this run's owned temporary
+  download directories and wheelhouse. Preserve native copy2 fallback and link
+  materialization; installed package-store publication retains its independent
+  source/staged verification and native Windows metadata semantics.
 
 - Package publication optimizations must preserve independent staged-byte
   verification, source-change detection, native copy metadata semantics,
@@ -220,6 +242,9 @@ Use `direct/build_release.py` after committing release sources. It combines
 committed defaults, verified materialized LFS installers and the local private
 Windows runtime, then verifies every archived file. Missing runtime files must
 stop packaging. GitHub source archives alone are not a packaged Windows release.
+Place project files directly at the ZIP root, with `main/`, `src/` and
+`LAUNCHER/` beside the root entry files; never add a checkout-name wrapper.
+Verify exact archive names, hashes, sizes and executable modes against its manifest.
 Keep user state, package stores, protected caches and audit fixtures out of
 release ZIPs without deleting them from the working checkout.
 

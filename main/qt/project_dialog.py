@@ -278,6 +278,8 @@ class ProjectDialog(QDialog):
                               or getattr(self._backend, "_current_op_phase", None) is not None):
             return True
         p = self.parent()
+        if p and callable(getattr(p, "_is_busy", None)) and p._is_busy():
+            return True
         if p and getattr(p, "_active_operation", None) is not None:
             return True
         return False
@@ -390,6 +392,14 @@ class ProjectDialog(QDialog):
         self._setup_recents_tab()
         self._setup_open_projects_tab()
         self._setup_cloud_tab()
+        ghost_actions = QHBoxLayout()
+        self._btn_ghost_sketch = self._action("Ghost Sketch", "secondary", self._create_ghost_sketch, self)
+        self._btn_ghost_sketch.setObjectName("btn-ghost-sketch")
+        self._btn_ghost_sketch.setToolTip(
+            "Start a temporary sketch. Compile and upload now; choose its permanent folder when saving.")
+        ghost_actions.addWidget(self._btn_ghost_sketch)
+        ghost_actions.addStretch(1)
+        root.addLayout(ghost_actions)
         self._apply_dialog_theme()
         try:
             from main.qt.signals import signals
@@ -759,6 +769,32 @@ class ProjectDialog(QDialog):
         self._btn_create = self._action("Create project", "primary", self._create_project, tab)
         actions.addWidget(self._btn_cancel_new)
         actions.addWidget(self._btn_create)
+
+    def _create_ghost_sketch(self) -> None:
+        """Create temporary source storage only after workspace choice/protection."""
+        if self._is_busy():
+            return
+        self._tabs.setCurrentIndex(1)
+        result = {}
+        def create(in_new_window):
+            if self._backend:
+                reply = self._backend.create_ghost_project(open_in_new_window=in_new_window)
+            else:
+                from main.core.ghost_sketch import create_ghost_project_path
+                path = create_ghost_project_path()
+                reply = {"success": True, "path": str(path)}
+            result.update(reply)
+            return reply
+        def accepted():
+            path = result.get("path") or result.get("project", {}).get("path")
+            if path:
+                self.selected_project = Path(path)
+            self.accept()
+        # A new temporary project can never be the current project's identity.
+        import tempfile
+        import uuid
+        target = str(Path(tempfile.gettempdir()) / ("ghost-sketch-" + uuid.uuid4().hex))
+        self._dispatch_project_action(target, "Ghost Sketch", create, accepted, self._new_status)
 
     def _setup_recents_tab(self) -> None:
         tab, layout, actions = self._make_tab("Recent")
@@ -1260,6 +1296,11 @@ class ProjectDialog(QDialog):
         except (OSError, TypeError, ValueError):
             pass
 
+        ghost = getattr(parent, "_ghost_sketch", None)
+        if backend and getattr(backend, "is_ghost_sketch", False) is True and ghost is not None:
+            ghost.confirm_leave(lambda ready: callback(ready, "", not ready))
+            return
+
         dirty = bool(backend and any(getattr(backend, "modified_files", {}).values()))
         if not dirty:
             callback(True, "", False)
@@ -1371,7 +1412,14 @@ class ProjectDialog(QDialog):
                 return
             begin_wait()
             try:
-                finish(action(bool(in_new_window)))
+                old_ghost = (str(self._backend.sketch_dir_path) if self._backend
+                             and getattr(self._backend, "is_ghost_sketch", False) is True else "")
+                result = action(bool(in_new_window))
+                if result.get("success") and not in_new_window and old_ghost:
+                    owner = getattr(self.parent(), "_ghost_sketch", None)
+                    if owner is not None:
+                        owner.release_after_switch(old_ghost)
+                finish(result)
             except Exception as exc:
                 finish(error=str(exc))
 

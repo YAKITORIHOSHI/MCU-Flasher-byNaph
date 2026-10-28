@@ -41,6 +41,9 @@ def definitions(names, folder):
                  _sync_private_python_site_packages=Mock(),
                  _record_bootstrap_log=Mock(), status=Mock(), ok=Mock(),
                  warn=Mock(), fail=Mock(), _LAST_PIP_ERROR="")
+    names = set(names)
+    if "ensure_pip_packages_parallel" in names:
+        names.add("_merge_bootstrap_wheels")
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), scope)
     return scope
@@ -384,6 +387,80 @@ class PipMonitorChecks(unittest.TestCase):
             self.assertTrue(scope["ensure_pip_packages_parallel"]())
         scope["_run_pip_install"].assert_not_called()
         scope["_is_network_reachable"].assert_not_called()
+
+    def test_large_prefetch_wheel_moves_without_reading_and_copying_its_payload(self):
+        scope = definitions({"_merge_bootstrap_wheels"}, self.folder)
+        worker, wheelhouse = self.folder / "worker", self.folder / "wheelhouse"
+        worker.mkdir()
+        wheelhouse.mkdir()
+        artifact = worker / "fixture-large.whl"
+        block = b"large wheel fixture\n" * 32768
+        with artifact.open("wb") as output:
+            for _ in range(32):
+                output.write(block)
+        original = artifact.stat()
+        with patch.object(shutil, "copy2", side_effect=AssertionError("Redundant wheel payload copy")), \
+                patch.object(os, "rename", wraps=os.rename) as rename:
+            scope["_merge_bootstrap_wheels"](worker, wheelhouse)
+        target = wheelhouse / artifact.name
+        rename.assert_called_once_with(artifact, target)
+        self.assertFalse(artifact.exists())
+        self.assertEqual(target.stat().st_size, original.st_size)
+        self.assertEqual(target.stat().st_mtime_ns, original.st_mtime_ns)
+        with target.open("rb") as result:
+            for _ in range(32):
+                self.assertEqual(result.read(len(block)), block)
+            self.assertEqual(result.read(), b"")
+
+    def test_prefetch_collision_keeps_both_original_artifacts_without_overwrite(self):
+        scope = definitions({"_merge_bootstrap_wheels"}, self.folder)
+        worker, wheelhouse = self.folder / "worker", self.folder / "wheelhouse"
+        worker.mkdir()
+        wheelhouse.mkdir()
+        artifact = worker / "duplicate.whl"
+        target = wheelhouse / artifact.name
+        artifact.write_bytes(b"worker bytes")
+        target.write_bytes(b"existing wheelhouse bytes")
+        with patch.object(os, "rename", side_effect=AssertionError("Overwrite attempted")), \
+                patch.object(shutil, "copy2", side_effect=AssertionError("Overwrite attempted")):
+            scope["_merge_bootstrap_wheels"](worker, wheelhouse)
+        self.assertEqual(artifact.read_bytes(), b"worker bytes")
+        self.assertEqual(target.read_bytes(), b"existing wheelhouse bytes")
+
+    def test_prefetch_failed_rename_keeps_native_copy2_fallback(self):
+        scope = definitions({"_merge_bootstrap_wheels"}, self.folder)
+        worker, wheelhouse = self.folder / "worker", self.folder / "wheelhouse"
+        worker.mkdir()
+        wheelhouse.mkdir()
+        artifact = worker / "fallback.whl"
+        artifact.write_bytes(b"exact fixture wheel bytes")
+        os.utime(artifact, ns=(1700000000000000000, 1700000000000000000))
+        with patch.object(os, "rename", side_effect=OSError("Fixture cross-device or locked rename")), \
+                patch.object(shutil, "copy2", wraps=shutil.copy2) as copy:
+            scope["_merge_bootstrap_wheels"](worker, wheelhouse)
+        target = wheelhouse / artifact.name
+        copy.assert_called_once_with(artifact, target)
+        self.assertEqual(target.read_bytes(), artifact.read_bytes())
+        self.assertEqual(target.stat().st_mtime_ns, artifact.stat().st_mtime_ns)
+
+    def test_prefetch_linked_input_keeps_copy2_materialization(self):
+        scope = definitions({"_merge_bootstrap_wheels"}, self.folder)
+        worker, wheelhouse = self.folder / "worker", self.folder / "wheelhouse"
+        worker.mkdir()
+        wheelhouse.mkdir()
+        payload = self.folder / "payload.whl"
+        payload.write_bytes(b"linked fixture payload")
+        artifact = worker / "linked.whl"
+        try:
+            artifact.symlink_to(payload)
+        except OSError as exc:
+            self.skipTest(f"Native symlink creation unavailable: {exc}")
+        with patch.object(os, "rename", side_effect=AssertionError("Linked wheel renamed")):
+            scope["_merge_bootstrap_wheels"](worker, wheelhouse)
+        target = wheelhouse / artifact.name
+        self.assertFalse(target.is_symlink())
+        self.assertEqual(target.read_bytes(), payload.read_bytes())
+        self.assertTrue(artifact.is_symlink())
 
     def test_download_wrapper_uses_qt_budget_and_closed_setup_never_installs(self):
         scope = definitions({"ensure_pip_packages_parallel"}, self.folder)

@@ -979,16 +979,8 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
             status(f"Release-first check: {len(specs)} missing {kind}: "
                    + ", ".join(spec.humanize() for spec in specs))
     zip_dest = root / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
-    verified = False
-    if zip_dest.is_file():
-        with timed_stage(status, "cached release seed checksum"):
-            verified, reason = _download_matches_expectations(
-                zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
-        if not verified:
-            raise RuntimeError(f"Existing release archive was retained because verification failed: {zip_dest}: {reason}")
-    if verified:
-        status(f"Using verified cached release seed ({zip_dest.stat().st_size / 1048576:.1f} MiB): {zip_dest}")
-    else:
+    cached_archive = zip_dest.is_file()
+    if not cached_archive:
         if seed_url is None and not _is_network_reachable(timeout=2.0):
             reject_unresolved_collisions(core, missing)
             warn("Release seed unavailable while offline; cached/partial files were retained. Missing-package setup must still succeed.")
@@ -1008,11 +1000,16 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
             warn(f"Release seed download failed: {exc}. Archive/partial checkpoints were retained; normal setup will resolve missing packages.")
             reject_unresolved_collisions(core, missing)
             return False
+    # Verify immediately before import. Cached archives need one complete hash
+    # here, rather than an additional identical 1.79 GB scan before this gate.
+    # Newly downloaded archives still revalidate after the downloader finishes.
     with timed_stage(status, "release seed verification before import"):
         verified, reason = _download_matches_expectations(
             zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
     if not verified:
         raise RuntimeError(f"Release seed verification failed; archive retained at {zip_dest}: {reason}")
+    if cached_archive:
+        status(f"Using verified cached release seed ({zip_dest.stat().st_size / 1048576:.1f} MiB): {zip_dest}")
     status("Importing only missing package groups from the verified release...")
     last_update = 0.0
 
@@ -2958,6 +2955,34 @@ PIP_PACKAGES_SPEC = [
 ]
 
 
+def _merge_bootstrap_wheels(worker_dir: Path, wheelhouse: Path) -> None:
+    """Transfer finished downloads inside this run's owned temporary root.
+
+    A same-volume rename preserves the wheel and its native metadata without
+    reading/writing its payload again. Keep copy2 for filesystems or Windows
+    sharing rules that reject rename, and retain the existing collision and
+    best-effort merge policy. Merges are serialized after each worker exits.
+    """
+    for artifact in worker_dir.iterdir():
+        if not artifact.is_file():
+            continue
+        target = wheelhouse / artifact.name
+        if target.exists():
+            continue
+        try:
+            # copy2 previously materialized any linked input. Keep that
+            # behavior instead of publishing a link into a worker folder.
+            if artifact.is_symlink():
+                shutil.copy2(artifact, target)
+                continue
+            try:
+                os.rename(artifact, target)
+            except OSError:
+                shutil.copy2(artifact, target)
+        except OSError:
+            pass
+
+
 def ensure_pip_packages_parallel(
     gui: Optional[BootstrapGUI] = None,
     *,
@@ -3322,15 +3347,7 @@ def ensure_pip_packages_parallel(
 
                 if downloaded_ok:
                     # Merge complete artifacts only after that worker exits.
-                    for artifact in worker_dir.iterdir():
-                        if not artifact.is_file():
-                            continue
-                        target = wheelhouse / artifact.name
-                        if not target.exists():
-                            try:
-                                shutil.copy2(artifact, target)
-                            except OSError:
-                                pass
+                    _merge_bootstrap_wheels(worker_dir, wheelhouse)
                     completed_downloads += 1
                     _set_state(
                         result_sid,

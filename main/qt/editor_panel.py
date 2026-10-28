@@ -62,6 +62,19 @@ def editor_page_background(theme_name: str) -> str:
     return {"light": "#ffffff", "solarized_dark": "#002b36"}.get(name, "#1f272a")
 
 
+def _editor_workspace(panel):
+    """Resolve the original workspace while Monaco belongs to a detached host."""
+    owner = panel.window() if panel and callable(getattr(panel, "window", None)) else None
+    seen = set()
+    while owner is not None and id(owner) not in seen:
+        seen.add(id(owner))
+        if callable(getattr(owner, "_shortcut_save", None)):
+            return owner
+        parent = getattr(owner, "parentWidget", None)
+        owner = parent() if callable(parent) else None
+    return None
+
+
 class EditorBridgeAPI(QObject):
     """
     Python-side of the Monaco ↔ Python bridge via QWebChannel.
@@ -76,6 +89,7 @@ class EditorBridgeAPI(QObject):
     request_save   = Signal()
     request_save_all = Signal()
     save_finished = Signal(str, bool)
+    ghost_paths_promoted = Signal(str, str, bool)
     cloud_reload_finished = Signal(str, bool)
     cloud_project_files_ready = Signal(str, dict)
     _cloud_manifest_finished = Signal(str, dict)
@@ -108,6 +122,17 @@ class EditorBridgeAPI(QObject):
     @Slot(str, bool)
     def finish_save_request(self, token: str, success: bool) -> None:
         self.save_finished.emit(token, success)
+
+    @Slot(str, str, bool)
+    def finish_ghost_path_promotion(self, token: str, renderer: str, success: bool) -> None:
+        self.ghost_paths_promoted.emit(token, renderer, success)
+
+    @Slot(bool)
+    def request_workspace_save(self, all_files: bool = False) -> None:
+        """Keep an explicit editor save distinct from an internal build flush."""
+        panel = self.parent()
+        if panel and hasattr(panel, "request_workspace_save"):
+            panel.request_workspace_save(all_files)
 
     @Slot(str, bool)
     def finish_cloud_reload(self, token: str, success: bool) -> None:
@@ -459,9 +484,30 @@ class EditorBridgeAPI(QObject):
         if not self._recovery_buffers:
             self._recovering_buffers = False
 
+    def remap_project_paths(self, mapping: dict[str, str]) -> None:
+        """Retain crash recovery when an unsaved sketch gains its final folder."""
+        paths = {str(Path(old).resolve()): str(Path(new).resolve())
+                 for old, new in mapping.items()}
+        self._buffer_snapshots = {paths.get(path, path): content
+                                  for path, content in self._buffer_snapshots.items()}
+        self._recovery_buffers = {paths.get(path, path): content
+                                  for path, content in self._recovery_buffers.items()}
+        self._syntax_generation += 1
+        self._syntax_pending = None
+
     @Slot(str, result="QVariant")
     def run_action(self, action_name: str) -> dict:
         """Monaco toolbar button dispatches an action."""
+        action = str(action_name or "").strip().lower()
+        workspace = _editor_workspace(self.parent())
+        if workspace is not None:
+            if action in {"save", "save_all"}:
+                self.request_workspace_save(action == "save_all")
+                return {"success": True, "dispatched": True}
+            if action != "stop" and (
+                    getattr(workspace, "_ghost_save_in_progress", False) is True
+                    or getattr(getattr(workspace, "_ghost_sketch", None), "needs_recovery", False) is True):
+                return {"success": False, "error": "Finish saving the Ghost Sketch before starting another action."}
         if self._backend:
             return self._backend.run_action(action_name)
         return {"success": False}
@@ -1013,6 +1059,13 @@ class MonacoEditorPanel(QWidget):
             "if (typeof window.saveActiveFile === 'function') { window.saveActiveFile(); }"
         )
 
+    def request_workspace_save(self, all_files: bool = False) -> None:
+        """Find the original workspace through a detached window's Qt parent."""
+        owner = _editor_workspace(self)
+        save = getattr(owner, "_shortcut_save_all" if all_files else "_shortcut_save", None)
+        if callable(save):
+            save()
+
     def trigger_save_all(
         self,
         callback: Optional[Callable[[], None]] = None,
@@ -1069,6 +1122,8 @@ class MonacoEditorPanel(QWidget):
 
     def _schedule_autosave(self) -> None:
         """Debounce auto-save when user edits text in Monaco."""
+        if getattr(self._backend, "is_ghost_sketch", False) is True:
+            return
         if not getattr(self, "_autosave_enabled", False):
             return
         delay = getattr(self, "_autosave_delay", 1500)
@@ -1077,6 +1132,8 @@ class MonacoEditorPanel(QWidget):
 
     def _on_autosave_timeout(self) -> None:
         """Trigger background file save on debounce expiration."""
+        if getattr(self._backend, "is_ghost_sketch", False) is True:
+            return
         if getattr(self, "_autosave_enabled", False):
             if self._backend and hasattr(self._backend, "ai_review_manager") and self._backend.ai_review_manager:
                 if self._backend.ai_review_manager.has_any_pending_ai_edits():
@@ -1131,6 +1188,9 @@ class MonacoEditorPanel(QWidget):
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:
         """Handle project folder change or new sketch creation."""
+        if payload.get("operation") == "ghost_saved" and payload.get("preserve_buffers"):
+            self.promote_ghost_paths(payload)
+            return
         self._bridge.retain_current_project_buffers()
         search = getattr(self, "_search_dialog", None)
         if search and self._backend and search.project != Path(self._backend.sketch_dir_path):
@@ -1141,6 +1201,72 @@ class MonacoEditorPanel(QWidget):
         active = payload.get("active_file")
         if active:
             self.open_file(active)
+
+    def promote_ghost_paths(self, payload: dict, callback=None, failure_callback=None) -> None:
+        """Acknowledge relocation before a Save-and-close may retire the page."""
+        mapping = payload.get("path_mapping")
+        if (not self._backend or not isinstance(mapping, dict) or not mapping
+                or payload.get("path") != str(self._backend.sketch_dir_path)
+                or not all(isinstance(old, str) and isinstance(new, str)
+                           for old, new in mapping.items())):
+            if failure_callback:
+                failure_callback()
+            return
+        renderer = self._bridge._renderer_token
+        fingerprint = (renderer, payload["path"], json.dumps(mapping, sort_keys=True))
+        if getattr(self, "_ghost_promotion_receipt", None) == fingerprint:
+            if callback:
+                callback()
+            return
+        pending = getattr(self, "_ghost_promotion_pending", None)
+        if pending:
+            if pending["fingerprint"] == fingerprint:
+                pending["callbacks"].append((callback, failure_callback))
+            elif failure_callback:
+                failure_callback()
+            return
+
+        import uuid
+        token = uuid.uuid4().hex
+        state = {"token": token, "fingerprint": fingerprint,
+                 "callbacks": [(callback, failure_callback)]}
+        self._ghost_promotion_pending = state
+        self._bridge.remap_project_paths(mapping)
+        self._project_files_generation = getattr(self, "_project_files_generation", 0) + 1
+        generation = self._project_files_generation
+        search = getattr(self, "_search_dialog", None)
+        if search:
+            search.close()
+            search.deleteLater()
+            self._search_dialog = None
+        self._search_active_snapshot = {}
+
+        def finished(received, received_renderer, success):
+            if received != token or getattr(self, "_ghost_promotion_pending", None) is not state:
+                return
+            success = bool(success and renderer and received_renderer == renderer
+                           and self._bridge._renderer_token == renderer
+                           and str(self._backend.sketch_dir_path) == payload["path"])
+            self._ghost_promotion_pending = None
+            self._bridge.ghost_paths_promoted.disconnect(finished)
+            if success:
+                self._ghost_promotion_receipt = fingerprint
+            for succeeded, failed in state["callbacks"]:
+                handler = succeeded if success else failed
+                if handler:
+                    handler()
+
+        self._bridge.ghost_paths_promoted.connect(finished)
+        QTimer.singleShot(30000, self, lambda: finished(token, renderer, False))
+        change = dict(payload, renderer=renderer, generation=generation)
+        self._view.page().runJavaScript(
+            f"window.invalidateProjectFileOperations?.({generation}, {json.dumps(payload['path'])}, {json.dumps(renderer)});"
+            "Promise.resolve(window.__mcuInitialProjectLoad).then(() => "
+            f"window.promoteGhostProject?.({json.dumps(change)})).then(ok => "
+            f"window.editorBridge?.finish_ghost_path_promotion({json.dumps(token)}, {json.dumps(renderer)}, ok === true))"
+            ".catch(error => { console.error('Ghost Sketch relocation failed:', error); "
+            f"window.editorBridge?.finish_ghost_path_promotion({json.dumps(token)}, {json.dumps(renderer)}, false); }});"
+        )
 
     @Slot(dict)
     def _on_project_files_updated(self, payload: dict) -> None:

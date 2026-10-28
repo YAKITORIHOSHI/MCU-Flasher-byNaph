@@ -46,8 +46,12 @@ def checks(group, scale, output):
     if group in ("all", "workspace", "responsive"):
         yield render("verify_window_alignment", "alignment")
         yield render("verify_toolbar_sizing", "toolbar")
+        yield "verify_detached_actions", []
         yield render("verify_responsive", "responsive")
         if scale in ("1", "2"):
+            yield "verify_ghost_ui", []
+            yield "verify_ghost_renderer", []
+            yield render("verify_ghost_workflow", "ghost-detached")
             yield "verify_shutdown", ["--repeat", "3"]
             yield render("verify_runtime", "workspace", "--no-finalize")
     if group in ("all", "resources", "responsive"):

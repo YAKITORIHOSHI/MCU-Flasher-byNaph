@@ -149,4 +149,72 @@
     pending = operation.catch(() => false);
     return operation;
   };
+
+  async function promote(change) {
+    const store = window.__mcuProjectFileStore;
+    const api = window.pywebview?.api;
+    const key = window.projectPathKey;
+    const mapping = change?.path_mapping;
+    const current = () => change.renderer === renderer &&
+      change.generation === (window.__mcuProjectFilesGeneration || 0) &&
+      key(project) === key(change.path);
+    if (!store || !api || !mapping || !current()) return false;
+    await window.waitForProjectLoad?.();
+    if (!current()) return false;
+    const root = await api.get_project_dir();
+    if (!current() || key(root) !== key(change.path)) return false;
+    const paths = new Map(Object.entries(mapping).map(([oldPath, newPath]) => [key(oldPath), newPath]));
+    const destinations = new Set(Array.from(paths.values(), key));
+    if (destinations.size !== paths.size) return false;
+    const files = store.list();
+    const moves = files.map(file => ({file, tab:tabFor(store, file), oldPath:file.path,
+      newPath:paths.get(key(file.path)) || (destinations.has(key(file.path)) ? file.path : '')}));
+    // Validate the whole loaded set before changing any path. An incomplete
+    // acknowledgement must never strand a mixture of cache and saved tabs.
+    if (!moves.length || moves.some(move => !move.newPath || !move.tab || move.file.model.isDisposed())) return false;
+    const published = window.lastKnownFileContents;
+    for (const {file, tab, oldPath, newPath} of moves) {
+      file.path = newPath;
+      file.name = newPath.replaceAll('\\', '/').split('/').pop();
+      tab.id = store.tabId(newPath);
+      tab.querySelector('span:first-child').textContent = file.name;
+      mapTab(store, file);
+      store.refresh(file);
+      if (published && Object.hasOwn(published, key(oldPath))) {
+        published[key(newPath)] = published[key(oldPath)];
+        if (key(oldPath) !== key(newPath)) delete published[key(oldPath)];
+      }
+    }
+    window.__mcuProjectFileListRevision = (window.__mcuProjectFileListRevision || 0) + 1;
+    window.projectFileList = files.map(file => ({name:file.name, path:file.path}));
+    // A user edit can arrive between the disk flush and the relocation reply.
+    // Re-publish its current bytes under the saved path without replacing any
+    // Monaco model, clearing a dirty flag or touching its undo/selection state.
+    for (const file of files) {
+      if (!file.isDirty) continue;
+      if (api.update_editor_buffer) await api.update_editor_buffer(file.path, file.model.getValue());
+      else {
+        await api.mark_modified?.(file.path, true);
+        await api.snapshot_buffer?.(file.path, file.model.getValue());
+      }
+      if (!current()) return false;
+    }
+    const active = store.active();
+    if (active) await api.set_active_file?.(active.path);
+    const order = Array.from(document.querySelectorAll('#tab-bar .tab'), tab => tab._filePath).filter(Boolean);
+    if (api.save_project_tab_order && (await api.save_project_tab_order(renderer, change.path, order)) === false) return false;
+    if (!current()) return false;
+    if (window.syncTabPaths) await window.syncTabPaths();
+    if (!current()) return false;
+    revision = 0;
+    window.syncModelLanguageForActiveTab?.();
+    window.refreshProjectSyntax?.();
+    return true;
+  }
+
+  window.promoteGhostProject = change => {
+    const operation = pending.then(() => promote(change));
+    pending = operation.catch(() => false);
+    return operation;
+  };
 })();

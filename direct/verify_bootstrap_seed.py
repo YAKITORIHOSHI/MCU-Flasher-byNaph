@@ -444,14 +444,34 @@ class SeedChecks(unittest.TestCase):
         scope["_PLATFORMIO_PREBUILT_EXPECTED_SIZE"] = cached.stat().st_size
         scope["_PLATFORMIO_PREBUILT_EXPECTED_SHA256"] = hashlib.sha256(cached.read_bytes()).hexdigest()
         missing = {"packages": [PackageSpec("vendor/missing@1.0.0")], "platforms": [], "lib": []}
+        hashes = Mock(wraps=scope["_file_sha256"])
+        scope["_file_sha256"] = hashes
         with patch.object(seed, "missing_packages", side_effect=[missing, {"packages": [], "platforms": [], "lib": []}]), \
                 patch.object(seed, "import_missing", return_value={"imported": ["fixture"]}) as importer:
             self.assertTrue(scope["_ensure_platformio_core_prebuilt"](script_dir=self.root,
                 plan={"schema": 1, "platforms": ["demo"], "frameworks": ["arduino"], "libraries": []}))
         importer.assert_called_once()
+        hashes.assert_called_once_with(cached)
         scope["_is_network_reachable"].assert_not_called()
         self.assertTrue(cached.is_file())
         self.assertTrue(any("verified cached" in line for line in logs))
+
+    def test_invalid_cached_seed_is_retained_and_refused_before_import(self):
+        scope, _ = bootstrap_scope(self.root)
+        cached = self.root / "src/seed.zip"
+        cached.parent.mkdir()
+        cached.write_bytes(b"unverified fixture archive")
+        scope["_PLATFORMIO_PREBUILT_EXPECTED_SIZE"] = cached.stat().st_size
+        scope["_PLATFORMIO_PREBUILT_EXPECTED_SHA256"] = "a" * 64
+        missing = {"packages": [PackageSpec("vendor/missing@1.0.0")], "platforms": [], "lib": []}
+        with patch.object(seed, "missing_packages", return_value=missing), \
+                patch.object(seed, "import_missing") as importer:
+            with self.assertRaisesRegex(RuntimeError, r"(?=.*verification failed)(?=.*retained)"):
+                scope["_ensure_platformio_core_prebuilt"](script_dir=self.root,
+                    plan={"schema": 1, "platforms": ["demo"], "libraries": []})
+        importer.assert_not_called()
+        scope["_is_network_reachable"].assert_not_called()
+        self.assertEqual(cached.read_bytes(), b"unverified fixture archive")
 
     def test_complete_configured_scope_skips_seed_network_and_archive(self):
         scope, _ = bootstrap_scope(self.root)

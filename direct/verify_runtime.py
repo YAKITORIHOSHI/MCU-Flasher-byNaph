@@ -735,7 +735,8 @@ def qt_smoke(app, render_dir=None):
             unexpected = [widget for widget in visible if widget not in (window, *extra)]
             assert not unexpected, f"Unexpected desktop windows: {[(type(w).__name__, w.objectName()) for w in unexpected]}"
             assert window.findChild(QWidget, "workflow-bar") is None
-            assert window._primary_toolbar.window() is window
+            action_host = window._detached_window if window._editor_detached else window
+            assert window._primary_toolbar.window() is action_host
             assert window._controls_bar.window() is window
 
         def verify_tool_tabs():

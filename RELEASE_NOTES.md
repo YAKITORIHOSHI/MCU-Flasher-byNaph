@@ -6,10 +6,40 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** October 23, 2026<br>
+> **Notes Updated:** October 28, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
+
+## October 28 Source Update: Action Toolbar and Ghost Sketch
+
+The action toolbar uses symmetric native layout insets so its bottom divider
+stays below the buttons after resizing, theme changes and short-window layout
+changes. Detach Editor carries the same primary action row and keyboard shortcuts
+with the editor, then returns them on attachment. Board/port Controls stay in the
+main workspace; project callbacks, busy checks and unsaved buffers keep their
+original workspace ownership.
+
+The project selector's **Ghost Sketch** starts in owned temporary application
+storage. Compile/Upload save their inputs there without a location prompt;
+Save, Ctrl+S and Save All choose an empty permanent folder. Editing is locked
+through the acknowledged buffer save, root-source copy and model-path update,
+preserving undo history and tab state. Autosave remains off until permanent
+save. Closing or switching offers Save/Discard/Cancel even after a clean compile.
+These are application changes, not hardware qualification. Existing public ZIPs
+must be rebuilt before these source fixes are included.
+
+Release ZIPs now open directly to the project files, without an enclosing folder.
+The packager verifies exact entry names, sizes, permissions and SHA-256 hashes,
+including the complete private Windows Python runtime.
+
+Windows Bootstrap avoids a redundant full read of the cached 1.79 GB toolchain
+seed: it verifies the checksum once immediately before import. Completed Python
+package downloads move into their shared temporary wheelhouse instead of being
+copied again when a native rename is available. Locked or cross-volume moves
+retain the native copy fallback. Package verification, board coverage and
+download deadlines remain unchanged. These remove unnecessary disk work;
+they do not establish a new cold-install time on the reported Windows PC.
 
 ## October 23 Source Update: Bootstrap Delays
 

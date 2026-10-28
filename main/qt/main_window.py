@@ -100,6 +100,8 @@ class MCUMainWindow(QMainWindow):
 
         self._setup_window()
         self._build_ui()
+        from main.qt.ghost_sketch import GhostSketchController
+        self._ghost_sketch = GhostSketchController(self)
         self._connect_signals()
         from main.qt.cursor_visibility import WorkspacePointerGuard
         self._pointer_guard = WorkspacePointerGuard(self)
@@ -214,7 +216,7 @@ class MCUMainWindow(QMainWindow):
             self._short_screen = tight
             for name in ("primary-toolbar", "controls-toolbar"):
                 toolbar = self.findChild(QWidget, name)
-                if toolbar is not None:
+                if toolbar is not None and toolbar.window() is self:
                     if not hasattr(toolbar, "_full_height_margins"):
                         toolbar._full_height_margins = toolbar.contentsMargins()
                     margins = toolbar._full_height_margins
@@ -240,7 +242,8 @@ class MCUMainWindow(QMainWindow):
         # after the resize handler. Apply the height budget to polished bars.
         for name in ("primary-toolbar", "controls-toolbar"):
             toolbar = self.findChild(QWidget, name)
-            if toolbar is not None and hasattr(toolbar, "_full_height_layout_margins"):
+            if (toolbar is not None and toolbar.window() is self
+                    and hasattr(toolbar, "_full_height_layout_margins")):
                 toolbar.ensurePolished()
                 margins = toolbar._full_height_layout_margins
                 if self._short_screen:
@@ -768,18 +771,30 @@ class MCUMainWindow(QMainWindow):
         self._status_label.setText(text)
 
     def _setup_shortcuts(self) -> None:
-        QShortcut(QKeySequence("Ctrl+R"), self, activated=self._shortcut_compile)
-        QShortcut(QKeySequence("Ctrl+U"), self, activated=self._shortcut_upload)
-        QShortcut(QKeySequence("Ctrl+S"), self, activated=self._shortcut_save)
-        QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=self._shortcut_save_all)
+        # Window shortcuts follow the existing action row into the detached
+        # editor while their callbacks retain this workspace's save/busy policy.
+        self._workspace_shortcuts = [
+            QShortcut(QKeySequence("Ctrl+R"), self, activated=self._shortcut_compile),
+            QShortcut(QKeySequence("Ctrl+U"), self, activated=self._shortcut_upload),
+            QShortcut(QKeySequence("Ctrl+S"), self, activated=self._shortcut_save),
+            QShortcut(QKeySequence("Ctrl+Shift+S"), self, activated=self._shortcut_save_all),
+        ]
         self._find_all_shortcut = QShortcut(QKeySequence("Ctrl+Shift+F"), self,
                                           activated=self._editor_panel.show_project_search)
-        self._project_shortcut = QShortcut(QKeySequence("Ctrl+O"), self, activated=self._shortcut_open_project)
+        self._project_shortcut = QShortcut(QKeySequence("Ctrl+O"), self,
+                                         activated=self._shortcut_open_project)
+        self._workspace_shortcuts.extend((self._find_all_shortcut, self._project_shortcut))
         if sys.platform.startswith("linux"):
             # Native coding CLIs own these keys while their Qt view is focused,
             # just as Windows' embedded foreign assistant receives them.
             self._native_cli_shortcuts = self.findChildren(QShortcut)
             QApplication.instance().focusChanged.connect(self._update_native_cli_shortcuts)
+
+    def _set_action_shortcut_host(self, host) -> None:
+        # Use the host window rather than the toolbar as parent: hiding the
+        # action row must not disable saving or the other keyboard actions.
+        for shortcut in self._workspace_shortcuts:
+            shortcut.setParent(host)
 
     def _update_native_cli_shortcuts(self, *_args):
         focused = any(getattr(panel, "has_input_focus", lambda: False)()
@@ -1156,6 +1171,8 @@ class MCUMainWindow(QMainWindow):
         path = payload.get("path", "")
         if path and hasattr(self, "_primary_toolbar"):
             self._primary_toolbar.update_sketch_label(path)
+        if payload.get("preserve_buffers"):
+            return
         if hasattr(self, "_editor_panel"):
             active = payload.get("active_file", "")
             if active:
@@ -1169,6 +1186,8 @@ class MCUMainWindow(QMainWindow):
         link = getattr(self._backend, "_cloud_project_link", None)
         link = link if isinstance(link, dict) else None
         display_name = str(link.get("name") or name) if link else name
+        if getattr(self._backend, "is_ghost_sketch", False) is True:
+            display_name = "Ghost Sketch [Unsaved]"
         self.setWindowTitle(f"MCU Flasher by Naph — {display_name}" + (" [Cloud]" if link else ""))
 
     @Slot(dict)
@@ -1201,10 +1220,18 @@ class MCUMainWindow(QMainWindow):
         self._primary_toolbar._do_upload()
 
     def _shortcut_save(self) -> None:
+        if (getattr(self._backend, "is_ghost_sketch", False) is True
+                or getattr(getattr(self, "_ghost_sketch", None), "needs_recovery", False) is True):
+            self._ghost_sketch.request_save()
+            return
         self._trigger_temporary_action("Saving", 700)
         self._editor_panel.trigger_save()
 
     def _shortcut_save_all(self) -> None:
+        if (getattr(self._backend, "is_ghost_sketch", False) is True
+                or getattr(getattr(self, "_ghost_sketch", None), "needs_recovery", False) is True):
+            self._ghost_sketch.request_save()
+            return
         self._trigger_temporary_action("Saving All", 800)
         self._editor_panel.trigger_save_all()
 
@@ -1273,6 +1300,10 @@ class MCUMainWindow(QMainWindow):
             failed(f"The editor could not save before restart: {exc}")
 
     def _is_busy(self) -> bool:
+        if getattr(self, "_ghost_save_in_progress", False):
+            return True
+        if getattr(getattr(self, "_ghost_sketch", None), "needs_recovery", False) is True:
+            return True
         if self._backend and (self._backend.is_busy
                               or getattr(self._backend, "active_operation", None) is not None
                               or getattr(self._backend, "_current_op_phase", None) is not None):
@@ -1512,6 +1543,8 @@ class MCUMainWindow(QMainWindow):
         if self._detached_window is None:
             self._detached_window = DetachedEditorWindow(self)
             self._detached_window.closing.connect(self.attach_editor)
+        self._detached_window.set_action_toolbar(self._primary_toolbar)
+        self._set_action_shortcut_host(self._detached_window)
 
         # Center detached window over main window, clamped to the screen work
         # area so it never overflows small displays or hidden taskbars
@@ -1560,6 +1593,9 @@ class MCUMainWindow(QMainWindow):
             if self._detached_window is not None:
                 if self._detached_window.centralWidget() is self._editor_panel:
                     self._detached_window.takeCentralWidget()
+                self._detached_window.release_action_toolbar()
+                self._primary_toolbar.move_to_window(self, before=self._controls_toolbar)
+                self._set_action_shortcut_host(self)
                 self._detached_window.hide()
 
             # Place editor back inside _editor_area
@@ -1755,6 +1791,9 @@ class MCUMainWindow(QMainWindow):
         self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if getattr(self, "_ghost_save_in_progress", False):
+            event.ignore()
+            return
         if self._backend and getattr(self._backend, "_cloud_project_operation", False):
             self._set_status_text("Wait for cloud synchronization and editor refresh to finish.")
             event.ignore()
@@ -1865,6 +1904,23 @@ class MCUMainWindow(QMainWindow):
                     event.ignore()
                     return
 
+        ghost = getattr(self, "_ghost_sketch", None)
+        if ghost is not None and (ghost.temporary or ghost.needs_recovery):
+            # Saving is asynchronous; a second close is attempted only after
+            # disk publication and retained renderer models acknowledge it.
+            decision = []
+            prompting = [True]
+            def after_prompt(ready):
+                if prompting[0]:
+                    decision.append(ready)
+                elif ready:
+                    QTimer.singleShot(0, self.close)
+            ghost.confirm_leave(after_prompt)
+            prompting[0] = False
+            if not decision or not decision[0]:
+                event.ignore()
+                return
+
         # Instantly hide UI window so the user experiences zero visual latency on exit
         try:
             self.hide()
@@ -1909,6 +1965,9 @@ class MCUMainWindow(QMainWindow):
                 self._backend.stop_services()
             except Exception:
                 pass
+
+        if ghost is not None and (ghost.temporary or ghost.needs_recovery):
+            ghost.discard_after_close()
 
         # Signal any sleeping Download Manager process to terminate if this is the last window
         try:

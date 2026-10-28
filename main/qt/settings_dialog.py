@@ -455,10 +455,12 @@ class SettingsDialog(QDialog):
         av.setSpacing(10)
 
         cur_autosave_en, cur_autosave_delay = get_autosave_settings()
+        self._ghost_autosave_locked = getattr(self._backend, "is_ghost_sketch", False) is True
 
         as_row = QHBoxLayout()
         self.cb_autosave = QCheckBox("Enable Auto-Save")
         self.cb_autosave.setChecked(cur_autosave_en)
+        self.cb_autosave.setEnabled(not self._ghost_autosave_locked)
         as_row.addWidget(self.cb_autosave)
 
         delay_lbl = QLabel("Delay (ms):")
@@ -468,13 +470,16 @@ class SettingsDialog(QDialog):
         self.autosave_spin.setRange(500, 10000)
         self.autosave_spin.setSingleStep(500)
         self.autosave_spin.setValue(int(cur_autosave_delay))
-        self.autosave_spin.setEnabled(cur_autosave_en)
-        self.cb_autosave.toggled.connect(self.autosave_spin.setEnabled)
+        self.autosave_spin.setEnabled(cur_autosave_en and not self._ghost_autosave_locked)
+        self.cb_autosave.toggled.connect(
+            lambda enabled: self.autosave_spin.setEnabled(enabled and not self._ghost_autosave_locked))
         as_row.addWidget(self.autosave_spin)
         as_row.addStretch()
         av.addLayout(as_row)
 
         as_note = QLabel("Automatically saves modified files after you stop typing for the given delay.")
+        if self._ghost_autosave_locked:
+            as_note.setText("Save this Ghost Sketch to a permanent folder before using Auto-Save.")
         as_note.setProperty("role", "dim")
         as_note.setWordWrap(True)
         av.addWidget(as_note)
@@ -913,6 +918,8 @@ class SettingsDialog(QDialog):
         # 7. Auto-Save
         as_enabled = self.cb_autosave.isChecked()
         as_delay = self.autosave_spin.value()
+        if getattr(self._backend, "is_ghost_sketch", False) is True:
+            as_enabled, as_delay = get_autosave_settings()
         data["shared"]["autosave_enabled"] = as_enabled
         data["shared"]["autosave_delay_ms"] = as_delay
 

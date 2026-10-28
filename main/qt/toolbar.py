@@ -259,6 +259,9 @@ class PrimaryToolbar(QToolBar):
     def __init__(self, backend: "MCUWebBackendAPI", parent: QWidget | None = None):
         super().__init__("Primary Actions", parent)
         self._backend = backend
+        # The native toolbar travels with the editor, but project state and
+        # callbacks continue to belong to its original workspace.
+        self._workspace_window = parent.window() if parent is not None else None
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setMovable(False)
         self.setFloatable(False)
@@ -275,6 +278,34 @@ class PrimaryToolbar(QToolBar):
         self._reflow_timer.timeout.connect(lambda: self.set_responsive_width(self.width()))
         self._in_reflow = False
         self._setup_widgets()
+
+    def _workspace(self):
+        return self._workspace_window or self.window()
+
+    def move_to_window(self, host, *, before=None) -> None:
+        """Transfer this action row without duplicating actions or shortcuts."""
+        if self._actions_popup is not None:
+            self._actions_popup.close()
+            self._actions_popup = None
+        self._reflow_timer.stop()
+        visible = not self.isHidden()
+        previous = self.window()
+        if previous is not host:
+            previous.removeToolBar(self)
+            if before is not None:
+                host.insertToolBar(before, self)
+                # insertToolBar shares the target's row. Preserve the separate
+                # Controls row when restoring the workspace's native layout.
+                host.insertToolBarBreak(before)
+            else:
+                host.addToolBar(Qt.ToolBarArea.TopToolBarArea, self)
+        self.setVisible(visible)
+        short = host.height() < 350
+        if bool(self.property("shortScreen")) != short:
+            self.setProperty("shortScreen", short)
+            self.style().unpolish(self)
+            self.style().polish(self)
+        self.set_responsive_width(self.width())
 
     def _setup_widgets(self) -> None:
         # ── 1. Left: Logo / Title (Stealth trigger: exactly 5 clicks opens owner portal) ──
@@ -481,7 +512,7 @@ class PrimaryToolbar(QToolBar):
                 action()
 
         if ready():
-            mw = self.window()
+            mw = self._workspace()
             if hasattr(mw, "_editor_panel") and mw._editor_panel:
                 mw._editor_panel.trigger_save_all(callback=run)
             else:
@@ -522,7 +553,7 @@ class PrimaryToolbar(QToolBar):
             self._backend.clean_cache()
 
     def _do_reload(self) -> None:
-        mw = self.window()
+        mw = self._workspace()
         if hasattr(mw, "_shortcut_reload_file"):
             mw._shortcut_reload_file()
         elif hasattr(mw, "_editor_panel"):
@@ -533,8 +564,10 @@ class PrimaryToolbar(QToolBar):
                               or getattr(self._backend, "active_operation", None) is not None
                               or getattr(self._backend, "_current_op_phase", None) is not None):
             return True
-        mw = self.window()
-        if mw and getattr(mw, "_active_operation", None) is not None:
+        mw = self._workspace()
+        if mw and (getattr(mw, "_active_operation", None) is not None
+                   or getattr(mw, "_ghost_save_in_progress", False) is True
+                   or getattr(getattr(mw, "_ghost_sketch", None), "needs_recovery", False) is True):
             return True
         return False
 
@@ -548,7 +581,7 @@ class PrimaryToolbar(QToolBar):
                 "Please wait for the current action to finish or stop it first.",
             )
             return
-        mw = self.window()
+        mw = self._workspace()
         if hasattr(mw, "_open_modify_files_dialog"):
             mw._open_modify_files_dialog()
         else:
@@ -557,14 +590,14 @@ class PrimaryToolbar(QToolBar):
             dlg.exec()
 
     def _do_save(self) -> None:
-        mw = self.window()
+        mw = self._workspace()
         if hasattr(mw, "_shortcut_save"):
             mw._shortcut_save()
         elif hasattr(mw, "_editor_panel"):
             mw._editor_panel.trigger_save()
 
     def _do_save_all(self) -> None:
-        mw = self.window()
+        mw = self._workspace()
         if hasattr(mw, "_shortcut_save_all"):
             mw._shortcut_save_all()
         elif hasattr(mw, "_editor_panel"):
@@ -608,7 +641,7 @@ class PrimaryToolbar(QToolBar):
         from main.core.runtime_recovery import bootstrap_can_repair
 
         parent = self.window()
-        restart = getattr(parent, "restart_for_runtime_repair", None)
+        restart = getattr(self._workspace(), "restart_for_runtime_repair", None)
         repairable = bootstrap_can_repair(error) and callable(restart)
         box = QMessageBox(parent)
         box.setWindowTitle("Developer access unavailable")
@@ -649,7 +682,7 @@ class PrimaryToolbar(QToolBar):
         if self._is_busy():
             return
         from main.qt.project_dialog import ProjectDialog
-        dlg = ProjectDialog(self._backend, parent=self.window(), open_in_new_window=True)
+        dlg = ProjectDialog(self._backend, parent=self._workspace(), open_in_new_window=True)
         dlg.exec()
         dlg.deleteLater()
 
@@ -665,7 +698,7 @@ class PrimaryToolbar(QToolBar):
         from main.qt.cloud_sketch_panel import show_cloud_dialog
         window = self.window()
         show_cloud_dialog(self._backend, parent=window,
-                          on_pulled=getattr(window, "_on_cloud_project_pulled", None))
+                          on_pulled=getattr(self._workspace(), "_on_cloud_project_pulled", None))
 
     def update_sketch_label(self, path: str) -> None:
         self._current_sketch_path = path
@@ -673,14 +706,19 @@ class PrimaryToolbar(QToolBar):
         text = p.name if p.name else path
         link = getattr(self._backend, "_cloud_project_link", None)
         link = link if isinstance(link, dict) else None
+        temporary = getattr(self._backend, "is_ghost_sketch", False) is True
         self.lbl_sketch_icon.setPixmap(icon("cloud" if link else "project").pixmap(16, 16))
-        if link:
+        if temporary:
+            text = "Ghost Sketch"
+        elif link:
             text = str(link.get("name") or text)
         if len(text) > 40:
             text = "…" + text[-38:]
         self.lbl_sketch.setText(text)
         if self._is_busy():
             self.lbl_sketch.setToolTip("Project switching is unavailable while an action is running")
+        elif temporary:
+            self.lbl_sketch.setToolTip("Temporary Ghost Sketch — save to choose a project folder.")
         else:
             self.lbl_sketch.setToolTip(f"{path} — left-click: open in Explorer • right-click: choose where a project opens" if path else "Current sketch folder — left-click: open in Explorer • right-click: choose where a project opens")
         self.set_responsive_width(self.width())
@@ -902,9 +940,11 @@ class PrimaryToolbar(QToolBar):
             return
         self._in_reflow = True
         try:
-            # QToolBar's stylesheet padding is flattened by some native styles.
-            # Keep the intended asymmetric chrome explicit in logical pixels.
-            desired_margins = (8, 0, 8, 0) if self.property("shortScreen") else (8, 4, 8, 4)
+            # Native QToolBarLayout uses the left inset to position horizontal
+            # rows vertically. Equal margins keep the buttons above the bottom
+            # rim; even short screens need one logical pixel of clearance.
+            inset = 1 if self.property("shortScreen") else 4
+            desired_margins = (inset, inset, inset, inset)
             margins = self.layout().contentsMargins()
             if (margins.left(), margins.top(), margins.right(), margins.bottom()) != desired_margins:
                 self.layout().setContentsMargins(*desired_margins)

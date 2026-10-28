@@ -35,6 +35,10 @@ for _p in (_project_root, _modules_path, _main_path):
 
 from src.modules.package_jobs import guarded_package_operation, package_store_lease, package_core_directory
 from main.core.project_scaffold import create_project_scaffold
+from main.core.ghost_sketch import (
+    create_ghost_project_path, discard_ghost_project_path, is_ghost_project,
+    promote_ghost_project,
+)
 
 SCRIPT_DIR = _project_root
 
@@ -413,11 +417,18 @@ class MCUWebBackendAPI:
     @property
     def is_busy(self) -> bool:
         return bool(getattr(self, "_hardware_busy", False)
-                    or getattr(self, "_cloud_project_operation", False))
+                    or getattr(self, "_cloud_project_operation", False)
+                    or getattr(self, "_ghost_project_operation", False))
 
     @is_busy.setter
     def is_busy(self, value: bool) -> None:
         self._hardware_busy = bool(value)
+
+    @property
+    def is_ghost_sketch(self) -> bool:
+        """A flushed temporary project still needs an explicit permanent Save."""
+        path = getattr(self, "sketch_dir_path", None)
+        return bool(path and path == getattr(self, "_ghost_project_path", None))
 
     @property
     def cloud_sketch_service(self):
@@ -480,6 +491,7 @@ class MCUWebBackendAPI:
         # Remembered folders remain available through the Recent projects page.
         config = load_gui_config()
         self.sketch_dir_path: Optional[Path] = None
+        self._ghost_project_path: Optional[Path] = None
 
         self.active_file_path: Optional[str] = None
         self.modified_files: dict[str, bool] = {}
@@ -1134,6 +1146,8 @@ class MCUWebBackendAPI:
 
     def save_file(self, file_path: str, content: str) -> dict[str, Any]:
         """Save text content safely to a sketch file."""
+        if getattr(self, "_ghost_project_operation", False):
+            return {"success": False, "error": "Wait for Ghost Sketch to finish saving."}
         if getattr(self, "_cloud_project_operation", False):
             return {"success": False, "error": "Wait for cloud synchronization to finish before saving."}
         try:
@@ -2534,6 +2548,9 @@ class MCUWebBackendAPI:
                 "error": "Select a sketch folder inside Documents, not the Documents folder itself.",
             }
 
+        if is_ghost_project(folder):
+            return {"success": True, "folder": str(folder), "source": ""}
+
         for source in get_project_root_source_files(folder, _PROJECT_ENTRY_SOURCE_EXTENSIONS):
             try:
                 with source.open("rb") as handle:
@@ -2606,7 +2623,10 @@ class MCUWebBackendAPI:
         self.sketch_dir_path = p
         self._cloud_project_link = None
         self.refresh_cloud_project_link()
-        add_recent_project(str(p))
+        ghost = is_ghost_project(p)
+        self._ghost_project_path = p if ghost else None
+        if not ghost:
+            add_recent_project(str(p))
 
         # Enforce file hiding and cleanup immediately upon opening sketch
         try:
@@ -2615,9 +2635,10 @@ class MCUWebBackendAPI:
             pass
 
         # Update config
-        cfg = load_gui_config()
-        cfg["last_sketch_dir"] = str(p)
-        save_gui_config(cfg)
+        if not ghost:
+            cfg = load_gui_config()
+            cfg["last_sketch_dir"] = str(p)
+            save_gui_config(cfg)
 
         files = self.get_project_files()
         if active_file and any(f["path"] == active_file for f in files):
@@ -2632,6 +2653,8 @@ class MCUWebBackendAPI:
             "files": files,
             "active_file": self.active_file_path,
         }
+        if ghost:
+            payload["is_ghost"] = True
         self.emit("project:updated", payload)
 
         # Auto-detect sketch baud rate from Serial.begin(...) in background
@@ -2820,7 +2843,7 @@ class MCUWebBackendAPI:
     def get_default_project_parent(self) -> str:
         """Return the default parent directory for new projects."""
         try:
-            if self.sketch_dir_path and self.sketch_dir_path.is_dir() and not is_application_codebase_dir(self.sketch_dir_path) and not is_application_codebase_dir(self.sketch_dir_path.parent):
+            if self.sketch_dir_path and not self.is_ghost_sketch and self.sketch_dir_path.is_dir() and not is_application_codebase_dir(self.sketch_dir_path) and not is_application_codebase_dir(self.sketch_dir_path.parent):
                 return str(self.sketch_dir_path.parent)
             docs = Path.home() / "Documents" / "Arduino"
             if docs.is_dir():
@@ -2828,6 +2851,160 @@ class MCUWebBackendAPI:
             return str(Path.home() / "Documents")
         except Exception:
             return str(Path.home())
+
+    def create_ghost_project(self, open_in_new_window: bool = False) -> dict[str, Any]:
+        """Open a fresh local sketch that does not yet have a permanent location."""
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
+            return {"success": False, "error": "Wait for the current action before opening Ghost Sketch."}
+        path = None
+        try:
+            path = create_ghost_project_path()
+            result = (self.open_project_window(str(path)) if open_in_new_window
+                      else self.open_project(str(path)))
+            if not result.get("success"):
+                discard_ghost_project_path(path)
+            result.setdefault("path", str(path))
+            return result
+        except Exception as exc:
+            if path is not None and self.sketch_dir_path != path:
+                try:
+                    discard_ghost_project_path(path)
+                except (OSError, ValueError):
+                    pass
+            return {"success": False, "error": str(exc)}
+
+    def save_ghost_project(self, destination: str) -> dict[str, Any]:
+        """Publish acknowledged editor bytes and remap the active project in place.
+
+        The caller flushes every editor model first and blocks editing through
+        the returned model-remap acknowledgement. This method never reloads
+        editor buffers or changes selected hardware and serial/terminal state.
+        """
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None
+                or self._operation_worker_alive()):
+            return {"success": False, "error": "Wait for the current action before saving Ghost Sketch."}
+        if not self.is_ghost_sketch:
+            return {"success": False, "error": "The current project is not a Ghost Sketch."}
+        if not str(destination).strip():
+            return {"success": False, "cancelled": True}
+        if any(getattr(self, "modified_files", {}).values()):
+            return {"success": False, "error": "Save all editor buffers before choosing a permanent Ghost Sketch location."}
+        self._ghost_project_operation = True
+        old = self.sketch_dir_path
+        try:
+            target = Path(destination).expanduser().resolve()
+            if is_application_codebase_dir(target):
+                return {"success": False, "error": "Choose a folder outside the MCU Flasher application."}
+            if find_project_window(target):
+                return {"success": False, "error": "The selected project is already open in another window."}
+            target = promote_ghost_project(old, destination)
+            mapping = {str(old / path.name): str(path) for path in target.iterdir()
+                       if path.suffix.lower() in {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}}
+            if not mapping:
+                return {"success": False, "saved_path": str(target), "error":
+                        "The saved source list could not be read. Ghost Sketch remains open."}
+            if not set_active_sketch_dir(str(target), hwnd=getattr(self, "_hwnd", 0)):
+                return {"success": False, "saved_path": str(target), "error":
+                        f"Sources were copied to {target}, but the project could not be registered. Ghost Sketch remains open."}
+            self.sketch_dir_path = target
+            self._ghost_project_path = None
+            self._cloud_project_link = None
+            self.active_file_path = mapping.get(self.active_file_path, "")
+            self.modified_files = {mapping[path]: dirty for path, dirty in self.modified_files.items() if path in mapping}
+            _sketch_ram_cache.invalidate()
+            files = self.get_project_files()
+            if not self.active_file_path:
+                self.active_file_path = files[0]["path"] if files else ""
+            self.skip_compile = False
+            self._last_source_hash = self._last_compiled_board = ""
+            self._project_files_revision = getattr(self, "_project_files_revision", 0) + 1
+            payload = {"path": str(target), "name": target.name, "files": files,
+                       "active_file": self.active_file_path, "is_ghost": False,
+                       "operation": "ghost_saved", "preserve_buffers": True,
+                       "old_path": str(old), "path_mapping": mapping}
+            result = {"success": True, "project": payload, "old_path": str(old), "path_mapping": mapping}
+            # Publication and project ownership have committed. Auxiliary
+            # failures must still return the mapping so editor models can move
+            # to the saved paths, preserving their undo/selection identity.
+            warnings = []
+            for name in ("ai_review_manager", "ai_watcher"):
+                owner = getattr(self, name, None)
+                if owner:
+                    try:
+                        owner.bind_project(target)
+                    except Exception:
+                        warnings.append("AI file watching could not attach; reopen the saved project to retry.")
+            try:
+                self.emit("project:updated", payload)
+            except Exception:
+                warnings.append("The workspace location display could not refresh.")
+            try:
+                add_recent_project(str(target))
+                cfg = load_gui_config()
+                cfg["last_sketch_dir"] = str(target)
+                if not save_gui_config(cfg):
+                    raise OSError("Project preferences could not be saved.")
+            except Exception:
+                warnings.append("The remembered project location could not be updated.")
+            try:
+                self.update_skip_compile_availability()
+                self._sync_project_hardware_state(target)
+            except Exception:
+                warnings.append("Project status could not refresh; reopen the saved project to retry.")
+            if warnings:
+                result["warning"] = "The sketch was saved. " + " ".join(dict.fromkeys(warnings))
+            return result
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+        finally:
+            self._ghost_project_operation = False
+
+    def release_saved_ghost(self, project_path: str) -> dict[str, Any]:
+        """Release a promoted copy while retaining any original AI history."""
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
+            return {"success": False, "error": "Ghost Sketch is still in use by the current action."}
+        try:
+            if not str(project_path).strip():
+                return {"success": False, "error": "No original Ghost Sketch was supplied."}
+            original = Path(project_path).absolute()
+            if original == self.sketch_dir_path or not is_ghost_project(original):
+                return {"success": False, "error": "Only an inactive owned Ghost Sketch can be released."}
+            # Inspect directory presence only. Backup contents and the private
+            # .state journal remain untouched and are never copied to Save As.
+            histories = (original / ".mcu_flasher_build_cache" / ".mcu_ai_edits",
+                         original / ".mcu_ai_edits")
+            for path in histories:
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    continue
+                return {"success": True, "retained": True, "recovery_path": str(original),
+                        "warning": f"Original Ghost Sketch retained to preserve AI recovery history: {original}"}
+            return self.discard_ghost_project(str(original))
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def discard_ghost_project(self, project_path: str = "") -> dict[str, Any]:
+        """Release a Ghost after accepted close/switch or acknowledged promotion."""
+        if (self.is_busy or getattr(self, "active_operation", None) is not None
+                or getattr(self, "_current_op_phase", None) is not None):
+            return {"success": False, "error": "Ghost Sketch is still in use by the current action."}
+        try:
+            target = Path(project_path) if project_path else self.sketch_dir_path
+            if not target:
+                return {"success": False, "error": "No Ghost Sketch is available to discard."}
+            discard_ghost_project_path(target)
+            if self.sketch_dir_path == target:
+                self.sketch_dir_path = None
+                self._ghost_project_path = None
+                self.active_file_path = ""
+                self.modified_files.clear()
+            return {"success": True}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     def create_project(
         self,
