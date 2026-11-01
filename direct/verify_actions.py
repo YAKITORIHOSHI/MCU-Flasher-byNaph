@@ -245,7 +245,10 @@ class ActionChecks(unittest.TestCase):
     def test_clean_preserves_sources_settings_and_journal(self):
         cache = self.root / ".mcu_flasher_build_cache"
         keep = [self.root / "src/user.cpp", self.root / "platformio.ini",
-                cache / ".mcu_ai_edits/session/edit.txt", cache / "project_state.json"]
+                cache / ".mcu_ai_edits/session/edit.txt", cache / "project_state.json",
+                self.root / "soft_reset/soft_reset_project/boards/host/board/firmware.bin",
+                self.root / "soft_reset/soft_reset_project_uno/boards/host/board/firmware.hex",
+                self.root / "soft_reset/soft_reset_project_esp8266/boards/host/board/firmware.bin"]
         for path in keep:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("keep", encoding="utf-8")

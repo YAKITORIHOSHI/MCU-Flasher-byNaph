@@ -292,6 +292,52 @@ class BoardBuildCacheChecks(unittest.TestCase):
         self.assertTrue(previous_object.exists())
         self.assertTrue(self.api.check_can_skip_compile())
 
+    def test_comment_and_condition_edits_preserve_incremental_library_objects(self):
+        self.prepare_library()
+        build = self.compile_board(AVR)
+        library_object = build / "library.o"
+        library_object.write_bytes(b"retained compiler object")
+        for content in ("// edited comment\nvoid setup() {}\nvoid loop() {}\n",
+                        "void setup() { if (true) {} }\nvoid loop() {}\n"):
+            self.source.write_text(content, encoding="utf-8")
+            self.assertFalse(self.api.check_can_skip_compile())
+            self.compile_board(AVR)
+            self.assertEqual(library_object.read_bytes(), b"retained compiler object")
+            self.assertEqual((self.api._board_workspace_dir() / "src" / self.source.name).read_bytes(),
+                             self.source.read_bytes())
+            self.assertTrue(self.api.check_can_skip_compile())
+
+    def test_esp_skip_check_scans_library_bytes_once(self):
+        self.prepare_library()
+        self.compile_board(ESP)
+        with patch.object(compiled_cache, "input_signature", wraps=compiled_cache.input_signature) as scan:
+            self.assertTrue(self.api.check_can_skip_compile_for_upload())
+        self.assertEqual(scan.call_count, 1, "Binary lookup repeated the complete library scan")
+
+    def test_generated_ino_change_escapes_coarse_clock_without_rewriting_equal_code(self):
+        destination = self.sandbox / "fixture.ino.cpp"
+        self.api._stage_generated_source_text(destination, "old code\n")
+        original = destination.stat()
+        write = web_bridge.write_generated_text
+        def coarse_write(path, content):
+            write(path, content)
+            os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+        with patch.object(web_bridge, "write_generated_text", side_effect=coarse_write) as changed:
+            self.assertTrue(self.api._stage_generated_source_text(destination, "new code\n"))
+        self.assertEqual(changed.call_count, 1)
+        self.assertGreaterEqual(destination.stat().st_mtime_ns, original.st_mtime_ns + 2_000_000_000)
+        self.assertEqual(destination.read_bytes(), b"new code\n")
+        with patch.object(web_bridge, "write_generated_text") as unchanged:
+            self.assertFalse(self.api._stage_generated_source_text(destination, "new code\n"))
+        unchanged.assert_not_called()
+
+    def test_reset_metadata_does_not_scan_the_current_sketch_build(self):
+        self.compile_board(ESP)
+        reset_image = self.sandbox / "reset/.pio/build/mcu_flash/firmware.bin"
+        with patch.object(compiled_cache, "input_signature", wraps=compiled_cache.input_signature) as scan:
+            self.assertEqual(self.api._cached_build_metadata({"firmware": reset_image}), {})
+        scan.assert_not_called()
+
     def test_failed_library_object_cleanup_never_records_new_input_signature(self):
         header = self.prepare_library()
         build = self.compile_board(AVR)
@@ -463,6 +509,7 @@ class BoardBuildCacheChecks(unittest.TestCase):
         self.api._compile_worker.assert_not_called()
         self.assertEqual(self.calls[-1][0], workspace)
         self.assertIn("upload", self.calls[-1][1])
+        self.assertIn("nobuild", self.calls[-1][1], "Verified upload repeated the build stage")
         self.assertTrue(any(call.args[0] == "notification" and call.args[1].get("title") == "Upload completed"
                             for call in self.api.emit.call_args_list))
 
@@ -475,6 +522,53 @@ class BoardBuildCacheChecks(unittest.TestCase):
         self.api._native_upload_worker(can_skip=True)
         self.assertEqual(len(self.calls), previous_calls)
         self.api._stop_serial_monitor.assert_not_called()
+        self.assertIn("Saved build is unavailable", self.logs())
+
+    def prepare_esp_upload(self):
+        self.api.current_port = "FIXTURE_PORT"
+        self.api.skip_compile = True
+        self.api._is_port_present = Mock(return_value=True)
+        self.api._get_compat_analysis = Mock(return_value=([], []))
+        self.api._check_write_connection = Mock()
+        self.api._stop_serial_monitor = Mock()
+        self.api._start_serial_monitor = Mock()
+        self.api._trigger_actual_board_reset = Mock()
+        self.api._is_native_usb_port = Mock(return_value=False)
+        self.api._append_connecting_progress = Mock()
+        self.api._append_upload_boot_hint = Mock()
+        self.api._finish_upload_connection_status = Mock()
+        self.api._release_port_lines = Mock()
+        self.api._compile_worker = Mock(side_effect=AssertionError("Reusable upload recompiled"))
+        self.api._soft_reset_esptool_write = Mock(return_value=(True, "", 1))
+        self.stack.enter_context(patch.object(web_bridge._HOST_RUNTIME, "use_native_upload", return_value=False))
+        self.stack.enter_context(patch.object(web_bridge, "port_occupied_owner", return_value=None))
+        self.stack.enter_context(patch.object(web_bridge.time, "sleep"))
+
+    def test_complete_esp_skip_upload_has_candidate_and_final_byte_checks_only(self):
+        self.prepare_library()
+        self.compile_board(ESP)
+        self.prepare_esp_upload()
+        def write_fixture(images, _port):
+            self.api._cached_build_metadata(images)
+            return True, "", 1
+        self.api._soft_reset_esptool_write.side_effect = write_fixture
+        with patch.object(compiled_cache, "input_signature", wraps=compiled_cache.input_signature) as scan:
+            self.api._start_resolved_upload({})
+        self.api._soft_reset_esptool_write.assert_called_once()
+        self.assertEqual(scan.call_count, 2, self.logs())
+
+    def test_library_change_after_esp_skip_check_stops_before_esptool(self):
+        header = self.prepare_library()
+        self.compile_board(ESP)
+        self.prepare_esp_upload()
+        def compatibility_fixture():
+            before = header.stat()
+            header.write_bytes(header.read_bytes().replace(b"1", b"2"))
+            os.utime(header, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return [], []
+        self.api._get_compat_analysis.side_effect = compatibility_fixture
+        self.api._start_resolved_upload({})
+        self.api._soft_reset_esptool_write.assert_not_called()
         self.assertIn("Saved build is unavailable", self.logs())
 
     def test_empty_successful_compiler_output_cannot_be_certified(self):

@@ -7,26 +7,35 @@ and
 at commit `615de517ffa5ae828b3109752316b2129363d00a`. It is an adaptation,
 not an exact reproduction or an official Arduino theme.
 
-Light retains the white editor surface, `#4e5b61` foreground, `#434f54`
+Reading surfaces follow the native workspace's `Theme.PALETTES.BG_DARKEST`:
+Light `#f1f7fc`, Default `#101b2a` and Solarized `#001b22`. The native page,
+HTML/body, loading state, Monaco canvas and gutter use the same opaque color.
+Source tabs and scrollbars follow their corresponding native theme tokens.
+Theme and saved font size are supplied before the first editor construction;
+changing themes preserves the existing source models.
+
+Light retains the `#4e5b61` foreground, `#434f54`
 identifiers/punctuation and `#005c5f` strings/constants. Default uses Arduino's
-`#1f272a` Dark surface and `#dae3e3` foreground, with orange `#f39c12`
+`#dae3e3` foreground, with orange `#f39c12`
 functions, teal `#0ca1a6` types, pale teal `#7fcbcd` strings/constants/numbers,
 mauve `#c586c0` control keywords and blue `#569cd6` directives. Solarized retains
-the application's `#002b36` surface and uses the compatible Dark syntax colors;
+its native reading surface and uses the compatible Dark syntax colors;
 Arduino does not provide this Solarized adaptation.
 
 Small-text readability adjustments are explicit:
 
-| Role | Upstream Light | Adapted Light | Contrast on white |
+| Role | Upstream Light | Adapted Light | Contrast on native Light |
 | --- | --- | --- | --- |
-| Comments | `#95a5a6cc` | `#657375` | 4.93:1 |
-| Types/storage | `#00979d` | `#007f84` | 4.81:1 |
-| Functions | `#d35400` | `#c94f00` | 4.56:1 |
-| Control keywords | `#728e00` | `#657c00` | 4.73:1 |
-| Directives | `#9e846d` | `#826c59` | 4.95:1 |
+| Comments | `#95a5a6cc` | `#657375` | 4.56:1 |
+| Types/storage | `#00979d` | `#007a7f` | 4.76:1 |
+| Functions | `#d35400` | `#bf4b00` | 4.61:1 |
+| Control keywords | `#728e00` | `#607700` | 4.70:1 |
+| Directives | `#9e846d` | `#826c59` | 4.59:1 |
 
-Dark comments change from `#7f8c8d` to `#839091`: 4.60:1 on Dark and 4.55:1 on
-Solarized. Numeric literals use each palette's constant color, including inside
+Dark comments retain the adapted `#839091` rather than upstream `#7f8c8d`.
+The light type/function/control inks are slightly deeper than the earlier white-
+surface adaptation so they retain at least 4.5:1 contrast on native Light.
+Numeric literals use each palette's constant color, including inside
 preprocessor expressions, rather than the upstream dark numeric-preprocessor
 override. Normal punctuation replaces inherited rainbow bracket colors while
 retaining bracket matching. Theme selection does not change the saved font

@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.
+description: Guidance for intentional visual design, native theme-matched editor surfaces and restrained loading feedback when building or reshaping UI. Helps with typography and choices specific to the application.
 license: Complete terms in LICENSE.txt
 ---
 
@@ -115,6 +115,10 @@ captures must come from isolated fixtures, with no live setup or accounts.
 
 For this application's Qt/Monaco UI, refine the existing smoked/frosted glass
 palette and Montserrat navigation rather than introducing website sections.
+Editor page, gutter and reading surfaces use the actual native BG_DARKEST token;
+source tabs use the surrounding theme tokens. Apply initial theme/font/resource
+options before Monaco construction, and use quiet static loading feedback rather
+than animation. Keep syntax contrast at least 4.5:1 on the chosen reading surface.
 Keep board/port selection in Controls and keep the editor dominant; do not add
 a target-board banner. Use static gradients and theme tokens, opaque reading
 surfaces, clear selected tabs and separate keyboard focus. Avoid compositor blur

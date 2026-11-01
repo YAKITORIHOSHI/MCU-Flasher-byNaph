@@ -21,13 +21,13 @@ from main.qt.editor_panel import editor_page_background
 REPORT = []
 CAPTURES = None
 EXPECTED = {
-    "light": {"background":"#ffffff", "foreground":"#4e5b61", "identifier":"#434f54",
-        "comment":"#657375", "type":"#007f84", "function":"#c94f00",
-        "literal":"#005c5f", "control":"#657c00", "directive":"#826c59"},
-    "default": {"background":"#1f272a", "foreground":"#dae3e3", "identifier":"#dae3e3",
+    "light": {"background":"#f1f7fc", "foreground":"#4e5b61", "identifier":"#434f54",
+        "comment":"#657375", "type":"#007a7f", "function":"#bf4b00",
+        "literal":"#005c5f", "control":"#607700", "directive":"#826c59"},
+    "default": {"background":"#101b2a", "foreground":"#dae3e3", "identifier":"#dae3e3",
         "comment":"#839091", "type":"#0ca1a6", "function":"#f39c12",
         "literal":"#7fcbcd", "control":"#c586c0", "directive":"#569cd6"},
-    "solarized_dark": {"background":"#002b36", "foreground":"#dae3e3", "identifier":"#dae3e3",
+    "solarized_dark": {"background":"#001b22", "foreground":"#dae3e3", "identifier":"#dae3e3",
         "comment":"#839091", "type":"#0ca1a6", "function":"#f39c12",
         "literal":"#7fcbcd", "control":"#c586c0", "directive":"#569cd6"}
 }

@@ -1619,7 +1619,7 @@ class MCUWebBackendAPI:
             if platform in ("espressif32", "espressif8266"):
                 fast_bins = self._locate_soft_reset_fast_binaries(
                     self.sketch_dir_path, target_board, platform,
-                    skip_mtime_check=False
+                    build_dir=self._board_build_dir(target_board), skip_mtime_check=True,
                 )
                 if fast_bins is None:
                     return False
@@ -1845,10 +1845,18 @@ class MCUWebBackendAPI:
         from main.core import compiled_cache
         target = self.current_board
         try:
+            if Path(fast_bins.get("firmware", "")).parent != self._board_build_dir(target):
+                return {}
+            # This operation's final byte check captured display-only metadata
+            # before starting esptool. Do not stall its connected output with
+            # another complete library/image scan just to paint these rows.
+            captured = fast_bins.get("display_metadata")
+            if isinstance(captured, dict):
+                return dict(captured)
             workspace = self._board_workspace_dir(target)
             valid, _ = compiled_cache.validate_receipt(workspace, board_key=self._board_cache_key(target),
                                                       source_hash=self._hash_sources(target))
-            if not valid or Path(fast_bins.get("firmware", "")).parent != self._board_build_dir(target):
+            if not valid:
                 return {}
             receipt = compiled_cache.read_receipt(workspace)
             return dict(receipt.get("metadata") or {}) if receipt else {}
@@ -4325,18 +4333,7 @@ class MCUWebBackendAPI:
                 dst_ino_cpp = src_dir / target_ino_cpp_name
 
                 converted_code = self._convert_sketch_inos_to_cpp(primary_ino, sorted(ino_files.values(), key=lambda p: p.name))
-                should_replace_ino = True
-                if dst_ino_cpp.is_file():
-                    try:
-                        old_code = dst_ino_cpp.read_text(encoding="utf-8", errors="replace")
-                        if old_code == converted_code:
-                            should_replace_ino = False
-                    except Exception:
-                        should_replace_ino = True
-
-                if should_replace_ino:
-                    ensure_file_writable(dst_ino_cpp)
-                    dst_ino_cpp.write_text(converted_code, encoding="utf-8")
+                self._stage_generated_source_text(dst_ino_cpp, converted_code)
 
                 # Remove any raw .ino files from src_dir so PlatformIO doesn't delete the .cpp file at exit
                 for existing_ino in list(src_dir.glob("*.ino")):
@@ -5249,6 +5246,24 @@ class MCUWebBackendAPI:
         except OSError as exc:
             raise RuntimeError(f"Cannot verify source content: {exc}") from exc
         return hasher.hexdigest()
+
+    @staticmethod
+    def _stage_generated_source_text(destination: Path, content: str) -> bool:
+        """Write changed Arduino/reset inputs without hiding coarse-clock edits."""
+        previous_mtime_ns = None
+        try:
+            previous_mtime_ns = destination.stat().st_mtime_ns
+            if destination.read_bytes() == content.encode("utf-8"):
+                return False
+        except FileNotFoundError:
+            pass
+        write_generated_text(destination, content)
+        written = destination.stat()
+        if previous_mtime_ns is not None and written.st_mtime_ns == previous_mtime_ns:
+            os.utime(destination, ns=(written.st_atime_ns, previous_mtime_ns + 2_000_000_000))
+            if destination.stat().st_mtime_ns == previous_mtime_ns:
+                raise OSError("The build drive could not mark the generated source change.")
+        return True
 
     @staticmethod
     def _stage_root_source_file(source: Path, destination: Path) -> bool:
@@ -6901,7 +6916,9 @@ class MCUWebBackendAPI:
             self.emit("operation:phase", {"phase": "upload", "is_busy": True, "can_stop": True, "op": "upload"})
             self.emit("window:closable", {"closable": False})
             jobs = self._get_jobs()
-            command += ["run", "-e", "mcu_env", "-t", "upload", "-j", str(jobs)]
+            # The successful build was byte-verified immediately above. Ask
+            # PlatformIO only to upload it, avoiding a second build/LDF pass.
+            command += ["run", "-e", "mcu_env", "-t", "nobuild", "-t", "upload", "-j", str(jobs)]
             if port:
                 command += ["--upload-port", port]
             core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
@@ -7226,11 +7243,26 @@ class MCUWebBackendAPI:
         }
         base = family_map.get(family, "soft_reset_project")
         board_key = self._board_cache_key(name)
-        target_dir = SCRIPT_DIR / "soft_reset" / base / "boards" / board_key
-        legacy_dir = SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards" / board_key
-        if not target_dir.exists() and legacy_dir.exists():
-            return legacy_dir
-        return target_dir
+        from main.core.compiled_cache import host_namespace
+        # Reset firmware belongs to the application and exact native target,
+        # never to the current sketch. Do not adopt an unqualified legacy host.
+        return SCRIPT_DIR / "soft_reset" / base / "boards" / host_namespace() / board_key
+
+    def _prepare_reset_project(self, board_name: str, board_info: dict) -> tuple[Path, bool]:
+        """Keep the shared reset template stable so incremental objects survive."""
+        project_dir = self._soft_reset_project_dir(board_name, board_info)
+        project_dir.mkdir(parents=True, exist_ok=True)
+        hide_generated_directory(project_dir.parent.parent)
+        hide_generated_directory(project_dir.parent)
+        hide_generated_directory(project_dir)
+        ini_content, cpp_content, _ = self._reset_project_contents(board_name, board_info)
+        changed = False
+        for filename, content in (("platformio.ini", ini_content), ("main.cpp", cpp_content)):
+            changed = self._stage_generated_source_text(project_dir / filename, content) or changed
+        if changed:
+            from main.core.compiled_cache import invalidate_receipt
+            invalidate_receipt(project_dir)
+        return project_dir, changed
 
     def _reset_project_contents(self, board_name: str, board_info: dict) -> tuple[str, str, str]:
         info = dict(board_info or self._resolve_board_info(board_name))
@@ -7327,38 +7359,41 @@ class MCUWebBackendAPI:
         return hashlib.sha256(payload).hexdigest()
 
     def _write_reset_manifest(self, project_dir: Path, board_name: str, board_info: dict) -> tuple[bool, str]:
+        """Certify a compiled reset once, independently of upload success."""
+        from main.core import compiled_cache
         ini_content, cpp_content, _ = self._reset_project_contents(board_name, board_info)
-        build_dir = Path(project_dir) / ".pio" / "build" / "mcu_flash"
-        hashes: dict[str, str] = {}
-        platform = str(board_info.get("platform", ""))
-        image_names = ("firmware.bin",) if platform == "espressif8266" else ("bootloader.bin", "partitions.bin", "firmware.bin")
-        for filename in image_names:
-            image_path = build_dir / filename
-            if not image_path.is_file():
-                return False, f"Reset build is missing {filename}."
-            try:
-                hashes[filename] = hashlib.sha256(image_path.read_bytes()).hexdigest()
-            except OSError as exc:
-                return False, f"Could not hash {filename}: {exc}"
-
-        manifest = {
-            "schema": 1,
-            "board_key": self._board_cache_key(board_name),
-            "board_name": board_name,
-            "platform": platform,
-            "board": str(board_info.get("board", "")),
-            "template_sha256": self._reset_template_digest(ini_content, cpp_content),
-            "sha256": hashes,
-            "partition_scheme": "board-specific reset project partition table",
-            "source_label": "MCU Flasher exact-board reset build",
-        }
-        manifest_path = Path(project_dir) / "hard_reset_manifest.json"
         try:
-            write_generated_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-            hide_hidden_attribute(manifest_path)
+            project_dir = Path(project_dir)
+            for filename, content in (("platformio.ini", ini_content), ("main.cpp", cpp_content)):
+                if (project_dir / filename).read_bytes() != content.encode("utf-8"):
+                    raise ValueError("The reset project changed during compilation")
+            compiled_cache.write_receipt(project_dir, board_key=self._board_cache_key(board_name),
+                board_name=board_name, source_hash=self._reset_template_digest(ini_content, cpp_content),
+                environment="mcu_flash", metadata={
+                    "partition_scheme": "board-specific reset project partition table",
+                    "source_label": "MCU Flasher exact-board reset build",
+                })
             return True, ""
         except Exception as exc:
+            try:
+                compiled_cache.invalidate_receipt(project_dir)
+            except (OSError, ValueError):
+                pass
             return False, f"Could not write reset manifest: {exc}"
+
+    def _reset_build_status(self, project_dir: Path, board_name: str,
+                            board_info: dict) -> tuple[bool, str]:
+        """Read the shared receipt and verify current template and image bytes."""
+        from main.core import compiled_cache
+        try:
+            ini_content, cpp_content, _ = self._reset_project_contents(board_name, board_info)
+            for filename, content in (("platformio.ini", ini_content), ("main.cpp", cpp_content)):
+                if (Path(project_dir) / filename).read_bytes() != content.encode("utf-8"):
+                    return False, "The reset project configuration changed and must be rebuilt."
+            return compiled_cache.validate_receipt(project_dir, board_key=self._board_cache_key(board_name),
+                source_hash=self._reset_template_digest(ini_content, cpp_content), environment="mcu_flash")
+        except (OSError, ValueError) as exc:
+            return False, str(exc)
 
     def _locate_hard_reset_recovery_images(self, board_name=None, board_info=None) -> tuple[dict | None, str]:
         name = board_name or self.current_board
@@ -7372,24 +7407,9 @@ class MCUWebBackendAPI:
 
         project_dir = self._soft_reset_project_dir(name, binfo)
         build_dir = project_dir / ".pio" / "build" / "mcu_flash"
-        manifest_path = project_dir / "hard_reset_manifest.json"
-        manifest = {}
-        if manifest_path.is_file():
-            try:
-                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    manifest = loaded
-            except Exception:
-                manifest = {}
-
-        desired_ini, desired_cpp, _monitor_speed = self._reset_project_contents(name, binfo)
-        desired_template_hash = self._reset_template_digest(desired_ini, desired_cpp)
-        if not manifest:
-            return None, "The reset cache needs one incremental validation build."
-        if manifest.get("board_key") != self._board_cache_key(name):
-            return None, "The reset cache belongs to a different selectable board."
-        if manifest.get("template_sha256") != desired_template_hash:
-            return None, "The reset project configuration changed and must be rebuilt."
+        valid, reason = self._reset_build_status(project_dir, name, binfo)
+        if not valid:
+            return None, reason
 
         bootloader = build_dir / "bootloader.bin"
         partitions = build_dir / "partitions.bin"
@@ -7397,20 +7417,6 @@ class MCUWebBackendAPI:
         missing = [p.name for p in (bootloader, partitions) if not p.is_file()]
         if missing:
             return None, f"Dedicated reset recovery cache is incomplete: missing {', '.join(missing)}."
-
-        expected_hashes = manifest.get("sha256", {})
-        if not isinstance(expected_hashes, dict):
-            return None, "The reset cache has no valid recovery-image hashes."
-        for key, path in (("bootloader.bin", bootloader), ("partitions.bin", partitions)):
-            expected = str(expected_hashes.get(key, "")).strip().lower()
-            if not expected:
-                return None, f"The reset cache has no validated hash for {path.name}."
-            try:
-                actual = hashlib.sha256(path.read_bytes()).hexdigest().lower()
-            except Exception as exc:
-                return None, f"Could not read recovery image {path.name}: {exc}"
-            if actual != expected:
-                return None, f"Recovery image integrity check failed for {path.name}."
 
         return {
             "project_dir": project_dir,
@@ -7420,27 +7426,16 @@ class MCUWebBackendAPI:
             "firmware": firmware if firmware.is_file() else None,
             "board_id": selected_board_id,
             "platform": selected_platform,
-            "partition_scheme": str(manifest.get("partition_scheme") or "default OTA partition table"),
-            "source_label": str(manifest.get("source_label") or "Soft Reset recovery build"),
+            "partition_scheme": "board-specific reset project partition table",
+            "source_label": "MCU Flasher exact-board reset build",
         }, ""
 
     def _build_hard_reset_recovery_images(self, board_name: str, board_info: dict) -> tuple[dict | None, str]:
         """Build the exact board's reset bundle on first Hard Reset use."""
-        project_dir = self._soft_reset_project_dir(board_name, board_info)
         try:
-            project_dir.mkdir(parents=True, exist_ok=True)
-            hide_generated_directory(project_dir.parent.parent)
-            hide_generated_directory(project_dir.parent)
-            hide_generated_directory(project_dir)
-        except Exception as exc:
-            return None, f"Could not create the reset cache folder: {exc}"
-
-        ini_content, cpp_content, _monitor_speed = self._reset_project_contents(board_name, board_info)
-        try:
-            ini_path = project_dir / "platformio.ini"
-            cpp_path = project_dir / "main.cpp"
-            ini_path.write_text(ini_content, encoding="utf-8")
-            cpp_path.write_text(cpp_content, encoding="utf-8")
+            project_dir, _ = self._prepare_reset_project(board_name, board_info)
+            from main.core.compiled_cache import invalidate_receipt
+            invalidate_receipt(project_dir)
         except Exception as exc:
             return None, f"Could not prepare reset project files: {exc}"
 
@@ -7722,18 +7717,12 @@ class MCUWebBackendAPI:
         need_compile = True
         skip_comp = bool(getattr(self, "_active_skip_compile", getattr(self, "skip_compile", False)))
         skip_reason_msg: str | None = None  # message to show after console clear
-        if skip_comp:
-            recompile_needed, reason = self._needs_recompile(self.current_board)
-            if not recompile_needed:
-                # Reuse only when the user requested it and identity is valid.
-                need_compile = False
-                skip_reason_msg = "  Sources unchanged — skipping recompile (using cached firmware)"
-            else:
-                self.emit("console:log", {
-                    "text": f"  Recompile needed: {reason}",
-                    "tag": "warning",
-                    "newline": True,
-                })
+        if skip_comp and can_skip:
+            # The request worker already verified this operation's candidate.
+            # Recheck all bytes at the final write boundary below, after any
+            # compatibility prompt; do not rescan the library store here too.
+            need_compile = False
+            skip_reason_msg = "  Sources unchanged — skipping recompile (using cached firmware)"
 
         if not need_compile:
             cfg = load_gui_config()
@@ -7918,8 +7907,12 @@ class MCUWebBackendAPI:
                     str(binfo.get("platform", "")).lower(),
                     env_name="mcu_env",
                     upload_speed=upload_speed,
-                    skip_mtime_check=bool(skip_comp or can_skip or not need_compile),
+                    build_dir=self._board_build_dir(board_name), skip_mtime_check=True,
                 )
+                if fast_bins is not None:
+                    from main.core.compiled_cache import read_receipt
+                    receipt = read_receipt(self._board_workspace_dir(board_name))
+                    fast_bins["display_metadata"] = dict((receipt or {}).get("metadata") or {})
 
             if fast_bins is not None:
                 if (is_s3_board(str(binfo.get("board", ""))) or "s3" in board_name.lower()) and self._is_native_usb_port(port):
@@ -8035,7 +8028,7 @@ class MCUWebBackendAPI:
             (cache_root / ".pio" / "libdeps" / "mcu_env").mkdir(parents=True, exist_ok=True)
 
             jobs = self._get_jobs()
-            cmd = pio_cmd + ["run", "-e", "mcu_env", "-t", "upload", "-j", str(jobs), "--upload-port", port]
+            cmd = pio_cmd + ["run", "-e", "mcu_env", "-t", "nobuild", "-t", "upload", "-j", str(jobs), "--upload-port", port]
 
             creation_flags = (
                 (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
@@ -8842,7 +8835,7 @@ class MCUWebBackendAPI:
                     if not pio_path:
                         self.emit("console:log", {"text": "  PlatformIO is unavailable.", "tag": "error", "newline": True})
                         return
-                    cache_root = get_project_build_cache_root(self.sketch_dir_path)
+                    cache_root, _ = self._prepare_reset_project(board_name, binfo)
                     jobs = self._get_jobs()
                     cmd = pio_path + [
                         "run", "-e", "mcu_flash", "-t", "bootloader",
@@ -9209,32 +9202,14 @@ class MCUWebBackendAPI:
             try:
                 self._stop_serial_monitor()
                 time.sleep(0.4)
-                project_dir = self._soft_reset_project_dir(board_name, binfo)
-                project_dir.mkdir(parents=True, exist_ok=True)
-                hide_generated_directory(project_dir.parent.parent)
-                hide_generated_directory(project_dir.parent)
-                hide_generated_directory(project_dir)
-
-                ini_content, cpp_content, monitor_speed = self._reset_project_contents(board_name, binfo)
-                ini_path = project_dir / "platformio.ini"
-                cpp_path = project_dir / "main.cpp"
-
-                files_changed = False
-                existing_ini = ini_path.read_text(encoding="utf-8") if ini_path.exists() else ""
-                existing_cpp = cpp_path.read_text(encoding="utf-8") if cpp_path.exists() else ""
-
-                if existing_ini != ini_content or existing_cpp != cpp_content:
-                    files_changed = True
-                    env_build_dir = project_dir / ".pio" / "build" / "mcu_flash"
-                    is_first_time = not env_build_dir.exists()
-                    ini_path.write_text(ini_content, encoding="utf-8")
-                    cpp_path.write_text(cpp_content, encoding="utf-8")
-                    if is_first_time:
-                        self.emit("console:log", {"text": "  First-time setup for this board — this may take a minute. Subsequent Soft Resets will be instant.", "tag": "warning", "newline": True})
-                    else:
-                        self.emit("console:log", {"text": "  Reset project updated; its existing incremental objects were preserved.", "tag": "dim", "newline": True})
+                project_dir, _ = self._prepare_reset_project(board_name, binfo)
+                reset_cached, _ = self._reset_build_status(project_dir, board_name, binfo)
+                if not reset_cached:
+                    from main.core.compiled_cache import invalidate_receipt
+                    invalidate_receipt(project_dir)
+                    self.emit("console:log", {"text": "  Preparing this board's dedicated recovery build; other sketch builds are preserved.", "tag": "info", "newline": True})
                 else:
-                    self.emit("console:log", {"text": "  Using cached build (no recompilation needed).", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "  Verified dedicated recovery build — no recompilation needed.", "tag": "success", "newline": True})
 
                 pio_cmd = find_pio_executable()
                 if not pio_cmd:
@@ -9258,13 +9233,13 @@ class MCUWebBackendAPI:
                 ok = False
                 err_msg = ""
 
-                # Fast path check for ESP boards: if reset project files are identical,
-                # skip mtime verification to avoid false recompile triggers from filesystem timestamp shifts.
+                # Shared reset receipts bind the actual template and image
+                # bytes, independently of any current sketch or timestamps.
                 fast_bins = None
-                if not files_changed and is_esp:
+                if reset_cached and is_esp:
                     fast_bins = self._locate_soft_reset_fast_binaries(
                         project_dir, board_name, p_platform, env_name="mcu_flash",
-                        skip_mtime_check=True,
+                        build_dir=project_dir / ".pio" / "build" / "mcu_flash", skip_mtime_check=True,
                     )
 
                 if fast_bins is not None:
@@ -9390,16 +9365,10 @@ class MCUWebBackendAPI:
 
                     if proc.returncode == 0:
                         self.emit("console:log", {"text": "  Recovery sketch compiled successfully.", "tag": "success", "newline": True})
-                        # Pass build_dir explicitly and skip mtime check — we know compile just
-                        # finished so the source files (just rewritten) will have newer mtimes
-                        # than firmware.bin on some filesystems, causing a false staleness hit.
+                        manifest_ok, manifest_error = self._write_reset_manifest(project_dir, board_name, binfo)
+                        if not manifest_ok:
+                            raise RuntimeError(manifest_error)
                         _env_build_dir = project_dir / ".pio" / "build" / "mcu_flash"
-                        try:
-                            _fw = _env_build_dir / "firmware.bin"
-                            if _fw.exists():
-                                os.utime(str(_fw), None)
-                        except Exception:
-                            pass
                         fast_bins = self._locate_soft_reset_fast_binaries(
                             project_dir, board_name, p_platform, env_name="mcu_flash",
                             build_dir=_env_build_dir, skip_mtime_check=True,
@@ -9440,9 +9409,12 @@ class MCUWebBackendAPI:
                     while True:
                         self._check_write_connection(port, binfo)
                         cmd = pio_cmd + [
-                            "run", "-e", "mcu_flash", "-t", "upload",
+                            "run", "-e", "mcu_flash",
                             "-j", str(jobs),
                         ]
+                        if reset_cached:
+                            cmd.extend(["-t", "nobuild"])
+                        cmd.extend(["-t", "upload"])
                         if port and needs_port:
                             cmd.extend(["--upload-port", port])
                         proc = subprocess.Popen(
@@ -9509,6 +9481,12 @@ class MCUWebBackendAPI:
                             continue
 
                         ok = (rc == 0)
+                        if ok and not reset_cached:
+                            manifest_ok, manifest_error = self._write_reset_manifest(project_dir, board_name, binfo)
+                            if not manifest_ok:
+                                # The upload completed, but never advertise an
+                                # unverified result for the next operation.
+                                self.emit("console:log", {"text": manifest_error, "tag": "warning", "newline": True})
                         if not ok:
                             err_msg = f"Upload failed with exit code {rc}"
                             if is_avr_target:
@@ -9520,8 +9498,6 @@ class MCUWebBackendAPI:
                         break
 
                 if ok:
-                    if p_platform in ("espressif32", "espressif8266"):
-                        self._write_reset_manifest(project_dir, board_name, binfo)
                     time.sleep(0.5)
                     if port:
                         self._trigger_actual_board_reset(port, board_name, binfo)
@@ -9580,12 +9556,8 @@ class MCUWebBackendAPI:
 
         def _worker():
             sketch_name = sketch.name if sketch else "Project"
-            reset_cache_lock = None
             clean_success = False
             try:
-                reset_cache_lock = _try_acquire_reset_cache_lock()
-                if reset_cache_lock is None:
-                    raise RuntimeError("Another window is using the shared reset cache. Try Clean after it finishes.")
                 cache_root = get_project_build_cache_root(sketch, create=False)
                 targets = [
                     (cache_root / "boards", "exact-board build workspaces"),
@@ -9596,21 +9568,10 @@ class MCUWebBackendAPI:
                     (cache_root / ".mcu_gui_cache.json", "compile metadata"),
                     (cache_root / "compile_cache.json", "compile cache"),
                     (cache_root / ".mcu_flash_syntax_errors.json", "syntax metadata"),
-                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / "boards", "Soft/Hard Reset board caches"),
-                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / "boards", "Arduino reset board caches"),
-                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project" / ".pio", "Soft/Hard Reset shared legacy cache"),
-                    (SCRIPT_DIR / "soft_reset" / "soft_reset_project_uno" / ".pio", "Arduino shared legacy cache"),
                 ]
-                soft_reset_dir = SCRIPT_DIR / "soft_reset"
-                if soft_reset_dir.is_dir():
-                    for sub in soft_reset_dir.iterdir():
-                        if sub.is_dir() and sub.name not in ("soft_reset_project", "soft_reset_project_uno"):
-                            b_dir = sub / "boards"
-                            if b_dir.exists():
-                                targets.append((b_dir, f"{sub.name} reset board caches"))
-                            p_dir = sub / ".pio"
-                            if p_dir.exists():
-                                targets.append((p_dir, f"{sub.name} shared cache"))
+                # These application-owned reset allocations are shared across
+                # projects. A project Clean must not make every board rebuild
+                # its recovery firmware on the next reset.
                 remote_root = self._remote_workspace_root(sketch)
                 if remote_root is not None:
                     targets.append((remote_root, "remote project local build workspace"))
@@ -9620,7 +9581,7 @@ class MCUWebBackendAPI:
                     if target.exists():
                         try:
                             # A redirected cache must never delete material outside its owner.
-                            owner = SCRIPT_DIR if target.is_relative_to(SCRIPT_DIR / "soft_reset") else (remote_root.parent if remote_root is not None and target == remote_root else cache_root)
+                            owner = remote_root.parent if remote_root is not None and target == remote_root else cache_root
                             if not target.resolve().is_relative_to(owner.resolve()) or target.is_symlink() or getattr(target, "is_junction", lambda: False)():
                                 raise RuntimeError("Refusing redirected cache path")
                             if target.is_dir():
@@ -9674,7 +9635,6 @@ class MCUWebBackendAPI:
                     "details": {"sketch": str(sketch), "error": str(e)},
                 })
             finally:
-                _release_reset_cache_lock(reset_cache_lock)
                 self.is_busy = False
                 self.active_operation = None
                 self._current_op_phase = None

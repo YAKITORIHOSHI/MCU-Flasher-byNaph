@@ -11,6 +11,23 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
+The October 31 source update aligns the editor's reading surface and source tabs
+with the active workspace theme, applies saved fonts and resource settings before
+Monaco starts, and shares one initial project listing. Source listing and reads
+run off the UI thread through bounded, project-scoped requests. Compile/Upload wait for
+loaded source models and recovered buffers before saving. Ghost Sketch requires
+deliberate activation in the project selector. Compile/Upload also wait for a
+previous operation's cleanup thread to exit, with a visible explanation and an
+automatic readiness refresh.
+
+Uploads avoid repeated intermediate firmware checks and a second PlatformIO
+build after a verified compile. Source edits keep incremental framework/library
+objects; source, dependency and firmware bytes still receive final validation
+before reuse. Hard/Soft Reset builds have dedicated shared storage for each
+native host, exact board and framework. Switching sketch projects and project
+Clean preserve those reset builds. These are source changes; existing release
+downloads require rebuilding to include them.
+
 The current v11 source fixes quiet Bootstrap retries, disappearing Project and
 Resources actions, oversized navigation padding and half-screen window sizing.
 Native frame margins are included in the minimum width, including after
@@ -23,8 +40,17 @@ Fresh distribution folders use committed first-run defaults and retain the
 complete private Windows runtime. Personal settings, accounts, histories,
 development environments and project caches stay outside that distribution.
 Open the matching executable in [`LAUNCHER/`](LAUNCHER/README.md) after extraction;
-first launch prepares missing dependencies through Bootstrap. Updating source on
-GitHub does not replace the existing release download automatically.
+first launch prepares missing dependencies through Bootstrap. A normal
+standalone Windows or native Ubuntu launch checks the canonical GitHub `main`
+branch before opening the workspace. When the commit changes, it stages a
+shallow clone, verifies it, refreshes application source files, then restarts
+for one full readiness check. If Git is unavailable it uses GitHub's immutable
+archive for the same verified commit. Existing workspace windows defer the
+refresh until they close. Settings, sketches, project caches, private runtimes,
+installers, catalog data and active launchers stay in place. A Git working copy
+remains under its own source control and is never replaced by Bootstrap. This
+source refresh is separate from a packaged release; it does not qualify or
+replace the private Windows runtime.
 
 The v11 Bootstrap correction preserves packages with damaged PlatformIO metadata
 under the configured core's `.mcu-package-recovery` folder before installing
@@ -1890,7 +1916,7 @@ verification; board compilation/upload still requires separate target checks.
 - **Hard Reset**: ESP32 validates/builds exact-board recovery images before erasing, then restores the bootloader, partitions and boot_app0 without application firmware. ESP8266 erases SPI flash and retains its ROM bootloader. Other targets, including AVR bootloader burning without a configured programmer workflow, are unavailable in Settings.
 - Reset confirmations recheck board, framework, port and busy state. Workers reserve the operation before starting, retain the confirmed target, and report preparation/erase/write failures. Reset writes are not automatically replayed after a connected write failure.
 - Ubuntu uses the prepared private esptool runtime. Its v5 commands and chip connector avoid deprecated aliases, while v4 syntax and Windows command paths remain compatible.
-- **Actions**: Save All acknowledges completed editor saves before Compile/Upload. Failed saves stop the action. Reload uses Monaco's reload and dirty-tab bookkeeping. Clean removes known generated build/reset caches while preserving source folders, project settings and AI edit history; locked or failed cleanup is reported.
+- **Actions**: Save All waits for initial model loading/recovery and acknowledges completed editor saves before Compile/Upload. Failed saves stop the action and permit retry. Reload uses Monaco's reload and dirty-tab bookkeeping. Project Clean removes known generated sketch builds while preserving shared reset builds, source folders, project settings and AI edit history; locked or failed cleanup is reported.
 - Hardware-free reset/action regressions: `src/_python/python.exe -B direct/verify_actions.py` and `direct/verify_controls.py`. Physical reset/flash verification requires the selected board and port.
 
 ### 11. Remote Network Shares (UNC Paths)

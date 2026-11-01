@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, responsive layouts and window snapping, detached action rows, temporary Ghost Sketch saves, safe shutdown, Bootstrap performance, native Rust preview, embedded editor/terminals and executable launchers. Use for application changes and platform verification; firmware work follows the sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, theme-matched cold editor loading, action readiness, incremental builds and dedicated reset reuse, responsive layouts, Ghost Sketch saves, safe shutdown, Bootstrap performance, native Rust preview, embedded terminals and launchers. Use for app changes and platform verification; firmware work follows sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -73,9 +73,27 @@ launcher entry and executable mode.
 
 Editor syntax adapts the pinned official Arduino Light/Dark colors documented
 in `src/editor/ARDUINO_PALETTE.md`, including explicit small-text contrast changes.
-Solarized retains its reading surface with compatible Dark syntax. Preserve
+Page/host/Monaco reading surfaces use the native theme's BG_DARKEST token;
+Solarized retains compatible Dark syntax. Preserve
 chosen font family/size, dirty models, undo, tab order, focus and selection;
 native page fallback, HTML host and Monaco must agree on the reading background.
+Pass initial theme, font and resource options before bundle execution. Share one
+initial project manifest and one project-load promise across model loading,
+path mapping and font setup. Save before Compile/Upload must await model load
+and recovery completion; failed or timed-out saves must remain retryable.
+Use the bounded renderer/project-scoped async storage transport for listing and
+source reads; strict enumeration must distinguish inaccessible folders from
+valid empty projects. Deliver results through queued Qt signals, reject stale
+pages/projects and keep one active worker request plus one pending replacement.
+Verify `direct/verify_editor_storage.py`, `verify_editor_transport.js`,
+`verify_editor_save_readiness.js` and real `verify_editor_startup.py` in all
+three themes. Preserve compatibility slots without routing normal cold loads
+back onto the GUI thread.
+Without an explicit launch project, retain the project selector. Ghost Sketch
+requires its own explicit action; disable Qt automatic/default Return dispatch
+for selector actions, retaining Space and pointer activation and Existing-field
+Return validation. Check delayed save acknowledgements and busy events without
+weakening worker ownership or write-phase guards.
 Extend existing cached C/C++ grammar identifier rules without scanning source
 per edit or losing separate C keywords/comments/strings/raw-string states.
 Verify actual rendered spans with `direct/verify_arduino_palette.py` and actual
@@ -924,6 +942,20 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   stops, even if termination is delayed or denied. Verify local children,
   effective manager HTTP calls and restoration with
   `direct/verify_bootstrap_interruption.py` and Windows board setup fixtures.
+- Bootstrap application source updates check the canonical GitHub `main` branch
+  before a standalone Windows or native Ubuntu launch. Stage a shallow clone
+  under per-user state; verify its HTTPS origin and exact API-selected commit
+  before atomically replacing application-owned source. If Git is unavailable,
+  use only GitHub's immutable archive for that same commit. Do not hydrate Git
+  LFS installer payloads. Preserve settings, sketches, caches, runtimes,
+  installers, catalog data, user instructions and active launchers; never touch
+  a Git working copy. Defer refresh while a workspace is active. Windows
+  invalidates warm-launch health and retains its update worker until it stops;
+  Ubuntu re-execs `direct/ubuntu/run.sh` with a one-shot resume marker. Use
+  finite check/clone/archive time budgets. This source refresh is not a
+  packaged-release qualification. Verify isolated preservation, rollback,
+  source path and Bootstrap wiring with `direct/verify_app_update.py` and
+  `direct/verify_ubuntu_launcher.py`.
 - Python dependency downloads/installs can be quiet with progress disabled.
   Use package-aware finite monotonic budgets, never stdout-silence retries.
   Cancellation must stop owned descendants before retry or package-store release,
@@ -980,6 +1012,18 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   Compile; dirty buffers, failed builds and altered images must reject reuse.
   Verify with `direct/verify_board_build_cache.py`, board-family/upload fixtures
   and isolated actual Compile-button AVR probes; never migrate a live cache.
+  Upload may skip the second PlatformIO build with the documented `nobuild`
+  target only after final source/dependency/output byte validation. Reuse the
+  initial decision within its operation without repeating intermediate library
+  scans; never carry that validation across operations or remove final checks.
+  Hard/Soft Reset share application-owned exact-board/framework/native-host
+  allocations and bounded template/output receipts, independent of sketch
+  projects. Avoid equal template writes. Project Clean preserves these shared
+  reset builds; failed writes never trigger a replay.
+  Verify shared reset reuse/tampering and project independence with
+  `direct/verify_reset_build_cache.py` alongside the sketch cache, action and
+  upload verifiers. New host-qualified reset receipts may require one initial
+  build; never adopt or delete unqualified live legacy reset trees.
 - Bootstrap recognizes only the exact standalone upstream UF2 already-added
   message as `UF2 bootloader image already included.`. Present it as a normal
   informational summary once per stage, preserving active package progress and
@@ -1621,7 +1665,7 @@ MCU Flasher by Naph/
 
 - [ ] **GUI Launch**: Verify the private-runtime Python entry and the host's native executable: `MCU_Flasher.exe` on Windows, `MCU_Flasher` on Ubuntu amd64 or `MCU_Flasher-arm64` on Ubuntu ARM64. Record actual desktop double-click execution separately from ELF/source checks.
 - [ ] **Hardware core requirements**: Verify fewer than 4 physical cores is blocked (logical fallback if topology unavailable); unknown logical counts stop with a diagnostic. Verify 4/6-core policy and saved job clamping.
-- [ ] **Manual Startup Hardware Selection**: On startup, verify that no board and no port are automatically selected, and action buttons (Compile, Upload, Reset) remain disabled until the user manually selects them.
+- [ ] **Manual Startup Selection**: A launch without an explicit project opens the selector; Ghost Sketch requires deliberate activation. Board and port remain unselected. Compile becomes available after board selection independently of a port; Upload/Reset require the declared transport's readiness. Check again after failed or delayed editor saves.
 - [ ] **Critical Operation Protection**: Verify attempting to close the application during active flashing, erasing, or downloading triggers a safety warning and keeps the app open.
 - [ ] **Compile Phase Serial Monitor**: Verify Serial Monitor remains open, streaming, and fully functional (Reset DTR, Baud selection, Send bar) while compiling.
 - [ ] **Upload Phase Serial Lock & Parity**: Verify Serial Monitor is paused during flashing, switches to Serial Monitor tab after 500ms on success, issues silent reset pulse, and auto-resumes monitoring.

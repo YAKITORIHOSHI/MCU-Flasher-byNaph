@@ -240,6 +240,37 @@ class ProjectChecks(unittest.TestCase):
                     dialog.deleteLater()
                     APP.processEvents()
 
+    def test_startup_selector_ghost_requires_explicit_activation(self):
+        from PySide6.QtTest import QTest
+        with patch("main.core.ghost_sketch.create_ghost_project_path",
+                   return_value=self.folder / "StartupGhost") as create, \
+             patch.object(ProjectDialog, "_browse_folder"):
+            dialog = ProjectDialog()
+            try:
+                dialog.show()
+                APP.processEvents()
+                self.assertIsNone(dialog.selected_project)
+                self.assertFalse(dialog._btn_ghost_sketch.autoDefault())
+                self.assertFalse(dialog._btn_ghost_sketch.isDefault())
+                # Return on page navigation or a field must leave the startup
+                # picker open instead of creating a temporary project.
+                for widget in (dialog._tabs.tabBar(), dialog._open_path_edit):
+                    widget.setFocus()
+                    QTest.keyClick(widget, Qt.Key.Key_Return)
+                    APP.processEvents()
+                create.assert_not_called()
+                self.assertIsNone(dialog.selected_project)
+                self.assertTrue(dialog.isVisible())
+                # Space remains the explicit native button keyboard action.
+                dialog._btn_ghost_sketch.setFocus()
+                QTest.keyClick(dialog._btn_ghost_sketch, Qt.Key.Key_Space)
+                create.assert_called_once()
+                self.assertEqual(dialog.selected_project, self.folder / "StartupGhost")
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                APP.processEvents()
+
     def test_existing_project_preview_lists_root_files_and_highlights_setup_loop_main(self):
         project = self.folder / "WebConnect-GarbyController"
         project.mkdir()

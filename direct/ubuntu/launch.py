@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -14,6 +15,79 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+
+
+def application_update_config() -> dict:
+    """Read the optional Bootstrap source-update policy without rewriting it."""
+    path = ROOT / "src" / "dbs" / "bootstrap_config.json"
+    try:
+        if not path.is_file() or path.stat().st_size > 512 * 1024:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, UnicodeError, ValueError):
+        return {}
+
+
+def workspace_is_running() -> bool:
+    """Avoid replacing source underneath an already-open workspace."""
+    try:
+        from src.modules.crash_detector import running_sessions
+        return bool(running_sessions(ROOT))
+    except Exception:
+        # Session tracking is advisory for source refresh. A failure to inspect
+        # old state must not make launching the installed application fail.
+        return False
+
+
+def available_application_update(arguments: list[str]):
+    """Return a verified source revision for a normal Ubuntu launch, if any."""
+    if "--resume-application-update" in arguments:
+        return None
+    try:
+        if workspace_is_running():
+            return None
+        from src.modules import app_update
+        config = application_update_config()
+        if not app_update.automatic_updates_enabled(config):
+            return None
+        checked = app_update.check_for_update(ROOT, config=config, timeout=1.5)
+        return checked.candidate if checked.status == "available" else None
+    except Exception:
+        # A source check is never allowed to block an otherwise usable native
+        # Ubuntu workspace, including when the network is offline.
+        return None
+
+
+def install_application_update(candidate, arguments: list[str], env: dict[str, str]) -> bool:
+    """Refresh verified source before runtime checks, then re-exec the launcher."""
+    from src.modules import app_update
+
+    def report(message: str) -> None:
+        print(message, flush=True)
+
+    try:
+        installed = app_update.apply_source_update(ROOT, candidate, report=report)
+    except Exception as exc:
+        print(f"MCU Flasher source update was not installed: {exc}", file=sys.stderr)
+        return False
+
+    print(
+        f"Installed GitHub source {installed.candidate.branch}@{installed.candidate.commit[:12]} "
+        f"({installed.strategy}); restarting Bootstrap…",
+        flush=True,
+    )
+    retained = [str(argument) for argument in arguments if argument != "--resume-application-update"]
+    command = ["/bin/bash", str(ROOT / "direct" / "ubuntu" / "run.sh"),
+               "--resume-application-update", *retained]
+    try:
+        os.execvpe(command[0], command, env)
+    except OSError as exc:
+        # Source replacement is complete and verified. Continue through the
+        # currently loaded coordinator if the shell cannot be re-executed.
+        print(f"MCU Flasher could not restart Bootstrap after the source update: {exc}",
+              file=sys.stderr)
+    return True
 
 
 def clean_environment() -> dict[str, str]:
@@ -135,6 +209,7 @@ def main(argv=None) -> int:
     from src.modules.ubuntu_release import enforce_supported_ubuntu
     if not enforce_supported_ubuntu():
         return 1
+    arguments_in = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repair", action="store_true", help="Repair native runtime dependencies before opening")
     parser.add_argument("--check", action="store_true", help="Diagnose dependencies without installing or launching")
@@ -144,7 +219,8 @@ def main(argv=None) -> int:
     parser.add_argument("--new-window", action="store_true", help="Open an independent sketch window")
     parser.add_argument("--desktop", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--bootstrap-window", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args(argv)
+    parser.add_argument("--resume-application-update", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args(arguments_in)
     desktop = not args.check and (args.bootstrap_window or (args.desktop and not sys.stdin.isatty()))
     env = clean_environment()
     try:
@@ -153,6 +229,10 @@ def main(argv=None) -> int:
         if args.install_shortcut and not args.check:
             from direct.ubuntu.install_desktop import main as install_shortcut
             return install_shortcut(["--install"])
+        if not args.check:
+            candidate = available_application_update(arguments_in)
+            if candidate is not None:
+                install_application_update(candidate, arguments_in, env)
         from direct.ubuntu.preflight import MissingSystemDependencies, host_preflight
         host_problem = None
         try:

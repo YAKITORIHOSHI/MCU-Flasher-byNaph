@@ -20,7 +20,8 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QUrlQuery
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from main import web_bridge
@@ -82,10 +83,17 @@ class BackendFileChecks(unittest.TestCase):
         load = Mock()
         host = SimpleNamespace(_project_files_generation=7, _editor_html=ROOT / "src/editor/index.html",
             _bridge=SimpleNamespace(begin_renderer_load=lambda: "replacement-renderer"),
+            _performance=SimpleNamespace(constrained=False),
             _view=SimpleNamespace(load=load))
-        MonacoEditorPanel._load_editor(host)
+        with patch("main.core.config.get_theme_mode", return_value="default"), \
+             patch("main.core.config.get_editor_font_size", return_value=14):
+            MonacoEditorPanel._load_editor(host)
         self.assertEqual(host._project_files_generation, 0)
-        self.assertEqual(load.call_args.args[0].query(), "renderer=replacement-renderer")
+        query = QUrlQuery(load.call_args.args[0])
+        self.assertEqual(query.queryItemValue("renderer"), "replacement-renderer")
+        self.assertEqual(query.queryItemValue("theme"), "default")
+        self.assertEqual(query.queryItemValue("font"), "14")
+        self.assertEqual(query.queryItemValue("constrained"), "0")
 
     def test_rename_and_delete_refuse_the_affected_dirty_source(self):
         before = (self.root / "Sketch.ino").read_bytes()
@@ -136,6 +144,13 @@ FIXTURE = r"""
   }})};
   window.invalidateProjectFileOperations(0,f.root);
   f.change = (operation,file,extra={}) => ({path:f.root,operation,file,renderer:'',generation:0,...extra});
+  // Ordinary mapping now reuses the loaded store. Delayed backend-response
+  // scenarios explicitly exercise the fallback used before store paths exist.
+  f.syncFromBackend = () => {
+    const store=window.__mcuProjectFileStore, list=store.list;
+    try {store.list=()=>[];return window.syncTabPaths();}
+    finally {store.list=list;}
+  };
   f.snapshot = () => ({
     active:window.__mcuProjectFileStore.active()?.path,
     files:window.__mcuProjectFileStore.list().map(file => ({path:file.path,dirty:file.isDirty,
@@ -154,7 +169,12 @@ class MonacoFileChecks(unittest.TestCase):
     async_js = renderer.EditorReviewChecks.async_js
 
     def setUp(self):
-        self.view = QWebEngineView()
+        self.host = QWidget()
+        self.host.resize(1000, 620)
+        self.view = QWebEngineView(self.host)
+        self.host_layout = QVBoxLayout(self.host)
+        self.host_layout.setContentsMargins(0, 0, 0, 0)
+        self.host_layout.addWidget(self.view)
         self.profile = QWebEngineProfile(self.view)
         self.page = ReviewPage(self.profile, self.view)
         self.view.setPage(self.page)
@@ -162,10 +182,23 @@ class MonacoFileChecks(unittest.TestCase):
         self.addCleanup(self._dispose_renderer)
         self.view.settings().setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, False)
         self.view.resize(1000, 620)
+        self.host.show()
         self.view.show()
         self.load()
         self.js(FIXTURE)
         self.assertTrue(self.async_js("return await window.safeLoadProject();"))
+
+    def test_tab_mapping_reuses_loaded_sources_without_another_backend_listing(self):
+        result = self.async_js(r"""
+          const f=__filesFixture;
+          const before=f.calls.filter(call=>call.name==='get_project_files').length;
+          const files=await syncTabPaths();
+          return {extraListings:f.calls.filter(call=>call.name==='get_project_files').length-before,
+            paths:files.map(file=>file.path),
+            tabs:Array.from(document.querySelectorAll('#tab-bar .tab'),tab=>tab._filePath)};
+        """)
+        expected = ["/fixture/Sketch/Sketch.ino", "/fixture/Sketch/helper.cpp", "/fixture/Sketch/remove.h"]
+        self.assertEqual(result, {"extraListings": 0, "paths": expected, "tabs": expected})
 
     def test_add_rename_delete_preserve_unrelated_models_undo_dirty_tabs_and_order(self):
         self.js(r"""(() => {
@@ -322,7 +355,7 @@ class MonacoFileChecks(unittest.TestCase):
             if (!first) return list();
             first=false;return new Promise(resolve=>{f.listReply=resolve;});
           };
-          f.mapping=syncTabPaths();return true;
+          f.mapping=f.syncFromBackend();return true;
         })()""")
         until(lambda: self.js("Boolean(__filesFixture.listReply)"))
         result = self.async_js(r"""
@@ -350,7 +383,7 @@ class MonacoFileChecks(unittest.TestCase):
                     first=false;return new Promise(resolve=>{f.listReply=resolve;});
                   };
                   f.methods.save_project_tab_order=()=>new Promise(resolve=>{f.saveReply=resolve;});
-                  f.mapping=syncTabPaths();return true;
+                  f.mapping=f.syncFromBackend();return true;
                 })()""")
                 until(lambda: self.js("Boolean(__filesFixture.listReply)"))
                 self.js(r"""(() => {

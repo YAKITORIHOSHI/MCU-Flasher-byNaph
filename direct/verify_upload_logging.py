@@ -221,6 +221,7 @@ class UploadPresentationChecks(unittest.TestCase):
         api = Mock()
         api.current_board, api.current_port, api.upload_speed = "UNO", "COM99", "460800"
         api.current_baud, api._active_upload_speed = 9600, "921600"
+        api._project_files_revision = 0
         api._extract_port_device.return_value = "COM99"
         api._resolve_board_info.return_value = UNO
         api._queue_hardware_state_write = Mock()

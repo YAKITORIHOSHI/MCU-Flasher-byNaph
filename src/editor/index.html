@@ -5,40 +5,65 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MCU Flasher — Embedded Code Editor</title>
+  <script>
+    // Resolve the native host's small preference snapshot before stylesheet or
+    // Monaco work. A cold renderer must never paint another theme first.
+    (() => {
+      const parameters = new URLSearchParams(location.search);
+      const requested = (parameters.get('theme') || 'default').toLowerCase().replace(/-/g, '_');
+      const theme = requested === 'light' ? 'light'
+        : ['solarized', 'solarize_dark', 'solarized_dark'].includes(requested) ? 'solarized_dark' : 'default';
+      window.__mcuInitialTheme = parameters.has('theme') ? theme : null;
+      window.__mcuInitialMonacoTheme = theme === 'light' ? 'mcu-light'
+        : theme === 'solarized_dark' ? 'mcu-solarized-dark' : 'mcu-default-dark';
+      const size = Number(parameters.get('font'));
+      window.__mcuInitialEditorFontSize = parameters.has('font') && Number.isFinite(size)
+        ? Math.max(6, Math.min(48, size)) : null;
+      window.__mcuResourceConstrained = parameters.get('constrained') === '1';
+      document.documentElement.classList.add('theme-' + theme.replace(/_/g, '-'));
+      document.documentElement.classList.toggle('resource-constrained', window.__mcuResourceConstrained);
+      document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+    })();
+  </script>
   <style>
     @font-face {
       font-family: 'Montserrat';
+      font-display: swap;
       src: url('../fonts/Montserrat/static/Montserrat-Regular.ttf') format('truetype');
       font-weight: 400;
       font-style: normal;
     }
     @font-face {
       font-family: 'Montserrat';
+      font-display: swap;
       src: url('../fonts/Montserrat/static/Montserrat-Italic.ttf') format('truetype');
       font-weight: 400;
       font-style: italic;
     }
     @font-face {
       font-family: 'Montserrat';
+      font-display: swap;
       src: url('../fonts/Montserrat/static/Montserrat-Medium.ttf') format('truetype');
       font-weight: 500;
       font-style: normal;
     }
     @font-face {
       font-family: 'Montserrat';
+      font-display: swap;
       src: url('../fonts/Montserrat/static/Montserrat-SemiBold.ttf') format('truetype');
       font-weight: 600;
       font-style: normal;
     }
     @font-face {
       font-family: 'Montserrat';
+      font-display: swap;
       src: url('../fonts/Montserrat/static/Montserrat-Bold.ttf') format('truetype');
       font-weight: 700;
       font-style: normal;
     }
 
-    :root, body.theme-default {
-      --bg-darkest: #1f272a;
+    :root, :root.theme-default, body.theme-default {
+      --bg-darkest: #101b2a;
       --bg-dark: #18283b;
       --bg-tab-hover: #2a415a;
       --border: #425e79;
@@ -50,9 +75,9 @@
       --tab-rim: rgba(227, 237, 246, 0.2);
       --tab-selected: #29475a;
       --tab-sheen: rgba(227, 237, 246, 0.055);
-      --hover-bg: #161d27;
-      --hover-code-bg: #0f121a;
-      --hover-border: #2a3545;
+      --hover-bg: #20344b;
+      --hover-code-bg: #18283b;
+      --hover-border: #425e79;
       --hover-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
       --hover-kind: #00d2ff;
       --hover-proto: #5ccc6e;
@@ -71,12 +96,12 @@
       --diff-modify-text: #dbeeff;
     }
 
-    body.theme-light {
-      --bg-darkest: #ffffff;
-      --bg-dark: #f0f2f5;
-      --bg-tab-hover: #e4e7eb;
-      --border: #d0d7de;
-      --border-tab: #d8dee4;
+    :root.theme-light, body.theme-light {
+      --bg-darkest: #f1f7fc;
+      --bg-dark: #e8f0f7;
+      --bg-tab-hover: #dce9f3;
+      --border: #a6becf;
+      --border-tab: #d1e4ee;
       --text: #24292f;
       --text-dim: #57606a;
       --accent: #0969da;
@@ -84,9 +109,9 @@
       --tab-rim: #c2cdd8;
       --tab-selected: #e2efff;
       --tab-sheen: rgba(255, 255, 255, 0.6);
-      --hover-bg: #ffffff;
-      --hover-code-bg: #f6f8fa;
-      --hover-border: #d0d7de;
+      --hover-bg: #f8fcff;
+      --hover-code-bg: #e8f0f7;
+      --hover-border: #a6becf;
       --hover-shadow: 0 10px 28px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
       --hover-kind: #0969da;
       --hover-proto: #116329;
@@ -105,22 +130,22 @@
       --diff-modify-text: #0550ae;
     }
 
-    body.theme-solarized-dark {
-      --bg-darkest: #002b36;
-      --bg-dark: #00212b;
-      --bg-tab-hover: #073642;
-      --border: #073642;
-      --border-tab: #094250;
+    :root.theme-solarized-dark, body.theme-solarized-dark {
+      --bg-darkest: #001b22;
+      --bg-dark: #002b36;
+      --bg-tab-hover: #0d4a59;
+      --border: #166b80;
+      --border-tab: #115d70;
       --text: #ffffff;
-      --text-dim: #8fa1b3;
-      --accent: #39c5bb;
+      --text-dim: #d0e4e8;
+      --accent: #2aa198;
       --dirty-dot: #b58900;
       --tab-rim: #285361;
       --tab-selected: #0d414b;
       --tab-sheen: rgba(255, 255, 255, 0.04);
       --hover-bg: #002b36;
-      --hover-code-bg: #00212b;
-      --hover-border: #094250;
+      --hover-code-bg: #001b22;
+      --hover-border: #166b80;
       --hover-shadow: 0 12px 32px rgba(0, 0, 0, 0.7);
       --hover-kind: #39c5bb;
       --hover-proto: #859900;
@@ -165,7 +190,7 @@
       flex: 0 0 auto;
       align-items: center;
       min-width: 0;
-      background: var(--bg-dark);
+      background: linear-gradient(var(--tab-sheen), transparent), var(--bg-dark);
       border-bottom: 1px solid var(--border);
     }
 
@@ -190,7 +215,7 @@
       gap: 6px;
       flex: 1 1 auto;
       min-width: 0;
-      background: var(--bg-dark);
+      background: transparent;
       overflow-x: auto;
       overflow-y: hidden;
       min-height: 46px;
@@ -269,7 +294,7 @@
     }
 
     #tab-bar::-webkit-scrollbar-thumb {
-      background: #3e4f6d;
+      background: var(--border);
       border-radius: 3px;
     }
 
@@ -284,31 +309,31 @@
     }
 
     ::-webkit-scrollbar-track {
-      background: #0b0e14;
-      border-left: 1px solid #1c2333;
+      background: var(--bg-darkest);
+      border-left: 1px solid var(--border-tab);
     }
 
     ::-webkit-scrollbar-thumb {
-      background: #3e4f6d;
+      background: var(--border);
       border-radius: 6px;
-      border: 2px solid #0b0e14;
+      border: 2px solid var(--bg-darkest);
     }
 
     ::-webkit-scrollbar-thumb:hover {
-      background: #56cfbf;
+      background: var(--accent);
     }
 
     .monaco-editor .scrollbar .slider {
-      background: rgba(74, 91, 120, 0.65) !important;
+      background: var(--border) !important;
       border-radius: 5px !important;
     }
 
     .monaco-editor .scrollbar .slider:hover {
-      background: rgba(86, 207, 191, 0.85) !important;
+      background: var(--text-dim) !important;
     }
 
     .monaco-editor .scrollbar .slider.active {
-      background: rgba(78, 201, 148, 1.0) !important;
+      background: var(--accent) !important;
     }
 
     .tab {
@@ -393,6 +418,24 @@
       overflow: hidden;
     }
 
+    #editor-loading {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: flex;
+      align-items: flex-start;
+      padding: 24px;
+      box-sizing: border-box;
+      background: var(--bg-darkest);
+      color: var(--text-dim);
+      font-size: 12px;
+      line-height: 1.6;
+      pointer-events: none;
+    }
+    #editor-loading[hidden] { display: none; }
+    #editor-loading > span { border-left: 2px solid var(--accent); padding-left: 12px; }
+    #editor-loading strong { display: block; font-weight: 600; color: var(--text); }
+
     .monaco-editor .decorationsOverviewRuler {
       display: none !important;
     }
@@ -428,7 +471,6 @@
       pointer-events: auto;
       user-select: text;
       transition: opacity 0.12s ease, transform 0.12s ease;
-      backdrop-filter: blur(14px);
     }
 
     #monaco-custom-hover-card .hover-header {
@@ -1098,6 +1140,7 @@
     </div>
     <div id="editor-container" role="tabpanel" aria-label="Source editor">
       <div id="monaco-anchor"></div>
+      <div id="editor-loading" role="status" aria-live="polite"><span><strong>Opening your sketch</strong>Preparing the source editor…</span></div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
         <span id="ai-review-title" class="review-title" title="AI Review"><span class="review-title-icon" aria-hidden="true"></span><span class="review-title-label">AI Review</span></span>
         <span id="ai-review-source" class="review-source" aria-label="Unknown source" title="Unknown source"><span class="review-source-label">Unknown</span><span class="review-source-short" aria-hidden="true">?</span></span>
@@ -1136,6 +1179,8 @@
       let attempts = 0;
       function apply() {
         if (window.editorInstance) {
+          if (window.__mcuPerformanceApplied === Boolean(constrained)) return;
+          window.__mcuPerformanceApplied = Boolean(constrained);
           if (constrained) window.editorInstance.updateOptions({
             minimap: {enabled: false}, smoothScrolling: false,
             cursorBlinking: 'solid', cursorSmoothCaretAnimation: 'off'
@@ -1163,6 +1208,45 @@
         new QWebChannel(qt.webChannelTransport, function (channel) {
           const bridge = channel.objects.editorBridge;
           window.editorBridge = bridge;
+          let storageTail = Promise.resolve();
+          let storageSequence = 0;
+          let storageQueued = 0;
+          const storageReplies = new Map();
+          const asyncStorage = typeof bridge.request_editor_storage === 'function' &&
+            typeof bridge.editor_storage_ready?.connect === 'function';
+          if (asyncStorage) bridge.editor_storage_ready.connect((renderer, request, result) => {
+            if (renderer !== rendererToken) return;
+            storageReplies.get(request)?.(result);
+          });
+          function readEditorStorage(operation, args) {
+            if (storageQueued >= 32) {
+              window._editorReadFailures = (window._editorReadFailures || 0) + 1;
+              return Promise.reject(new Error('The editor source queue is busy. Try again.'));
+            }
+            storageQueued++;
+            const task = storageTail.then(() => new Promise((resolve, reject) => {
+              const request = rendererToken + ':' + (++storageSequence);
+              const timeout = setTimeout(() => finish({success: false,
+                error: 'Loading the source timed out. Reopen the project to try again.'}), 30000);
+              const finish = result => {
+                if (!storageReplies.delete(request)) return;
+                clearTimeout(timeout);
+                if (result?.success) resolve(result.value);
+                else {
+                  window._editorReadFailures = (window._editorReadFailures || 0) + 1;
+                  reject(new Error(result?.error || 'The source could not be loaded.'));
+                }
+              };
+              storageReplies.set(request, finish);
+              try {
+                bridge.request_editor_storage(rendererToken, request, operation, args[0] || '', accepted => {
+                  if (!accepted) finish({success: false, error: 'The source request is no longer available. Try again.'});
+                });
+              } catch (error) { finish({success: false, error: String(error)}); }
+            })).finally(() => { storageQueued--; });
+            storageTail = task.catch(() => {});
+            return task;
+          }
           window.pywebview = {
             api: new Proxy(bridge, {
               get(target, prop) {
@@ -1171,6 +1255,15 @@
                   return function (...args) {
                     return new Promise((resolve, reject) => {
                       try {
+                        if (asyncStorage && (prop === 'get_project_files' || prop === 'read_file')) {
+                          readEditorStorage(prop, args).then(res => {
+                            if (prop === 'read_file' && res?.success === false) {
+                              window._editorReadFailures = (window._editorReadFailures || 0) + 1;
+                              reject(new Error(res.error || 'File could not be read'));
+                            } else resolve(res);
+                          }, reject);
+                          return;
+                        }
                         const parameters = rendererMethods[prop] ? [rendererToken, ...args] : args;
                         target[method](...parameters, function (res) {
                           if (prop === 'read_file' && res?.success === false) {
@@ -1440,8 +1533,11 @@
         if (projectLoadInFlight) return projectLoadInFlight;
         if (!window.pywebview || !window.pywebview.api) return Promise.resolve(false);
         if (typeof originalLoadProject !== 'function') return Promise.resolve();
+        window.__mcuProjectLoadReady = false;
+        const readFailures = window._editorReadFailures || 0;
         projectLoadInFlight = Promise.resolve(originalLoadProject())
           .then(async () => {
+            if ((window._editorReadFailures || 0) !== readFailures) return false;
             const api = window.pywebview && window.pywebview.api;
             if (!api) return false;
             const generationRequired = !!window.editorBridge || !!api.get_renderer_recovery;
@@ -1491,7 +1587,15 @@
               if (activePath && window.activateProjectFile) window.activateProjectFile(activePath);
             }
           })
-          .finally(() => { projectLoadInFlight = null; });
+          .then(ready => {
+            window.__mcuProjectLoadReady = ready === true;
+            return ready;
+          })
+          .finally(() => {
+            projectLoadInFlight = null;
+            const loading = document.getElementById('editor-loading');
+            if (loading) loading.hidden = true;
+          });
         return projectLoadInFlight;
       };
 
@@ -1582,7 +1686,8 @@
       };
       // Structural file events wait for the current full load, including a
       // same-page project switch and the entire confirmed Cloud replacement.
-      window.waitForProjectLoad = () => cloudProjectLoad || projectLoadInFlight || Promise.resolve(true);
+      window.waitForProjectLoad = () => cloudProjectLoad || projectLoadInFlight ||
+        Promise.resolve(window.__mcuProjectLoadReady !== false);
 
       function dedupeProjectTabs() {
         const seen = new Map();
@@ -1768,7 +1873,16 @@
         }
         syncGeneration = generation;
         syncListRevision = listRevision;
-        const request = window.pywebview.api.get_project_files()
+        // The bundled loader already owns the exact source list it just read.
+        // Reuse that list while it builds each tab; rescanning the folder on
+        // every asynchronous read is especially expensive on cold/removable IO.
+        const loaded = window.__mcuProjectFileStore?.list?.();
+        const tabs = Array.from(document.querySelectorAll('#tab-bar .tab'));
+        const loadedNames = new Set((loaded || []).map(file => file.name));
+        const localFiles = Array.isArray(loaded) && loaded.length === tabs.length &&
+          tabs.every(tab => loadedNames.has(tab.querySelector('span:first-child')?.textContent))
+          ? loaded.map(file => ({name: file.name, path: file.path})) : null;
+        const request = Promise.resolve(localFiles || window.pywebview.api.get_project_files())
           .then((files) => {
             if (syncInFlight !== request || generation !== (window.__mcuProjectFilesGeneration || 0)
                 || listRevision !== (window.__mcuProjectFileListRevision || 0)) return [];
@@ -1862,10 +1976,17 @@
       window.__mcuSavedEditorFontSize = 13;
       window.__mcuFontChangeRevision = 0;
       window.__mcuSavedFontRevision = 0;
+      if (window.__mcuInitialEditorFontSize !== null && window.__mcuInitialEditorFontSize !== undefined) {
+        window.__mcuEditorFontSize = window.__mcuSavedEditorFontSize = window.__mcuInitialEditorFontSize;
+      }
       let fontSaveGeneration = 0;
       let savedFontGeneration = 0;
 
       function triggerMonacoLayout() {
+        if (window.forceEditorLayout) {
+          window.forceEditorLayout();
+          return;
+        }
         if (window.editorInstance && typeof window.editorInstance.layout === 'function') {
           window.editorInstance.layout();
         }
@@ -2016,6 +2137,13 @@
         const failures = window._editorSaveFailures || 0;
         if (typeof window.saveAllFiles !== 'function' || !window.editorInstance || !window.pywebview?.api) {
           throw new Error('Editor is not ready to save');
+        }
+        // A cold page has an editor before its source models and recovery
+        // acknowledgement finish. Actions must wait for that same load rather
+        // than save an empty/partial model store and report a false success.
+        const pendingLoad = window.waitForProjectLoad?.() || window.__mcuInitialProjectLoad;
+        if (pendingLoad && await pendingLoad !== true) {
+          throw new Error('The sketch is still unavailable');
         }
         if (typeof window.saveAllFiles === 'function') {
           try {
@@ -4668,8 +4796,8 @@
         function:'f39c12', literal:'7fcbcd', control:'c586c0', directive:'569cd6'
       };
       const arduinoLight = {
-        foreground:'4e5b61', identifier:'434f54', comment:'657375', type:'007f84',
-        function:'c94f00', literal:'005c5f', control:'657c00', directive:'826c59'
+        foreground:'4e5b61', identifier:'434f54', comment:'657375', type:'007a7f',
+        function:'bf4b00', literal:'005c5f', control:'607700', directive:'826c59'
       };
       function arduinoRules(palette, background) {
         const rules = [
@@ -4713,30 +4841,30 @@
           monacoObj.editor.defineTheme('mcu-solarized-dark', {
             base: 'vs-dark',
             inherit: true,
-            rules: arduinoRules(arduinoDark, '002b36'),
+            rules: arduinoRules(arduinoDark, '001b22'),
             colors: {
               ...arduinoBracketColors(arduinoDark),
-              'editor.background': '#002b36',
+              'editor.background': '#001b22',
               'editor.foreground': '#dae3e3',
               'editorLineNumber.foreground': '#586e75',
-              'editorLineNumber.activeForeground': '#39c5bb',
+              'editorLineNumber.activeForeground': '#2aa198',
               'editor.lineHighlightBackground': '#073642',
-              'editorCursor.foreground': '#39c5bb',
+              'editorCursor.foreground': '#2aa198',
               'editorWhitespace.foreground': '#073642',
               'editorIndentGuide.background': '#073642',
               'editorIndentGuide.activeBackground': '#586e75',
               'editor.selectionBackground': '#073642',
-              'editorGutter.background': '#00212b'
+              'editorGutter.background': '#001b22'
             }
           });
 
           monacoObj.editor.defineTheme('mcu-light', {
             base: 'vs',
             inherit: true,
-            rules: arduinoRules(arduinoLight, 'ffffff'),
+            rules: arduinoRules(arduinoLight, 'f1f7fc'),
             colors: {
               ...arduinoBracketColors(arduinoLight),
-              'editor.background': '#ffffff',
+              'editor.background': '#f1f7fc',
               'editor.foreground': '#4e5b61',
               'editorLineNumber.foreground': '#8c959f',
               'editorLineNumber.activeForeground': '#0969da',
@@ -4746,24 +4874,24 @@
               'editorIndentGuide.background': '#d0d7de',
               'editorIndentGuide.activeBackground': '#afb8c1',
               'editor.selectionBackground': '#7fcbcdb3',
-              'editorGutter.background': '#ffffff'
+              'editorGutter.background': '#f1f7fc'
             }
           });
 
           monacoObj.editor.defineTheme('mcu-default-dark', {
             base: 'vs-dark',
             inherit: true,
-            rules: arduinoRules(arduinoDark, '1f272a'),
+            rules: arduinoRules(arduinoDark, '101b2a'),
             colors: {
               ...arduinoBracketColors(arduinoDark),
-              'editor.background': '#1f272a',
+              'editor.background': '#101b2a',
               'editor.foreground': '#dae3e3',
               'editorLineNumber.foreground': '#6b7d94',
               'editorLineNumber.activeForeground': '#80d9ce',
               'editor.lineHighlightBackground': '#434f5410',
               'editorCursor.foreground': '#dae3e3',
               'editor.selectionBackground': '#00818480',
-              'editorGutter.background': '#1f272a'
+              'editorGutter.background': '#101b2a'
             }
           });
         } catch (e) {
@@ -4774,6 +4902,7 @@
       window.setEditorTheme = function (themeName) {
         themeName = (themeName || 'default').toLowerCase().trim();
         document.body.classList.remove('theme-default', 'theme-light', 'theme-solarized-dark');
+        document.documentElement.classList.remove('theme-default', 'theme-light', 'theme-solarized-dark');
 
         registerCustomMonacoThemes();
         const monacoObj = window.monaco || (typeof monaco !== 'undefined' ? monaco : null);
@@ -4789,6 +4918,11 @@
           document.body.classList.add('theme-default');
           targetMonacoTheme = 'mcu-default-dark';
         }
+        document.documentElement.classList.add(targetMonacoTheme === 'mcu-light' ? 'theme-light'
+          : targetMonacoTheme === 'mcu-solarized-dark' ? 'theme-solarized-dark' : 'theme-default');
+        document.documentElement.style.colorScheme = targetMonacoTheme === 'mcu-light' ? 'light' : 'dark';
+        if (window.__mcuAppliedMonacoTheme === targetMonacoTheme) return;
+        window.__mcuAppliedMonacoTheme = targetMonacoTheme;
 
         if (monacoObj && monacoObj.editor) {
           try {
@@ -4798,11 +4932,6 @@
               monacoObj.editor.setTheme(targetMonacoTheme === 'mcu-light' ? 'vs' : 'vs-dark');
             } catch (e2) {}
           }
-        }
-        if (window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
-          try {
-            window.editorInstance.updateOptions({ theme: targetMonacoTheme });
-          } catch (e) {}
         }
         window.refreshAiDiffTheme?.();
       };
@@ -4819,15 +4948,16 @@
         }
         if (window.editorInstance && typeof window.editorInstance.updateOptions === 'function') {
           try {
+            if (window.editorInstance.getRawOptions?.().fontSize === num) return;
             window.editorInstance.updateOptions({ fontSize: num });
-            if (typeof window.editorInstance.layout === 'function') {
-              window.editorInstance.layout();
-            }
+            if (window.forceEditorLayout) window.forceEditorLayout();
+            else if (typeof window.editorInstance.layout === 'function') window.editorInstance.layout();
           } catch (e) {}
         }
       };
 
       async function autoInitTheme() {
+        if (window.__mcuInitialTheme !== null) return;
         if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_theme_mode === 'function') {
           try {
             const theme = await window.pywebview.api.get_theme_mode();
@@ -4839,6 +4969,7 @@
       }
 
       async function autoInitFontSize() {
+        if (window.__mcuInitialEditorFontSize !== null) return;
         if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_font_size === 'function') {
           try {
             const sz = await window.pywebview.api.get_font_size();
@@ -4852,10 +4983,17 @@
         autoInitFontSize();
       });
       document.addEventListener('DOMContentLoaded', () => {
-        registerCustomMonacoThemes();
-        setTimeout(() => { autoInitTheme(); autoInitFontSize(); }, 50);
-        setTimeout(() => { autoInitTheme(); autoInitFontSize(); }, 300);
+        window.setPerformanceMode(window.__mcuResourceConstrained);
+        autoInitTheme();
+        autoInitFontSize();
+        // Standalone/offline previews have no project transport to complete.
+        if (!window.pywebview?.api && (typeof qt === 'undefined' || !qt.webChannelTransport)) {
+          document.getElementById('editor-loading').hidden = true;
+        }
       });
+      // Register custom themes before the bundle's DOMContentLoaded constructor
+      // chooses its theme. This also paints the loading surface correctly.
+      window.setEditorTheme(window.__mcuInitialTheme || 'default');
     })();
   </script>
 </body>

@@ -632,6 +632,60 @@ class LauncherChecks(unittest.TestCase):
             self.assertEqual(launch.main([]), 0)
         gui.assert_called_once()
 
+    def test_available_application_update_refreshes_before_workspace_checks(self):
+        candidate = SimpleNamespace(branch="main", commit="a" * 40)
+        installed = SimpleNamespace(candidate=candidate, strategy="fixture", changed_files=3,
+                                    preserved_files=2)
+        events = []
+
+        def check(*_args, **_kwargs):
+            events.append("check")
+            return SimpleNamespace(status="available", candidate=candidate, detail="")
+
+        def apply(*_args, **_kwargs):
+            events.append("apply")
+            return installed
+
+        def restart(*_args, **_kwargs):
+            events.append("restart")
+            raise OSError("fixture cannot exec")
+
+        def runtime(_env):
+            events.append("runtime")
+            return None
+
+        def workspace(*_args, **_kwargs):
+            events.append("workspace")
+            return 0
+
+        with patch("src.modules.app_update.automatic_updates_enabled", return_value=True), \
+                patch("src.modules.app_update.check_for_update", side_effect=check) as update_check, \
+                patch("src.modules.app_update.apply_source_update", side_effect=apply) as update_apply, \
+                patch.object(launch.os, "execvpe", side_effect=restart) as reexec, \
+                patch.object(launch, "runtime_problem", side_effect=runtime), \
+                patch.object(launch, "launch_workspace", side_effect=workspace):
+            self.assertEqual(launch.main(["--project", "Sketch With Spaces"]), 0)
+
+        self.assertEqual(events, ["check", "apply", "restart", "runtime", "workspace"])
+        self.assertEqual(update_check.call_args.args[0], self.root)
+        self.assertEqual(update_apply.call_args.args[:2], (self.root, candidate))
+        self.assertTrue(callable(update_apply.call_args.kwargs["report"]))
+        self.assertEqual(reexec.call_args.args[0], "/bin/bash")
+        self.assertEqual(reexec.call_args.args[1], ["/bin/bash", str(self.root / "direct/ubuntu/run.sh"),
+                                                    "--resume-application-update",
+                                                    "--project", "Sketch With Spaces"])
+
+    def test_running_workspace_defers_source_update_until_all_windows_close(self):
+        with patch("src.modules.crash_detector.running_sessions", return_value=[{"pid": 1234}]) as sessions, \
+                patch("src.modules.app_update.automatic_updates_enabled", return_value=True), \
+                patch("src.modules.app_update.check_for_update", side_effect=AssertionError("Update checked")) as check, \
+                patch.object(launch, "runtime_problem", return_value=None), \
+                patch.object(launch, "launch_workspace", return_value=0) as gui:
+            self.assertEqual(launch.main([]), 0)
+        sessions.assert_called_once_with(self.root)
+        check.assert_not_called()
+        gui.assert_called_once()
+
     def test_runtime_with_only_scons_routes_to_native_board_bootstrap(self):
         python = self.root / ".venv-linux/bin/python"
         python.parent.mkdir(parents=True)

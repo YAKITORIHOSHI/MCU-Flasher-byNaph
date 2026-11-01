@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from main.web_bridge import MCUWebBackendAPI
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QObject, QUrl, Slot, Signal, QTimer, QEvent, Qt
+from PySide6.QtCore import QObject, QUrl, QUrlQuery, Slot, Signal, QTimer, QEvent, Qt
 # pyrefly: ignore [missing-import]
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEngineProfile
 # pyrefly: ignore [missing-import]
@@ -55,11 +55,12 @@ _WEBCHANNEL_INIT_JS = """
 
 
 def editor_page_background(theme_name: str) -> str:
-    """Match Monaco's reading surface during page startup and repaint."""
+    """Use the workspace reading surface during page startup and repaint."""
+    from main.core.theme import Theme
     name = (theme_name or "default").lower().strip().replace("-", "_")
     if name in ("solarized", "solarize_dark"):
         name = "solarized_dark"
-    return {"light": "#ffffff", "solarized_dark": "#002b36"}.get(name, "#1f272a")
+    return Theme.PALETTES.get(name, Theme.PALETTES["default"])["BG_DARKEST"]
 
 
 def _editor_workspace(panel):
@@ -94,6 +95,8 @@ class EditorBridgeAPI(QObject):
     cloud_project_files_ready = Signal(str, dict)
     _cloud_manifest_finished = Signal(str, dict)
     _syntax_finished = Signal(dict)
+    editor_storage_ready = Signal(str, str, dict)
+    _editor_storage_finished = Signal(str, str, str, dict)
 
     def __init__(self, backend: "MCUWebBackendAPI", parent: QObject | None = None):
         super().__init__(parent)
@@ -107,8 +110,11 @@ class EditorBridgeAPI(QObject):
         self._syntax_pending = None
         self._save_failure_count = 0
         self._cloud_manifest_running = False
+        self._editor_storage_running = False
+        self._editor_storage_pending = None
         self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
         self._cloud_manifest_finished.connect(self._finish_cloud_manifest, Qt.ConnectionType.QueuedConnection)
+        self._editor_storage_finished.connect(self._finish_editor_storage, Qt.ConnectionType.QueuedConnection)
 
     # ── Called FROM Monaco JS ─────────────────────────────────────────────
 
@@ -164,6 +170,73 @@ class EditorBridgeAPI(QObject):
         if self._backend:
             return self._backend.get_project_files()
         return []
+
+    @Slot(str, str, str, str, result=bool)
+    def request_editor_storage(self, renderer: str, request: str, operation: str, path: str = "") -> bool:
+        """Keep cold directory/source IO off Qt, with one active and one pending read."""
+        if (not renderer or renderer != self._renderer_token or not self._backend
+                or not request or len(request) > 160 or operation not in ("get_project_files", "read_file")):
+            return False
+        work = (renderer, request, operation, path, self._backend, str(self._backend.sketch_dir_path))
+        if self._editor_storage_running:
+            if self._editor_storage_pending is not None:
+                return False
+            self._editor_storage_pending = work
+        else:
+            self._start_editor_storage(work)
+        return True
+
+    def _start_editor_storage(self, work) -> None:
+        renderer, request, operation, path, backend, project = work
+        if renderer != self._renderer_token or str(backend.sketch_dir_path) != project:
+            self.editor_storage_ready.emit(renderer, request,
+                                           {"success": False, "error": "The source request is no longer current."})
+            return
+        self._editor_storage_running = True
+
+        def read():
+            result = {"success": False, "error": "The sketch changed while its source was loading."}
+            try:
+                if str(backend.sketch_dir_path) == project:
+                    if operation == "get_project_files":
+                        # The ordinary compatibility getter is best-effort and
+                        # conflates inaccessible storage with an empty sketch.
+                        # Reuse the strict read-only worker enumeration so a
+                        # partial/failed cold load cannot authorize a build.
+                        manifest = backend.get_cloud_project_files()
+                        if (not isinstance(manifest, dict) or manifest.get("success") is not True
+                                or not isinstance(manifest.get("files"), list)):
+                            raise OSError("The source folder could not be read. Reopen the project to try again.")
+                        value = manifest["files"]
+                    else:
+                        value = backend.read_file(path)
+                    if str(backend.sketch_dir_path) == project:
+                        result = {"success": True, "value": value}
+            except Exception as exc:
+                result = {"success": False, "error": str(exc)}
+            try:
+                self._editor_storage_finished.emit(renderer, request, project, result)
+            except RuntimeError:
+                pass  # An owned read may outlive a closed browser/workspace.
+
+        try:
+            threading.Thread(target=read, daemon=True, name="MCU_EditorStorage").start()
+        except Exception as exc:
+            self._editor_storage_finished.emit(renderer, request, project,
+                                               {"success": False, "error": str(exc)})
+
+    @Slot(str, str, str, dict)
+    def _finish_editor_storage(self, renderer: str, request: str, project: str, result: dict) -> None:
+        self._editor_storage_running = False
+        if (renderer != self._renderer_token or not self._backend
+                or str(self._backend.sketch_dir_path) != project):
+            result = {"success": False, "error": "The editor or sketch changed while its source was loading."}
+        pending, self._editor_storage_pending = self._editor_storage_pending, None
+        if pending is not None:
+            # Starting the reserved replacement before publishing this result
+            # keeps the worker bound intact even across a reentrant callback.
+            self._start_editor_storage(pending)
+        self.editor_storage_ready.emit(renderer, request, result)
 
     @Slot(str, result=bool)
     def request_cloud_project_files(self, token: str) -> bool:
@@ -768,7 +841,16 @@ class MonacoEditorPanel(QWidget):
         self._project_files_generation = 0
         if self._editor_html.exists():
             url = QUrl.fromLocalFile(str(self._editor_html.resolve()))
-            url.setQuery("renderer=" + self._bridge.begin_renderer_load())
+            query = QUrlQuery()
+            query.addQueryItem("renderer", self._bridge.begin_renderer_load())
+            # Seed the first paint and initial Monaco construction. Waiting for
+            # loadFinished repaints the wrong theme/font before the workspace
+            # can apply its preferences, especially on slower cold storage.
+            from main.core.config import get_theme_mode, get_editor_font_size
+            query.addQueryItem("theme", get_theme_mode())
+            query.addQueryItem("font", str(get_editor_font_size()))
+            query.addQueryItem("constrained", "1" if self._performance.constrained else "0")
+            url.setQuery(query)
             self._view.load(url)
         else:
             # Fallback: blank page with error message

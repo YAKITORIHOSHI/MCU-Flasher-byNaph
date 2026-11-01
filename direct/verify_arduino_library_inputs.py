@@ -35,8 +35,8 @@ class LibraryInputChecks(unittest.TestCase):
 
     def used_dependencies(self, paths):
         original = self.stream.side_effect
-        def stream(owner, command, environment, cwd, *, upload=False):
-            original(owner, command, environment, cwd, upload=upload)
+        def stream(owner, command, environment, cwd, *, upload=False, **kwargs):
+            original(owner, command, environment, cwd, upload=upload, **kwargs)
             if not upload:
                 build = Path(command[command.index("--build-path") + 1])
                 escaped = [str(path).replace("\\", "/").replace(" ", "\\ ") for path in paths]
@@ -107,6 +107,19 @@ class LibraryInputChecks(unittest.TestCase):
         self.used_dependencies([header])
         self.compile_then_upload(api)
         self.assertTrue(arduino_backend.run_arduino_operation(api, upload=True))
+        self.assertEqual([upload for _, upload in self.operations], [True])
+
+    def test_skip_rechecks_library_bytes_at_write_without_redundant_initial_pass(self):
+        api = self.api()
+        header = self.library()
+        self.used_dependencies([header])
+        self.compile_then_upload(api)
+        with patch.object(arduino_inputs, "sha256_file", wraps=arduino_inputs.sha256_file) as digest:
+            self.assertTrue(arduino_backend.run_arduino_operation(api, upload=True))
+        # One initial decision and one fresh write-boundary read, even on slow
+        # storage. Existing mutation fixtures prove that the second is required.
+        header_reads = [call for call in digest.call_args_list if Path(call.args[0]) == header]
+        self.assertEqual(len(header_reads), 2)
         self.assertEqual([upload for _, upload in self.operations], [True])
 
     def test_same_size_same_timestamp_header_change_rebuilds_cleanly(self):

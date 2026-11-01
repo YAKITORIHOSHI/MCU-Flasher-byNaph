@@ -190,9 +190,11 @@ def _safe_name(name) -> bool:
             and not _DEVICE_NAME.match(name) and Path(name).suffix.lower() in _OUTPUT_SUFFIXES)
 
 
-def _output_hashes(root: Path) -> dict:
+def _output_hashes(root: Path, environment: str = "mcu_env") -> dict:
+    if environment not in {"mcu_env", "mcu_flash"}:
+        raise ValueError("The compiled output environment is invalid")
     directory = root
-    for name in (".pio", "build", "mcu_env"):
+    for name in (".pio", "build", environment):
         directory /= name
         info = directory.lstat()
         if _linked(info) or not stat.S_ISDIR(info.st_mode):
@@ -244,7 +246,8 @@ def _identity(value, label: str, limit: int):
 
 
 def write_receipt(workspace: Path, *, board_key: str, board_name: str, source_hash: str,
-                  metadata: dict | None = None, build_inputs: dict | None = None) -> dict:
+                  metadata: dict | None = None, build_inputs: dict | None = None,
+                  environment: str = "mcu_env") -> dict:
     """Publish only after a successful build; failures leave no usable new receipt."""
     root = _workspace(workspace)
     inputs = input_signature(root)
@@ -254,7 +257,7 @@ def write_receipt(workspace: Path, *, board_key: str, board_name: str, source_ha
                "board_key": _identity(board_key, "board key", 512),
                "board": _identity(board_name, "board name", 1024),
                "source_hash": _identity(source_hash, "source hash", 4096),
-               **inputs, "files": _output_hashes(root),
+               **inputs, "environment": environment, "files": _output_hashes(root, environment),
                "metadata": {} if metadata is None else metadata}
     if not isinstance(receipt["metadata"], dict):
         raise ValueError("The compiled receipt metadata is invalid")
@@ -281,7 +284,8 @@ def read_receipt(workspace: Path) -> dict | None:
         return None
 
 
-def validate_receipt(workspace: Path, *, board_key: str, source_hash: str) -> tuple[bool, str]:
+def validate_receipt(workspace: Path, *, board_key: str, source_hash: str,
+                     environment: str = "mcu_env") -> tuple[bool, str]:
     """Recheck actual bytes before reuse, including on coarse-timestamp storage."""
     try:
         root = _workspace(workspace)
@@ -290,6 +294,8 @@ def validate_receipt(workspace: Path, *, board_key: str, source_hash: str) -> tu
             return False, "No valid successful-build receipt is available"
         if type(receipt.get("schema")) is not int or receipt["schema"] != 1:
             return False, "The compiled receipt version is unsupported"
+        if receipt.get("environment", "mcu_env") != environment:
+            return False, "The compiled build belongs to another environment"
         for key, expected, reason in (
                 ("host", host_namespace(), "The compiled build belongs to another host"),
                 ("board_key", board_key, "The compiled build belongs to another board"),
@@ -307,7 +313,7 @@ def validate_receipt(workspace: Path, *, board_key: str, source_hash: str) -> tu
         if any(not _safe_name(name) or not isinstance(digest, str) or not _DIGEST.fullmatch(digest)
                for name, digest in files.items()):
             return False, "The compiled receipt contains an invalid output entry"
-        if files != _output_hashes(root):
+        if files != _output_hashes(root, environment):
             return False, "The compiled firmware outputs changed since compilation"
         return True, "Verified compiled firmware is available"
     except (OSError, ValueError, UnicodeError, RecursionError) as exc:

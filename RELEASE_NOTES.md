@@ -6,10 +6,70 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** October 28, 2026<br>
+> **Notes Updated:** November 2, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
+
+## November 2 Source Update: Bootstrap GitHub Refresh
+
+On a normal standalone Windows or native Ubuntu launch, Bootstrap checks the canonical
+`YAKITORIHOSHI/MCU-Flasher-byNaph` `main` branch before it opens the workspace.
+When a newer commit is available, it stages a shallow Git clone, checks the
+origin and exact commit, then atomically refreshes application source files and
+restarts Bootstrap. Systems without Git use GitHub's immutable archive for that
+same verified commit. A failed or offline check is bounded and continues with
+the installed application. An existing workspace window defers the refresh until
+it closes, so source files are never replaced underneath a running editor.
+
+The refresh keeps settings, sketches, project caches, private runtimes,
+installers, catalog data, user instructions and active launchers in place. Git
+LFS installer payloads are not hydrated during the clone. It never updates a
+development working copy. Windows clears its warm-launch health record after a
+refresh; Ubuntu re-executes its native launcher and rechecks its private runtime.
+This is a source-update path, not a replacement for a tested package release.
+
+## October 31 Source Update: Editor Loading and Build Reuse
+
+The editor page, reading area and gutter now use the active native theme's
+background, with matching source tabs and scrollbars. Light syntax colors retain
+their roles with small contrast adjustments for the new surface. Saved fonts,
+theme and resource settings arrive before Monaco construction. A quiet static
+loading state replaces late restyling. One initial project manifest serves model
+loading and path mapping, reducing repeated disk scans on slower storage.
+Listing and source reads run off the UI thread with bounded requests, stale-page
+rejection and explicit failures for inaccessible source folders.
+
+Compile/Upload now wait for initial source loading and recovered buffers before
+the editor acknowledges Save. A no-project launch keeps the project selector;
+Ghost Sketch no longer participates in automatic Return-key default activation.
+Compile/Upload stay disabled while an earlier operation's cleanup thread is
+still alive, show a finishing explanation, and refresh once it exits. This
+matches the backend reservation boundary instead of allowing a click that the
+backend must silently refuse.
+
+Verified uploads use PlatformIO's `nobuild` target to avoid compiling again after
+the build step. Redundant intermediate source/library/firmware checks are removed;
+final actual-byte checks remain. Arduino CLI also shares its initial dependency
+validation rather than hashing selected libraries twice for the same decision.
+Changed sketch code still compiles, preserving unchanged framework/library
+objects. Dependency/configuration changes and invalid receipts continue to
+invalidate reuse, including equal-size edits with unchanged timestamps.
+
+Hard/Soft Reset builds now share dedicated application storage partitioned by
+native host, exact board and framework, with template and firmware receipts.
+AVR Hard Reset uses this dedicated workspace. Unchanged templates are not
+rewritten; project switching and project Clean retain shared reset builds.
+The first reset for a new qualified allocation still needs a build.
+
+Local verification uses isolated hardware-free fixtures on Ubuntu 26.04 AMD64.
+The 12-file startup fixture reduces directory scans from 14 to one, theme/font
+requests from four to zero, and tracked layout passes from four to one while
+retaining every model. A complete cached ESP Upload reduces full byte checks
+from six passes to two: the initial candidate and final write-boundary check.
+Reduced startup work does not establish a cold-load time on a physical lower-end
+device. Windows, ARM64 and physical upload/reset behavior require native checks.
+Existing public ZIPs must be rebuilt before these source changes are included.
 
 ## October 28 Source Update: Action Toolbar and Ghost Sketch
 

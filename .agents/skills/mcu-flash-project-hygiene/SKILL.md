@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher's generated metadata, protected caches, temporary Ghost Sketch ownership and saves, package publication, Fresh cleanup and public release integrity on Windows and Ubuntu. Use for file-utility, cleanup, packaging or publication-preparation changes; preserve user sketches, settings and recovery journals."
+description: "Maintain MCU Flasher's generated metadata, protected caches, independent shared reset storage, temporary Ghost Sketch ownership and saves, package publication, Fresh cleanup and public release integrity on Windows and Ubuntu. Preserve user sketches, settings and recovery journals."
 ---
 
 # MCU Flasher Project Hygiene
@@ -157,8 +157,10 @@ Classify paths before changing attributes or deleting anything:
   and are cleanly registered for manual Clean operations.
 - Preserve incremental objects after ordinary source or linker failures. Repair
   only the selected board workspace after explicit cache-corruption evidence.
-- Manual Clean may remove generated configuration, metadata, compiled caches,
-  and reset caches only after the user confirms the rebuild cost.
+- Project Clean removes only that sketch's generated build material after
+  confirmation. Preserve app-owned shared Hard/Soft Reset builds across project
+  switches and project Clean. Partition reset storage by native host, exact board
+  and framework; validate template/configuration and firmware bytes before reuse.
 - Patch `SCRIPT_DIR`, temp-path helpers, and deletion helpers in tests so a test
   cannot remove live caches.
 
@@ -279,6 +281,17 @@ subdirectories, not the project root:
 
 When moving files into new subdirectories, always update all dependent imports,
 path references, and fallback logic in the same operation.
+
+Bootstrap source updates stage their clone/rollback material and commit record
+in per-user state, outside the application installation. They may replace only
+verified tracked application source files. Preserve `src/dbs` settings, user
+instructions, project/build caches, private runtimes, installers, catalog data
+and active launchers. A source checkout is managed by Git and must be skipped.
+Defer source replacement while any workspace is live. Do not treat a source
+refresh as a packaged release: it cannot replace the verified Windows runtime
+or establish release qualification. Keep Git LFS installer objects unhydrated
+and use `direct/verify_app_update.py` and `direct/verify_ubuntu_launcher.py`
+with disposable fixtures for source-update changes.
 
 ## Git repository hygiene
 

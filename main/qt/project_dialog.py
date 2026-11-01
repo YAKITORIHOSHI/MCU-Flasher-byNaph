@@ -395,6 +395,11 @@ class ProjectDialog(QDialog):
         ghost_actions = QHBoxLayout()
         self._btn_ghost_sketch = self._action("Ghost Sketch", "secondary", self._create_ghost_sketch, self)
         self._btn_ghost_sketch.setObjectName("btn-ghost-sketch")
+        # Temporary projects require an explicit activation. Qt must never
+        # promote this persistent footer action to a dialog-wide Return default
+        # while the selected page's actions are hidden or disabled.
+        self._btn_ghost_sketch.setAutoDefault(False)
+        self._btn_ghost_sketch.setDefault(False)
         self._btn_ghost_sketch.setToolTip(
             "Start a temporary sketch. Compile and upload now; choose its permanent folder when saving.")
         ghost_actions.addWidget(self._btn_ghost_sketch)

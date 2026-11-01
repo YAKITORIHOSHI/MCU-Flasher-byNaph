@@ -9499,6 +9499,126 @@ def _explicit_setup_requested() -> bool:
     return (SCRIPT_DIR / ".force_rebuild").exists()
 
 
+def _available_application_update():
+    """Check the canonical GitHub source branch before a normal launch.
+
+    This is independent from component/package update checks below.  The
+    request has a short finite timeout so an offline launch remains responsive;
+    an available revision is staged only after this function returns it.
+    """
+    if "--resume-application-update" in sys.argv:
+        return None
+    try:
+        from src.modules import app_update
+        config = load_bootstrap_config()
+        if not app_update.automatic_updates_enabled(config):
+            _record_bootstrap_log("UPDATE", "Automatic application updates are disabled by policy.")
+            return None
+        checked = app_update.check_for_update(
+            SCRIPT_DIR, config=config, timeout=1.5,
+        )
+        if checked.status == "available":
+            _record_bootstrap_log(
+                "UPDATE",
+                f"GitHub source update available: {checked.candidate.branch}@{checked.candidate.commit[:12]}",
+            )
+            return checked.candidate
+        if checked.status == "current" and checked.candidate is not None:
+            _record_bootstrap_log(
+                "UPDATE",
+                f"GitHub source is current at {checked.candidate.branch}@{checked.candidate.commit[:12]}.",
+            )
+        if checked.status == "unavailable":
+            _record_bootstrap_log("UPDATE", f"Application update check unavailable: {checked.detail}")
+        elif checked.status == "skipped":
+            _record_bootstrap_log("UPDATE", f"Application update check skipped: {checked.detail}")
+    except Exception as exc:
+        _record_bootstrap_log("UPDATE", f"Application update check failed safely: {exc}")
+    return None
+
+
+def _install_application_update(candidate) -> bool:
+    """Show a bounded Bootstrap stage while verified GitHub source is staged."""
+    global _gui
+    import threading
+    from src.modules import app_update
+
+    gui = BootstrapGUI()
+    _gui = gui
+    outcome: dict[str, object] = {"installed": False}
+    completed = threading.Event()
+
+    def post(callback):
+        try:
+            gui.root.after(0, callback)
+        except Exception:
+            # The durable log still records the outcome if a setup view cannot
+            # remain open. The worker never needs to call a widget directly.
+            _record_bootstrap_log("UPDATE", "Bootstrap update view is no longer available.")
+
+    def report(message: str):
+        post(lambda message=message: gui.log_status(message))
+
+    def worker():
+        post(lambda: gui.log_banner())
+        post(lambda: gui.log_section("Installing application update"))
+        post(lambda: gui.log_status("Checking the GitHub source revision before changing this installation…"))
+        try:
+            try:
+                installed = app_update.apply_source_update(SCRIPT_DIR, candidate, report=report)
+                outcome["installed"] = True
+                outcome["result"] = installed
+                _record_bootstrap_log(
+                    "UPDATE",
+                    f"Installed GitHub source {installed.candidate.branch}@{installed.candidate.commit[:12]} "
+                    f"with {installed.strategy}; changed {installed.changed_files} application files and "
+                    f"preserved {installed.preserved_files} protected source paths.",
+                )
+                post(lambda: gui.log_ok("Verified GitHub source update installed. Restarting MCU Flasher…"))
+                post(lambda: gui.stop_spinner("Restarting…", ok=True))
+                post(lambda: gui.close_after_delay(0.25))
+            except Exception as exc:
+                outcome["error"] = str(exc)
+                _record_bootstrap_log("UPDATE", f"Application update failed safely: {exc}")
+                post(lambda exc=exc: gui.log_warn(f"Application update was not installed: {exc}"))
+                post(lambda: gui.stop_spinner("Continuing with the installed application", ok=True))
+                post(lambda: gui.close_after_delay(1.25))
+        finally:
+            completed.set()
+
+    thread = threading.Thread(target=worker, name="MCUApplicationUpdate", daemon=True)
+    thread.start()
+    gui.mainloop_until_done()
+    # Do not let an unexpected view close race the GUI launch against an
+    # update worker that is still replacing application files.
+    if not completed.is_set():
+        _record_bootstrap_log("UPDATE", "Waiting for the owned source update worker to finish safely.")
+        completed.wait()
+    _gui = None
+    return bool(outcome.get("installed"))
+
+
+def _restart_after_application_update() -> None:
+    """Exec the newly written Bootstrap source without a second launcher race."""
+    retained = [str(arg) for arg in sys.argv[1:] if arg != "--resume-application-update"]
+    try:
+        # A source update can alter dependencies outside the inexpensive
+        # warm-launch fingerprint, so the restarted Bootstrap must recheck.
+        STARTUP_HEALTH_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        _record_bootstrap_log("UPDATE", f"Could not clear warm-launch health after source update: {exc}")
+    command = [str(sys.executable), "-B", str(SCRIPT_DIR / "src" / "modules" / "bootstrap.py"),
+               "--resume-application-update", *retained]
+    _record_bootstrap_log("UPDATE", "Restarting Bootstrap after a verified application update.")
+    try:
+        os.execv(command[0], command)
+    except OSError as exc:
+        # The verified files remain installed. Fall through to the normal
+        # launcher instead of abandoning a working application because the
+        # current interpreter could not re-exec itself.
+        _record_bootstrap_log("UPDATE", f"Could not restart Bootstrap after the source update: {exc}")
+
+
 def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
     """
     Launch MCU Flasher.exe (if exists) or mcu_flash_gui.py as a detached process.
@@ -11120,6 +11240,14 @@ def main():
     if _try_running_instance_launch():
         _record_bootstrap_log("FINISH", "Existing main GUI detected; spawning new window directly.")
         return
+
+    # A normal standalone launch checks the canonical GitHub source branch
+    # before the fast path. A successful refresh replaces only application
+    # source files, then execs this updated Bootstrap exactly once. A failed
+    # or offline check stays non-fatal and falls through to the installed app.
+    candidate = _available_application_update()
+    if candidate is not None and _install_application_update(candidate):
+        _restart_after_application_update()
 
     # Fast path: on subsequent launches where the previous run was healthy,
     # jump straight into the main GUI / Project Selector without showing Bootstrap.

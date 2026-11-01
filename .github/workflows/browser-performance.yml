@@ -43,6 +43,7 @@ on:
       - direct/verify_ai_line_diff.py
       - direct/verify_editor_review_ui.py
       - direct/verify_editor_c.py
+      - direct/verify_editor_startup.py
   pull_request:
     paths:
       - .github/workflows/browser-performance.yml
@@ -85,6 +86,7 @@ on:
       - direct/verify_ai_line_diff.py
       - direct/verify_editor_review_ui.py
       - direct/verify_editor_c.py
+      - direct/verify_editor_startup.py
   workflow_dispatch:
     inputs:
       windows_only:
@@ -190,6 +192,9 @@ jobs:
           Invoke-BrowserCheck 'ai-line-diff.log' @('direct/verify_ai_line_diff.py')
           Invoke-BrowserCheck 'ai-diff-colors.log' @('direct/verify_ai_diff_colors.py')
           Invoke-BrowserCheck 'editor-c.log' @('direct/verify_editor_c.py')
+          foreach ($theme in 'default', 'light', 'solarized_dark') {
+            Invoke-BrowserCheck "editor-startup-$theme.log" @('direct/verify_editor_startup.py', '--theme', $theme, '--report', "$env:BROWSER_AUDIT_DIR/editor-startup-$theme.json")
+          }
       - name: Windows portable launcher and archive contracts
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         shell: pwsh
@@ -228,6 +233,9 @@ jobs:
             run_check ai-line-diff.log direct/verify_ai_line_diff.py
             run_check ai-diff-colors.log direct/verify_ai_diff_colors.py
             run_check editor-c.log direct/verify_editor_c.py
+            for theme in default light solarized_dark; do
+              run_check "editor-startup-$theme.log" direct/verify_editor_startup.py --theme "$theme" --report "$BROWSER_AUDIT_DIR/editor-startup-$theme.json"
+            done
           '
       - name: Offscreen Qt resource and marquee regressions
         if: ${{ !cancelled() }}

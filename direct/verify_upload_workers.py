@@ -191,6 +191,7 @@ class UploadWorkerChecks(unittest.TestCase):
         cache.mkdir(exist_ok=True)
         (cache / "platformio.ini").write_text("; isolated upload fixture\n", encoding="utf-8")
         b._board_workspace_dir = Mock(return_value=cache)
+        b._board_build_dir = Mock(return_value=cache / ".pio/build/mcu_env")
         b._generate_platformio_ini = Mock(side_effect=AssertionError("No metadata generation"))
         bins = dict(self.bins, platform="espressif32", upload_speed=b.upload_speed,
                     bootloader_addr="0x0", board_name=b.current_board)

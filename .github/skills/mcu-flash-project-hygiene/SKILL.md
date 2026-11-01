@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: Audit and improve Windows MCU Flasher project hygiene, including generated-file visibility, Windows hidden attributes, safe writable metadata, PlatformIO board caches, Clean targets, and protection of user sketch files. Use for changes involving hide_internal_project_metadata, hide_hidden_attribute, hide_generated_directory, ensure_file_writable, generated project files, or cache cleanup in main/core/file_utils.py or main/mcu_flash_gui.py.
+description: Audit and improve MCU Flasher project hygiene, including generated-file visibility, safe writable metadata, native board caches, independent shared reset storage, project Clean targets and protection of user sketch files.
 ---
 
 # MCU Flasher Project Hygiene
@@ -30,6 +30,12 @@ Classify paths before changing attributes or deleting anything:
 - Never recursively apply hidden, system, or read-only attributes to children.
   Hiding a generated directory is enough and keeps its cache files writable.
 
+Bootstrap source refreshes keep their clone/rollback files in per-user state
+and preserve settings, sketches, caches, runtimes, installers, catalog data,
+user instructions and active launchers. Defer refresh while a workspace is
+live. Never auto-refresh a Git working copy or treat a GitHub source refresh as
+a packaged Windows release.
+
 ## Use the Windows attribute helpers deliberately
 
 - Use `hide_generated_directory(path)` for generated directories. It applies
@@ -55,8 +61,10 @@ Classify paths before changing attributes or deleting anything:
   and are cleanly registered for manual Clean operations.
 - Preserve incremental objects after ordinary source or linker failures. Repair
   only the selected board workspace after explicit cache-corruption evidence.
-- Manual Clean may remove generated configuration, metadata, compiled caches,
-  and reset caches only after the user confirms the rebuild cost.
+- Manual Clean may remove generated configuration, metadata and sketch compiled caches
+  only after the user confirms the rebuild cost. Preserve shared native-host,
+  exact-board/framework reset builds across sketch switches and project Clean;
+  their bounded template and output receipts govern reuse.
 - Patch `SCRIPT_DIR`, temp-path helpers, and deletion helpers in tests so a test
   cannot remove live caches.
 

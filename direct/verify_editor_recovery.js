@@ -134,7 +134,7 @@ function page(native, token, {delay, mapDelay, missing = false, mismatched = fal
     },
   };
   const context = vm.createContext({window, URLSearchParams, console,
-    document: {querySelector: () => active,
+    document: {querySelector: () => active, getElementById: () => null,
       querySelectorAll: () => Array.from(models.keys(), file => ({
         _filePath: pathsMapped && !unmappedPaths.includes(file) ? file : undefined,
         querySelector: () => ({textContent: path.basename(file)}), setAttribute() {}}))},

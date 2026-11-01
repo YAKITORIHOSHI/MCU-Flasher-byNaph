@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Developer and troubleshooting guide for the Windows MCU Flash GUI (mcu_flash_gui.py, launcher.py, dedicated_AI.py). Use when modifying, debugging, or enhancing the PySide6 Qt flasher interface, serial monitor, Arduino CLI or PlatformIO pipelines, board caches, or Windows launchers."
+description: "Developer and troubleshooting guide for MCU Flasher's PySide6 editor loading/themes, selector and action readiness, incremental Compile/Upload, shared exact-board reset caches, serial monitor and host launchers."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -9,6 +9,20 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 
 The canonical current application guidance is
 [`.agents/skills/mcu-flash-gui-dev/SKILL.md`](../../../.agents/skills/mcu-flash-gui-dev/SKILL.md).
+Initialize Monaco with native theme/font/resource options and share one initial
+source manifest. Compile/Upload wait for completed model loading, recovery and
+acknowledged saves. Keep Ghost Sketch explicit in the startup selector. Preserve
+incremental sketch objects and final actual-byte upload checks; use `nobuild`
+only for verified images. Hard/Soft Reset share host/board/framework storage
+independent of sketch projects and project Clean. Verify with owned fixtures.
+Bootstrap source refreshes check the canonical GitHub `main` branch before a
+standalone Windows or native Ubuntu launch, stage and verify a shallow
+exact-commit clone under per-user state, preserve local user/runtime/installer
+data and defer while a workspace is active. Windows invalidates warm-launch
+health before restart; Ubuntu re-execs its launcher with a one-shot resume
+marker. Git working copies are skipped; an immutable GitHub archive is only the
+fallback when Git is unavailable. Use `direct/verify_app_update.py` and
+`direct/verify_ubuntu_launcher.py` for isolated updater coverage.
 Native Ubuntu requires 24.04 or newer, validated from installed OS-release
 information before runtime preparation, installation, repair or services. Missing
 or malformed data fails explicitly; rejection preserves all user resources.

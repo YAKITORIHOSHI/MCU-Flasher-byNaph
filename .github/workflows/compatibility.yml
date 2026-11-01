@@ -268,6 +268,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_ubuntu_arm_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_release.py
           .venv-linux/bin/python -B direct/verify_ubuntu_launcher.py
+          .venv-linux/bin/python -B direct/verify_app_update.py
           .venv-linux/bin/python -B direct/verify_bootstrap_cold_cache.py
           .venv-linux/bin/python -B direct/verify_ubuntu_bootstrap.py
           .venv-linux/bin/python -B direct/verify_ubuntu_system_setup.py
@@ -306,6 +307,9 @@ jobs:
         run: |
           .venv-linux/bin/python -B direct/verify_application_guard.py
           .venv-linux/bin/python -B direct/verify_actions.py
+          .venv-linux/bin/python -B direct/verify_board_build_cache.py
+          .venv-linux/bin/python -B direct/verify_reset_build_cache.py
+          .venv-linux/bin/python -B direct/verify_arduino_library_inputs.py
           .venv-linux/bin/python -B direct/verify_cursor.py
           .venv-linux/bin/python -B direct/verify_preferences.py
           .venv-linux/bin/python -B direct/verify_storage_resources.py
@@ -327,6 +331,11 @@ jobs:
         run: |
           node direct/verify_editor_preferences.js
           node direct/verify_editor_recovery.js
+          node direct/verify_editor_resources.js
+          node direct/verify_editor_layout_scheduling.js
+          node direct/verify_editor_save_readiness.js
+          node direct/verify_editor_transport.js
+          .venv-linux/bin/python -B direct/verify_editor_storage.py
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_editor_review_ui.py --render-dir temp/audit/compatibility/editor-review
           xvfb-run -a env QT_QPA_PLATFORM=xcb QT_DEBUG_PLUGINS=1 .venv-linux/bin/python -B direct/verify_runtime.py --render-dir temp/audit/compatibility --no-finalize
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_terminal_scroll.py --render-dir temp/audit/compatibility/terminal-scroll
@@ -418,6 +427,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_bootstrap_package_recovery.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & env/Scripts/python.exe -B direct/verify_app_update.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_target_resolution.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_board_families.py
@@ -430,7 +441,7 @@ jobs:
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader') {
+          foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_board_build_cache', 'verify_reset_build_cache', 'verify_arduino_library_inputs', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader') {
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -471,6 +482,12 @@ jobs:
           node direct/verify_editor_preferences.js
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node direct/verify_editor_recovery.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($check in 'verify_editor_resources', 'verify_editor_layout_scheduling', 'verify_editor_save_readiness', 'verify_editor_transport') {
+            node "direct/$check.js"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & env/Scripts/python.exe -B direct/verify_editor_storage.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & env/Scripts/python.exe -B direct/verify_runtime.py --render-dir temp/audit/compatibility --no-finalize
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

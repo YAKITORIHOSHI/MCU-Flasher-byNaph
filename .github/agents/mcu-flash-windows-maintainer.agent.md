@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-windows-maintainer
-description: "Windows MCU Flasher maintainer for board-isolated incremental builds, compile/upload/reset flows, generated-project hygiene, and safe low-end-device optimizations."
+description: "Windows MCU Flasher maintainer for theme-matched cold editor loading, selector/action readiness, board-isolated incremental builds, shared reset reuse, generated-project hygiene and safe low-end-device optimizations."
 tools: [read, edit, search, execute]
 ---
 
@@ -16,15 +16,17 @@ Ground every conclusion in the current source and preserve user projects and har
 - Keep native action-toolbar insets symmetric and its bottom divider clear of buttons through resize, theme and short-window transitions. Verify real QMainWindow containers and preserve button sizes and action callbacks.
 - Move the same primary action row and shortcuts with the detached editor and restore them above Controls. Keep board/port Controls in the main window and callbacks/busy state bound to the original workspace.
 - Preserve Ghost Sketch's marked temporary ownership. Compile/Upload flush temporary inputs; Save/Ctrl+S/Save All chooses an empty permanent folder, locks editing through acknowledged source copy/model remap and preserves undo/tab state. Keep autosave off until permanent save and offer Save/Discard/Cancel on close/switch even after a clean compile. Use hardware-free fixtures; do not infer a native Windows or hardware pass from other hosts.
+- Keep no-project startup in the selector and require deliberate Ghost activation. Initialize editor theme/font/resource options before Monaco and share its initial manifest; await model loading/recovery before save acknowledgement and keep failure/timeout retryable.
+- Bootstrap source refreshes use the canonical GitHub `main` branch before a standalone fast launch. Stage and verify an exact-commit clone under per-user state, preserve user/runtime/installer data and defer while any workspace is active. Windows invalidates warm-launch health before restart; native Ubuntu re-execs its launcher with a one-shot resume marker. Skip Git working copies; use GitHub's immutable archive only if Git is unavailable. Verify with `direct/verify_app_update.py` and `direct/verify_ubuntu_launcher.py` fixtures.
 
 ## Project Model
 
 - `MCUUploadGUI` owns compile, upload, serial monitor, Hard Reset, Soft Reset, Clean, board selection, and project lifecycle behavior.
 - `src/modules/bootstrap.py` manages private Python runtime auto-heal (`_heal_private_python_runtime()`), virtual environments (`env`), PlatformIO toolchains, Arduino CLI, Node.js LTS, and OpenCode AI Assistant.
 - PlatformIO frameworks and toolchains are shared, but each exact board keeps a canonical project-local workspace under `.mcu_flasher_build_cache/boards/<board-key>/`.
-- Hard and Soft Reset reuse the same exact-board reset project. Switching A → B → A must return to A's existing incremental objects and binaries.
+- Hard and Soft Reset reuse the same native-host, exact-board/framework reset project independent of sketch allocation. Switching projects or A → B → A returns to the existing verified reset build.
 - Ordinary compiler/linker failures preserve incremental state. Only explicit cache-corruption evidence may trigger one selected-board-only repair.
-- Manual Clean is intentionally broader and must warn that all sketch build and reset caches will be removed and may require first-time rebuilds.
+- Project Clean removes that sketch's build material after confirmation and preserves shared reset builds. Upload avoids a second build only after final actual-byte validation; do not carry candidate checks across operations.
 
 ## Generated-File Visibility Contract
 

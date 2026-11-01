@@ -436,6 +436,79 @@ class ControlChecks(unittest.TestCase):
         bus.board_selected.emit({"board_name": ""})
         self.assertFalse(toolbar.btn_compile.isEnabled())
 
+    def test_idle_cannot_enable_actions_before_the_operation_thread_finishes(self):
+        from main.qt.signals import MCUSignals
+        bus = MCUSignals()
+        window = self.own(QMainWindow())
+        window._editor_panel = SimpleNamespace(trigger_save_all=Mock())
+        toolbar = PrimaryToolbar(self.backend, window)
+        window.addToolBar(toolbar)
+        toolbar.connect_signals(bus)
+        self.backend.current_board, self.backend.current_port = "Demo", "COM99"
+        alive = [True]
+        self.backend._operation_worker = SimpleNamespace(is_alive=lambda: alive[0])
+        self.backend.is_busy, self.backend.active_operation = True, "compile"
+        self.backend._current_op_phase = "compiling"
+        bus.operation_phase.emit({"phase": "compile", "is_busy": True, "op": "compile"})
+        # A delayed idle payload must not override the actual reservation.
+        bus.operation_phase.emit({"phase": "idle", "is_busy": False})
+        self.assertFalse(toolbar.btn_compile.isEnabled())
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.assertFalse(toolbar._action_state_timer.isActive())
+        self.backend.is_busy = False
+        self.backend.active_operation = self.backend._current_op_phase = None
+        bus.operation_phase.emit({"phase": "idle", "is_busy": False})
+        self.assertFalse(toolbar.btn_compile.isEnabled())
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.assertIn("Finishing the previous action", toolbar.btn_compile.toolTip())
+        self.assertTrue(toolbar._action_state_timer.isActive())
+        toolbar._do_compile()
+        window._editor_panel.trigger_save_all.assert_not_called()
+        alive[0] = False
+        deadline = time.monotonic() + 1
+        while not toolbar.btn_compile.isEnabled() and time.monotonic() < deadline:
+            APP.processEvents()
+            time.sleep(.005)
+        self.assertTrue(toolbar.btn_compile.isEnabled())
+        self.assertTrue(toolbar.btn_upload.isEnabled())
+        self.assertFalse(toolbar._action_state_timer.isActive())
+        toolbar._do_compile()
+        window._editor_panel.trigger_save_all.call_args.kwargs["callback"]()
+        self.backend.compile_sketch.assert_called_once()
+
+    def test_failed_or_timed_out_save_allows_a_fresh_build_request(self):
+        from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout):
+                self.backend.compile_sketch.reset_mock()
+                window = self.own(QMainWindow())
+                panel = QWidget(window)
+                panel._bridge = EditorBridgeAPI(self.backend, panel)
+                panel._backend, panel._view = self.backend, Mock()
+                panel.trigger_save_all = lambda **kw: MonacoEditorPanel.trigger_save_all(panel, **kw)
+                window._editor_panel = panel
+                toolbar = PrimaryToolbar(self.backend, window)
+                window.addToolBar(toolbar)
+                self.backend.current_board, self.backend.current_port = "Demo", "COM99"
+                with patch("main.qt.editor_panel.QTimer.singleShot") as timer:
+                    toolbar._do_compile()
+                    token = panel._save_pending
+                    if timeout:
+                        timer.call_args.args[2]()
+                    else:
+                        panel._bridge.finish_save_request(token, False)
+                    self.assertIsNone(panel._save_pending)
+                    self.backend.compile_sketch.assert_not_called()
+                    toolbar._update_action_button_states()
+                    self.assertTrue(toolbar.btn_compile.isEnabled())
+                    self.assertTrue(toolbar.btn_upload.isEnabled())
+                    # Late acknowledgement cannot launch the failed request.
+                    panel._bridge.finish_save_request(token, True)
+                    self.backend.compile_sketch.assert_not_called()
+                    toolbar._do_compile()
+                    panel._bridge.finish_save_request(panel._save_pending, True)
+                    self.backend.compile_sketch.assert_called_once()
+
     def test_build_rechecks_selection_and_busy_state_after_editor_save(self):
         window = self.own(QMainWindow())
         window._editor_panel = SimpleNamespace(trigger_save_all=Mock())

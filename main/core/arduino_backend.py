@@ -97,20 +97,26 @@ def _stage_sources(api, staging):
     return staged_sources, staged_bytes
 
 
-def _receipt_matches(path, source_hash, fqbn, build, inputs, *, inputs_only=False):
+def _matching_input_receipt(path, fqbn, inputs):
+    """Read and validate dependency bytes once for this operation's decision."""
     try:
         if path.stat().st_size > 16 * 1024 * 1024:
-            return False
+            return None
         receipt = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(receipt, dict):
-            return False
-        files = receipt.get("files")
+            return None
         if receipt.get("fqbn") != fqbn:
-            return False
+            return None
         if not arduino_inputs.matches(receipt.get("inputs"), inputs):
-            return False
-        if inputs_only:
-            return True
+            return None
+        return receipt
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _receipt_outputs_match(receipt, source_hash, build):
+    try:
+        files = receipt.get("files")
         if receipt.get("source_hash") != source_hash or not isinstance(files, dict) or not files or len(files) > 128:
             return False
         for name, digest in files.items():
@@ -119,6 +125,11 @@ def _receipt_matches(path, source_hash, fqbn, build, inputs, *, inputs_only=Fals
         return True
     except (OSError, ValueError, TypeError):
         return False
+
+
+def _receipt_matches(path, source_hash, fqbn, build, inputs, *, inputs_only=False):
+    receipt = _matching_input_receipt(path, fqbn, inputs)
+    return receipt is not None and (inputs_only or _receipt_outputs_match(receipt, source_hash, build))
 
 
 def _workspace(api, board, info, fqbn):
@@ -175,9 +186,13 @@ def run_arduino_operation(api, *, upload=False):
         receipt = workspace / "build-receipt.json"
         collections, library_flags = arduino_inputs.library_collections(command, info)
         inputs = arduino_inputs.snapshot(collections, byte_hashes=False)
-        previous_inputs_valid = _receipt_matches(receipt, source_hash, fqbn, build, inputs, inputs_only=True)
-        previous_valid = _receipt_matches(receipt, source_hash, fqbn, build, inputs)
-        can_skip = bool(upload and getattr(api, "_active_skip_compile", False) and previous_valid)
+        previous = _matching_input_receipt(receipt, fqbn, inputs)
+        previous_inputs_valid = previous is not None
+        # Ordinary Compile rebuilds final images, so reading their old bytes is
+        # wasted work. Upload reuses this dependency check only for its initial
+        # decision; the write boundary below always verifies fresh input bytes.
+        can_skip = bool(upload and getattr(api, "_active_skip_compile", False)
+                        and previous_inputs_valid and _receipt_outputs_match(previous, source_hash, build))
         if not can_skip:
             external_inputs = arduino_inputs.previous_dependency_bytes(receipt, collections)
             receipt.unlink(missing_ok=True)

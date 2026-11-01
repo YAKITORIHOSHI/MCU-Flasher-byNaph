@@ -273,10 +273,18 @@ class PrimaryToolbar(QToolBar):
         self._logo_click_timer.setSingleShot(True)
         self._logo_click_timer.timeout.connect(self._on_logo_click_timeout)
         self._owner_dialog: QWidget | None = None
+        self._in_reflow = False
         self._reflow_timer = QTimer(self)
         self._reflow_timer.setSingleShot(True)
         self._reflow_timer.timeout.connect(lambda: self.set_responsive_width(self.width()))
-        self._in_reflow = False
+        # An idle phase can arrive before the operation thread has finished
+        # unmapping storage or restoring its serial session. The backend keeps
+        # rejecting builds until that thread exits; reflect that same boundary
+        # and recheck only while this short completion tail is still active.
+        self._action_state_timer = QTimer(self)
+        self._action_state_timer.setSingleShot(True)
+        self._action_state_timer.setInterval(100)
+        self._action_state_timer.timeout.connect(self._update_action_button_states)
         self._setup_widgets()
 
     def _workspace(self):
@@ -538,10 +546,8 @@ class PrimaryToolbar(QToolBar):
             "Clear All Board Build Caches?",
             "Clean will remove generated project configuration and ALL cached "
             "builds for every board used with this sketch.\n\n"
-            "The app-wide Hard/Soft Reset board caches shared by all sketches "
-            "and windows will also be cleared. "
-            "The next Compile, Upload, Hard "
-            "Reset, or Soft Reset for those boards may need a first-time rebuild.\n\n"
+            "The next Compile or Upload for those boards may need a first-time rebuild. "
+            "Dedicated Hard/Soft Reset board caches are preserved.\n\n"
             "Your .ino/.cpp/.c/.h source files, other user files, and shared "
             "PlatformIO frameworks/toolchains will NOT be removed.\n\n"
             "Continue with Clean?",
@@ -564,12 +570,18 @@ class PrimaryToolbar(QToolBar):
                               or getattr(self._backend, "active_operation", None) is not None
                               or getattr(self._backend, "_current_op_phase", None) is not None):
             return True
+        if self._operation_worker_alive():
+            return True
         mw = self._workspace()
         if mw and (getattr(mw, "_active_operation", None) is not None
                    or getattr(mw, "_ghost_save_in_progress", False) is True
                    or getattr(getattr(mw, "_ghost_sketch", None), "needs_recovery", False) is True):
             return True
         return False
+
+    def _operation_worker_alive(self) -> bool:
+        worker = getattr(self._backend, "_operation_worker", None) if self._backend else None
+        return bool(worker is not None and worker.is_alive())
 
     def _do_modify(self) -> None:
         if self._is_busy():
@@ -850,7 +862,26 @@ class PrimaryToolbar(QToolBar):
     def _update_action_button_states(self) -> None:
         """Serial uploads require a port; verified native programmers use USB."""
         if self._is_busy():
-            return  # operation state machine owns buttons right now
+            # Selection updates and a stale idle event cannot make a running
+            # operation clickable. Conversely, a live thread finishing after
+            # idle needs one scheduled refresh once it really exits.
+            finishing = bool(self._operation_worker_alive() and not (
+                self._backend.is_busy
+                or getattr(self._backend, "active_operation", None) is not None
+                or getattr(self._backend, "_current_op_phase", None) is not None))
+            reason = ("Finishing the previous action. Compile and upload will be ready shortly."
+                      if finishing else "Wait for the current action to finish.")
+            for button in (self.btn_compile, self.btn_upload):
+                button.setEnabled(False)
+                button.setCursor(Qt.CursorShape.ArrowCursor)
+                button.setToolTip(reason)
+            if finishing:
+                self._action_state_timer.start()
+            else:
+                self._action_state_timer.stop()
+            return
+
+        self._action_state_timer.stop()
 
         board_selected = bool(self._backend and self._backend.current_board)
         upload_ready = self._upload_ready()

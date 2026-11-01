@@ -346,6 +346,7 @@ class ConnectionLossChecks(unittest.TestCase):
             def clear(self): self.rows.clear(); self.index = -1
             def addItem(self, text, userData): self.rows.append((userData, text))
             def setCurrentIndex(self, index): self.index = index
+            def refresh_current_text(self): pass
             def currentIndex(self): return self.index
             def findData(self, value):
                 return next((i for i, row in enumerate(self.rows) if row[0] == value), -1)
