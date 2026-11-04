@@ -22,25 +22,31 @@ _icon_checked_dim = (_icons_dir / "checkbox_checked_disabled.svg").as_posix()
 _icon_arrow = (_icons_dir / "chevron-down.svg").as_posix()
 
 
-def install_checkbox_focus_style(app=None) -> bool:
-    """Keep native checkbox focus feedback on the indicator, not its label."""
-    from PySide6.QtWidgets import QApplication, QCheckBox, QProxyStyle, QStyle
+def install_no_focus_lines(app=None) -> bool:
+    """Controls work by mouse and shortcut without taking focus or drawing focus lines.
+
+    Text fields, lists, the editor and terminals keep keyboard focus. Clicking a
+    button therefore leaves the cursor where the user was typing. A style polish
+    runs once per widget, so this adds no per-event or per-paint work; the
+    stylesheet's universal ``outline: none`` removes the remaining focus rectangles.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import (QAbstractButton, QAbstractSlider, QApplication, QComboBox,
+                                   QProxyStyle, QTabBar, QTabWidget)
 
     app = app or QApplication.instance()
-    if app is None or app.property("mcuCheckboxFocusStyleInstalled"):
+    if app is None or app.property("mcuNoFocusLinesInstalled"):
         return False
 
-    class CheckboxFocusStyle(QProxyStyle):
-        def drawPrimitive(self, element, option, painter, widget=None):
-            if (element == QStyle.PrimitiveElement.PE_FrameFocusRect
-                    and isinstance(widget, QCheckBox)):
-                return
-            super().drawPrimitive(element, option, painter, widget)
+    class NoFocusLineStyle(QProxyStyle):
+        def polish(self, target):
+            if (isinstance(target, (QAbstractButton, QAbstractSlider, QTabBar, QTabWidget))
+                    or (isinstance(target, QComboBox) and not target.isEditable())):
+                target.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            return super().polish(target)
 
-    # Qt's platform style draws a focus rectangle around a checkbox's label.
-    # The stylesheet paints the focus border on ::indicator instead.
-    app.setStyle(CheckboxFocusStyle(app.style()))
-    app.setProperty("mcuCheckboxFocusStyleInstalled", True)
+    app.setStyle(NoFocusLineStyle(app.style()))
+    app.setProperty("mcuNoFocusLinesInstalled", True)
     return True
 
 
@@ -139,6 +145,7 @@ def build_stylesheet(theme_mode: str = "default") -> str:
 * {{
     font-family: "Montserrat", "Segoe UI", "Ubuntu", sans-serif;
     font-size: 12px;
+    outline: none;
 }}
 
 QMainWindow {{
@@ -842,8 +849,6 @@ QCheckBox::indicator:checked:disabled {{
     border-color: {border};
     image: url("{_icon_checked_dim}");
 }}
-QCheckBox:focus {{ border: none; }}
-QCheckBox::indicator:focus {{ border: 2px solid {cyan}; }}
 
 /* ── StatusBar ───────────────────────────────────────────────────────────── */
 QStatusBar {{
@@ -1048,11 +1053,7 @@ QToolButton#serial-display-options::menu-indicator {{
 }}
 QSplitter::handle {{ background: transparent; }}
 QSplitter::handle:hover {{ background: {selected}; }}
-QPushButton:focus, QToolButton:focus,
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 2px solid {cyan}; }}
-QPushButton#btn-compile:focus, QPushButton#btn-upload:focus,
-QPushButton#btn-stop:focus, QPushButton#btn-save:focus,
-QPushButton#btn-save-all:focus {{ border: 2px solid {cyan}; }}
+QLineEdit:focus, QSpinBox:focus, QComboBox:editable:focus {{ border: 2px solid {cyan}; }}
 QDialog QGroupBox {{ border: 1px solid {rim}; border-radius: 12px; }}
 QPushButton#btn-compile:enabled, QPushButton#btn-upload:enabled,
 QPushButton#btn-save:enabled, QPushButton#btn-save-all:enabled,

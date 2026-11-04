@@ -5,44 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
-
-static int unavailable(const char *platform) {
-    char message[512];
-    int count = snprintf(message, sizeof message,
-        "MCU Flasher for %s is not available in this release.\n"
-        "The native application and firmware tools are still being implemented.\n"
-        "This notice does not install or start the Ubuntu application.", platform);
-    if (count < 0 || (size_t)count >= sizeof message) return 1;
-    fprintf(stderr, "%s\n", message);
-    /* The binary has no terminal when double-clicked. Use an available native
-     * dialog without a shell, package installation or application startup. */
-    const char *dialogs[] = {"/usr/bin/zenity", "/usr/bin/kdialog", "/usr/bin/xmessage"};
-    for (size_t index = 0; index < sizeof dialogs / sizeof *dialogs; ++index) {
-        if (access(dialogs[index], X_OK) != 0) continue;
-        pid_t child = fork();
-        if (child == 0) {
-            if (index == 0)
-                execl(dialogs[index], dialogs[index], "--info", "--title=MCU Flasher",
-                      "--no-markup", "--text", message, (char *)NULL);
-            else if (index == 1)
-                execl(dialogs[index], dialogs[index], "--title", "MCU Flasher",
-                      "--msgbox", message, (char *)NULL);
-            else
-                execl(dialogs[index], dialogs[index], "-center", "-title", "MCU Flasher",
-                      "--", message, (char *)NULL);
-            _exit(127);
-        }
-        if (child > 0) {
-            int status = 0;
-            pid_t waited;
-            do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
-            if (waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0) break;
-        }
-    }
-    return 1;
-}
 
 int main(int argc, char **argv) {
     char path[65536];
@@ -55,10 +18,10 @@ int main(int argc, char **argv) {
     char *separator = strrchr(path, '/');
     if (!separator) return 1;
     const char *name = separator + 1;
-    if (strcmp(name, "FEDORA") == 0 || strcmp(name, "FEDORA_ARM64") == 0)
-        return unavailable("Fedora");
-    if (strcmp(name, "LINUX_MINT") == 0) return unavailable("Linux Mint");
-    if (strcmp(name, "UBUNTU") != 0 && strcmp(name, "UBUNTU_ARM64") != 0) {
+    /* run.sh performs admission on OS release data, never on this file's name. */
+    if (strcmp(name, "UBUNTU") != 0 && strcmp(name, "UBUNTU_ARM64") != 0
+            && strcmp(name, "FEDORA") != 0 && strcmp(name, "FEDORA_ARM64") != 0
+            && strcmp(name, "LINUX_MINT") != 0) {
         fprintf(stderr, "Use the named executable supplied in LAUNCHER.\n");
         return 1;
     }
@@ -91,7 +54,7 @@ int main(int argc, char **argv) {
     for (int index = 1; index < argc; ++index) command[index + 2] = argv[index];
     execv(command[0], command);
     int error = errno;
-    perror("Cannot start the Ubuntu launcher");
+    perror("Cannot start the MCU Flasher launcher");
     free(script); free(command);
     return error == ENOENT ? 127 : 1;
 }

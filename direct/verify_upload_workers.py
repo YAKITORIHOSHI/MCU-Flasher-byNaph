@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from src.modules.platformio_build_env import RUN_OPTIONS as PLATFORMIO_RUN_OPTIONS, build_environment  # noqa: E402
 
 
 class TrackingSerial:
@@ -48,7 +49,7 @@ class UploadWorkerChecks(unittest.TestCase):
                  "refresh_board_catalog", "update_skip_compile_availability", "stop_operation",
                  "_upload_status_key", "_append_upload_boot_hint",
                  "_finish_upload_connection_status", "_esptool_chip_mismatch",
-                 "_append_connecting_progress", "_upload_worker", "_check_write_connection"}
+                 "_append_connecting_progress", "_upload_worker", "_platformio_build_environment", "_check_write_connection"}
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
         cls.bases = []
         iterator = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
@@ -80,6 +81,7 @@ class UploadWorkerChecks(unittest.TestCase):
                        is_s3_board=lambda _: False,
                        find_pio_executable=lambda: ["mock-platformio"],
                        _refresh_platformio_core_environment=lambda _: (self.root / "fixture-core", {}),
+                       PLATFORMIO_RUN_OPTIONS=PLATFORMIO_RUN_OPTIONS, build_environment=build_environment,
                        SCRIPT_DIR=self.root, DEFAULT_UPLOAD_SPEED="460800")
         self.ns["_HOST_RUNTIME"] = SimpleNamespace(process_options=lambda **_: {},
                                                    compiler_working_directory=lambda workspace: workspace)
@@ -321,6 +323,10 @@ class UploadWorkerChecks(unittest.TestCase):
         self.outputs = [(0, "========================= [SUCCESS] Took 1.00 seconds =========================\n")]
         self.api._upload_worker(can_skip=True)
         self.assertEqual(len(self.processes), 1)
+        command, options = self.processes[0][0][0], self.processes[0][1]
+        # A different environment or auto-clean here would delete Compile's objects.
+        self.assertIn("--disable-auto-clean", command)
+        self.assertNotIn("PLATFORMIO_BUILD_CACHE_DIR", options["env"])
         rows = self.retained_status_rows()
         status = rows[self.api._upload_status_key("connection")]
         self.assertIn("Connected", status["text"])

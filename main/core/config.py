@@ -346,7 +346,7 @@ def set_editor_mode(mode: str):
 
 def _detect_system_theme() -> str:
     """Query the native desktop appearance without making startup depend on it."""
-    if sys.platform.startswith("linux"):
+    if sys.platform != "win32":
         try:
             from PySide6.QtCore import Qt
             from PySide6.QtGui import QGuiApplication
@@ -357,6 +357,8 @@ def _detect_system_theme() -> str:
                     return "default" if scheme == Qt.ColorScheme.Dark else "light"
         except (ImportError, AttributeError):
             pass
+        if sys.platform == "darwin":
+            return "default"  # Qt reports the macOS appearance above; there is no GNOME setting.
         try:
             import subprocess
             result = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
@@ -987,7 +989,7 @@ def focus_project_window(hwnd: int = 0, pid: int = 0) -> bool:
     other desktop windows and gains keyboard input focus.
     """
     if sys.platform != "win32":
-        if sys.platform.startswith("linux") and pid:
+        if sys.platform != "win32" and pid:
             try:
                 from PySide6.QtNetwork import QLocalSocket
                 socket = QLocalSocket()

@@ -1434,7 +1434,6 @@ class CloudSketchPanel(QWidget):
             QListWidget::item:selected {{ background: {pal['BG_HOVER']}; color: {pal['TEXT_BRIGHT']}; }}
             QPushButton {{ color: {pal['TEXT_BRIGHT']}; background: {pal['BG_MID']}; border: 1px solid {pal['BORDER']}; border-radius: 6px; padding: 7px 10px; font-size: 12px; font-weight: 600; }}
             QPushButton:hover {{ background: {pal['BG_HOVER']}; border-color: {pal['BORDER_LIT']}; }}
-            QPushButton:focus {{ border: 2px solid {pal['CYAN']}; padding: 6px 9px; }}
             QPushButton[cloudPrimary="true"]:enabled {{ background: {pal['BTN_COMPILE']}; color: {primary}; border-color: {pal['BORDER_LIT']}; }}
             QPushButton:disabled {{ color: {pal['TEXT_DIM']}; background: {pal['BG_DARK']}; }}
         """)

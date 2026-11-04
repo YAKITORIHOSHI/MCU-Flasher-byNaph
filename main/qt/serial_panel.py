@@ -617,7 +617,7 @@ class SerialOutputView(QPlainTextEdit):
         self._paused_dirty = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             self._follow.clear_document(super().clear)
         else:
             super().clear()

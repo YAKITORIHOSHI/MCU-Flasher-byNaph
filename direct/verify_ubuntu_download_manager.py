@@ -1,79 +1,24 @@
 #!/usr/bin/env python3
-"""Ubuntu downloader reuse/teardown fixtures; no Tk startup, cache or installers."""
+"""Native downloader reuse/teardown fixtures; no window startup, cache or installers."""
 from __future__ import annotations
 
 from contextlib import ExitStack
 import os
 from pathlib import Path
+import select
 import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
-from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from main.qt import download_dialog
-from src.modules import arduino_lib_req as browser
 from src.modules import ubuntu_download_manager as lifecycle
-
-
-class FileHandlerRoot:
-    """A stepped Tk boundary; protocol I/O still uses real owned sockets."""
-
-    def __init__(self):
-        self.handlers, self.timers, self.bindings = {}, {}, {}
-        self._next = 0
-
-    def createfilehandler(self, descriptor, mask, callback):
-        if mask != 2:
-            raise AssertionError("Only listener readability may be watched")
-        self.handlers[descriptor] = callback
-
-    def deletefilehandler(self, descriptor):
-        self.handlers.pop(descriptor, None)
-
-    def after(self, delay, callback):
-        if not 0 < delay <= 100:
-            raise AssertionError("Partial requests need a short bounded timer")
-        self._next += 1
-        identifier = f"timer-{self._next}"
-        self.timers[identifier] = callback
-        return identifier
-
-    def after_cancel(self, identifier):
-        self.timers.pop(identifier, None)
-
-    def bind(self, event, callback, add=None):
-        if event != "<Destroy>" or add != "+":
-            raise AssertionError("Retain the root's other destruction callbacks")
-        self._next += 1
-        identifier = f"binding-{self._next}"
-        self.bindings[identifier] = callback
-        return identifier
-
-    def unbind(self, event, identifier):
-        if event != "<Destroy>":
-            raise AssertionError("Only the owned destruction binding may be removed")
-        self.bindings.pop(identifier, None)
-
-    def readable(self):
-        for descriptor, callback in list(self.handlers.items()):
-            callback(descriptor, 2)
-
-    def step_timer(self):
-        identifier, callback = next(iter(self.timers.items()))
-        self.timers.pop(identifier)
-        callback()
-
-    def destroy(self, widget=None):
-        for callback in list(self.bindings.values()):
-            callback(SimpleNamespace(widget=self if widget is None else widget))
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Ubuntu downloader IPC")
@@ -133,115 +78,56 @@ class DownloaderChecks(unittest.TestCase):
             client.sendall(b"MCU-DM-1 quit\nextra command")
             self.assertEqual(channel.poll(), [])
 
-    def test_watcher_sleeps_without_timers_and_delivers_each_command_once(self):
-        channel, root, commands = self.channel(), FileHandlerRoot(), []
-        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
-        watcher = channel.watch(root, commands.extend)
-        self.assertIsNotNone(watcher)
-        self.assertEqual(len(root.handlers), 1)
-        self.assertEqual(root.timers, {})
+    def test_readiness_descriptor_signals_each_command_once(self):
+        channel = self.channel()
+        self.assertEqual(select.select([channel.fileno()], [], [], 0)[0], [], "An idle channel must not be readable")
         self.assertTrue(lifecycle.request(self.root, "wake"))
         self.assertTrue(lifecycle.request(self.root, "quit"))
-        root.readable()
-        root.readable()
-        self.assertEqual(commands, ["wake", "quit"])
-        self.assertEqual(root.timers, {})
+        self.assertEqual(select.select([channel.fileno()], [], [], 1)[0], [channel.fileno()])
+        self.assertEqual(channel.poll(), ["wake", "quit"])
+        self.assertEqual(channel.poll(), [])
+        self.assertFalse(channel.has_partial())
+        self.assertEqual(select.select([channel.fileno()], [], [], 0)[0], [])
 
-    def test_watcher_finishes_partial_request_then_stops_its_timer(self):
-        channel, root, commands = self.channel(), FileHandlerRoot(), []
-        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
-        channel.watch(root, commands.extend)
+    def test_partial_request_reports_pending_until_it_finishes(self):
+        channel = self.channel()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.connect(lifecycle._address(self.root))
             client.sendall(b"MCU-DM-1 ")
-            root.readable()
-            self.assertEqual(commands, [])
-            self.assertEqual(len(root.timers), 1)
+            self.assertEqual(channel.poll(), [])
+            self.assertTrue(channel.has_partial(), "The window must keep polling this client")
             client.sendall(b"wake\n")
-            root.step_timer()
+            deadline = time.monotonic() + 1
+            commands = []
+            while not commands and time.monotonic() < deadline:
+                commands = channel.poll()
             self.assertEqual(commands, ["wake"])
-            self.assertEqual(root.timers, {})
+            self.assertFalse(channel.has_partial())
 
-    def test_watcher_retires_expired_partial_client_without_idle_rescheduling(self):
-        channel, root, commands = self.channel(), FileHandlerRoot(), []
-        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
-        channel.watch(root, commands.extend)
+    def test_expired_partial_client_is_retired_without_a_command(self):
+        channel = self.channel()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client, \
                 patch.object(lifecycle.time, "monotonic", return_value=10) as now:
             client.connect(lifecycle._address(self.root))
             client.sendall(b"MCU-DM-1 ")
-            root.readable()
-            self.assertEqual(len(root.timers), 1)
+            self.assertEqual(channel.poll(), [])
+            self.assertTrue(channel.has_partial())
             now.return_value = 11.1
-            root.step_timer()
+            self.assertEqual(channel.poll(), [])
+            self.assertFalse(channel.has_partial())
             self.assertEqual(client.recv(1), b"")
-        self.assertEqual(commands, [])
-        self.assertEqual(root.timers, {})
 
-    def test_watcher_close_and_root_destroy_retire_callbacks_without_closing_channel(self):
-        for destroy in (False, True):
-            with self.subTest(destroy=destroy):
-                root, commands = FileHandlerRoot(), []
-                channel = self.channel(self.root / str(destroy))
-                self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
-                watcher = channel.watch(root, commands.extend)
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                    client.connect(lifecycle._address(self.root / str(destroy)))
-                    client.sendall(b"MCU-DM-1 ")
-                    root.readable()
-                    ready = next(iter(root.handlers.values()))
-                    timer = next(iter(root.timers.values()))
-                    root.destroy(widget=object())
-                    self.assertEqual(len(root.handlers), 1)
-                    if destroy:
-                        root.destroy()
-                    else:
-                        watcher.close()
-                    watcher.close()
-                    ready(-1, 2)
-                    timer()
-                self.assertEqual((root.handlers, root.timers, root.bindings), ({}, {}, {}))
-                self.assertEqual(commands, [])
-                self.assertTrue(lifecycle.request(self.root / str(destroy), "wake"))
-                self.assertEqual(channel.poll(), ["wake"])
-
-    def test_channel_shutdown_retires_watcher_even_when_command_callback_closes_it(self):
-        channel, root, commands = self.channel(), FileHandlerRoot(), []
-        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
-        def received(batch):
-            commands.extend(batch)
-            channel.close()
-        channel.watch(root, received)
+    def test_close_retires_partial_clients_and_the_endpoint(self):
+        channel = self.channel()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as partial:
             partial.connect(lifecycle._address(self.root))
             partial.sendall(b"MCU-DM-1 ")
-            self.assertTrue(lifecycle.request(self.root, "quit"))
-            root.readable()
-        self.assertEqual(commands, ["quit"])
-        self.assertEqual((root.handlers, root.timers, root.bindings), ({}, {}, {}))
+            channel.poll()
+            channel.close()
+            self.assertFalse(channel.has_partial())
+            self.assertEqual(partial.recv(1), b"")
         self.assertFalse(lifecycle.request(self.root, "wake"))
-
-    def test_watcher_setup_failures_fall_back_without_socket_or_callback_leaks(self):
-        channel = self.channel()
-        self.assertTrue(callable(getattr(channel, "watch", None)), "Tk listener watcher is missing")
-        for failure in ("unavailable", "register", "bind"):
-            with self.subTest(failure=failure):
-                root = FileHandlerRoot()
-                if failure == "unavailable":
-                    root.createfilehandler = None
-                    context = ExitStack()
-                elif failure == "register":
-                    def broken_registration(descriptor, mask, callback):
-                        root.handlers[descriptor] = callback
-                        raise RuntimeError("fixture registration failed")
-                    context = patch.object(root, "createfilehandler", side_effect=broken_registration)
-                else:
-                    context = patch.object(root, "bind", side_effect=RuntimeError("fixture bind failed"))
-                with context:
-                    self.assertIsNone(channel.watch(root, lambda commands: None))
-                self.assertEqual((root.handlers, root.timers, root.bindings), ({}, {}, {}))
-                self.assertTrue(lifecycle.request(self.root, "wake"))
-                self.assertEqual(channel.poll(), ["wake"])
+        channel.close()
 
     def test_launcher_wakes_existing_manager_without_spawn_or_cache_writes(self):
         channel = self.channel()
@@ -255,36 +141,6 @@ class DownloaderChecks(unittest.TestCase):
         self.assertEqual(channel.poll(), ["wake"])
         self.assertFalse((self.root / "index_json").exists())
 
-    def test_tk_commands_restore_state_and_quit_without_windows_trigger_reads(self):
-        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
-        app.root = Mock()
-        app._linux_channel = Mock(poll=Mock(return_value=["wake"]))
-        app._unhide_window = Mock()
-        app._force_exit = Mock()
-        with patch.object(browser.os.path, "exists", side_effect=AssertionError("Windows trigger read")):
-            app._check_show_trigger()
-            app._linux_channel.poll.return_value = ["quit", "wake"]
-            app._check_show_trigger()
-        app._unhide_window.assert_called_once()
-        app._force_exit.assert_called_once()
-        app.root.after.assert_called_once_with(150, app._check_show_trigger)
-
-    def test_shutdown_cancels_workers_closes_socket_and_destroys_tk(self):
-        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
-        app.root = Mock()
-        app._cancel_event = threading.Event()
-        app._linux_channel = Mock()
-        channel = app._linux_channel
-        with patch.object(lifecycle, "close_viewers") as viewers, \
-                patch.object(browser.os.path, "exists", side_effect=AssertionError("Windows HWND read")):
-            with self.assertRaises(SystemExit):
-                app._force_exit()
-        self.assertTrue(app._cancel_event.is_set())
-        channel.close.assert_called_once()
-        self.assertIsNone(app._linux_channel)
-        viewers.assert_called_once()
-        app.root.destroy.assert_called_once()
-
     def test_windows_launch_keeps_existing_subprocess_path(self):
         script = self.root / "src/modules/arduino_lib_req.py"
         script.parent.mkdir(parents=True)
@@ -297,26 +153,6 @@ class DownloaderChecks(unittest.TestCase):
             self.assertTrue(download_dialog.launch_download_manager())
         self.assertEqual(spawn.call_args.args[0], [str(self.root / "pythonw.exe"), str(script)])
         self.assertEqual(spawn.call_args.kwargs["creationflags"], 0)
-
-    def test_windows_trigger_and_exit_keep_their_original_behavior(self):
-        app = browser.ArduinoBrowser.__new__(browser.ArduinoBrowser)
-        app.root = Mock()
-        app._linux_channel = Mock(poll=Mock(side_effect=AssertionError("Linux IPC on Windows")))
-        app._cancel_event = threading.Event()
-        app._is_hidden = True
-        app._unhide_window = Mock()
-        with patch.object(browser.sys, "platform", "win32"), \
-                patch.object(browser.os.path, "exists", side_effect=lambda name: name.endswith(".show_dm_trigger")), \
-                patch.object(browser.os, "remove") as remove, \
-                patch.object(lifecycle, "close_viewers", side_effect=AssertionError("Linux cleanup on Windows")):
-            app._check_show_trigger()
-            with self.assertRaises(SystemExit):
-                app._force_exit()
-        app._unhide_window.assert_called_once()
-        remove.assert_called_once_with(os.path.join(browser.INDEX_CACHE_DIR, ".show_dm_trigger"))
-        self.assertFalse(app._cancel_event.is_set())
-        app._linux_channel.close.assert_not_called()
-        app.root.destroy.assert_called_once()
 
     def test_another_live_workspace_keeps_shared_manager_and_last_window_quits(self):
         from main.core import config

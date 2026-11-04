@@ -5,7 +5,8 @@ import json
 import os
 from pathlib import Path
 import shutil
-from src.modules.ubuntu_architecture import elf_matches_host, linux_tool_architecture
+from src.modules.platform_runtime import native_tools_name
+from src.modules.ubuntu_architecture import MACH_O_MAGICS, elf_matches_host, native_tool_architecture
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,7 +25,8 @@ def _native_executable(candidate) -> str | None:
             return None
         with path.open("rb") as stream:
             header = stream.read(4)
-            if header[:2] == b"MZ" or (header == b"\x7fELF" and not elf_matches_host(path)):
+            if header[:2] == b"MZ" or ((header == b"\x7fELF" or header in MACH_O_MAGICS)
+                                       and not elf_matches_host(path)):
                 return None
         return str(path)
     except (OSError, RuntimeError, TypeError, ValueError):
@@ -33,7 +35,7 @@ def _native_executable(candidate) -> str | None:
 
 def managed_arduino_cli(root=None) -> str | None:
     """Require an owned native installation receipt without running the CLI."""
-    folder = Path(ROOT if root is None else root) / ".ubuntu-tools/arduino-cli"
+    folder = Path(ROOT if root is None else root) / native_tools_name() / "arduino-cli"
     receipt = folder / "installation.json"
     try:
         if folder.parent.is_symlink() or folder.is_symlink() or receipt.is_symlink():
@@ -42,7 +44,7 @@ def managed_arduino_cli(root=None) -> str | None:
             return None
         data = json.loads(receipt.read_text(encoding="utf-8"))
         if (not isinstance(data, dict) or data.get("owner") != "mcu-flasher-ubuntu-arduino-cli"
-                or data.get("architecture") != linux_tool_architecture()
+                or data.get("architecture") != native_tool_architecture()
                 or data.get("executable") != "arduino-cli"):
             return None
         executable = folder / "arduino-cli"

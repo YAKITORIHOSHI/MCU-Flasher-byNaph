@@ -956,6 +956,22 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   packaged-release qualification. Verify isolated preservation, rollback,
   source path and Bootstrap wiring with `direct/verify_app_update.py` and
   `direct/verify_ubuntu_launcher.py`.
+- The AVR packages hold about 55,000 of the store's 104,000 files in under 600 MiB
+  (MegaCore: 19,309 files in a 2.7 MB archive), so that stage is filesystem work,
+  not network. `bootstrap_file_pool.py` runs extraction, native `copy2`, both
+  independent hash passes and deletion concurrently within the storage worker
+  limit. `Package files:` lines drive the progress row across what used to be a
+  silent wait after `Unpacking 100%`. Keep native copy semantics: only the
+  dispatch is parallel. `_ParallelTarWriter` uses tarfile's own data filter;
+  enter `parallel_archive_writes` outside `archive_paths`, whose Windows check
+  must run after queued writes finish. `ensure_board_toolchains` and
+  `_prewarm_pio_platform` are not on the default Bootstrap path. Verify with
+  `direct/verify_bootstrap_file_pool.py`, which injects a per-file wait.
+- The seed asset's first 942,585,255 bytes are unused `.cache` and `.tmp` entries.
+  `_download_release_packages` fetches only the tail against a pinned SHA-256, and
+  `open_release_tail` refuses reads below it. A cached complete archive or any
+  range failure uses the original full download. Any new seed asset needs new
+  pinned size, offset and digest values, and should omit those entries.
 - Python dependency downloads/installs can be quiet with progress disabled.
   Use package-aware finite monotonic budgets, never stdout-silence retries.
   Cancellation must stop owned descendants before retry or package-store release,
@@ -1019,7 +1035,33 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   Hard/Soft Reset share application-owned exact-board/framework/native-host
   allocations and bounded template/output receipts, independent of sketch
   projects. Avoid equal template writes. Project Clean preserves these shared
-  reset builds; failed writes never trigger a replay.
+  reset builds; failed writes never trigger a replay. Non-ESP resets build and
+  certify first, then upload with `nobuild`, so a failed upload keeps the build.
+- PlatformIO deletes `.pio/build` whenever its project checksum changes, and
+  every `PLATFORMIO_*` option in the environment feeds that checksum. Compile
+  once removed `PLATFORMIO_BUILD_CACHE_DIR` while Upload kept it, so each action
+  wiped the other's objects and `nobuild` then lost the firmware. Launch all
+  actions through `platformio_build_env.build_environment` with `RUN_OPTIONS`
+  (`--disable-auto-clean`). A mocked compiler cannot catch this class of bug:
+  run `direct/verify_incremental_builds.py`, which drives the real compile
+  worker and real PlatformIO and counts compiler lines, without any hardware.
+- `platformio_build_hook.py` runs through `PLATFORMIO_EXTRA_SCRIPTS`, leaving the
+  generated INI unchanged. Pre: `CacheDir` shares identical objects across
+  sketches and after Clean, while each workspace keeps its own SCons database;
+  `prune_object_cache` bounds it at 2 GiB by least-recent use. Post: records the
+  libraries PlatformIO's finder selected. `compiled_cache.input_signature` then
+  hashes only those trees, so unrelated downloads cannot retire objects or stop
+  Skip Compile. Without a record it covers every configured collection. Trees
+  over the 40,000-entry / 256 MiB budget disable reuse and never fail a build.
+  `library_bytes_changed` retires objects only for a library present on both
+  sides with different bytes; SCons handles configuration and dependency-list
+  changes. Workspace keys use compile-relevant board fields only: catalog
+  scores, source folders and manifest spellings change on refresh and used to
+  rebuild every sketch and reset firmware.
+- Compiled bytecode lives under `bytecode_cache.cache_directory`. The launchers'
+  `-B` keeps the installation clean, but a non-empty PYTHONDONTWRITEBYTECODE,
+  including `"0"`, also disables writing. Nested guarded children install a lazy
+  finder, so tools such as esptool no longer import PlatformIO just to start.
   Verify shared reset reuse/tampering and project independence with
   `direct/verify_reset_build_cache.py` alongside the sketch cache, action and
   upload verifiers. New host-qualified reset receipts may require one initial

@@ -359,6 +359,7 @@ class PackageJobChecks(unittest.TestCase):
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                  and node.name in ('_bootstrap_tool_store_lease', '_run_setup_in_thread')]
         gui = Mock()
+        gui._closed = False  # A bare Mock attribute would read as a closed window.
         gui._signals = SimpleNamespace(thread_id=-1)
         gui._package_event_root = self.events
         gui.root.after.side_effect = lambda delay, callback: callback()
@@ -384,7 +385,8 @@ class PackageJobChecks(unittest.TestCase):
                          check_cp210x_driver=Mock(return_value=True), check_opencode_cli=Mock(return_value=True),
                          ensure_opencode_cli=Mock(return_value=True), run_update_checks=Mock(),
                          _write_startup_health_snapshot=Mock(return_value=False),
-                         _cleanup_platformio_prebuilt_archive=Mock(return_value=True))
+                         _cleanup_platformio_prebuilt_archive=Mock(return_value=True),
+                         _cleanup_release_packages=Mock(return_value=True))
         calls = []
         def guarded_stage(name, error=None):
             def call(*args, **kwargs):
@@ -405,7 +407,9 @@ class PackageJobChecks(unittest.TestCase):
                      'ensure_platformio', 'ensure_arduino_avr_board', 'ensure_esp32_board_folder', 'ensure_arduino_cli'):
             namespace[name] = guarded_stage(name)
         namespace['_ensure_platformio_core_prebuilt'] = guarded_stage('seed', seed_error)
-        namespace['_stream_offline_setup_output'] = guarded_stage('offline-packs')
+        # This stage returns its child's exit code, where every other stage returns success.
+        offline_stage = guarded_stage('offline-packs')
+        namespace['_stream_offline_setup_output'] = lambda *args, **kwargs: 0 if offline_stage(*args, **kwargs) else 1
         namespace['_spawn_main_gui'] = Mock(side_effect=lambda: (SimpleNamespace(poll=lambda: None), None)
                                              if after_repair() else None)
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), namespace)

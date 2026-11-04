@@ -28,6 +28,7 @@ for _p in (_project_root, _modules_path, _main_path):
 if sys.platform == "win32" and _env_site.is_dir() and str(_env_site) not in sys.path:
     sys.path.insert(0, str(_env_site))
 
+from src.modules.startup_timing import mark as _startup_mark
 from src.modules.ubuntu_release import enforce_supported_ubuntu
 if not enforce_supported_ubuntu():
     raise SystemExit(1)
@@ -111,7 +112,7 @@ try:
     from main.qt.signals import signals as _global_signals
     from main.qt.main_window import MCUMainWindow
     from main.qt.project_dialog import ProjectDialog
-    from main.qt.theme import register_fonts, build_stylesheet, install_checkbox_focus_style
+    from main.qt.theme import register_fonts, build_stylesheet, install_no_focus_lines
     _PYSIDE6_AVAILABLE = True
 except ImportError:
     QTimer = None  # type: ignore
@@ -123,11 +124,12 @@ except ImportError:
     ProjectDialog = None  # type: ignore
     register_fonts = None  # type: ignore
     build_stylesheet = None  # type: ignore
-    install_checkbox_focus_style = None  # type: ignore
+    install_no_focus_lines = None  # type: ignore
     _PYSIDE6_AVAILABLE = False
 
 
 _enforce_minimum_cpu_requirement = enforce_minimum_cpu_requirement
+_startup_mark("modules_imported")
 
 
 def _configure_windows_environment() -> None:
@@ -200,7 +202,8 @@ def main() -> int:
             record_crash_event("missing_dependency", "PySide6 is not installed", exc_type="ImportError", pid=os.getpid())
             msg = (
                 "MCU Flasher error: PySide6 is not installed.\n\n"
-                + ("Run python3 direct/ubuntu/setup.py to repair dependencies."
+                + ("Run bash direct/macos/run.sh --repair to repair dependencies." if sys.platform == "darwin" else
+                   "Run python3 direct/ubuntu/setup.py to repair dependencies."
                    if sys.platform.startswith("linux") else
                    "Please run bootstrap or runThisOnWindows.vbs to install all dependencies.")
             )
@@ -218,9 +221,11 @@ def main() -> int:
         if not startup_ready(_get_safe_platformio_core_dir(_project_root)):
             print(bootstrap_instruction("Bootstrap preparation is incomplete for the selected mode"), file=sys.stderr)
             return 1
+        _startup_mark("packages_checked")
 
         # ── Qt Application ────────────────────────────────────────────────────
         app = QApplication.instance() or QApplication(sys.argv)
+        _startup_mark("qapplication")
         from main.qt.garbage_collection import install_gui_garbage_collector
         cycle_collector = install_gui_garbage_collector(app)
         app.setApplicationName("MCU Flasher by Naph")
@@ -241,7 +246,7 @@ def main() -> int:
         active_theme = get_theme_mode()
         Theme.apply_theme(active_theme)
         register_fonts()
-        install_checkbox_focus_style(app)
+        install_no_focus_lines(app)
         if QFont:
             app_font = QFont("Montserrat", 10)
             app_font.setStyleHint(QFont.StyleHint.SansSerif)
@@ -354,9 +359,12 @@ def main() -> int:
                 return 0
 
         # ── Main window ───────────────────────────────────────────────────────
+        _startup_mark("project_selected")
         window = MCUMainWindow(backend=api)
+        _startup_mark("window_built")
         window.show()
-        if sys.platform.startswith("linux"):
+        _startup_mark("window_shown")
+        if sys.platform != "win32":
             from main.qt.project_activation import install_activation_server
             window._activation_server = install_activation_server(window)
         window.raise_()

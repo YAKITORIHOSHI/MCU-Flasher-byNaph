@@ -5,11 +5,14 @@ with the original payload; this module never invents PlatformIO provenance.
 """
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -195,6 +198,53 @@ def _archive_groups(archive):
     return groups
 
 
+class ReleaseTail(io.RawIOBase):
+    """Present a stored archive tail as the complete release file.
+
+    The published archive begins with about 900 MiB of unrelated cache data. All
+    package members and the ZIP directory sit in one contiguous tail, so only
+    those bytes are fetched and checksummed. A read below the tail is an error,
+    never silently substituted data.
+    """
+
+    def __init__(self, path, offset, total):
+        super().__init__()
+        self._file = open(path, "rb")
+        self._offset, self._total, self._position = offset, total, 0
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def tell(self):
+        return self._position
+
+    def seek(self, position, whence=os.SEEK_SET):
+        base = {os.SEEK_SET: 0, os.SEEK_CUR: self._position, os.SEEK_END: self._total}[whence]
+        self._position = base + position
+        return self._position
+
+    def readinto(self, buffer):
+        if self._position >= self._total:
+            return 0
+        if self._position < self._offset:
+            raise OSError("The release member lies outside the verified package tail")
+        self._file.seek(self._position - self._offset)
+        count = self._file.readinto(buffer)
+        self._position += count
+        return count
+
+    def close(self):
+        self._file.close()
+        super().close()
+
+
+def open_release_tail(path, offset, total):
+    return io.BufferedReader(ReleaseTail(path, offset, total), buffer_size=1024 * 1024)
+
+
 def _publish_missing(source, destination, *, log=print, attempts=8):
     """Publish one validated tree; briefly wait out Windows sharing/access locks.
 
@@ -243,9 +293,20 @@ def import_missing(zip_path, core, missing, *, staging_parent, log=print, progre
     started = time.monotonic()
     imported, copied_bytes = [], 0
     log(f"Release seed staging retained at {stage}")
+    from src.modules.bootstrap_file_pool import FilePool
+    open_lock = threading.Lock()
     try:
         with zipfile.ZipFile(zip_path) as archive:
             groups = _archive_groups(archive)
+
+            def extract(info, target):
+                # Members read independently through ZipFile's own shared-file
+                # lock; only opening them touches unsynchronized state.
+                with open_lock:
+                    source = archive.open(info)
+                with source, open(target, "wb") as output:
+                    shutil.copyfileobj(source, output)
+
             # Only small provenance/manifests are indexed first. No unselected
             # toolchains, frameworks, caches or Python environments are copied.
             for (kind, directory), members in groups.items():
@@ -285,15 +346,18 @@ def import_missing(zip_path, core, missing, *, staging_parent, log=print, progre
                         raise RuntimeError(f"Release destination leaves the configured core: {destination}")
                     group_bytes = sum(info.file_size for info, _ in groups[key])
                     log(f"Importing release package {spec.humanize()} ({group_bytes / 1048576:.1f} MiB) -> {destination}")
-                    for info, relative in groups[key]:
-                        target = source_dir.joinpath(*relative)
-                        os.makedirs(extended_windows_path(target.parent), exist_ok=True)
-                        with archive.open(info) as source, open(extended_windows_path(target), "wb") as output:
-                            import shutil
-                            shutil.copyfileobj(source, output)
-                        copied_bytes += info.file_size
-                        if progress:
-                            progress(copied_bytes, info.filename)
+                    created = set()
+                    with FilePool() as pool:
+                        for info, relative in groups[key]:
+                            target = source_dir.joinpath(*relative)
+                            parent = extended_windows_path(target.parent)
+                            if parent not in created:
+                                os.makedirs(parent, exist_ok=True)
+                                created.add(parent)
+                            pool.submit(extract, info, extended_windows_path(target), size=info.compress_size)
+                            copied_bytes += info.file_size
+                            if progress:
+                                progress(copied_bytes, info.filename)
                     staged_stores[kind].memcache_reset()
                     if not valid_package(staged_stores[kind], spec):
                         raise RuntimeError(f"Release package payload is incomplete: {spec.humanize()}")

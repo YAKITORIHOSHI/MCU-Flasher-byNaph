@@ -17,15 +17,13 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
-if __name__ == "__main__" and sys.platform.startswith("linux"):
+if __name__ == "__main__" and sys.platform != "win32":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from src.modules.ubuntu_release import enforce_supported_ubuntu
     if not enforce_supported_ubuntu():
         raise SystemExit(1)
 
 import requests
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
 
 
 def check_internet_connection(timeout: float = 2.0) -> bool:
@@ -257,174 +255,163 @@ def download_direct_link(url: str, destination_dir: Path, progress_callback, can
 
 # ---------- GUI ----------
 
-class DownloaderApp(tk.Tk):
-    def __init__(self, *, theme_mode=None):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-        from src.modules.tk_font_runtime import register_tk_fonts
-        from main.core.theme import Theme
-        from types import SimpleNamespace
-        from src.modules.ui_palette import resource_palette
-        register_tk_fonts()
-        if theme_mode is None:
-            from main.core.config import get_theme_mode
-            theme_mode = get_theme_mode()
-        mode = theme_mode if theme_mode in Theme.PALETTES else "default"
-        self.palette = SimpleNamespace(**resource_palette(Theme.PALETTES[mode]), active_theme=mode)
-        super().__init__()
-        self.title("MCU Flasher — Download files")
-        from src.modules.tk_glass import DialogFit
-        self._window_fit = DialogFit(self, preferred=(660, 420), minimum=(420, 320))
-        self.configure(bg=self.palette.WINDOW_BG)
-        self.download_dir = tk.StringVar(value=str(Path.home() / "Downloads"))
-        self.status_text = tk.StringVar(value="Paste a direct link or Google Drive share link to download a file.")
-        self.cancel_event = threading.Event()
-        self.worker_thread = None
-        self._build_widgets()
+def create_window(*, theme_mode=None):
+    """Build the window on demand; importing this module must not load Qt."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from PySide6.QtCore import QObject, Qt, Signal
+    from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+                                   QMessageBox, QProgressBar, QVBoxLayout)
+    from main.core.config import get_theme_mode
+    from main.core.theme import Theme
+    from main.qt.glass import GlassWorkspace
+    from main.qt.icons import ActionButton
+    from main.qt.responsive import ScreenWatcher, fit_dialog
+    from main.qt.theme import build_stylesheet, install_no_focus_lines, register_fonts
 
-    def _build_widgets(self):
-        from src.modules.tk_glass import BrowserHeader, GlassButton, GlassCard, GlassScene, FieldRow, ScrollForm, EntryWell, ui_scale
-        from src.modules.tk_material import GlassBody, GlassLabel
-        from src.modules.ui_palette import readable_foreground
-        p = self.palette
-        self._scene = GlassScene(self, p)
-        self._scene.pack(fill="both", expand=True)
-        self._header = BrowserHeader(self._scene.body, p, title="Download files", subtitle="Direct links and Google Drive", framed=True)
-        self._header.pack(fill="x", padx=12, pady=(12, 10))
-        self._form = ScrollForm(self._scene.body, p.WINDOW_BG, fill_viewport=True, material=True)
-        self._form.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self._card = GlassCard(self._form.body, p, padding=14)
-        self._card.pack(fill="both", expand=True)
-        self._card.bind("<<GlassRequestChanged>>", lambda _event: self._form.request_fit(), add="+")
-        body = self._card.body
+    class Reports(QObject):
+        """Queued delivery from the transfer worker to the GUI thread."""
+        progress = Signal(int, int)
+        success = Signal(str)
+        failure = Signal(str)
 
-        def label(parent, text):
-            return GlassLabel(parent, text=text, font=("Montserrat", 10), bg=p.BG_MID, fg=p.TEXT,
-                            anchor="w", bd=0)
+    class DownloaderWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("MCU Flasher — Download files")
+            self.cancel_event = threading.Event()
+            self.worker_thread = None
+            self.reports = Reports(self)
+            self.reports.progress.connect(self._update_progress, Qt.ConnectionType.QueuedConnection)
+            self.reports.success.connect(self._on_success, Qt.ConnectionType.QueuedConnection)
+            self.reports.failure.connect(self._on_error, Qt.ConnectionType.QueuedConnection)
+            self._build_widgets()
+            fit_dialog(self, preferred=(660, 420), minimum=(420, 320))
+            self._screen_watcher = ScreenWatcher(self)
 
-        def entry(parent, **options):
-            return EntryWell(parent, p, font=("Montserrat", 10), **options)
+        def _build_widgets(self):
+            central = GlassWorkspace()
+            self.setCentralWidget(central)
+            root = QVBoxLayout(central)
+            root.setContentsMargins(12, 12, 12, 12)
+            root.setSpacing(10)
+            title = QLabel("Download files")
+            title.setObjectName("download-title")
+            root.addWidget(title)
+            subtitle = QLabel("Direct links and Google Drive")
+            subtitle.setObjectName("download-subtitle")
+            root.addWidget(subtitle)
+            card = QFrame()
+            card.setObjectName("download-card")
+            body = QVBoxLayout(card)
+            body.setContentsMargins(14, 14, 14, 14)
+            body.setSpacing(8)
+            body.addWidget(QLabel("Download link"))
+            self.url_entry = QLineEdit()
+            body.addWidget(self.url_entry)
+            body.addWidget(QLabel("Save to"))
+            folder = QHBoxLayout()
+            self.folder_entry = QLineEdit(str(Path.home() / "Downloads"))
+            folder.addWidget(self.folder_entry, 1)
+            self.browse_btn = ActionButton("Browse…")
+            self.browse_btn.clicked.connect(self._choose_dir)
+            folder.addWidget(self.browse_btn)
+            body.addLayout(folder)
+            self.progress = QProgressBar()
+            self.progress.setTextVisible(False)
+            self.progress.setRange(0, 100)
+            self.progress.setFixedHeight(6)
+            body.addWidget(self.progress)
+            self.status_label = QLabel("Paste a direct link or Google Drive share link to download a file.")
+            self.status_label.setWordWrap(True)
+            self.status_label.setObjectName("download-status")
+            body.addWidget(self.status_label)
+            body.addStretch(1)
+            actions = QHBoxLayout()
+            actions.addStretch(1)
+            self.cancel_btn = ActionButton("Cancel")
+            self.cancel_btn.setEnabled(False)
+            self.cancel_btn.clicked.connect(self._cancel_download)
+            actions.addWidget(self.cancel_btn)
+            self.download_btn = ActionButton("Download")
+            self.download_btn.setProperty("role", "primary")
+            self.download_btn.clicked.connect(self._start_download)
+            actions.addWidget(self.download_btn)
+            body.addLayout(actions)
+            root.addWidget(card, 1)
 
-        def button(parent, text, callback, *, primary=False, state="normal"):
-            base, hover = (p.BTN_MONITOR, p.BTN_MONITOR_H) if primary else (p.BG_LIGHT, p.BG_HOVER)
-            return GlassButton(parent, text=text, command=callback, state=state,
-                               font=("Montserrat", 9, "bold"), bg=base, activebackground=hover,
-                               fg=readable_foreground(base), activeforeground=readable_foreground(hover),
-                               disabledforeground=p.TEXT_DIM, relief="flat", bd=0,
-                               highlightthickness=1, highlightbackground=p.BG_MID, highlightcolor=p.CYAN)
+        def _choose_dir(self):
+            chosen = QFileDialog.getExistingDirectory(self, "Choose download folder", self.folder_entry.text())
+            if chosen:
+                self.folder_entry.setText(chosen)
 
-        label(body, "Download link").pack(fill="x", pady=(0, 7))
-        self._url_well = entry(body, width=1)
-        self.url_entry = self._url_well.entry
-        self._url_well.pack(fill="x", pady=(0, 14))
-        folder = GlassBody(body, bg=p.BG_MID)
-        folder.pack(fill="x", pady=(0, 16))
-        self._folder_well = entry(folder, textvariable=self.download_dir, width=1)
-        self.folder_entry = self._folder_well.entry
-        self.browse_btn = button(folder, "Browse…", self._choose_dir)
-        self._folder_row = FieldRow(folder, label(folder, "Save to"), self._folder_well, self.browse_btn)
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("Vertical.TScrollbar", background=p.BG_MID, troughcolor=p.WINDOW_BG,
-                        bordercolor=p.WINDOW_BG, arrowcolor=p.TEXT_DIM,
-                        lightcolor=p.BG_MID, darkcolor=p.BG_MID)
-        style.map("Vertical.TScrollbar", background=[("active", p.BG_HOVER)])
-        # Clam fixes its progress element at 18px; scope the configurable native
-        # elements to this track so its requested height follows our 4px budget.
-        for part in ("trough", "pbar"):
-            style.element_create(f"FileDownload.{part}", "from", "default", f"Horizontal.Progressbar.{part}")
-        style.layout("FileDownload.Horizontal.TProgressbar", [
-            ("FileDownload.trough", {"sticky": "nswe", "children": [
-                ("FileDownload.pbar", {"side": "left", "sticky": "ns"})]})])
-        style.configure("FileDownload.Horizontal.TProgressbar", background=p.CYAN,
-                        troughcolor=p.BG_LIGHT, bordercolor=p.BG_LIGHT,
-                        borderwidth=0, troughborderwidth=0, thickness=round(4 * ui_scale(self)),
-                        lightcolor=p.BG_LIGHT, darkcolor=p.BG_LIGHT)
-        self.progress = ttk.Progressbar(body, orient="horizontal", mode="determinate",
-                                       style="FileDownload.Horizontal.TProgressbar")
-        self.progress.pack(fill="x", pady=(0, 10))
-        self.status_label = label(body, "")
-        self.status_label.configure(textvariable=self.status_text, justify="left", fg=p.TEXT_DIM)
-        self.status_label.pack(fill="x", pady=(0, 16))
-        body.bind("<Configure>", lambda event: self.status_label.configure(wraplength=max(80, event.width - 4)), add="+")
-        actions = GlassBody(body, bg=p.BG_MID)
-        actions.pack(fill="x")
-        self.download_btn = button(actions, "Download", self._start_download, primary=True)
-        self.download_btn.pack(side="right")
-        self.cancel_btn = button(actions, "Cancel", self._cancel_download, state="disabled")
-        self.cancel_btn.pack(side="right", padx=(0, 8))
-
-    def _choose_dir(self):
-        chosen = filedialog.askdirectory(initialdir=self.download_dir.get())
-        if chosen:
-            self.download_dir.set(chosen)
-
-    def _start_download(self):
-        url = self.url_entry.get().strip()
-        if not url:
-            messagebox.showwarning("Missing link", "Please paste a download link first.")
-            return
-
-        if not check_internet_connection():
-            proceed = messagebox.askyesno(
-                "Internet Connection Warning",
-                "Could not verify an active internet connection.\n\n"
-                "Downloads typically require an active internet connection.\n\n"
-                "Would you like to attempt the download anyway?",
-                parent=self,
-            )
-            if not proceed:
+        def _start_download(self):
+            url = self.url_entry.text().strip()
+            if not url:
+                QMessageBox.warning(self, "Missing link", "Please paste a download link first.")
                 return
+            self.download_btn.setEnabled(False)
+            self.cancel_btn.setEnabled(True)
+            self.cancel_event.clear()
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            self.status_label.setText("Starting download...")
+            self.worker_thread = threading.Thread(target=self._run_download, args=(url, Path(self.folder_entry.text())),
+                                                  daemon=True)
+            self.worker_thread.start()
 
-        dest_dir = Path(self.download_dir.get())
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        def _run_download(self, url, dest_dir):
+            try:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                final_path = download_direct_link(url, dest_dir, self.reports.progress.emit, self.cancel_event)
+                self.reports.success.emit(str(final_path))
+            except Exception as error:  # pylint: disable=broad-except
+                self.reports.failure.emit(str(error))
 
-        self.cancel_event.clear()
-        self.progress["value"] = 0
-        self.status_text.set("Starting download...")
-        self.download_btn.config(state="disabled")
-        self.cancel_btn.config(state="normal")
+        def _update_progress(self, downloaded, total):
+            megabytes = downloaded / (1024 * 1024)
+            if total > 0:
+                percent = downloaded / total * 100
+                self.progress.setValue(round(percent))
+                self.status_label.setText(f"Downloading... {megabytes:.2f} MB / {total / (1024 * 1024):.2f} MB ({percent:.1f}%)")
+            else:
+                self.progress.setRange(0, 0)
+                self.status_label.setText(f"Downloading... {megabytes:.2f} MB (size unknown)")
 
-        self.worker_thread = threading.Thread(
-            target=self._run_download, args=(url, dest_dir), daemon=True
-        )
-        self.worker_thread.start()
+        def _finish(self, status):
+            self.status_label.setText(status)
+            self.download_btn.setEnabled(True)
+            self.cancel_btn.setEnabled(False)
 
-    def _run_download(self, url, dest_dir):
-        def on_progress(downloaded, total):
-            self.after(0, self._update_progress, downloaded, total)
+        def _on_success(self, final_path):
+            self.progress.setRange(0, 100)
+            self.progress.setValue(100)
+            self._finish(f"Done. Saved to:\n{final_path}")
 
-        try:
-            final_path = download_direct_link(url, dest_dir, on_progress, self.cancel_event)
-            self.after(0, self._on_success, final_path)
-        except Exception as e:
-            self.after(0, self._on_error, str(e))
+        def _on_error(self, message):
+            self.progress.setRange(0, 100)
+            self._finish(f"Error: {message}")
 
-    def _update_progress(self, downloaded, total):
-        if total > 0:
-            percent = (downloaded / total) * 100
-            self.progress["value"] = percent
-            self.status_text.set(f"Downloading... {downloaded / (1024*1024):.2f} MB / {total / (1024*1024):.2f} MB ({percent:.1f}%)")
-        else:
-            self.progress["mode"] = "indeterminate"
-            self.status_text.set(f"Downloading... {downloaded / (1024*1024):.2f} MB (size unknown)")
+        def _cancel_download(self):
+            self.cancel_event.set()
+            self.status_label.setText("Cancelling...")
+            self.cancel_btn.setEnabled(False)
 
-    def _on_success(self, final_path):
-        self.progress["value"] = 100
-        self.status_text.set(f"Done. Saved to:\n{final_path}")
-        self.download_btn.config(state="normal")
-        self.cancel_btn.config(state="disabled")
-
-    def _on_error(self, message):
-        self.status_text.set(f"Error: {message}")
-        self.download_btn.config(state="normal")
-        self.cancel_btn.config(state="disabled")
-
-    def _cancel_download(self):
-        self.cancel_event.set()
-        self.status_text.set("Cancelling...")
-        self.cancel_btn.config(state="disabled")
+    app = QApplication.instance() or QApplication(sys.argv)
+    register_fonts()
+    install_no_focus_lines(app)
+    mode = theme_mode or get_theme_mode()
+    mode = mode if mode in Theme.PALETTES else "default"
+    Theme.apply_theme(mode)
+    palette = Theme.PALETTES[Theme.active_theme]
+    app.setStyleSheet(build_stylesheet(Theme.active_theme) + f"""
+        QFrame#download-card {{ background: {palette["BG_MID"]}; border: 1px solid {palette["BORDER"]}; border-radius: 10px; }}
+        QLabel#download-title {{ color: {palette["TEXT_BRIGHT"]}; font-size: 17px; font-weight: 700; }}
+        QLabel#download-subtitle, QLabel#download-status {{ color: {palette["TEXT_DIM"]}; }}
+    """)
+    return app, DownloaderWindow()
 
 
 if __name__ == "__main__":
-    app = DownloaderApp()
-    app.mainloop()
+    application, window = create_window()
+    window.show()
+    raise SystemExit(application.exec())

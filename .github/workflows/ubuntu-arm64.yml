@@ -33,7 +33,7 @@ jobs:
           prerequisites="$(/usr/bin/python3 - <<'PY'
           from direct.ubuntu.preflight import system_libraries, SYSTEM_TOOLS, CLIPBOARD_PACKAGES, normalize_packages
           from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES
-          packages = ['python3-venv', 'python3-tk', 'xvfb', *SYSTEM_PACKAGES, *CLIPBOARD_PACKAGES]
+          packages = ['python3-venv', 'xvfb', *SYSTEM_PACKAGES, *CLIPBOARD_PACKAGES]
           packages += [package for _, package in (*system_libraries(), *SYSTEM_TOOLS)]
           print(' '.join(normalize_packages(packages)))
           PY

@@ -34,6 +34,9 @@ for _p in (_project_root, _modules_path, _main_path):
         sys.path.insert(0, str(_p))
 
 from src.modules.package_jobs import guarded_package_operation, package_store_lease, package_core_directory
+from src.modules.platformio_build_env import (
+    RUN_OPTIONS as PLATFORMIO_RUN_OPTIONS, build_environment, prune_object_cache,
+)
 from main.core.project_scaffold import create_project_scaffold
 from main.core.ghost_sketch import (
     create_ghost_project_path, discard_ghost_project_path, is_ghost_project,
@@ -2011,7 +2014,7 @@ class MCUWebBackendAPI:
                 return False
 
             try:
-                if sys.platform.startswith("linux"):
+                if sys.platform != "win32":
                     from main.platforms.ubuntu_esptool import connect_chip
                     esp = connect_chip(
                         esptool, serial_list=[port], port=port,
@@ -2026,7 +2029,7 @@ class MCUWebBackendAPI:
                     )
             except Exception:
                 time.sleep(0.5)
-                if sys.platform.startswith("linux"):
+                if sys.platform != "win32":
                     from main.platforms.ubuntu_esptool import connect_chip
                     esp = connect_chip(
                         esptool, serial_list=[port], port=port,
@@ -2761,7 +2764,7 @@ class MCUWebBackendAPI:
         if (self.is_busy or getattr(self, "active_operation", None) is not None
                 or getattr(self, "_current_op_phase", None) is not None):
             return ""
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             from PySide6.QtWidgets import QFileDialog, QWidget
             parent = self._window if isinstance(self._window, QWidget) else None
             selected = QFileDialog.getExistingDirectory(parent, "Open sketch project", str(self.sketch_dir_path))
@@ -2802,7 +2805,7 @@ class MCUWebBackendAPI:
 
     def open_file_picker(self) -> str:
         """Open native file browser dialog for .ino, .cpp, .c, .h files."""
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             from PySide6.QtWidgets import QFileDialog, QWidget
             parent = self._window if isinstance(self._window, QWidget) else None
             selected, _ = QFileDialog.getOpenFileName(
@@ -3064,9 +3067,9 @@ class MCUWebBackendAPI:
 
     def open_in_explorer(self):
         """Open the active sketch directory in the native file manager."""
-        if sys.platform.startswith("linux") and self.sketch_dir_path.exists():
+        if sys.platform != "win32" and self.sketch_dir_path.exists():
             try:
-                subprocess.Popen(["xdg-open", str(self.sketch_dir_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(self.sketch_dir_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError as exc:
                 self.emit("notification", {"title": "Could not open folder", "message": str(exc), "type": "error"})
             return
@@ -3087,7 +3090,7 @@ class MCUWebBackendAPI:
         # 1. Primary discovery via pyserial SetupAPI enumeration
         try:
             for p in serial.tools.list_ports.comports():
-                if sys.platform.startswith("linux"):
+                if sys.platform != "win32":
                     from main.platforms.ubuntu_ports import port_entry
                     entry = port_entry(p)
                     if entry is not None:
@@ -3249,7 +3252,7 @@ class MCUWebBackendAPI:
 
             payload_text = json.dumps(state_data, indent=2, ensure_ascii=False)
             self._queue_hardware_state_write(sketch_dir, state_payload, payload_text)
-            if sys.platform.startswith("linux"):
+            if sys.platform != "win32":
                 return state_payload  # Native assistant waits for this exact durable revision.
         except Exception as exc:
             self.emit("console:log", {"text": f"Project connection state could not be saved: {exc}",
@@ -4072,7 +4075,7 @@ class MCUWebBackendAPI:
             if (not fallback and resolved.get("pio_resolution_status") != "ambiguous"
                     and (resolved.get("pio_resolved") is False or not resolved.get("board"))):
                 from src.modules.offline_runtime import bootstrap_instruction
-                definition_kind = "Native" if sys.platform.startswith("linux") else "Offline"
+                definition_kind = "Native" if sys.platform != "win32" else "Offline"
                 self.emit("console:log", {"text": bootstrap_instruction(f"{definition_kind} board definition unavailable: {name}"),
                                           "tag": "error", "newline": True})
             if resolved != info:
@@ -4145,6 +4148,36 @@ class MCUWebBackendAPI:
             except Exception:
                 pass
         return merged_body
+
+    @staticmethod
+    def _platformio_build_environment(jobs) -> tuple[Path, dict]:
+        """Every PlatformIO action shares one environment; see platformio_build_env."""
+        core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
+        core_dir = Path(core_dir)
+        return core_dir, build_environment(os.environ, core_dir, jobs)
+
+    def _compile_reset_project(self, project_dir: Path, board_name: str, board_info: dict,
+                               pio_cmd: list, jobs: int, launch_env: dict) -> tuple[bool, str]:
+        """Build and certify a reset firmware without touching any serial port."""
+        process = subprocess.Popen(
+            [*pio_cmd, "run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_flash", "-j", str(jobs)],
+            cwd=str(project_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", env=launch_env,
+            **_HOST_RUNTIME.process_options(priority=True, session=True),
+        )
+        self._active_process = process
+        output_tail: list[str] = []
+        if process.stdout:
+            for raw in iter(process.stdout.readline, ""):
+                line = raw.rstrip()
+                if line and any(token in line.lower() for token in ("error", "fatal", "failed")):
+                    output_tail = (output_tail + [line])[-8:]
+                    self.emit("console:log", {"text": f"  {line}", "tag": "error", "newline": True})
+        process.wait()
+        self._active_process = None
+        if process.returncode != 0:
+            return False, (output_tail[-1] if output_tail else f"PlatformIO exited with code {process.returncode}")
+        return self._write_reset_manifest(project_dir, board_name, board_info)
 
     def _compile_worker(self, is_upload: bool = False, is_clean_retry: bool = False) -> bool:
         """Keep preparation failures observable and release the operation safely."""
@@ -4270,7 +4303,8 @@ class MCUWebBackendAPI:
             # A started rebuild cannot reuse its earlier success certificate.
             # Keep incremental objects and every other board's workspace.
             from main.core.compiled_cache import (file_digest, input_signature, invalidate_receipt,
-                                                  read_input_signature, write_input_signature)
+                                                  library_bytes_changed, read_input_signature,
+                                                  write_input_signature)
             invalidate_receipt(cache_root)
 
             # Pre-create build directories to avoid SCons dbm/dblite FileNotFoundError
@@ -4359,12 +4393,16 @@ class MCUWebBackendAPI:
             staged_hashes = {path.name: file_digest(path)
                              for path in src_dir.iterdir() if path.is_file()}
             build_inputs = input_signature(cache_root)
-            if read_input_signature(cache_root) != build_inputs:
+            previous_inputs = read_input_signature(cache_root)
+            if library_bytes_changed(previous_inputs, build_inputs):
                 # External library edits can retain coarse timestamps. Retire
                 # only this target's objects instead of trusting SCons times.
+                # A configuration or dependency-list change needs no retirement:
+                # SCons already rebuilds exactly what those flags affect.
                 if not self._clean_board_cache(build_board):
                     raise RuntimeError("The selected board's changed build inputs could not be cleared")
                 (cache_root / ".pio" / "build" / "mcu_env").mkdir(parents=True, exist_ok=True)
+            if previous_inputs != build_inputs:
                 write_input_signature(cache_root, build_inputs)
 
             # Dynamically determine optimal compiler workers using real-time available RAM
@@ -4395,36 +4433,14 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": "", "newline": True})
             self.emit("console:log", {"text": "  Starting PlatformIO build process...", "tag": "purple", "newline": True})
 
-            cmd = pio_cmd + ["run", "-j", str(jobs)]
+            cmd = pio_cmd + ["run", *PLATFORMIO_RUN_OPTIONS, "-j", str(jobs)]
 
-            # Configure high-performance SCons and PlatformIO environment variables matching LATEST-WORKING-MCU- FLASHER
-            launch_env = os.environ.copy()
-            core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
+            core_dir, launch_env = self._platformio_build_environment(jobs)
             # Pre-verify SCons build engine so PlatformIO doesn't
             # re-download it mid-compile (avoids scary console noise).
             if not ensure_scons_ready(core_dir):
                 from src.modules.offline_runtime import bootstrap_instruction
                 raise RuntimeError(bootstrap_instruction("PlatformIO tool-scons is missing"))
-            launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
-            launch_env["PLATFORMIO_CACHE_DIR"] = str(core_dir / ".cache")
-            launch_env["PLATFORMIO_GLOBALLIB_DIR"] = str(core_dir / "lib")
-            launch_env["TMP"] = str(core_dir / ".tmp")
-            launch_env["TEMP"] = str(core_dir / ".tmp")
-            launch_env["TMPDIR"] = str(core_dir / ".tmp")
-            launch_env["PYTHONUNBUFFERED"] = "1"
-            launch_env["PYTHONWARNINGS"] = "ignore"
-            launch_env["PLATFORMIO_UNBUFFERED"] = "1"
-            launch_env["PLATFORMIO_SETTING_ENABLE_CACHE"] = "true"
-            launch_env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "1"
-            launch_env["PLATFORMIO_DISABLE_PROMPTS"] = "1"
-            launch_env["PLATFORMIO_NO_TELEMETRY"] = "1"
-            launch_env["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
-            launch_env["PYTHONDONTWRITEBYTECODE"] = "0"
-            launch_env.pop("PLATFORMIO_BUILD_CACHE_DIR", None)
-            launch_env.pop("PYTHONOPTIMIZE", None)
-            launch_env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-            launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
-            launch_env["SCONSFLAGS"] = f"-j{jobs}"
 
             compiler_cwd = cache_root
             if sys.platform == "win32":
@@ -4448,7 +4464,7 @@ class MCUWebBackendAPI:
 
             output_lines: list[str] = []
             _ubuntu_build_info = None
-            if sys.platform.startswith("linux"):
+            if sys.platform != "win32":
                 from main.platforms.ubuntu_logs import UbuntuBuildInfo
                 _ubuntu_build_info = UbuntuBuildInfo(self, binfo, self.current_board or "")
             _dependency_graph_active = [False]
@@ -4951,6 +4967,8 @@ class MCUWebBackendAPI:
                                                 build_inputs=build_inputs):
                     raise RuntimeError("The compiled build could not be verified and saved for this board.")
                 self.update_skip_compile_availability()
+                threading.Thread(target=prune_object_cache, args=(core_dir,), name="MCU_ObjectCachePrune",
+                                 daemon=True).start()
                 if not is_upload:
                     self.emit("console:progress", {"action": "Completed"})
 
@@ -6680,7 +6698,11 @@ class MCUWebBackendAPI:
                     if (item / h).is_file() or (item / "src" / h).is_file():
                         seen_lib_names.add(norm_name)
                         matched_headers.add(h)
-                        detected_symlinks.append(f"symlink://{item.as_posix()}")
+                        # A symlink dependency requires a manifest. A plain folder
+                        # is still found through lib_extra_dirs by the same header.
+                        if any((item / manifest).is_file() for manifest in
+                               ("library.json", "library.properties", "module.json")):
+                            detected_symlinks.append(f"symlink://{item.as_posix()}")
                         break
 
         detected_symlinks.sort()
@@ -6918,15 +6940,10 @@ class MCUWebBackendAPI:
             jobs = self._get_jobs()
             # The successful build was byte-verified immediately above. Ask
             # PlatformIO only to upload it, avoiding a second build/LDF pass.
-            command += ["run", "-e", "mcu_env", "-t", "nobuild", "-t", "upload", "-j", str(jobs)]
+            command += ["run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_env", "-t", "nobuild", "-t", "upload", "-j", str(jobs)]
             if port:
                 command += ["--upload-port", port]
-            core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
-            env = os.environ.copy()
-            env["PLATFORMIO_CORE_DIR"] = str(core_dir)
-            env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-            env["PLATFORMIO_RUN_JOBS"] = str(jobs)
-            env["SCONSFLAGS"] = f"-j{jobs}"
+            _, env = self._platformio_build_environment(jobs)
             from main.core.upload_log import UploadLog
             upload_log = UploadLog(
                 self, info, getattr(self, "current_board", "") or "", port,
@@ -7068,12 +7085,17 @@ class MCUWebBackendAPI:
     def _board_cache_key(self, board_name: str | None = None) -> str:
         name = board_name or self.current_board or "unknown_board"
         binfo = self._resolve_board_info(name)
+        # Catalog rows also carry match scores, source folders and manifest
+        # spellings that change on any refresh. Those must not select another
+        # workspace: that rebuilt every sketch and reset firmware from nothing.
         identity = {
             "display_name": name,
             "platform": str(binfo.get("platform", "")),
             "board": str(binfo.get("board", "")),
             "framework": str(binfo.get("framework", "")),
-            "definition": binfo,
+            "definition": {key: binfo.get(key) for key in (
+                "mcu", "flash_mb", "has_psram", "memory_type", "flash_mode",
+                "backend", "arduino_fqbn", "arduino_cli")},
         }
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8", errors="replace")
         digest = hashlib.sha256(encoded).hexdigest()[:10]
@@ -7119,7 +7141,7 @@ class MCUWebBackendAPI:
 
     def _get_esptool_cmd(self) -> list[str]:
         """Dynamically resolve the most reliable esptool command across Windows environments."""
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             from main.platforms.ubuntu_esptool import esptool_command
             return esptool_command()
         try:
@@ -7443,7 +7465,7 @@ class MCUWebBackendAPI:
         if not pio_path:
             return None, "PlatformIO is unavailable."
         jobs = self._get_jobs()
-        cmd = pio_path + ["run", "-e", "mcu_flash", "-j", str(jobs)]
+        cmd = pio_path + ["run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_flash", "-j", str(jobs)]
         self.emit("console:log", {
             "text": f"  First Hard/Soft Reset for {board_name} — preparing exact-board recovery binaries…",
             "tag": "info",
@@ -7451,16 +7473,7 @@ class MCUWebBackendAPI:
         })
         output_lines: list[str] = []
         try:
-            launch_env = os.environ.copy()
-            core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
-            launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
-            launch_env["TMP"] = str(core_dir / ".tmp")
-            launch_env["TEMP"] = str(core_dir / ".tmp")
-            launch_env["PYTHONUNBUFFERED"] = "1"
-            launch_env.pop("PYTHONOPTIMIZE", None)
-            launch_env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-            launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
-            launch_env["SCONSFLAGS"] = f"-j{jobs}"
+            _, launch_env = self._platformio_build_environment(jobs)
 
             proc = subprocess.Popen(
                 cmd,
@@ -8028,7 +8041,8 @@ class MCUWebBackendAPI:
             (cache_root / ".pio" / "libdeps" / "mcu_env").mkdir(parents=True, exist_ok=True)
 
             jobs = self._get_jobs()
-            cmd = pio_cmd + ["run", "-e", "mcu_env", "-t", "nobuild", "-t", "upload", "-j", str(jobs), "--upload-port", port]
+            cmd = pio_cmd + ["run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_env", "-t", "nobuild", "-t", "upload",
+                             "-j", str(jobs), "--upload-port", port]
 
             creation_flags = (
                 (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == "win32" else 0
@@ -8039,18 +8053,8 @@ class MCUWebBackendAPI:
                 startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0x00000001)
                 startupinfo.wShowWindow = 0
 
-            launch_env = os.environ.copy()
-            core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
-            launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
-            tmp_dir = core_dir / ".tmp"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            launch_env["TMP"] = str(tmp_dir)
-            launch_env["TEMP"] = str(tmp_dir)
-            launch_env["PYTHONUNBUFFERED"] = "1"
-            launch_env.pop("PYTHONOPTIMIZE", None)
-            launch_env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-            launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
-            launch_env["SCONSFLAGS"] = f"-j{jobs}"
+            core_dir, launch_env = self._platformio_build_environment(jobs)
+            (core_dir / ".tmp").mkdir(parents=True, exist_ok=True)
 
             # Synchronize esptool connect behavior via cache_root and env vars (ESP only)
             if is_esp:
@@ -8780,7 +8784,7 @@ class MCUWebBackendAPI:
         def _worker():
             plat = str(binfo.get("platform", "")).lower()
 
-            if sys.platform.startswith("linux"):
+            if sys.platform != "win32":
                 from main.platforms.ubuntu_esptool import subcommand
 
             owner_pid = port_occupied_owner(port)
@@ -8838,21 +8842,12 @@ class MCUWebBackendAPI:
                     cache_root, _ = self._prepare_reset_project(board_name, binfo)
                     jobs = self._get_jobs()
                     cmd = pio_path + [
-                        "run", "-e", "mcu_flash", "-t", "bootloader",
+                        "run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_flash", "-t", "bootloader",
                         "-j", str(jobs),
                         "--upload-port", port,
                     ]
                     self.emit("console:progress", {"action": "Burning bootloader"})
-                    launch_env = os.environ.copy()
-                    core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
-                    launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
-                    launch_env["TMP"] = str(core_dir / ".tmp")
-                    launch_env["TEMP"] = str(core_dir / ".tmp")
-                    launch_env["PYTHONUNBUFFERED"] = "1"
-                    launch_env.pop("PYTHONOPTIMIZE", None)
-                    launch_env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-                    launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
-                    launch_env["SCONSFLAGS"] = f"-j{jobs}"
+                    _, launch_env = self._platformio_build_environment(jobs)
 
                     proc = subprocess.Popen(
                         cmd,
@@ -8896,7 +8891,7 @@ class MCUWebBackendAPI:
                         "--before", "default-reset",
                         "--after", "no-reset",
                         "--connect-attempts", "30",
-                        subcommand("erase_flash") if sys.platform.startswith("linux") else "erase_flash",
+                        subcommand("erase_flash") if sys.platform != "win32" else "erase_flash",
                     ]
                     launch_env = os.environ.copy()
                     erase_cfg_path = self._write_esptool_connect_config(
@@ -8987,7 +8982,7 @@ class MCUWebBackendAPI:
                         "--before", before_reset,
                         "--after", "no-reset",
                         "--connect-attempts", "30",
-                        subcommand("erase_flash") if sys.platform.startswith("linux") else "erase_flash",
+                        subcommand("erase_flash") if sys.platform != "win32" else "erase_flash",
                     ]
 
                     launch_env = os.environ.copy()
@@ -9219,16 +9214,7 @@ class MCUWebBackendAPI:
                     return
 
                 jobs = self._get_jobs()
-                launch_env = os.environ.copy()
-                core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
-                launch_env["PLATFORMIO_CORE_DIR"] = str(core_dir)
-                launch_env["TMP"] = str(core_dir / ".tmp")
-                launch_env["TEMP"] = str(core_dir / ".tmp")
-                launch_env["PYTHONUNBUFFERED"] = "1"
-                launch_env.pop("PYTHONOPTIMIZE", None)
-                launch_env["PLATFORMIO_BUILD_JOBS"] = str(jobs)
-                launch_env["PLATFORMIO_RUN_JOBS"] = str(jobs)
-                launch_env["SCONSFLAGS"] = f"-j{jobs}"
+                _, launch_env = self._platformio_build_environment(jobs)
 
                 ok = False
                 err_msg = ""
@@ -9252,7 +9238,7 @@ class MCUWebBackendAPI:
                     self.emit("console:log", {"text": f"  Compiling clean recovery sketch for {board_name}...", "tag": "info", "newline": True})
                     self.emit("console:progress", {"action": "Compiling recovery sketch"})
                     compile_cmd = pio_cmd + [
-                        "run", "-e", "mcu_flash",
+                        "run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_flash",
                         "-j", str(jobs),
                     ]
                     proc = subprocess.Popen(
@@ -9404,17 +9390,24 @@ class MCUWebBackendAPI:
                         "clearcommerror", "setcommstate", "getcommstate",
                     )
                     target_label = port if port else "native programmer"
+                    # Certify the recovery build on its own. A failed upload or
+                    # an unplugged board must not cost the next reset a rebuild.
+                    if not reset_cached:
+                        self.emit("console:log", {"text": f"  Compiling clean recovery sketch for {board_name}...", "tag": "info", "newline": True})
+                        self.emit("console:progress", {"action": "Compiling recovery sketch"})
+                        built, build_error = self._compile_reset_project(project_dir, board_name, binfo, pio_cmd, jobs, launch_env)
+                        if not built:
+                            raise RuntimeError(build_error)
+                        reset_cached = True
                     self.emit("console:log", {"text": f"  Executing soft reset upload on {target_label}...", "tag": "info", "newline": True})
 
                     while True:
                         self._check_write_connection(port, binfo)
                         cmd = pio_cmd + [
-                            "run", "-e", "mcu_flash",
+                            "run", *PLATFORMIO_RUN_OPTIONS, "-e", "mcu_flash",
                             "-j", str(jobs),
+                            "-t", "nobuild", "-t", "upload",
                         ]
-                        if reset_cached:
-                            cmd.extend(["-t", "nobuild"])
-                        cmd.extend(["-t", "upload"])
                         if port and needs_port:
                             cmd.extend(["--upload-port", port])
                         proc = subprocess.Popen(
@@ -9481,12 +9474,6 @@ class MCUWebBackendAPI:
                             continue
 
                         ok = (rc == 0)
-                        if ok and not reset_cached:
-                            manifest_ok, manifest_error = self._write_reset_manifest(project_dir, board_name, binfo)
-                            if not manifest_ok:
-                                # The upload completed, but never advertise an
-                                # unverified result for the next operation.
-                                self.emit("console:log", {"text": manifest_error, "tag": "warning", "newline": True})
                         if not ok:
                             err_msg = f"Upload failed with exit code {rc}"
                             if is_avr_target:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Ubuntu dependency checks; never install packages or open a GUI."""
+"""Read-only native Linux dependency checks; never install packages or open a GUI."""
 from __future__ import annotations
 
 from importlib import metadata
@@ -19,8 +19,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from src.modules.ubuntu_release import require_supported_ubuntu
+from src.modules.ubuntu_release import linux_label, package_manager, require_supported_ubuntu
 from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
+from direct.ubuntu import fedora_packages
 
 # Ubuntu package names are kept beside their SONAMEs so a first-run failure
 # explains the actual missing dependency instead of Qt's generic xcb warning.
@@ -63,72 +64,79 @@ SYSTEM_TOOLS = (("bash", "bash"), ("git", "git"), ("make", "build-essential"),
 CLIPBOARD_PACKAGES = ("xclip", "wl-clipboard")
 
 
+def _uses_dnf() -> bool:
+    return package_manager() == "dnf"
+
+
 def system_libraries(architecture: str | None = None) -> tuple[tuple[str, str], ...]:
-    """Return only this CPU's Ubuntu library prerequisites, without loading Qt."""
-    return SYSTEM_LIBRARIES + (ARM_SYSTEM_LIBRARIES if (architecture or host_architecture()) == "arm64" else ())
+    """Return only this CPU's library prerequisites for this distribution, without loading Qt."""
+    arm = (architecture or host_architecture()) == "arm64"
+    if _uses_dnf():
+        return fedora_packages.SYSTEM_LIBRARIES + (fedora_packages.ARM_SYSTEM_LIBRARIES if arm else ())
+    return SYSTEM_LIBRARIES + (ARM_SYSTEM_LIBRARIES if arm else ())
+
+
+def system_tools() -> tuple[tuple[str, str], ...]:
+    return fedora_packages.SYSTEM_TOOLS if _uses_dnf() else SYSTEM_TOOLS
 
 
 def normalize_packages(packages) -> tuple[str, ...]:
     require_supported_ubuntu()
-    renamed = {"libasound2": "libasound2t64", "libglib2.0-0": "libglib2.0-0t64"}
+    renamed = {} if _uses_dnf() else {"libasound2": "libasound2t64", "libglib2.0-0": "libglib2.0-0t64"}
     return tuple(dict.fromkeys(renamed.get(item, item) for item in packages))
 
 
 class MissingSystemDependencies(RuntimeError):
-    """Known Ubuntu packages needed by Bootstrap, separate from fatal host errors."""
+    """Known distribution packages needed by Bootstrap, separate from fatal host errors."""
 
     def __init__(self, packages):
         self.packages = normalize_packages(packages)
-        super().__init__("Ubuntu system dependencies are missing: " + ", ".join(self.packages) +
-                         "\nLaunch MCU Flasher normally to install them through Ubuntu Bootstrap."
+        label = linux_label()
+        super().__init__(f"{label} system dependencies are missing: " + ", ".join(self.packages) +
+                         f"\nLaunch MCU Flasher normally to install them through {label} Bootstrap."
                          "\nManual alternative:\n" + system_install_command(self.packages))
 
 
 def system_install_command(packages=None) -> str:
     """Return a manual recovery command; checks never execute it."""
+    arm = host_architecture() == "arm64"
+    if _uses_dnf():
+        if not packages:
+            packages = [fedora_packages.VENV_PACKAGE, *(package for _, package in fedora_packages.SYSTEM_TOOLS),
+                        *fedora_packages.CLIPBOARD_PACKAGES, *(package for _, package in system_libraries()),
+                        *(fedora_packages.ARM_QT5_PACKAGES if arm else ())]
+        return "sudo dnf install " + " ".join(normalize_packages(packages))
     if not packages:
-        packages = ["python3-venv", "python3-tk", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", "gnome-keyring", *CLIPBOARD_PACKAGES,
+        packages = ["python3-venv", "build-essential", "git", "xdg-utils", "ripgrep", "libsecret-tools", "gnome-keyring", *CLIPBOARD_PACKAGES,
                     *(package for _, package in system_libraries())]
-        if host_architecture() == "arm64":
+        if arm:
             from direct.ubuntu.arm_qt5 import SYSTEM_PACKAGES
             packages.extend(SYSTEM_PACKAGES)
     return "sudo apt install " + " ".join(normalize_packages(packages))
 
 
-def _check_tk() -> None:
-    try:
-        import tkinter as tk
-        from tkinter import ttk
-    except ImportError as exc:
-        raise RuntimeError("Install python3-tk for the Python interpreter used by MCU Flasher.") from exc
-    try:
-        tk.Tcl()  # Check native Tcl data without requiring a display.
-    except (tk.TclError, OSError) as exc:
-        raise RuntimeError(f"Ubuntu's Tcl/Tk data is unavailable: {exc}. Install python3-tk.") from exc
-
-
 def host_preflight(*, require_display=False) -> None:
     require_supported_ubuntu()
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("This launcher requires native Ubuntu/Linux. Use MCU_Flasher.exe on Windows.")
+        raise RuntimeError("This launcher requires native Linux. Use MCU_Flasher.exe on Windows.")
+    label = linux_label()
+    fedora = _uses_dnf()
+    venv_package = fedora_packages.VENV_PACKAGE if fedora else "python3-venv"
     if sys.version_info < (3, 10):
-        raise RuntimeError("Python 3.10 or newer is required. Install Ubuntu's python3 and python3-venv.")
+        raise RuntimeError(f"Python 3.10 or newer is required. Install {label}'s "
+                           + ("python3." if fedora else "python3 and python3-venv."))
     architecture = host_architecture(os.uname().machine)
     if struct.calcsize("P") != 8:
-        raise RuntimeError("MCU Flasher requires a 64-bit Ubuntu Python interpreter (amd64 or ARM64).")
+        raise RuntimeError(f"MCU Flasher requires a 64-bit {label} Python interpreter (amd64 or ARM64).")
     if require_display and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        raise RuntimeError("Open MCU Flasher from your Ubuntu desktop session. No DISPLAY or WAYLAND_DISPLAY is available.")
+        raise RuntimeError(f"Open MCU Flasher from your {label} desktop session. No DISPLAY or WAYLAND_DISPLAY is available.")
     missing = []
     if architecture == "arm64":
         from direct.ubuntu.arm_qt5 import missing_system_packages
-        missing.extend(missing_system_packages())
+        missing.extend(missing_system_packages(fedora=fedora))
     if importlib.util.find_spec("ensurepip") is None:
-        missing.append("python3-venv")
-    try:
-        _check_tk()
-    except RuntimeError:
-        missing.append("python3-tk")
-    for executable, package in SYSTEM_TOOLS:
+        missing.append(venv_package)
+    for executable, package in system_tools():
         if not shutil.which(executable):
             missing.append(package)
     # Prepare both desktop backends so switching between X11 and Wayland does
@@ -153,7 +161,7 @@ def _check_linked_libraries(paths) -> None:
     failures = []
     for path in paths:
         if not path.is_file():
-            raise RuntimeError(f"A Qt runtime file is missing: {path}. Rerun Ubuntu Bootstrap.")
+            raise RuntimeError(f"A Qt runtime file is missing: {path}. Rerun {linux_label()} Bootstrap.")
         result = subprocess.run(["ldd", str(path)], capture_output=True, text=True, timeout=15, check=False)
         missing = [line.strip() for line in result.stdout.splitlines() if "not found" in line]
         if result.returncode or missing:
@@ -161,7 +169,7 @@ def _check_linked_libraries(paths) -> None:
             failures.append(f"{path.name}: {detail}")
     if failures:
         raise RuntimeError("Qt native dependencies are unavailable:\n" + "\n".join(failures) + "\n"
-                           "Install the Ubuntu desktop prerequisites:\n" + system_install_command())
+                           f"Install the {linux_label()} desktop prerequisites:\n" + system_install_command())
 
 
 def _check_qt_runtime_files(qt_root: Path, architecture: str) -> None:
@@ -172,15 +180,15 @@ def _check_qt_runtime_files(qt_root: Path, architecture: str) -> None:
     # runtime must never reach native loading or a host loader for a foreign CPU.
     for native in paths:
         if not native.is_file():
-            raise RuntimeError(f"A Qt runtime file is missing: {native}. Rerun Ubuntu Bootstrap.")
+            raise RuntimeError(f"A Qt runtime file is missing: {native}. Rerun {linux_label()} Bootstrap.")
         if not elf_matches_host(native, architecture):
-            raise RuntimeError("Ubuntu's Qt runtime was copied from another CPU architecture. "
+            raise RuntimeError(f"{linux_label()}'s Qt runtime was copied from another CPU architecture. "
                                "Run bash direct/ubuntu/run.sh --repair on this computer.")
     _check_linked_libraries(paths)
 
 
 def bootstrap_ready(core) -> bool:
-    """Ubuntu launch needs native CLI tools and certified native board packs."""
+    """A native launch needs native CLI tools and certified native board packs."""
     from main.platforms.ubuntu_arduino import find_arduino_cli
     from main.platforms.ubuntu_opencode import find_opencode_cli
     from src.modules.offline_bootstrap import ready
@@ -199,17 +207,17 @@ def check_qt_python_compatibility() -> None:
         parts = version.split(".", 2)
         release = int(parts[0]), int(parts[1])
     except (metadata.PackageNotFoundError, ValueError, IndexError) as exc:
-        raise RuntimeError("The Ubuntu Qt runtime version cannot be validated. "
+        raise RuntimeError(f"The {linux_label()} Qt runtime version cannot be validated. "
                            "Run bash direct/ubuntu/run.sh --repair.") from exc
     if release >= (6, 12):
-        raise RuntimeError(f"PySide6 {version} is incompatible with Ubuntu Python "
+        raise RuntimeError(f"PySide6 {version} is incompatible with {linux_label()} Python "
                            f"{sys.version_info[0]}.{sys.version_info[1]}. "
                            "This Linux wheel can crash while rendering. "
                            "Run bash direct/ubuntu/run.sh --repair to install PySide6 below 6.12.")
 
 
 def check_platformio_click_compatibility() -> None:
-    """Keep Ubuntu's PlatformIO CLI off Click's deprecated parsing APIs."""
+    """Keep the native PlatformIO CLI off Click's deprecated parsing APIs."""
     if not sys.platform.startswith("linux"):
         return
     try:
@@ -220,10 +228,10 @@ def check_platformio_click_compatibility() -> None:
             raise ValueError("Unrecognized Click version")
         release = tuple(int(part) for part in match.groups())
     except (metadata.PackageNotFoundError, ValueError, TypeError) as exc:
-        raise RuntimeError("The Ubuntu PlatformIO Click dependency cannot be validated. "
+        raise RuntimeError(f"The {linux_label()} PlatformIO Click dependency cannot be validated. "
                            "Run bash direct/ubuntu/run.sh --repair.") from exc
     if not (8, 1, 8) <= release < (8, 2, 0):
-        raise RuntimeError(f"Click {version} is incompatible with Ubuntu's PlatformIO runtime. "
+        raise RuntimeError(f"Click {version} is incompatible with {linux_label()}'s PlatformIO runtime. "
                            "PlatformIO still uses parsing APIs deprecated in Click 8.2. "
                            "Run bash direct/ubuntu/run.sh --repair to install Click >=8.1.8,<8.2.")
 
@@ -234,7 +242,7 @@ def runtime_preflight(root=ROOT) -> None:
     root = Path(root).resolve()
     expected = root / ".venv-linux"
     if sys.prefix == sys.base_prefix or Path(sys.prefix).resolve() != expected:
-        raise RuntimeError("MCU Flasher must use its own .venv-linux environment. Rerun Ubuntu Bootstrap.")
+        raise RuntimeError(f"MCU Flasher must use its own .venv-linux environment. Rerun {linux_label()} Bootstrap.")
     architecture = host_architecture()
     from direct.ubuntu.runtime_architecture import check_runtime_architecture
     check_runtime_architecture(expected, architecture)
@@ -247,7 +255,6 @@ def runtime_preflight(root=ROOT) -> None:
     check_platformio_click_compatibility()
     sys.path.insert(0, str(root))
     try:
-        _check_tk()
         import PySide6
         import PySide6.QtWebEngineWidgets
         import serial
@@ -258,8 +265,8 @@ def runtime_preflight(root=ROOT) -> None:
         from src.modules.mbed_compat import prepare_dependencies
         prepare_dependencies()
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
-        raise RuntimeError(f"Ubuntu runtime dependency validation failed: {exc}\n"
-                           "Rerun Ubuntu Bootstrap; python3-tk must be supplied by Ubuntu.") from exc
+        raise RuntimeError(f"{linux_label()} runtime dependency validation failed: {exc}\n"
+                           f"Rerun {linux_label()} Bootstrap.") from exc
     # Keep Qt5 and Qt6 native graphs in separate processes, as in production.
     result = subprocess.run([sys.executable, "-B", "-c",
                              "import PyQt5.QtWidgets, PyQt5.Qsci; "
@@ -268,7 +275,7 @@ def runtime_preflight(root=ROOT) -> None:
                             capture_output=True, text=True, timeout=30, check=False)
     if result.returncode:
         raise RuntimeError("The library sample viewer's PyQt5/QScintilla runtime is unavailable:\n" +
-                           result.stderr.strip() + "\nRerun Ubuntu Bootstrap.")
+                           result.stderr.strip() + f"\nRerun {linux_label()} Bootstrap.")
     viewer_plugin = Path(result.stdout.strip())
     _check_linked_libraries((viewer_plugin,))
 
@@ -276,7 +283,7 @@ def runtime_preflight(root=ROOT) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", action="store_true", help="Check the prepared private environment")
-    parser.add_argument("--host", action="store_true", help="Check native Ubuntu prerequisites")
+    parser.add_argument("--host", action="store_true", help="Check native Linux prerequisites")
     parser.add_argument("--require-display", action="store_true")
     args = parser.parse_args(argv)
     try:

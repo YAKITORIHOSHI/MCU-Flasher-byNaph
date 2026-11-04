@@ -1,7 +1,8 @@
 """OS-protected cloud credentials. No passwords or tokens in the checkout.
 
 Windows uses Credential Manager (the current user's protected credential vault).
-Ubuntu uses the desktop Secret Service through ``secret-tool``. Missing or locked
+macOS uses the login Keychain through ``/usr/bin/security``. Linux uses the
+desktop Secret Service through ``secret-tool``. Missing or locked
 secure storage is an error; there is deliberately no plaintext/key-file fallback.
 """
 from __future__ import annotations
@@ -37,6 +38,8 @@ class CredentialStore:
     """Small JSON records kept exclusively in the OS credential vault."""
 
     SERVICE = "MCUFlasher.Cloud.v1"
+    SECURITY_TOOL = "/usr/bin/security"
+    KEYCHAIN_NOT_FOUND = 44  # errSecItemNotFound, as the security tool reports it.
 
     def __init__(self, *, platform: str | None = None):
         self._platform = platform or sys.platform
@@ -45,18 +48,21 @@ class CredentialStore:
     def status(self) -> tuple[bool, str]:
         if self._platform == "win32":
             return True, "Windows Credential Manager protects saved credentials for this user."
+        if self._platform == "darwin" and os.access(self.SECURITY_TOOL, os.X_OK):
+            return True, "The macOS Keychain protects saved credentials for this user."
         if self._platform.startswith("linux") and shutil.which("secret-tool"):
             return True, "The desktop Secret Service protects saved credentials for this user."
         return False, (
-            "Secure credential saving is unavailable. On Ubuntu install libsecret-tools and gnome-keyring "
-            "and unlock a desktop keyring, or sign in without saving credentials."
+            "Secure credential saving is unavailable. On Linux install your desktop's Secret Service tools "
+            "(libsecret and gnome-keyring) and unlock a keyring, or sign in without saving credentials."
         )
 
     def _target(self, name: str) -> str:
         return self.SERVICE + ":" + hashlib.sha256(name.encode("utf-8")).hexdigest()
 
     def get(self, name: str) -> dict[str, Any] | None:
-        raw = self._windows_read(name) if self._platform == "win32" else self._linux_read(name)
+        raw = (self._windows_read(name) if self._platform == "win32"
+               else self._keychain_read(name) if self._platform == "darwin" else self._linux_read(name))
         if raw is None:
             return None
         try:
@@ -74,6 +80,8 @@ class CredentialStore:
             raise SecureStorageError("This credential is too large for secure storage.")
         if self._platform == "win32":
             self._windows_write(name, raw)
+        elif self._platform == "darwin":
+            self._keychain_write(name, raw)
         else:
             self._linux_write(name, raw)
 
@@ -82,6 +90,8 @@ class CredentialStore:
             api, _ = self._windows_api()
             if not api.CredDeleteW(self._target(name), 1, 0) and ctypes.get_last_error() != 1168:
                 raise SecureStorageError("Windows could not forget the saved cloud credential.")
+        elif self._platform == "darwin":
+            self._keychain_delete(name)
         else:
             self._secret_tool("clear", name)
 
@@ -143,6 +153,40 @@ class CredentialStore:
         credential.UserName = self.SERVICE
         if not api.CredWriteW(ctypes.byref(credential), 0):
             raise SecureStorageError("Windows could not securely save cloud credentials.")
+
+    def _security(self, arguments: list[str], *, stdin: str | None = None):
+        if not os.access(self.SECURITY_TOOL, os.X_OK):
+            raise SecureStorageError(self.status[1])
+        try:
+            return subprocess.run([self.SECURITY_TOOL, *arguments], input=stdin, text=True, encoding="utf-8",
+                                  capture_output=True, timeout=15, check=False)
+        except (OSError, subprocess.SubprocessError, UnicodeError):
+            raise SecureStorageError("The macOS Keychain did not respond. Unlock it and try again.") from None
+
+    def _keychain_read(self, name: str) -> str | None:
+        result = self._security(["find-generic-password", "-s", self.SERVICE, "-a", self._target(name), "-w"])
+        if result.returncode == self.KEYCHAIN_NOT_FOUND:
+            return None
+        if result.returncode != 0:
+            raise SecureStorageError("The macOS Keychain is unavailable or locked. Unlock it and try again.")
+        try:
+            return bytes.fromhex(result.stdout.strip()).decode("utf-8")
+        except ValueError:
+            raise SecureStorageError("Saved cloud credentials are damaged. Forget them and sign in again.") from None
+
+    def _keychain_write(self, name: str, raw: str) -> None:
+        # Sent through stdin, never argv, where any local process could read it. Hex
+        # needs no quoting there and always reads back as the exact stored text.
+        command = (f"add-generic-password -U -s {self.SERVICE} -a {self._target(name)} "
+                   f"-w {raw.encode('utf-8').hex()}\n")
+        result = self._security(["-i"], stdin=command)
+        if result.returncode != 0 or result.stderr.strip():
+            raise SecureStorageError("The macOS Keychain could not save cloud credentials. Unlock it and try again.")
+
+    def _keychain_delete(self, name: str) -> None:
+        result = self._security(["delete-generic-password", "-s", self.SERVICE, "-a", self._target(name)])
+        if result.returncode not in (0, self.KEYCHAIN_NOT_FOUND):
+            raise SecureStorageError("The macOS Keychain could not forget the saved cloud credential.")
 
     def _secret_tool(self, action: str, name: str, raw: str | None = None) -> str | None:
         binary = shutil.which("secret-tool") if self._platform.startswith("linux") else None

@@ -1,4 +1,4 @@
-"""Detect a private Ubuntu environment copied from a different CPU architecture."""
+"""Detect a private native environment copied from a different CPU architecture."""
 from __future__ import annotations
 
 import json
@@ -68,8 +68,9 @@ def check_runtime_architecture(directory: Path, architecture: str | None = None)
         raise RuntimeError("Ubuntu runtime architecture record is damaged. Rerun Ubuntu Bootstrap.") from exc
     if (not isinstance(data, dict) or data.get("owner") != OWNER
             or data.get("architecture") != architecture):
-        raise RuntimeError("Ubuntu's private runtime belongs to another CPU architecture. "
-                           "Run bash direct/ubuntu/run.sh --repair on this computer.")
+        from src.modules.platform_runtime import repair_command
+        raise RuntimeError("This private runtime belongs to another CPU architecture. "
+                           f"Run {repair_command()} on this computer.")
 
 
 def record_runtime_architecture(directory: Path, architecture: str | None = None) -> None:

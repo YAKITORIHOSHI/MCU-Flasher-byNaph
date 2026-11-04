@@ -627,69 +627,6 @@ class BootstrapDialog(QDialog):
                 cursor.setPosition(excess, QTextCursor.MoveMode.KeepAnchor)
                 cursor.removeSelectedText()
 
-    def _restore_summary(self, snapshot):
-        self._presentation.restore_snapshot(snapshot.get("presentation", {}))
-        state = snapshot.get("summary")
-        if not state:
-            self._append_summaries(self._presentation.events)
-            self._set_details_expanded(snapshot.get("details_expanded", False))
-            return
-        doc = self.summary_edit.document()
-        raw = state.get("text", "")
-        keys = {"ok": "T_GREEN", "warn": "T_YELLOW", "fail": "T_RED", "failed_step": "T_RED",
-                "section": "T_CYAN", "subsection": "T_TEXT_BRIGHT", "dim": "T_TEXT_DIM", "update": "T_MAGENTA"}
-        cursor = QTextCursor(doc)
-        for run in state.get("runs", ({"text": raw, "tags": []},)):
-            tags = run.get("tags", [])
-            tag = next((value for value in reversed(tags) if value in keys and value != "failed_step"), "normal")
-            fmt = self._summary_format(tag, "failed_step" in tags)
-            start = cursor.position()
-            cursor.insertText(run["text"], fmt)
-            if tag in ("section", "subsection"):
-                block = doc.findBlock(start)
-                while block.isValid() and block.position() < cursor.position():
-                    self.summary_edit.mark_heading(block, tag)
-                    block = block.next()
-        removed = max(0, len(raw.encode("utf-16-le")) // 2 - doc.characterCount() + 1)
-        def position(offset):
-            return max(0, min(len(raw[:offset].encode("utf-16-le")) // 2 - removed, doc.characterCount() - 1))
-        selection = state.get("selection")
-        if selection:
-            cursor = QTextCursor(doc)
-            cursor.setPosition(position(selection[0]))
-            cursor.setPosition(position(selection[1]), QTextCursor.MoveMode.KeepAnchor)
-            self.summary_edit.setTextCursor(cursor)
-        # The presenter supplies dedupe state; the display preserves the reader.
-        section = next((event.text for event in reversed(self._presentation.events) if event.tag == "section"), None)
-        start = raw.rfind(section) if section else 0
-        self._summary_step_start = QTextCursor(doc)
-        self._summary_step_start.setPosition(position(state.get("step_start", max(0, start))))
-        self._summary_step_start.setKeepPositionOnInsert(True)
-        current_stage = []
-        for event in reversed(self._presentation.events):
-            if event.tag == "section":
-                break
-            current_stage.append(event)
-        self._summary_failed = bool(state.get("step_failed", any(event.tag == "fail" for event in current_stage)))
-        enabled = snapshot.get("auto_scroll", True)
-        self._summary_follow.enabled = enabled
-        reading = state.get("user_scrolled_up", False)
-        self._summary_follow.user_scrolled_up = reading
-        self._set_details_expanded(snapshot.get("details_expanded", False))
-        top = doc.findBlock(position(state.get("top_offset", 0))).blockNumber()
-        def restore_view():
-            self._summary_follow._depth += 1
-            try:
-                bar = self.summary_edit.verticalScrollBar()
-                bar.setValue(max(0, top) if reading or not enabled else bar.maximum())
-                horizontal = self.summary_edit.horizontalScrollBar()
-                horizontal.setValue(round(horizontal.maximum() * state.get("horizontal_fraction", 0)))
-            finally:
-                self._summary_follow._depth -= 1
-            self._summary_follow.user_scrolled_up = reading
-        restore_view()
-        QTimer.singleShot(0, restore_view)
-
     def dispatch(self, name, args):
         try:
             if name == "call":
@@ -703,82 +640,13 @@ class BootstrapDialog(QDialog):
         except Exception as error:
             self._context.record_exception(f"Bootstrap Qt display event error: {error}")
 
-    def restore_snapshot(self, snapshot):
-        """Restore the actual bounded Tk display, including committed tables."""
-        raw = snapshot["text"]
-        doc = self.log_edit.document()
-        maximum_blocks = self.log_edit.maximumBlockCount()
-        self.log_edit.setMaximumBlockCount(0)
-        cursor = QTextCursor(doc)
-        palette = self._theme_pal
-        colors = {"ok": "T_GREEN", "warn": "T_YELLOW", "fail": "T_RED",
-                  "failed_step": "T_RED", "section": "T_CYAN", "subsection": "T_CYAN",
-                  "dim": "T_TEXT_DIM", "update": "T_MAGENTA", "normal": "T_TEXT",
-                  "pip_row": "T_CYAN"}
-        for run in snapshot["runs"]:
-            tags = run["tags"]
-            tag = "failed_step" if "failed_step" in tags else next((value for value in reversed(tags) if value in colors), "normal")
-            fmt = QTextCharFormat()
-            color = palette[colors[tag]]
-            fmt.setForeground(QColor(color))
-            fmt.setFontFamilies(["Consolas", "Cascadia Code", "Courier New", "monospace"])
-            if tag in ("section", "subsection", "ok", "fail", "failed_step"):
-                fmt.setFontWeight(QFont.Weight.Bold)
-            self._insert_with_bar_styling(cursor, run["text"], fmt, color)
-        self.log_edit.setMaximumBlockCount(maximum_blocks)
-        removed = max(0, len(raw.encode("utf-16-le")) // 2 - doc.characterCount() + 1)
-
-        def position(offset):
-            value = len(raw[:offset].encode("utf-16-le")) // 2 - removed
-            return max(0, min(value, doc.characterCount() - 1))
-
-        self._step_start_cursor = QTextCursor(doc)
-        self._step_start_cursor.setPosition(position(snapshot["step_start"]))
-        self._step_start_cursor.setKeepPositionOnInsert(True)
-        self._step_failed = snapshot["step_failed"]
-        if snapshot["live_type"]:
-            self._live_block_type = snapshot["live_type"]
-            self._live_start_cursor = QTextCursor(doc)
-            self._live_start_cursor.setPosition(position(snapshot["live_start"]))
-            self._live_end_cursor = QTextCursor(doc)
-            self._live_end_cursor.setPosition(position(snapshot["live_end"]))
-            self._sync_live_block()
-        selection = snapshot["selection"]
-        if selection:
-            cursor = QTextCursor(doc)
-            cursor.setPosition(position(selection[0]))
-            cursor.setPosition(position(selection[1]), QTextCursor.MoveMode.KeepAnchor)
-            self.log_edit.setTextCursor(cursor)
-        enabled = snapshot["auto_scroll"]
-        self.auto_scroll_cb.blockSignals(True)
-        self.auto_scroll_cb.setChecked(enabled)
-        self.auto_scroll_cb.blockSignals(False)
-        self._follow.enabled = enabled
-        self._follow.user_scrolled_up = snapshot["user_scrolled_up"]
-        top_block = doc.findBlock(position(snapshot["top_offset"])).blockNumber()
-        horizontal = snapshot["horizontal_fraction"]
-
-        def restore_view():
-            vertical = self.log_edit.verticalScrollBar()
-            # Qt also consumes valueChanged to move the text viewport.
-            # Suppress only follow-state tracking, never that native signal.
-            self._follow._depth += 1
-            try:
-                if enabled and not snapshot["user_scrolled_up"]:
-                    vertical.setValue(vertical.maximum())
-                else:
-                    vertical.setValue(max(0, top_block))
-            finally:
-                self._follow._depth -= 1
-            self._follow.user_scrolled_up = snapshot["user_scrolled_up"]
-            bar = self.log_edit.horizontalScrollBar()
-            bar.setValue(round(bar.maximum() * horizontal))
-        restore_view()
-        QTimer.singleShot(0, restore_view)
+    def restore_history(self, history):
+        """Show what setup reported before this window could open."""
+        for text, tag in history:
+            self._on_log(text, tag)
         self._on_status(self._gui._status_text)
         self._on_progress(self._gui._overall_progress)
         self._tick_clock()
-        self._restore_summary(snapshot)
 
     def _unset_topmost(self):
         try:

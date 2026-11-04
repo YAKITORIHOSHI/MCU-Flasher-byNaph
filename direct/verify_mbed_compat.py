@@ -195,8 +195,9 @@ class MbedCompatibilityChecks(unittest.TestCase):
             self.assertEqual(sum(getattr(item, "_mcu_mbed_compat", False) is True for item in sys.meta_path), 1)
             prepare.assert_not_called()
             audit.assert_called_once_with(offline_runtime._audit)
-            with self.assertRaises(offline_runtime.OfflineDependencyError):
-                offline_runtime._audit("socket.connect", (None, ("example.invalid", 443)))
+            # Package Offline Mode never disables application networking.
+            self.assertFalse(offline_runtime.network_access_disabled())
+            self.assertIsNone(offline_runtime._audit("socket.connect", (None, ("example.invalid", 443))))
 
     def test_bootstrap_check_uses_target_python_and_real_api_validation(self):
         tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))

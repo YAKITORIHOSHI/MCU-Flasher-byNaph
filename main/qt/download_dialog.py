@@ -41,7 +41,7 @@ def launch_download_manager(parent: Optional[QWidget] = None) -> bool:
             )
         return False
 
-    if sys.platform.startswith("linux"):
+    if sys.platform != "win32":
         from src.modules.ubuntu_download_manager import request
         if request(ROOT, "wake"):
             sig_bus.notification.emit({

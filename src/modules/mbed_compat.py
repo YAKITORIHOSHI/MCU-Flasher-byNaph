@@ -107,7 +107,8 @@ def prepare_dependencies():
         if not callable(find_executable) or not callable(LooseVersion) or cmp(1, 2) != -1:
             raise ImportError("Mbed compatibility APIs are unavailable")
     except (ImportError, OSError, ValueError) as exc:
-        entry = "bash direct/ubuntu/run.sh --repair" if sys.platform.startswith("linux") else "direct/windows/run.vbs --repair"
+        from src.modules.platform_runtime import repair_command
+        entry = repair_command()
         raise RuntimeError(f"Mbed Python compatibility dependencies are unavailable: {exc}. "
                            f"Prepare them in bootstrap: {entry}") from exc
 
@@ -119,7 +120,7 @@ def _packages_directory():
     core = os.environ.get("PLATFORMIO_CORE_DIR", "").strip()
     if core:
         return Path(core) / "packages"
-    if sys.platform.startswith("linux"):
+    if sys.platform != "win32":
         from src.modules.platform_runtime import native_platformio_dir
         return native_platformio_dir() / "packages"
     return Path(__file__).resolve().parents[1] / ".platformio-mcu-gui" / "packages"

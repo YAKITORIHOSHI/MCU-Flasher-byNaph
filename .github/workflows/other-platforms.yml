@@ -1,0 +1,158 @@
+name: Other platforms
+
+# Real Fedora, Linux Mint and macOS evidence for the shipping Python application.
+# Containers have no physical desktop, USB device or board; Macs have no board.
+# Those remain separate qualification gates, as audit/PLATFORM_VERIFICATION.md records.
+on:
+  push:
+    paths:
+      - .github/workflows/other-platforms.yml
+      - LAUNCHER/**
+      - direct/**
+      - main/**
+      - mcu_flash_gui.py
+      - src/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: other-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  launcher-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Build this CPU's native entries on the oldest supported ABI
+        run: python -B direct/build_launcher_folder.py
+      - name: Verify literal arguments and moved-folder dispatch without startup
+        run: |
+          python -m pip install 'psutil>=5.9,<8'
+          env -u DISPLAY -u WAYLAND_DISPLAY python -B direct/verify_launcher_folder.py --native-only
+      - name: Retain the native entries
+        uses: actions/upload-artifact@v6
+        with:
+          name: launcher-binaries-${{ matrix.os }}
+          path: |
+            LAUNCHER/UBUNTU
+            LAUNCHER/UBUNTU_ARM64
+            LAUNCHER/FEDORA
+            LAUNCHER/FEDORA_ARM64
+            LAUNCHER/LINUX_MINT
+          if-no-files-found: error
+
+  linux-distribution:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fedora-44-x86_64
+            image: registry.fedoraproject.org/fedora:44
+            runner: ubuntu-24.04
+          - name: fedora-44-aarch64
+            image: registry.fedoraproject.org/fedora:44
+            runner: ubuntu-24.04-arm
+          - name: fedora-45-x86_64
+            image: registry.fedoraproject.org/fedora:45
+            runner: ubuntu-24.04
+          - name: linux-mint-22.3-x86_64
+            image: docker.io/linuxmintd/mint22.3-amd64:latest
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+      options: --shm-size=1g
+    timeout-minutes: 90
+    env:
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+      # Containers forbid the namespaces Chromium's sandbox needs. Production keeps it.
+      QTWEBENGINE_DISABLE_SANDBOX: '1'
+    steps:
+      - name: Fixture tools only; the application's own prerequisites install later
+        run: |
+          if command -v dnf >/dev/null; then
+            dnf install -y --setopt=install_weak_deps=False git-core tar sudo shadow-utils python3 \
+              util-linux-script xorg-x11-server-Xvfb xorg-x11-xauth
+          else
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git tar sudo bsdutils python3 xvfb xauth
+          fi
+      - uses: actions/checkout@v6
+      - name: Admission, package adapter and cold first launch on this real userland
+        run: bash direct/verify_linux_distribution_host.sh
+      - name: Retain first-launch evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: first-launch-${{ matrix.name }}
+          path: |
+            temp/audit/other-platforms/*
+            temp/audit/ubuntu-first-run/*/*.json
+            temp/audit/ubuntu-first-run/*/*.log
+            temp/audit/ubuntu-first-run/*/*.png
+          if-no-files-found: warn
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-14-apple-silicon
+            runner: macos-14
+          - name: macos-15-apple-silicon
+            runner: macos-15
+          - name: macos-15-intel
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      PYTHONFAULTHANDLER: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Record the host
+        run: |
+          mkdir -p temp/audit/other-platforms
+          { sw_vers; uname -a; sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu; } | tee temp/audit/other-platforms/host.txt
+      - name: Admission and fabricated-tool adapter checks
+        run: |
+          python -m pip install 'psutil>=5.9,<8'
+          python -B direct/verify_ubuntu_release.py
+          python -B direct/verify_macos_adapter.py
+      - name: Cold first launch from the real entry, through to real Compile
+        # Hosted Apple Silicon has three CPU cores, below the app's four-core policy.
+        # Only the disposable fixture overrides that; production keeps the policy.
+        run: python -B direct/verify_ubuntu_first_run.py --execute --allow-small-runner --timeout 3000
+      - name: The package browser and Keychain adapter in the runtime that first launch created
+        run: |
+          fixture="$(dirname "$(ls -d temp/audit/ubuntu-first-run/*/result.json | tail -1)")"
+          cd "$fixture/app"
+          QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_package_browser.py
+          QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_browser_loading.py
+          .venv-macos/bin/python -B direct/verify_macos_adapter.py
+      - name: Retain first-launch evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: first-launch-${{ matrix.name }}
+          path: |
+            temp/audit/other-platforms/*
+            temp/audit/ubuntu-first-run/*/*.json
+            temp/audit/ubuntu-first-run/*/*.log
+            temp/audit/ubuntu-first-run/*/*.png
+            temp/audit/ubuntu-first-run/*/app/logs/macos-launch-*.log
+          if-no-files-found: warn

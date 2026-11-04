@@ -1,4 +1,4 @@
-"""Exercise the cold-to-original setup window handoff without running installers."""
+"""Exercise the plain-text to Qt setup window handoff without running installers."""
 from __future__ import annotations
 
 import argparse
@@ -49,7 +49,7 @@ def verify_sink_swap():
 
 def verify_qt_origin_guard(folder):
     """Embedded Qt support is virtual; foreign native/package graphs stay blocked."""
-    import verify_bootstrap_native as native_checks
+    import verify_bootstrap_console as native_checks
     gui, namespace = native_checks.fixture()
     gui.close()
     root = folder / 'qt-origin-guard'
@@ -105,7 +105,7 @@ def verify_qt_origin_guard(folder):
 
 
 def warm_child(mode, folder):
-    import verify_bootstrap_native as native_checks
+    import verify_bootstrap_console as native_checks
     sys.meta_path[:] = [finder for finder in sys.meta_path if not isinstance(finder, native_checks.NoQt)]
     gui, namespace = native_checks.fixture(mode, has_qt=True, preimport_qt=True)
     result = {'scenario': 'warm', 'theme': mode, 'qt_preimported': True, 'errors': []}
@@ -137,21 +137,25 @@ def warm_child(mode, folder):
     return 0 if result.get('passed') else 1
 
 
+def inspection_lines(gui):
+    gui.log_section('Failed earlier attempt')
+    gui.log_status('Unicode diagnostic: 🧪 café e\u0301')
+    gui.log_fail('Retained failure details')
+    gui.log_section('Dependency verification succeeded')
+    return ('Failed earlier attempt', 'Unicode diagnostic: 🧪 café e\u0301', 'Retained failure details',
+            'Dependency verification succeeded')
+
+
 def retry_child(mode, folder):
     """A failed display restore must permit a later safe promotion in this process."""
-    import verify_bootstrap_native as native_checks
+    import verify_bootstrap_console as native_checks
     gui, namespace = native_checks.fixture(mode)
     native, dispatcher = gui._native_window, gui._signals
-    native._set_details_expanded(True)
     started = gui._start_time
     for number in range(140):
         gui.log_status(f'Retry retained row {number:03d}')
-    native.auto_var.set(False)
-    native._auto()
-    native.log_edit.yview_moveto(.3)
     gui.pump()
-    expected = native.log_edit.get('1.0', 'end-1c')
-    expected_top = native.log_edit.get(native.log_edit.index('@0,0'), native.log_edit.index('@0,0 lineend'))
+    expected = [text for text, _tag in native.snapshot()]
     sys.meta_path[:] = [finder for finder in sys.meta_path if not isinstance(finder, native_checks.NoQt)]
     loader = namespace['_load_bootstrap_qt']
     state = {'rejected': False, 'restore': None}
@@ -160,13 +164,13 @@ def retry_child(mode, folder):
     def failing_once_loader():
         app, cls = loader()
         if state['restore'] is None:
-            state['restore'] = cls.restore_snapshot
-            def restore(self, snapshot):
+            state['restore'] = cls.restore_history
+            def restore(self, history):
                 if not state['rejected']:
                     state['rejected'] = True
                     raise OSError('Deliberate isolated first restore failure')
-                return state['restore'](self, snapshot)
-            cls.restore_snapshot = restore
+                return state['restore'](self, history)
+            cls.restore_history = restore
         return app, cls
     namespace['_load_bootstrap_qt'] = failing_once_loader
 
@@ -177,15 +181,11 @@ def retry_child(mode, folder):
             assert gui._signals is dispatcher and gui._start_time == started
             assert gui._native_window is None and native.closed
             window = gui._window
-            assert window.isVisible() and not window.auto_scroll_cb.isChecked()
-            assert window.details_expanded
-            assert window.log_stack.currentWidget() is window.log_edit
+            assert window.isVisible()
             actual = window.log_edit.toPlainText()
-            for line in expected.splitlines():
-                if line.strip():
-                    assert actual.count(line) == expected.count(line), repr(line)
-            assert actual.count('Could not open the original setup view') == 1
-            assert window.log_edit.firstVisibleBlock().text() == expected_top
+            for line in expected:
+                assert actual.count(line) == 1, repr(line)
+            assert actual.count('Could not open the setup window') == 1
             assert result['callbacks'] == list(range(70))
             assert namespace['save_bootstrap_config'].call_count == 0
             assert window.grab().save(str(folder / f'original-qt-{mode}-retry.png'))
@@ -219,12 +219,11 @@ def retry_child(mode, folder):
 
 
 def summary_child(mode, folder):
-    """Promote the default clean reading surface without replaying raw events."""
-    import verify_bootstrap_native as native_checks
+    """The window's clean summary and raw details rebuild from what setup reported."""
+    import verify_bootstrap_console as native_checks
     gui, namespace = native_checks.fixture(mode)
     native, dispatcher = gui._native_window, gui._signals
     started = gui._start_time
-    assert not native._details_expanded
     gui.log_section('Preparing Python dependencies')
     for number in range(110):
         gui.log_status(f'Summary row {number:03d} · café e\u0301')
@@ -238,29 +237,9 @@ def summary_child(mode, folder):
     # top-level failed result. Its clean failed-step state must also transfer.
     gui.log_dim('ERROR: Required tool package is missing')
     gui.log_dim('pip: No matching distribution found for fixture-tool')
-    divider = '  ' + '─' * 104
-    gui.update_pip_table_block(
-        f'{divider}\n  pyserial                                  ⬇ Downloading...\n'
-        f'  ▰▰▱▱  40%\n{divider}\n  PySide6                                   ✖ Install Failed\n'
-        f'  ▰▰▰▰  100%\n{divider}\n')
     status = 'Installing Python dependencies (' + ', '.join(f'fixture-package-{i}' for i in range(14)) + ')...'
     gui.set_status(status)
-    native.auto_var.set(False)
-    native._auto()
-    native.summary_edit.yview_moveto(.25)
-    selected = native.summary_edit.search('café e\u0301', '1.0')
-    end = native.summary_edit.index(selected + ' + 7 chars')
-    native.summary_edit.tag_add('sel', selected, end)
-    native.summary_edit.mark_set('insert', end)
     gui.pump()
-    expected_selection = native.summary_edit.get('sel.first', 'sel.last')
-    expected_top = native.summary_edit.get(native.summary_edit.index('@0,0'), native.summary_edit.index('@0,0 lineend'))
-    snapshot = native.snapshot()
-    assert not snapshot['step_failed']
-    assert snapshot['summary']['step_failed']
-    assert snapshot['summary']['text'].count('Downloaded pyserial successfully.') == 1
-    assert '.whl.metadata' not in snapshot['summary']['text']
-    assert '.whl.metadata' in snapshot['text']
     sys.meta_path[:] = [finder for finder in sys.meta_path if not isinstance(finder, native_checks.NoQt)]
     result = {'scenario': 'summary', 'theme': mode, 'errors': [], 'callbacks': []}
 
@@ -271,18 +250,11 @@ def summary_child(mode, folder):
             assert gui._signals is dispatcher and gui._start_time == started
             assert not window.details_expanded
             assert window.log_stack.currentWidget() is window.summary_edit
-            assert window.summary_edit.toPlainText() == snapshot['summary']['text']
-            assert window.log_edit.toPlainText() == snapshot['text']
-            assert window._presentation.snapshot() == snapshot['presentation']
+            summary = window.summary_edit.toPlainText()
+            assert summary.count('Downloaded pyserial successfully.') == 1
+            assert '.whl.metadata' not in summary
+            assert '.whl.metadata' in window.log_edit.toPlainText()
             assert window._summary_failed
-            assert window.summary_edit.textCursor().selectedText().replace('\u2029', '\n') == expected_selection
-            assert window.summary_edit.firstVisibleBlock().text() == expected_top
-            assert not window.auto_scroll_cb.isChecked()
-            assert window.package_panel.isVisible()
-            displayed = [row for row in window.package_rows if row.isVisible()]
-            assert len(displayed) == 2
-            assert any('pyserial' in row.status_lbl.text() and row.pct_lbl.text() == '40%' for row in displayed)
-            assert any('PySide6' in row.status_lbl.text() and row.pct_lbl.text() == '100%' for row in displayed)
             assert '14 packages' in window.status_lbl.text()
             assert window.status_lbl.toolTip() == status
             for message, color_key in (('Custom board framework is unavailable', 'T_RED'),
@@ -295,8 +267,11 @@ def summary_child(mode, folder):
             assert window.summary_edit.toPlainText() == before, 'Promotion lost stage-scoped success deduplication'
             gui.log_warn('Custom board framework is unavailable')
             assert window.summary_edit.toPlainText().count('Custom board framework is unavailable') == 2
-            assert window.summary_edit.textCursor().selectedText().replace('\u2029', '\n') == expected_selection
-            assert window.summary_edit.firstVisibleBlock().text() == expected_top
+            divider = '  ' + '─' * 104
+            gui.update_pip_table_block(
+                f'{divider}\n  pyserial                                  ⬇ Downloading...\n'
+                f'  ▰▰▱▱  40%\n{divider}\n')
+            assert window.package_panel.isVisible()
             gui.log_section('Separate verification stage')
             gui.log_ok('Downloaded pyserial successfully.')
             assert window.summary_edit.toPlainText().count('Downloaded pyserial successfully.') == 2
@@ -304,15 +279,11 @@ def summary_child(mode, folder):
             assert window.grab().save(str(folder / f'original-qt-{mode}-summary.png'))
             window._set_details_expanded(True)
             assert window.log_stack.currentWidget() is window.log_edit
-            assert '.whl.metadata' in window.log_edit.toPlainText()
             window._set_details_expanded(False)
-            assert window.summary_edit.textCursor().selectedText().replace('\u2029', '\n') == expected_selection
             assert result['callbacks'] == list(range(70))
             namespace['save_bootstrap_config'].assert_not_called()
             namespace['_record_bootstrap_exception'].assert_not_called()
-            result.update(passed=True, summary_events=len(snapshot['presentation']['events']),
-                          rows=snapshot['presentation']['rows'], first_visible=expected_top,
-                          selection=expected_selection, details_expanded=window.details_expanded)
+            result.update(passed=True, details_expanded=window.details_expanded)
         except BaseException:
             result['errors'].append(traceback.format_exc())
         finally:
@@ -346,10 +317,9 @@ def child(scenario, mode, folder):
         return retry_child(mode, folder)
     if scenario == 'summary':
         return summary_child(mode, folder)
-    import verify_bootstrap_native as native_checks
+    import verify_bootstrap_console as native_checks
     gui, namespace = native_checks.fixture(mode)
     native = gui._native_window
-    native._set_details_expanded(True)
     started = time.time() - 394
     gui._start_time = started
     gui._step_index = 5
@@ -357,27 +327,11 @@ def child(scenario, mode, folder):
     gui.set_status('Preparing complete offline board/library packs')
     for number in range(140):
         gui.log_status(f'Retained row {number:03d}')
-    gui.log_section('Failed earlier attempt')
-    gui.log_status('Unicode diagnostic: 🧪 café e\u0301')
-    gui.log_fail('Retained failure details')
-    gui.log_section('Dependency verification succeeded')
-    gui.update_pip_table_block('PACKAGE 120%\nRetained live table\n')
-    native.auto_var.set(False)
-    native._auto()
-    native.log_edit.yview_moveto(.35)
-    selected = native.log_edit.search('🧪 café e\u0301', '1.0')
-    end = native.log_edit.index(selected + ' + 10 chars')
-    native.log_edit.tag_add('sel', selected, end)
-    native.log_edit.mark_set('insert', end)
+    expected = inspection_lines(gui)
     gui.pump()
-    expected_selection = native.log_edit.get('sel.first', 'sel.last')
-    expected_top = native.log_edit.get(native.log_edit.index('@0,0'), native.log_edit.index('@0,0 lineend'))
-    expected_text = native.log_edit.get('1.0', 'end-1c')
-    native_snapshot = native.snapshot()
     dispatcher = gui._signals
-    result = {'scenario': scenario, 'theme': mode, 'cold_visible': bool(native.root.winfo_viewable()),
-              'initial_qt_app': gui._app is not None, 'expected_top': expected_top,
-              'expected_selection': expected_selection, 'errors': [], 'callbacks': []}
+    result = {'scenario': scenario, 'theme': mode, 'initial_qt_app': gui._app is not None,
+              'errors': [], 'callbacks': []}
 
     if scenario != 'unavailable':
         # Model verified dependency availability. No pip, package manager or
@@ -388,20 +342,11 @@ def child(scenario, mode, folder):
         loader = namespace['_load_bootstrap_qt']
         def failing_loader():
             app, window_class = loader()
-            def reject_snapshot(self, snapshot):
+            def reject_history(self, history):
                 raise OSError('Deliberate restore failure after Qt became available')
-            window_class.restore_snapshot = reject_snapshot
+            window_class.restore_history = reject_history
             return app, window_class
         namespace['_load_bootstrap_qt'] = failing_loader
-
-    if scenario == 'held':
-        bar = native.scrollbar
-        positions = [y for y in range(bar.winfo_height()) if bar.identify(bar.winfo_width() // 2, y) == 'thumb']
-        point = (bar.winfo_width() // 2, positions[len(positions) // 2])
-        bar.event_generate('<ButtonPress-1>', x=point[0], y=point[1])
-        assert native.held
-        native.root.after(70, lambda: result.update(held_wait_kept_native=not native.closed and gui._app is None))
-        native.root.after(180, lambda: bar.event_generate('<ButtonRelease-1>', x=point[0], y=point[1]))
 
     def inspect():
         try:
@@ -410,12 +355,9 @@ def child(scenario, mode, folder):
             if scenario in ('unavailable', 'rollback'):
                 assert not result['promoted']
                 assert gui._app is None and not native.closed
-                assert native.root.winfo_viewable()
-                retained = native.log_edit.get('1.0', 'end-1c')
-                result['fallback_text'] = retained
-                for line in expected_text.splitlines():
-                    if line.strip():
-                        assert retained.count(line) == expected_text.count(line), repr(line)
+                retained = [text for text, _tag in native.snapshot()]
+                for line in expected:
+                    assert sum(line in value for value in retained) == 1, repr(line)
                 namespace['_record_bootstrap_exception'].assert_called()
                 if scenario == 'rollback':
                     from PySide6.QtWidgets import QApplication
@@ -425,33 +367,20 @@ def child(scenario, mode, folder):
                 window = gui._window
                 assert result['promoted'] and isinstance(window, BootstrapDialog)
                 assert window.isVisible() and native.closed
-                assert window.details_expanded
-                assert window.log_stack.currentWidget() is window.log_edit
-                assert window.log_edit.toPlainText() == expected_text
-                assert window.summary_edit.toPlainText() == native_snapshot['summary']['text']
-                assert window._presentation.snapshot() == native_snapshot['presentation']
-                assert window.log_edit.textCursor().selectedText().replace('\u2029', '\n') == expected_selection
-                assert not window.auto_scroll_cb.isChecked()
-                result['actual_top'] = window.log_edit.firstVisibleBlock().text()
-                result['snapshot_top_offset'] = native_snapshot['top_offset']
-                result['qt_scroll_value'] = window.log_edit.verticalScrollBar().value()
-                assert window.log_edit.firstVisibleBlock().text() == expected_top, result['actual_top']
+                text = window.log_edit.toPlainText()
+                for line in expected:
+                    assert text.count(line) == 1, repr(line)
+                assert text.count('Retained row 139') == 1
                 assert 'border-radius: 12px' in window.styleSheet()
                 cursor = window.log_edit.document().find('Retained failure details')
                 assert cursor.charFormat().foreground().color().name().lower() == window._theme_pal['T_RED'].lower()
+                gui.update_pip_table_block('PACKAGE 120%\nRetained live table\n')
                 gui.update_pip_table_block('PACKAGE 280%\nReplacement live table\n')
                 assert 'PACKAGE 120%' not in window.log_edit.toPlainText()
                 assert window.log_edit.toPlainText().count('PACKAGE 280%') == 1
-                assert window.log_edit.textCursor().selectedText().replace('\u2029', '\n') == expected_selection
-                assert window.log_edit.firstVisibleBlock().text() == expected_top
-                result.update(qt_class=type(window).__name__, first_visible=window.log_edit.firstVisibleBlock().text(),
-                              selection=window.log_edit.textCursor().selectedText(),
-                              elapsed_seconds=time.time() - gui._start_time,
+                result.update(qt_class=type(window).__name__, elapsed_seconds=time.time() - gui._start_time,
                               qt_geometry=[window.width(), window.height()],
-                              auto_scroll=window.auto_scroll_cb.isChecked(),
                               pending_callbacks=list(result['callbacks']))
-                if scenario == 'held':
-                    assert result.get('held_wait_kept_native')
                 # Capture this fixture's QWidget only, never the desktop.
                 assert window.grab().save(str(folder / f'original-qt-{mode}-{scenario}.png'))
             assert result['callbacks'] == list(range(70)), 'Queued callbacks were lost or repeated'
@@ -490,8 +419,8 @@ def child(scenario, mode, folder):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--report-dir', type=Path, required=True)
-    parser.add_argument('--child', choices=('success', 'held', 'unavailable', 'rollback', 'warm', 'retry', 'summary'))
+    parser.add_argument('--report-dir', type=Path, default=ROOT / 'temp/audit/bootstrap-promotion')
+    parser.add_argument('--child', choices=('success', 'unavailable', 'rollback', 'warm', 'retry', 'summary'))
     parser.add_argument('--theme', default='default')
     args = parser.parse_args()
     folder = args.report_dir.resolve()
@@ -503,7 +432,7 @@ def main():
     verify_qt_origin_guard(folder)
     results = []
     for scenario, mode in [('success', 'default'), ('success', 'light'), ('success', 'solarized_dark'),
-                           ('held', 'default'), ('unavailable', 'default'),
+                           ('unavailable', 'default'),
                            ('rollback', 'default'), ('warm', 'default'), ('retry', 'default'),
                            ('summary', 'default')]:
         command = [sys.executable, '-B', str(Path(__file__).resolve()), '--report-dir', str(folder),

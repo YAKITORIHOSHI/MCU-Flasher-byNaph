@@ -41,8 +41,8 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
         self.assertIn(png, embedded)
 
     def test_shipped_launchers_are_distinct_native_64_bit_executables(self):
-        for name, machine, other_machine in (("MCU_Flasher", "x86_64", "aarch64"),
-                                             ("MCU_Flasher-arm64", "aarch64", "x86_64")):
+        for name, machine, other_machine in (("LAUNCHER/UBUNTU", "x86_64", "aarch64"),
+                                             ("LAUNCHER/UBUNTU_ARM64", "aarch64", "x86_64")):
             with self.subTest(launcher=name):
                 launcher = ROOT / name
                 self.assertTrue(ubuntu_architecture.elf_matches_host(launcher, machine))
@@ -59,9 +59,9 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as temporary:
             source = Path(temporary) / "source"
-            for relative in ("main", "direct", "src/modules", "src/editor", "src/assets", "src/fonts", "src/dbs"):
+            for relative in ("main", "direct", "src/modules", "src/editor", "src/assets", "src/fonts", "src/dbs", "LAUNCHER"):
                 (source / relative).mkdir(parents=True, exist_ok=True)
-            for name in ("MCU_Flasher", "mcu_flash_gui.py", "README.md"):
+            for name in ("LAUNCHER/UBUNTU", "mcu_flash_gui.py", "README.md"):
                 (source / name).write_text("fixture", encoding="utf-8")
             for name in ("verify_runtime.py", "verify_target_resolution.py"):
                 (source / "direct" / name).write_text('sys.path.insert(0, str(ROOT))\n', encoding="utf-8")
@@ -84,14 +84,14 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
                     if has_guidance:
                         (source / "AGENTS.md").write_text("Local hardware/settings fixture", encoding="utf-8")
                     if has_arm64:
-                        (source / "MCU_Flasher-arm64").write_bytes(b"ARM64 executable fixture")
+                        (source / "LAUNCHER/UBUNTU_ARM64").write_bytes(b"ARM64 executable fixture")
                     destination = Path(temporary) / ("with-guidance" if has_guidance else "clean-checkout")
                     scope["_copy_source"](destination)
-                    self.assertTrue((destination / "MCU_Flasher").is_file())
-                    self.assertEqual((destination / "MCU_Flasher-arm64").exists(), has_arm64)
+                    self.assertTrue((destination / "LAUNCHER/UBUNTU").is_file())
+                    self.assertEqual((destination / "LAUNCHER/UBUNTU_ARM64").exists(), has_arm64)
                     if has_arm64:
-                        self.assertEqual((destination / "MCU_Flasher-arm64").read_bytes(),
-                                         (source / "MCU_Flasher-arm64").read_bytes())
+                        self.assertEqual((destination / "LAUNCHER/UBUNTU_ARM64").read_bytes(),
+                                         (source / "LAUNCHER/UBUNTU_ARM64").read_bytes())
                     self.assertFalse((destination / "AGENTS.md").exists())
                     self.assertFalse((destination / "src/dbs/bootstrap_config.json").exists())
                     for relative in native_sources:
@@ -608,7 +608,7 @@ class LauncherChecks(unittest.TestCase):
 
         def host(**kwargs):
             if PathFinder.find_spec("cold_prerequisite", [str(site)]) is None:
-                raise preflight.MissingSystemDependencies(["python3-tk"])
+                raise preflight.MissingSystemDependencies(["python3-venv"])
 
         def install(*args, **kwargs):
             before = site.stat()

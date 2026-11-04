@@ -16,12 +16,14 @@ import time
 import urllib.request
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from main.platforms.ubuntu_opencode import MANAGED_OWNER, _native_executable, find_opencode_cli
-from src.modules.ubuntu_architecture import elf_matches_host, host_architecture, linux_tool_architecture
+from src.modules.platform_runtime import native_tools_name
+from src.modules.ubuntu_architecture import elf_matches_host, host_architecture, native_tool_architecture
 
 # Official immutable release and GitHub asset SHA-256, reviewed 2026-10-09:
 # https://github.com/anomalyco/opencode/releases/tag/v1.18.35
@@ -36,12 +38,22 @@ ARM64_ARCHIVE_NAME = "opencode-linux-arm64.tar.gz"
 ARM64_ARCHIVE_URL = f"https://github.com/anomalyco/opencode/releases/download/v{VERSION}/{ARM64_ARCHIVE_NAME}"
 ARM64_ARCHIVE_SHA256 = "f7f2ba59ee8aa94d388f9696575a32d20e71c2ee48def9f80fc693a60fec6c72"
 ARM64_ARCHIVE_SIZE = 60_487_957
+# macOS assets of the same release, from its official asset digests. These are ZIPs.
+MACOS_ARCHIVES = {
+    "amd64": ("opencode-darwin-x64-baseline.zip",
+              "c29a3f70d5e99c83dc15365a4adc75de8f0cc3c6a5a043f098066df16ab594f5", 49_169_955),
+    "arm64": ("opencode-darwin-arm64.zip",
+              "80b05124357a77cd57945bfde36082a028e829c198d222d5e146617f49a2c4b7", 45_540_968),
+}
 MAX_DOWNLOAD_BYTES = 96 * 1024 * 1024
 MAX_BINARY_BYTES = 384 * 1024 * 1024
 INSTALL_LOCK_TIMEOUT = 60.0
 
 
 def _archive_spec() -> tuple[str, str, str, int]:
+    if sys.platform == "darwin":
+        name, digest, size = MACOS_ARCHIVES[host_architecture()]
+        return name, f"https://github.com/anomalyco/opencode/releases/download/v{VERSION}/{name}", digest, size
     if host_architecture() == "arm64":
         return ARM64_ARCHIVE_NAME, ARM64_ARCHIVE_URL, ARM64_ARCHIVE_SHA256, ARM64_ARCHIVE_SIZE
     return ARCHIVE_NAME, ARCHIVE_URL, ARCHIVE_SHA256, ARCHIVE_SIZE
@@ -126,7 +138,10 @@ def _download(destination: Path, log) -> None:
 
 
 def _extract(archive: Path, destination: Path) -> None:
-    """Copy just the bounded root executable; never extract arbitrary tar paths."""
+    """Copy just the bounded root executable; never extract arbitrary archive paths."""
+    if archive.suffix == ".zip":
+        _extract_zip(archive, destination)
+        return
     found, entries = False, 0
     with tarfile.open(archive, mode="r:gz") as bundle:
         for member in bundle:
@@ -150,15 +165,37 @@ def _extract(archive: Path, destination: Path) -> None:
             found = True
     if not found:
         raise RuntimeError("OpenCode archive does not contain its native executable.")
+    _finish_executable(destination)
+
+
+def _extract_zip(archive: Path, destination: Path) -> None:
+    """The macOS assets are ZIPs; apply the same rule of one bounded root executable."""
+    with zipfile.ZipFile(archive) as bundle:
+        members = bundle.infolist()
+        if len(members) > 8 or sum(not member.is_dir() for member in members) != 1:
+            raise RuntimeError("OpenCode archive contains unexpected files or links.")
+        member = next(item for item in members if not item.is_dir())
+        if member.filename != "opencode" or stat.S_ISLNK(member.external_attr >> 16):
+            raise RuntimeError("OpenCode archive contains unexpected files or links.")
+        if not 0 < member.file_size <= MAX_BINARY_BYTES:
+            raise RuntimeError("OpenCode executable exceeds its extraction limit.")
+        with bundle.open(member) as source, destination.open("xb") as stream:
+            shutil.copyfileobj(source, stream, length=256 * 1024)
+    if destination.stat().st_size != member.file_size:
+        raise RuntimeError("OpenCode executable extraction was truncated.")
+    _finish_executable(destination)
+
+
+def _finish_executable(destination: Path) -> None:
     destination.chmod(0o755)
     if not elf_matches_host(destination):
-        raise RuntimeError(f"OpenCode archive does not contain a native Linux {host_architecture()} executable.")
+        raise RuntimeError(f"OpenCode archive does not contain a native {("macOS" if sys.platform == "darwin" else "Linux")} {host_architecture()} executable.")
 
 
 @contextmanager
 def _installation_lock(tools: Path):
     """Serialize the complete owned-install check and promotion, with bounded wait."""
-    import fcntl  # Linux-only operation; Windows source fixtures may import the helper.
+    import fcntl  # Native POSIX operation; Windows source fixtures may import the helper.
     descriptor = os.open(tools / ".opencode.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
@@ -181,21 +218,21 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
     """Reuse a working native CLI or atomically prepare the pinned owned binary."""
     from src.modules.ubuntu_release import require_supported_ubuntu
     require_supported_ubuntu()
-    if not sys.platform.startswith("linux"):
-        raise RuntimeError("Native OpenCode Bootstrap requires Ubuntu.")
-    architecture = linux_tool_architecture()
+    if sys.platform == "win32":
+        raise RuntimeError("Native OpenCode Bootstrap requires Linux or macOS.")
+    architecture = native_tool_architecture()
     archive_name, _, archive_sha256, _ = _archive_spec()
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         raise RuntimeError("Prepare OpenCode as the desktop account, without sudo.")
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
-        raise RuntimeError("OpenCode installation is Bootstrap-only. Close the workspace and run Ubuntu Bootstrap.")
+        raise RuntimeError("OpenCode installation is Bootstrap-only. Close the workspace and run Bootstrap.")
     environment = dict(os.environ if env is None else env)
     for key in ("PYTHONHOME", "PYTHONPATH", "MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"):
         environment.pop(key, None)
-    directory = (ROOT if root is None else Path(root)) / ".ubuntu-tools" / "opencode"
+    directory = (ROOT if root is None else Path(root)) / native_tools_name() / "opencode"
     tools = directory.parent
     if tools.is_symlink() or tools.exists() and not tools.is_dir():
-        raise RuntimeError(".ubuntu-tools must be a local directory, without symbolic links.")
+        raise RuntimeError(f"{tools.name} must be a local directory, without symbolic links.")
     tools.mkdir(parents=True, exist_ok=True)
     with _installation_lock(tools):
         state = _installation_state(directory)
@@ -218,7 +255,7 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
         with tempfile.TemporaryDirectory(prefix=".opencode-prepare-", dir=tools) as temporary:
             staging = Path(temporary)
             archive = staging / archive_name
-            log(f"Preparing OpenCode {VERSION} for native Ubuntu…")
+            log(f"Preparing OpenCode {VERSION} for {architecture}…")
             _download(archive, log)
             prepared = staging / "installation"
             prepared.mkdir()

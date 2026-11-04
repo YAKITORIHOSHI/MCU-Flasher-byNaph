@@ -717,7 +717,14 @@ def find_pio_executable() -> list[str] | None:
             except Exception:
                 return False
 
-        # ── 1. Current interpreter first (fastest — already in the venv) ──
+        # ── 1. Current interpreter first. A cold child can take seconds on
+        # scanned storage and its 5 s limit could report a healthy install missing.
+        try:
+            import importlib.util
+            if importlib.util.find_spec("platformio") is not None:
+                return offline_pio_command()
+        except (ImportError, ValueError):
+            pass
         if _py_has_platformio(Path(sys.executable)):
             return offline_pio_command()
 

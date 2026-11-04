@@ -867,6 +867,11 @@ class MonacoEditorPanel(QWidget):
             self._recover_editor("The offline editor could not load.")
             return
         self._recovery_notice.hide()
+        if not getattr(self, "_startup_timing_written", False):
+            self._startup_timing_written = True
+            from src.modules import startup_timing
+            startup_timing.mark("editor_loaded")
+            startup_timing.write()
         focus_proxy = self._view.focusProxy()
         if focus_proxy:
             focus_proxy.installEventFilter(self)

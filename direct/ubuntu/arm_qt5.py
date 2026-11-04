@@ -1,8 +1,8 @@
-"""Expose Ubuntu's native ARM64 Qt5 viewer without enabling system site packages.
+"""Expose the distribution's native ARM64 Qt5 viewer without enabling system site packages.
 
-PyQt5 does not publish Linux ARM64 wheels. Ubuntu supplies ABI-matched Qt5/SIP/
-QScintilla packages; only the PyQt5 package is made visible to the private Python.
-This module is copied into the venv by Bootstrap and must stay self-contained.
+PyQt5 does not publish Linux ARM64 wheels. Ubuntu and Fedora supply ABI-matched
+Qt5/SIP/QScintilla packages; only the PyQt5 package is made visible to the private
+Python. This module is copied into the venv by Bootstrap and must stay self-contained.
 """
 from __future__ import annotations
 
@@ -15,17 +15,26 @@ import sys
 
 SYSTEM_DIST_PACKAGES = Path("/usr/lib/python3/dist-packages")
 SYSTEM_PACKAGES = ("python3-pyqt5", "python3-pyqt5.qsci", "python3-pyqt5.sip")
+# Fedora's package names; its PyQt5 is in the versioned architecture library folder.
+FEDORA_SYSTEM_PACKAGES = ("python3-qt5", "python3-qscintilla-qt5", "python3-pyqt5-sip")
 HOOK_MODULE = "_mcu_ubuntu_arm_qt5"
 HOOK_FILENAME = HOOK_MODULE + ".pth"
 HOOK_CONTENT = f"import {HOOK_MODULE}; {HOOK_MODULE}.activate()\n"
 
 
-def missing_system_packages() -> tuple[str, ...]:
+def _system_packages_root() -> Path:
+    if (SYSTEM_DIST_PACKAGES / "PyQt5").is_dir():
+        return SYSTEM_DIST_PACKAGES
+    return Path(f"/usr/lib64/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages")
+
+
+def missing_system_packages(*, fedora: bool = False) -> tuple[str, ...]:
     """Inspect exact ABI/ELF providers without importing Qt5 into the Qt6 process."""
-    package = SYSTEM_DIST_PACKAGES / "PyQt5"
+    package = _system_packages_root() / "PyQt5"
+    core, scintilla, sip = FEDORA_SYSTEM_PACKAGES if fedora else SYSTEM_PACKAGES
     missing = []
-    for name, dependency in (("QtCore", "python3-pyqt5"), ("QtWidgets", "python3-pyqt5"),
-                             ("Qsci", "python3-pyqt5.qsci"), ("sip", "python3-pyqt5.sip")):
+    for name, dependency in (("QtCore", core), ("QtWidgets", core),
+                             ("Qsci", scintilla), ("sip", sip)):
         spec = PathFinder.find_spec("PyQt5." + name, [str(package)])
         try:
             with Path(spec.origin).open("rb") as stream:
@@ -45,7 +54,7 @@ class _UbuntuQt5Finder:
     @staticmethod
     def find_spec(fullname, path=None, target=None):
         if fullname == "PyQt5":
-            return PathFinder.find_spec(fullname, [str(SYSTEM_DIST_PACKAGES)])
+            return PathFinder.find_spec(fullname, [str(_system_packages_root())])
         return None
 
 
@@ -55,7 +64,7 @@ def activate() -> None:
         if not any(getattr(item, "_mcu_ubuntu_qt5", False) for item in sys.meta_path):
             finder = _UbuntuQt5Finder()
             finder._mcu_ubuntu_qt5 = True
-            # A copied amd64 PyQt5 wheel must not shadow Ubuntu's ARM64 package.
+            # A copied amd64 PyQt5 wheel must not shadow the native ARM64 package.
             sys.meta_path.insert(0, finder)
 
 

@@ -1,9 +1,16 @@
 #!/bin/bash
-# This is an availability notice, not an application or installer.
-printf '%s\n' 'MCU Flasher for macOS is not available in this release.' \
-    'The native macOS application, firmware tools and packaging are still being implemented.' \
-    'This file does not install or launch the Windows or Ubuntu application.'
-if [[ -t 0 ]]; then
-    read -r -p 'Press Enter to close this notice.' || true
+# Finder opens this in Terminal, which shows first-run progress and any refusal.
+# Bash 3.2 syntax only: that is the bash macOS ships.
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+entry="$here/../direct/macos/run.sh"
+if [[ ! -r "$entry" ]]; then
+    printf '%s\n' 'Cannot locate direct/macos/run.sh. Keep the complete application folder together.' >&2
+    status=1
+else
+    /bin/bash "$entry" "$@"
+    status=$?
 fi
-exit 1
+if (( status != 0 )) && [[ -t 0 ]]; then
+    read -r -p 'Press Enter to close this window.' || true
+fi
+exit "$status"

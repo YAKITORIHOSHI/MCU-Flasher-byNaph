@@ -235,10 +235,7 @@
       overflow-x: auto;
     }
 
-    button:focus-visible, .tab:focus-visible, a:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: -2px;
-    }
+    :focus, :focus-visible { outline: none; }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
@@ -947,10 +944,6 @@
     #ai-diff-banner .review-btn:hover:not(:disabled) {
       background: var(--bg-tab-hover);
       border-color: var(--accent);
-    }
-    #ai-diff-banner .review-btn:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
     }
     #ai-diff-banner .review-icon {
       width: 14px;
@@ -1735,6 +1728,11 @@
           childList: true, subtree: true, attributes: true,
           attributeFilter: ['class', 'style', 'data-file-path']
         });
+        // Page buttons act on click and leave the caret in the editor.
+        document.addEventListener('mousedown', event => {
+          const control = event.target.closest && event.target.closest('button, a');
+          if (control && !control.closest('.monaco-editor')) event.preventDefault();
+        }, true);
         projectTabBar.addEventListener('keydown', event => {
           const tab = event.target.closest('.tab');
           if (!tab || event.altKey || event.ctrlKey || event.metaKey) return;

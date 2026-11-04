@@ -40,8 +40,12 @@ class PlatformChecks(unittest.TestCase):
             importer.reset_mock()
             self.assertEqual(get_platform_backend("win32"), "main.platforms.windows")
             importer.assert_called_once_with("main.platforms.windows")
+            importer.reset_mock()
+            # macOS shares the native POSIX backend; its differences stay in the modules that have them.
+            self.assertEqual(get_platform_backend("darwin"), "main.platforms.ubuntu")
+            importer.assert_called_once_with("main.platforms.ubuntu")
             with self.assertRaises(RuntimeError):
-                get_platform_backend("darwin")
+                get_platform_backend("freebsd14")
 
     def test_fresh_ubuntu_first_import_has_no_windows_or_board_discovery(self):
         code = ("import sys; sys.path.insert(0, " + repr(str(ROOT)) + "); sys.platform = 'linux'; "

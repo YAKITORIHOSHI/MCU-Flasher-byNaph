@@ -174,6 +174,110 @@ def archive_paths():
             setattr(ZIPArchiver, name, descriptor)
 
 
+class _ParallelTarWriter:
+    """Write regular TAR members from a pool while one thread decompresses.
+
+    Uses tarfile's own data filter for the identical path and mode policy. Links,
+    directories, large files and anything the filter refuses go through the
+    original extraction, which stays authoritative for those decisions.
+    """
+    MAX_FILE = 16 * 1024 * 1024
+
+    def __init__(self, archive):
+        from src.modules.bootstrap_file_pool import FilePool
+        self._archive = archive
+        self._pool = FilePool()
+        self._directories = set()
+
+    def accept(self, item, destination):
+        if not item.isreg() or item.size > self.MAX_FILE:
+            return False
+        import tarfile
+        try:
+            member = tarfile.data_filter(item, destination)
+        except Exception:
+            return False  # The original extraction reports this exact refusal.
+        if member is None:
+            return False
+        target = os.path.join(destination, *member.name.split("/"))
+        parent = os.path.dirname(target)
+        if parent not in self._directories:
+            os.makedirs(parent, exist_ok=True)
+            self._directories.add(parent)
+        with self._archive.extractfile(item) as stream:
+            data = stream.read()
+        self._pool.submit(self._write, target, data, member.mode, member.mtime, size=len(data))
+        return True
+
+    @staticmethod
+    def _write(target, data, mode, mtime):
+        with open(target, "wb") as output:
+            output.write(data)
+        if mode is not None:
+            os.chmod(target, mode)
+        if mtime is not None:
+            os.utime(target, (mtime, mtime))
+
+    def wait(self):
+        self._pool.wait()
+
+    def finish(self):
+        self._pool.finish()
+
+    def close(self):
+        self._pool.close()
+
+
+@contextmanager
+def parallel_archive_writes():
+    """Multiply extraction throughput; enter this outside ``archive_paths``."""
+    if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
+        raise RuntimeError("Package installation belongs to bootstrap, outside the workspace process")
+    import tarfile
+    if not hasattr(tarfile, "data_filter"):
+        yield
+        return
+    from platformio.package.unpack import ExtractArchiveItemError, FileUnpacker, TARArchiver
+    original, original_item = FileUnpacker.unpack, TARArchiver.extract_item
+
+    @wraps(original_item)
+    def extract_item(self, item, dest_dir, **kwargs):
+        writer = getattr(self, "_mcu_writer", None)
+        if writer is not None:
+            if writer.accept(item, dest_dir):
+                return None
+            # A later link or directory may depend on files already queued.
+            writer.wait()
+        return original_item(self, item, dest_dir, **kwargs)
+
+    @wraps(original)
+    def unpack(self, dest_dir=None, with_progress=True, check_unpacked=True, silent=False):
+        archiver = self._archiver
+        if not isinstance(archiver, TARArchiver):
+            return original(self, dest_dir, with_progress=with_progress,
+                            check_unpacked=check_unpacked, silent=silent)
+        destination = os.getcwd() if dest_dir is None else dest_dir
+        archiver._mcu_writer = writer = _ParallelTarWriter(archiver._afo)
+        try:
+            original(self, destination, with_progress=with_progress, check_unpacked=False, silent=silent)
+            writer.finish()
+        finally:
+            archiver._mcu_writer = None
+            writer.close()
+        if check_unpacked:
+            for item in archiver.get_items():
+                filename = archiver.get_item_filename(item)
+                if not archiver.is_link(item) and not os.path.exists(os.path.join(destination, filename)):
+                    raise ExtractArchiveItemError(filename, destination)
+        return True
+
+    FileUnpacker.unpack, TARArchiver.extract_item = unpack, extract_item
+    try:
+        yield
+    finally:
+        FileUnpacker.unpack, TARArchiver.extract_item = original, original_item
+
+
 def command():
     return [sys.executable, "-B", str(Path(__file__).absolute())]
 

@@ -27,8 +27,8 @@ class NativePtyProcess:
 
     @classmethod
     def spawn(cls, command, *, cwd, env, dimensions):
-        if not sys.platform.startswith("linux"):
-            raise OSError("Native PTYs require Linux")
+        if sys.platform == "win32":
+            raise OSError("Native PTYs require Linux or macOS")
         master, slave = os.openpty()
         try:
             cls._set_dimensions(master, *dimensions)

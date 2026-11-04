@@ -49,22 +49,16 @@ def show_incompatibility_notice(message: str) -> None:
         except (AttributeError, OSError):
             pass
     elif os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
-        # Ubuntu setup includes python3-tk; no editor or WebEngine is loaded.
-        try:
-            import tkinter as tk
-            from tkinter import messagebox
-        except ImportError:
-            return
-        try:
-            root = tk.Tk()
-            root.withdraw()
+        # The desktop's own dialog; stderr already carries the same notice.
+        import shutil
+        import subprocess
+        zenity = shutil.which("zenity")
+        if zenity:
             try:
-                messagebox.showerror("MCU Flasher — Incompatible Hardware", message, parent=root)
-            finally:
-                root.destroy()
-        except (RuntimeError, tk.TclError):
-            # Headless/desktop dependency failures still get the stderr notice.
-            pass
+                subprocess.run([zenity, "--error", "--title=MCU Flasher — Incompatible Hardware", "--width=620",
+                                "--no-markup", "--text=" + message], check=False)
+            except OSError:
+                pass
 
 
 def enforce_minimum_cpu_requirement() -> bool:
@@ -83,6 +77,10 @@ class PerformanceProfile:
     terminal_interval_ms: int
     terminal_scrollback: int
     terminal_history_chars: int
+    # Chromium's low-end mode trades rendering quality and raster threads for
+    # memory. A 6-core/12-thread PC with ample RAM keeps the app's conservative
+    # budgets above, but does not need its editor rendered like a low-end device.
+    low_end_renderer: bool = True
 
 
 def performance_profile(cores: int | None = None, total_memory_gb: float | None = None,
@@ -100,7 +98,8 @@ def performance_profile(cores: int | None = None, total_memory_gb: float | None 
     constrained = cores is None or cores <= 6 or (physical_cores is not None and physical_cores <= 6) or low_memory
     return PerformanceProfile(constrained, low_memory, 8000 if constrained else 4000,
                               40 if constrained else 25, 2000 if constrained else 5000,
-                              128_000 if constrained else 256_000)
+                              128_000 if constrained else 256_000,
+                              cores is None or cores <= 6 or low_memory)
 
 
 def configure_webengine_environment() -> None:
@@ -110,7 +109,7 @@ def configure_webengine_environment() -> None:
     # watchdog; disabling either can increase CPU load or hide driver failures.
     no_throttle = ["--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
                    "--disable-renderer-backgrounding", "--disable-features=CalculateNativeWinOcclusion"]
-    if profile.constrained:
+    if profile.low_end_renderer:
         flags = [flag for flag in flags if flag not in no_throttle]
         additions = ["--enable-low-end-device-mode", "--num-raster-threads=1"]
     else:

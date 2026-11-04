@@ -42,16 +42,21 @@ PRIVATE_PYTHON_DIR = _PROJECT_ROOT / "src" / "_python"
 
 ENV_PYTHON_DIR = _PROJECT_ROOT / "env"
 LINUX_ENV_DIR = _PROJECT_ROOT / ".venv-linux"
+MACOS_ENV_DIR = _PROJECT_ROOT / ".venv-macos"
+
+
+def _native_env_dir() -> Path:
+    return MACOS_ENV_DIR if sys.platform == "darwin" else LINUX_ENV_DIR
 
 
 def is_running_private_python() -> bool:
     """Accept only this host's runtime inside this application copy."""
     try:
-        if sys.platform.startswith("linux"):
-            # Ubuntu venv executables normally point to /usr/bin/python.
+        if sys.platform != "win32":
+            # Native venv executables normally point to the system interpreter.
             # sys.prefix identifies the environment; resolving executable does not.
             prefix = Path(sys.prefix).resolve()
-            return sys.prefix != sys.base_prefix and prefix == LINUX_ENV_DIR.resolve()
+            return sys.prefix != sys.base_prefix and prefix == _native_env_dir().resolve()
         current_exe = Path(sys.executable).resolve()
         private_dir = PRIVATE_PYTHON_DIR.resolve()
         if private_dir in current_exe.parents or current_exe == (private_dir / "python.exe") or current_exe == (private_dir / "pythonw.exe"):
@@ -127,8 +132,8 @@ def get_private_python_exe(prefer_pythonw: bool = False, *, allow_repair: bool =
     Get this host's private interpreter; never borrow the other host's runtime.
     STRICT: NEVER returns any system or external Python.
     """
-    if sys.platform.startswith("linux"):
-        for env_dir in (LINUX_ENV_DIR,):
+    if sys.platform != "win32":
+        for env_dir in (_native_env_dir(),):
             candidate = env_dir / "bin" / "python"
             if candidate.is_file():
                 try:
@@ -206,7 +211,7 @@ def sanitize_environment() -> dict[str, str]:
         env.pop(var, None)
 
     # Prepend private python and Scripts to PATH
-    if sys.platform.startswith("linux"):
+    if sys.platform != "win32":
         runtime_bin = get_private_python_exe().parent
         env["PATH"] = str(runtime_bin) + os.pathsep + env.get("PATH", "")
         env["PYTHONNOUSERSITE"] = "1"
@@ -238,7 +243,7 @@ def enforce_private_python(prefer_pythonw: bool = False, *, allow_repair: bool =
         return
 
     # Not running under private Python — reject external/system Python and switch to private runtime
-    runtime_dir = LINUX_ENV_DIR if sys.platform.startswith("linux") else PRIVATE_PYTHON_DIR
+    runtime_dir = _native_env_dir() if sys.platform != "win32" else PRIVATE_PYTHON_DIR
     print(
         f"[MCU Flasher] External system Python rejected ({sys.executable}). "
         f"Exclusively using private Python runtime at {runtime_dir}.",

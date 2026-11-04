@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-if __name__ == "__main__" and sys.platform.startswith("linux"):
+if __name__ == "__main__" and sys.platform != "win32":
     from src.modules.ubuntu_release import enforce_supported_ubuntu
     if not enforce_supported_ubuntu():
         raise SystemExit(1)
@@ -326,6 +326,9 @@ class MainWindow(QMainWindow):
         elide_middle: Any = getattr(Qt, "ElideMiddle", 2)
         self.tabs.setElideMode(elide_middle)
         tb = self.tabs.tabBar()
+        no_focus: Any = getattr(Qt, "NoFocus", 0)
+        self.tabs.setFocusPolicy(no_focus)
+        tb.setFocusPolicy(no_focus)
         if tb is not None:
             # Keep Qt's hint metrics aligned with the font painted by the QSS.
             tb.setFont(QFont("Montserrat", 10))
@@ -520,6 +523,8 @@ def main():
             pass
 
     app = QApplication(sys.argv)
+    # No dashed focus lines: tabs change by mouse and the text keeps keyboard focus.
+    app.setStyleSheet("* { outline: none; }")
     theme_mode = os.environ.get("MCU_FLASHER_VIEWER_THEME")
     try:
         font_size = int(os.environ["MCU_FLASHER_VIEWER_FONT_SIZE"])

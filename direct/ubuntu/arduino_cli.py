@@ -17,7 +17,8 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from main.platforms import ubuntu_arduino
-from src.modules.ubuntu_architecture import elf_matches_host, host_architecture, linux_tool_architecture
+from src.modules.platform_runtime import native_tools_name
+from src.modules.ubuntu_architecture import elf_matches_host, host_architecture, native_tool_architecture
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = "1.5.1"
@@ -29,6 +30,13 @@ ARCHIVE_SHA256 = "28a8e119c498a25607821c36cb2dc49e8463941b261a0d99091baa7bc692dd
 ARM64_ARCHIVE_NAME = f"arduino-cli_{VERSION}_Linux_ARM64.tar.gz"
 ARM64_ARCHIVE_URL = f"https://github.com/arduino/arduino-cli/releases/download/v{VERSION}/{ARM64_ARCHIVE_NAME}"
 ARM64_ARCHIVE_SHA256 = "1e69e077479f300614d4551334e0a33f08ee40b04315d83b8e7e0e94f0d0ee62"
+# macOS assets of the same release, from its official 1.5.1-checksums.txt.
+MACOS_ARCHIVES = {
+    "amd64": (f"arduino-cli_{VERSION}_macOS_64bit.tar.gz",
+              "c982e940027996bea9901050e95fae99c59c1dcfee54beedecaf28141e7bf2e7"),
+    "arm64": (f"arduino-cli_{VERSION}_macOS_ARM64.tar.gz",
+              "cb952e8c1621c95ef5f1d17831c945e3d0ec5973f89c557a7ec8feb9c4f7d4c9"),
+}
 OWNER = "mcu-flasher-ubuntu-arduino-cli"
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_EXECUTABLE_BYTES = 128 * 1024 * 1024
@@ -43,6 +51,9 @@ def _sha256(path: Path) -> str:
 
 
 def _archive_spec() -> tuple[str, str]:
+    if sys.platform == "darwin":
+        name, digest = MACOS_ARCHIVES[host_architecture()]
+        return f"https://github.com/arduino/arduino-cli/releases/download/v{VERSION}/{name}", digest
     if host_architecture() == "arm64":
         return ARM64_ARCHIVE_URL, ARM64_ARCHIVE_SHA256
     return ARCHIVE_URL, ARCHIVE_SHA256
@@ -109,7 +120,7 @@ def _extract_executable(archive: Path, destination: Path) -> None:
         with source, destination.open("xb") as output:
             shutil.copyfileobj(source, output, length=1024 * 1024)
     if not elf_matches_host(destination):
-        raise RuntimeError(f"Arduino CLI archive executable is not native Linux {host_architecture()}.")
+        raise RuntimeError(f"Arduino CLI archive executable is not native {("macOS" if sys.platform == "darwin" else "Linux")} {host_architecture()}.")
     destination.chmod(0o755)
 
 
@@ -134,7 +145,7 @@ def _owned_directory(folder: Path) -> None:
 
 @contextmanager
 def _installation_lock(tools: Path):
-    import fcntl  # Linux-only operation; Windows source fixtures may import this module.
+    import fcntl  # Native POSIX operation; Windows source fixtures may import this module.
     descriptor = os.open(tools / ".arduino-cli.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         deadline = time.monotonic() + 60
@@ -155,20 +166,20 @@ def ensure_arduino_cli(*, env=None, log=print) -> str:
     """Reuse a healthy install or atomically prepare the pinned CLI in app-owned files."""
     from src.modules.ubuntu_release import require_supported_ubuntu
     require_supported_ubuntu()
-    if not sys.platform.startswith("linux") or os.geteuid() == 0:
-        raise RuntimeError("Prepare Arduino CLI as the normal Ubuntu desktop account.")
-    architecture = linux_tool_architecture()
+    if sys.platform == "win32" or os.geteuid() == 0:
+        raise RuntimeError("Prepare Arduino CLI as the normal desktop account.")
+    architecture = native_tool_architecture()
     archive_url, archive_sha256 = _archive_spec()
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
-        raise RuntimeError("Arduino CLI downloads belong to Ubuntu Bootstrap; restart with --repair.")
+        raise RuntimeError("Arduino CLI downloads belong to Bootstrap; restart with --repair.")
     found = ubuntu_arduino.find_arduino_cli()
     managed = ubuntu_arduino.managed_arduino_cli(ROOT)
     if found and found != managed and _version(found, env):
         log("Native Arduino CLI is already installed.")
         return found
-    tools = ROOT / ".ubuntu-tools"
+    tools = ROOT / native_tools_name()
     if tools.is_symlink() or (tools.exists() and not tools.is_dir()):
-        raise RuntimeError(".ubuntu-tools must be an app-owned local directory.")
+        raise RuntimeError(f"{tools.name} must be an app-owned local directory.")
     tools.mkdir(exist_ok=True)
     folder = tools / "arduino-cli"
     with _installation_lock(tools):

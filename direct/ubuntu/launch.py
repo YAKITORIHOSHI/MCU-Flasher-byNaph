@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ubuntu launch coordinator. Bootstrap may use system Python; the GUI never does."""
+"""Native Linux launch coordinator. Bootstrap may use system Python; the GUI never does."""
 from __future__ import annotations
 
 import argparse
@@ -41,7 +41,7 @@ def workspace_is_running() -> bool:
 
 
 def available_application_update(arguments: list[str]):
-    """Return a verified source revision for a normal Ubuntu launch, if any."""
+    """Return a verified source revision for a normal native launch, if any."""
     if "--resume-application-update" in arguments:
         return None
     try:
@@ -55,11 +55,12 @@ def available_application_update(arguments: list[str]):
         return checked.candidate if checked.status == "available" else None
     except Exception:
         # A source check is never allowed to block an otherwise usable native
-        # Ubuntu workspace, including when the network is offline.
+        # workspace, including when the network is offline.
         return None
 
 
-def install_application_update(candidate, arguments: list[str], env: dict[str, str]) -> bool:
+def install_application_update(candidate, arguments: list[str], env: dict[str, str],
+                               run_script: str = "direct/ubuntu/run.sh") -> bool:
     """Refresh verified source before runtime checks, then re-exec the launcher."""
     from src.modules import app_update
 
@@ -78,8 +79,7 @@ def install_application_update(candidate, arguments: list[str], env: dict[str, s
         flush=True,
     )
     retained = [str(argument) for argument in arguments if argument != "--resume-application-update"]
-    command = ["/bin/bash", str(ROOT / "direct" / "ubuntu" / "run.sh"),
-               "--resume-application-update", *retained]
+    command = ["/bin/bash", str(ROOT / run_script), "--resume-application-update", *retained]
     try:
         os.execvpe(command[0], command, env)
     except OSError as exc:
@@ -111,31 +111,20 @@ def report_error(message: str, *, desktop: bool) -> None:
         try:
             subprocess.run([zenity, "--error", "--title=MCU Flasher", "--width=620",
                             "--no-markup", "--text=" + message], check=False)
-            return
         except OSError:
-            pass
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-    except ImportError:
-        return
-    try:
-        window = tk.Tk()
-        window.withdraw()
-        messagebox.showerror("MCU Flasher", message, parent=window)
-        window.destroy()
-    except (tk.TclError, RuntimeError, OSError):
-        pass  # The same complete diagnostic is already on stderr.
+            pass  # The same complete diagnostic is already on stderr.
 
 
 def runtime_problem(env: dict[str, str]) -> str | None:
     from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
+    from src.modules.ubuntu_release import linux_label
 
+    label = linux_label()
     python = ROOT / ".venv-linux/bin/python"
     if not python.is_file() or not os.access(python, os.X_OK):
-        return "The Ubuntu private runtime is missing or has a broken interpreter link."
+        return f"The {label} private runtime is missing or has a broken interpreter link."
     if not elf_matches_host(python):
-        return ("The Ubuntu private runtime interpreter does not match this host's "
+        return (f"The {label} private runtime interpreter does not match this host's "
                 f"{host_architecture()} architecture. Run Bootstrap repair on this computer.")
     commands = (
         [str(python), "-B", str(ROOT / "direct/ubuntu/preflight.py"), "--runtime"],
@@ -149,9 +138,9 @@ def runtime_problem(env: dict[str, str]) -> str | None:
             result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True,
                                     text=True, timeout=60, check=False)
         except (OSError, subprocess.SubprocessError) as exc:
-            return f"The Ubuntu runtime cannot be validated: {exc}"
+            return f"The {label} runtime cannot be validated: {exc}"
         if result.returncode:
-            return result.stderr.strip() or "The Ubuntu native board packages need Bootstrap preparation."
+            return result.stderr.strip() or f"The {label} native board packages need Bootstrap preparation."
     return None
 
 
@@ -164,8 +153,9 @@ def bootstrap_terminal(arguments: list[str], env: dict[str, str]) -> bool:
                  ("konsole", ("-e",)), ("xfce4-terminal", ("--execute",)),
                  ("xterm", ("-e",)), ("kitty", ("--",)), ("alacritty", ("-e",)))
     if version is not None and version[:2] >= (26, 4):
-        # Ubuntu 26.04 ships Ptyxis. Use a separate instance and literal argv,
-        # rather than forwarding setup to an existing terminal window.
+        # Ubuntu 26.04 and Fedora (whose admitted releases all compare above it) ship
+        # Ptyxis. Use a separate instance and literal argv, rather than forwarding
+        # setup to an existing terminal window.
         terminals = (("ptyxis", ("--standalone", "--")), *terminals)
     for name, options in terminals:
         terminal = shutil.which(name)
@@ -206,9 +196,10 @@ def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool
 
 
 def main(argv=None) -> int:
-    from src.modules.ubuntu_release import enforce_supported_ubuntu
+    from src.modules.ubuntu_release import enforce_supported_ubuntu, linux_label
     if not enforce_supported_ubuntu():
         return 1
+    label = linux_label()
     arguments_in = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repair", action="store_true", help="Repair native runtime dependencies before opening")
@@ -225,7 +216,7 @@ def main(argv=None) -> int:
     env = clean_environment()
     try:
         if not args.check and hasattr(os, "geteuid") and os.geteuid() == 0:
-            raise RuntimeError("Run MCU Flasher as your normal Ubuntu desktop account, without sudo.")
+            raise RuntimeError(f"Run MCU Flasher as your normal {label} desktop account, without sudo.")
         if args.install_shortcut and not args.check:
             from direct.ubuntu.install_desktop import main as install_shortcut
             return install_shortcut(["--install"])
@@ -246,7 +237,7 @@ def main(argv=None) -> int:
             if problem:
                 print(problem, file=sys.stderr)
                 return 1
-            print("Ubuntu system dependencies and the private runtime are ready.")
+            print(f"{label} system dependencies and the private runtime are ready.")
             return 0
         from src.modules.runtime_resources import enforce_minimum_cpu_requirement
         if not enforce_minimum_cpu_requirement():
@@ -256,7 +247,7 @@ def main(argv=None) -> int:
             arguments += ["--project", args.project or args.sketch]
         if args.new_window:
             arguments += ["--new-window"]
-        problem = host_problem or ("Explicit Ubuntu repair requested." if args.repair else runtime_problem(env))
+        problem = host_problem or (f"Explicit {label} repair requested." if args.repair else runtime_problem(env))
         if problem:
             print(problem, file=sys.stderr)
             if desktop and not args.bootstrap_window:
@@ -266,7 +257,7 @@ def main(argv=None) -> int:
                 raise RuntimeError("Bootstrap needs a terminal to display setup progress.\n"
                                    "Open a terminal in the application folder and run:\n"
                                    "bash direct/ubuntu/run.sh --repair")
-            print("Preparing Ubuntu system prerequisites and the native private runtime.", flush=True)
+            print(f"Preparing {label} system prerequisites and the native private runtime.", flush=True)
             result = subprocess.call(["/usr/bin/python3", "-B", str(ROOT / "direct/ubuntu/setup.py")],
                                      cwd=ROOT, env=env)
             if result:
@@ -278,7 +269,7 @@ def main(argv=None) -> int:
                         pass
                 return result
             # apt/pip ran in a child. Drop this launcher's pre-install negative
-            # import results before checking freshly installed Tk/ARM Qt5.
+            # import results before checking freshly installed ARM Qt5.
             importlib.invalidate_caches()
             host_preflight(require_display=True)
             problem = runtime_problem(env)
