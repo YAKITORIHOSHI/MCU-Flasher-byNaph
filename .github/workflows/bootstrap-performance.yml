@@ -47,6 +47,15 @@ jobs:
           python -B direct/verify_bootstrap_archives.py
           python -B direct/verify_bootstrap_processes.py
           python -B direct/verify_bootstrap_file_pool.py
+      - name: Record whether real-time antivirus is active
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force temp/audit/bootstrap-performance | Out-Null
+          Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, OnAccessProtectionEnabled |
+            ConvertTo-Json | Tee-Object temp/audit/bootstrap-performance/defender.json
+          Get-MpPreference | Select-Object -ExpandProperty ExclusionPath | Tee-Object temp/audit/bootstrap-performance/defender-exclusions.txt
       - name: Owned package I/O benchmark
         run: python -B direct/verify_bootstrap_io_performance.py --output temp/audit/bootstrap-performance/io.json
       - name: Retain benchmark evidence
