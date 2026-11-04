@@ -89,7 +89,8 @@ class PackageOutput:
             self.emit("warn", f"{self.phase} {self.item} interrupted{detail}")
             self.emit("status", f"{self.phase} interrupted{detail}")
         elif completed or self.percent == 100:
-            past = "Downloaded" if self.phase == "Downloading" else "Unpacked"
+            past = {"Downloading": "Downloaded", "Unpacking": "Unpacked",
+                    "Copying": "Copied", "Verifying": "Verified"}.get(self.phase, self.phase)
             self.emit("ok", f"{past} {self.item} — 100%")
         else:
             detail = f" at {self.percent}%" if self.percent is not None else ""
@@ -114,6 +115,10 @@ class PackageOutput:
     def _record(self, text):
         if notice := known_builder_notice(text):
             self.emit("dim", notice)
+            return
+        # The silent work between "Unpacking 100%" and "has been installed".
+        if files := re.fullmatch(r"Package files: (Copying|Verifying) (\d+)%", text):
+            self._progress(files[1], int(files[2]))
             return
         manager = re.match(r"(?:Tool|Platform|Library) Manager:\s*(.*)", text, re.I)
         body = manager[1] if manager else text

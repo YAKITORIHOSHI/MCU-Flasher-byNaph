@@ -1,8 +1,8 @@
-"""Static glass workspace and keyboard focus for native tool tabs."""
+"""Static glass workspace and native tool tabs."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import QWidget, QTabBar
 
 from main.core.theme import Theme
@@ -70,7 +70,7 @@ class GlassWorkspace(QWidget):
 
 
 class WorkspaceTabBar(QTabBar):
-    """Native tab navigation with a focus ring separate from selection."""
+    """Tool tabs switch by mouse without taking focus from the editor or terminal."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,15 +78,4 @@ class WorkspaceTabBar(QTabBar):
         self.setAccessibleName("Workspace tools")
         self.setExpanding(False)
         self.setDrawBase(False)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self.hasFocus() or self.currentIndex() < 0:
-            return
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(QColor(Theme.CYAN), 1, Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(self.tabRect(self.currentIndex()).adjusted(4, 4, -5, -10), 5, 5)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)

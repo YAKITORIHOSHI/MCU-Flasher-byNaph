@@ -127,7 +127,7 @@ class RuntimeChecks(unittest.TestCase):
 
     def test_source_syntax(self):
         files = [ROOT / "mcu_flash_gui.py", *ROOT.joinpath("main").rglob("*.py")]
-        files += [ROOT / "src/modules" / name for name in ("private_python_guard.py", "recovery.py", "platform_runtime.py", "runtime_resources.py", "launcher.py", "project_terminal.py", "arduino_lib_req.py", "bootstrap.py", "offline_bootstrap.py", "offline_runtime.py", "offline_platformio.py", "dedicated_AI.py", "tk_glass.py", "ui_palette.py", "ui_metrics.py")]
+        files += [ROOT / "src/modules" / name for name in ("private_python_guard.py", "recovery.py", "platform_runtime.py", "runtime_resources.py", "launcher.py", "project_terminal.py", "arduino_lib_req.py", "bootstrap.py", "offline_bootstrap.py", "offline_runtime.py", "offline_platformio.py", "dedicated_AI.py", "ui_palette.py", "ui_metrics.py")]
         files += [ROOT / "direct/setup_ubuntu.py", ROOT / "direct/ubuntu/setup.py",
                   ROOT / "src/modules/package_jobs.py", ROOT / "src/modules/board_preparation.py"]
         for path in files:
@@ -171,6 +171,10 @@ class RuntimeChecks(unittest.TestCase):
         self.assertFalse(resources.performance_profile(8, 8).constrained)
         self.assertTrue(resources.performance_profile(8, 8, physical_cores=4).constrained)
         self.assertTrue(resources.performance_profile(12, 8, physical_cores=6).constrained)
+        # Budgets stay conservative, but ample threads and RAM keep full rendering.
+        self.assertFalse(resources.performance_profile(12, 16, physical_cores=6).low_end_renderer)
+        self.assertTrue(resources.performance_profile(12, 4, physical_cores=6).low_end_renderer)
+        self.assertTrue(resources.performance_profile(6, 16, physical_cores=6).low_end_renderer)
         self.assertTrue(resources.performance_profile(12, 4).low_memory)
 
     def test_compiler_jobs_reserve_ui_and_limit_saved_values(self):

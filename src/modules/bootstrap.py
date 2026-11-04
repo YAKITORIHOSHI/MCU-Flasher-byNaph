@@ -8,9 +8,9 @@ installed and verified before launching the main GUI. Online version checks
 are kept out of this short-lived launcher process so a slow network cannot
 leave child interpreters behind.
 
-Called by MCU-Flash-GUI.vbs. A fresh private Python uses its bundled Tk setup
-window while Python dependencies install, then opens the original Qt setup
-view before board-tool preparation. Prepared environments use Qt immediately.
+Called by MCU-Flash-GUI.vbs. The private runtime ships Qt, so the setup window
+opens immediately. If those packages are missing or damaged, a plain-text view
+reports progress until they are repaired, then the same setup moves to Qt.
 Verified warm launches use a local health snapshot. First runs, changed
 installations, explicit repair and recorded crashes run dependency verification.
 """
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional, Sequence, Any
 
 def _configure_windows_dpi_awareness() -> None:
-    """Make Tk size and position controls in physical pixels on mixed-DPI displays."""
+    """Keep the setup window sharp and correctly sized on mixed-DPI displays."""
     if sys.platform != "win32":
         return
     try:
@@ -871,6 +871,8 @@ def _configure_platformio_environment(script_dir: Path) -> str:
         os.environ["PLATFORMIO_GLOBALLIB_DIR"] = str(lib_dir)
         os.environ["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         os.environ["PLATFORMIO_DISABLE_PROMPTS"] = "1"
+        os.environ["PLATFORMIO_NO_ANSI"] = "true"
+        os.environ["PLATFORMIO_DISABLE_COLOR"] = "true"
         os.environ["PLATFORMIO_NO_TELEMETRY"] = "1"
         os.environ["PLATFORMIO_SETTING_ENABLE_TELEMETRY"] = "false"
         os.environ["PLATFORMIO_DISABLE_TELEMETRY"] = "1"
@@ -914,6 +916,62 @@ _PLATFORMIO_PREBUILT_EXPECTED_SIZE = 1785358455
 _PLATFORMIO_PREBUILT_EXPECTED_SHA256 = (
     "b284708a25c46143827b94ec423d7fe4242729d5c39e4c3324556b9b7af8b7c2"
 )
+# The asset's first 942,585,255 bytes hold unused .cache and .tmp entries. Every
+# package member and the ZIP directory sit after them, in this verified tail.
+_PLATFORMIO_PREBUILT_TAIL_NAME = "platformio-mcu-gui-prebuilt.packages"
+_PLATFORMIO_PREBUILT_TAIL_OFFSET = 942585255
+_PLATFORMIO_PREBUILT_TAIL_SIZE = _PLATFORMIO_PREBUILT_EXPECTED_SIZE - _PLATFORMIO_PREBUILT_TAIL_OFFSET
+_PLATFORMIO_PREBUILT_TAIL_SHA256 = (
+    "f51e65b1a123176ec3f4534ec276e501295a9dfed4530d0b0d3b23648eb354b0"
+)
+
+
+def _download_release_packages(root: Path) -> Path | None:
+    """Fetch only the release's package tail; None selects the full archive path."""
+    destination = root / "src" / _PLATFORMIO_PREBUILT_TAIL_NAME
+    if destination.is_file():
+        verified, _reason = _download_matches_expectations(
+            destination, _PLATFORMIO_PREBUILT_TAIL_SIZE, _PLATFORMIO_PREBUILT_TAIL_SHA256)
+        if verified:
+            return destination
+        safe_unlink(destination)
+    partial = destination.with_name(destination.name + ".part")
+    try:
+        status(f"Downloading release toolchains ({_PLATFORMIO_PREBUILT_TAIL_SIZE / 1048576:.0f} MiB of "
+               f"{_PLATFORMIO_PREBUILT_EXPECTED_SIZE / 1048576:.0f} MiB; unused data is skipped)...")
+        _parallel_range_download(_PLATFORMIO_PREBUILT_GITHUB_URL, partial,
+                                 expected_size=_PLATFORMIO_PREBUILT_TAIL_SIZE,
+                                 display_name="release toolchains", timeout=120,
+                                 base_offset=_PLATFORMIO_PREBUILT_TAIL_OFFSET,
+                                 total_size=_PLATFORMIO_PREBUILT_EXPECTED_SIZE)
+        verified, reason = _download_matches_expectations(
+            partial, _PLATFORMIO_PREBUILT_TAIL_SIZE, _PLATFORMIO_PREBUILT_TAIL_SHA256)
+        if not verified:
+            safe_unlink(partial)
+            raise OSError(reason)
+        if not safe_replace_file(partial, destination):
+            raise OSError(f"Could not replace '{partial}' with '{destination}'")
+        safe_rmtree(partial.with_name(partial.name + ".parts"))
+        return destination
+    except Exception as exc:
+        # Completed ranges stay on disk, so a later run resumes rather than restarts.
+        _record_bootstrap_log("WARN", f"Selective release download unavailable: {exc}")
+        status(f"Selective download unavailable ({exc}); using the complete release archive...")
+        return None
+    finally:
+        if _gui:
+            _gui.clear_platformio_progress_block()
+
+
+def _cleanup_release_packages(script_dir=None) -> None:
+    """Remove the temporary selective download after a complete bootstrap."""
+    tail = Path(script_dir or SCRIPT_DIR) / "src" / _PLATFORMIO_PREBUILT_TAIL_NAME
+    for leftover in (tail, tail.with_name(tail.name + ".part")):
+        if leftover.exists():
+            safe_unlink(leftover)
+    checkpoints = tail.with_name(tail.name + ".part.parts")
+    if checkpoints.exists():
+        safe_rmtree(checkpoints)
 
 
 def _cleanup_platformio_prebuilt_archive(script_dir=None) -> bool:
@@ -980,14 +1038,19 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
                    + ", ".join(spec.humanize() for spec in specs))
     zip_dest = root / "src" / _PLATFORMIO_PREBUILT_ZIP_NAME
     cached_archive = zip_dest.is_file()
+    release_tail = None
     if not cached_archive:
         if seed_url is None and not _is_network_reachable(timeout=2.0):
             reject_unresolved_collisions(core, missing)
             warn("Release seed unavailable while offline; cached/partial files were retained. Missing-package setup must still succeed.")
             return False
-        status(f"Downloading release seed first ({_PLATFORMIO_PREBUILT_EXPECTED_SIZE / 1048576:.1f} MiB)...")
         if gui:
             gui.set_status("Downloading pre-built PlatformIO toolchains...")
+        if seed_url is None:
+            with timed_stage(status, "selective release download and checksum"):
+                release_tail = _download_release_packages(root)
+    if release_tail is None and not cached_archive:
+        status(f"Downloading release seed first ({_PLATFORMIO_PREBUILT_EXPECTED_SIZE / 1048576:.1f} MiB)...")
         try:
             with timed_stage(status, "release seed download and checksum"):
                 _download_file(seed_url or _PLATFORMIO_PREBUILT_GITHUB_URL, zip_dest,
@@ -1000,16 +1063,22 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
             warn(f"Release seed download failed: {exc}. Archive/partial checkpoints were retained; normal setup will resolve missing packages.")
             reject_unresolved_collisions(core, missing)
             return False
-    # Verify immediately before import. Cached archives need one complete hash
-    # here, rather than an additional identical 1.79 GB scan before this gate.
-    # Newly downloaded archives still revalidate after the downloader finishes.
-    with timed_stage(status, "release seed verification before import"):
-        verified, reason = _download_matches_expectations(
-            zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
-    if not verified:
-        raise RuntimeError(f"Release seed verification failed; archive retained at {zip_dest}: {reason}")
-    if cached_archive:
-        status(f"Using verified cached release seed ({zip_dest.stat().st_size / 1048576:.1f} MiB): {zip_dest}")
+    if release_tail is None:
+        # Verify immediately before import. Cached archives need one complete hash
+        # here, rather than an additional identical 1.79 GB scan before this gate.
+        # Newly downloaded archives still revalidate after the downloader finishes.
+        with timed_stage(status, "release seed verification before import"):
+            verified, reason = _download_matches_expectations(
+                zip_dest, _PLATFORMIO_PREBUILT_EXPECTED_SIZE, _PLATFORMIO_PREBUILT_EXPECTED_SHA256)
+        if not verified:
+            raise RuntimeError(f"Release seed verification failed; archive retained at {zip_dest}: {reason}")
+        if cached_archive:
+            status(f"Using verified cached release seed ({zip_dest.stat().st_size / 1048576:.1f} MiB): {zip_dest}")
+        release_source = lambda: zip_dest  # noqa: E731
+    else:
+        from src.modules.bootstrap_seed import open_release_tail
+        release_source = lambda: open_release_tail(  # noqa: E731
+            release_tail, _PLATFORMIO_PREBUILT_TAIL_OFFSET, _PLATFORMIO_PREBUILT_EXPECTED_SIZE)
     status("Importing only missing package groups from the verified release...")
     last_update = 0.0
 
@@ -1024,7 +1093,7 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
 
     try:
         with timed_stage(status, "release seed extraction and publication"):
-            result = import_missing(zip_dest, core, missing,
+            result = import_missing(release_source(), core, missing,
                                     staging_parent=root / "temp" / "audit" / "asset-seed",
                                     log=status, progress=progress)
         if missing["platforms"] and result["imported"]:
@@ -1033,7 +1102,7 @@ def _ensure_platformio_core_prebuilt(gui: "BootstrapGUI | None" = None, *,
             # verified seed before any online manager fallback.
             with timed_stage(status, "release seed toolchain discovery and import"):
                 discovered = missing_packages(core, plan)
-                second = import_missing(zip_dest, core, discovered,
+                second = import_missing(release_source(), core, discovered,
                                         staging_parent=root / "temp" / "audit" / "asset-seed",
                                         log=status, progress=progress)
             result["imported"].extend(second["imported"])
@@ -1328,8 +1397,8 @@ class _BootstrapRootProxy:
 
 class BootstrapGUI:
     """
-    Displays bootstrap progress in a native PySide6 (Qt for Python) window.
-    Uses a standard-library Tk window before PySide6 has been installed.
+    Displays bootstrap progress in a native PySide6 (Qt for Python) window,
+    or as plain text until a missing or damaged Qt has been repaired.
     All methods are safe to call from worker threads.
     """
     TOTAL_STEPS = 9
@@ -1368,32 +1437,29 @@ class BootstrapGUI:
             except Exception as error:
                 _record_bootstrap_exception(f"Bootstrap Qt view could not open: {error}")
         if self._app is None:
-            from src.modules.bootstrap_native import NativeBootstrapWindow
-            from src.modules.ui_palette import setup_text_palette
-            self._native_window = NativeBootstrapWindow(
-                self, setup_text_palette(_T_PALETTE), load_bootstrap_config, save_bootstrap_config,
-                _record_bootstrap_exception, dispatcher=self._signals,
-            )
+            from src.modules.bootstrap_console import ConsoleBootstrapView
+            self._native_window = ConsoleBootstrapView(self, _record_bootstrap_exception, dispatcher=self._signals)
             self._window = self._native_window
             detail = globals().get("_BOOTSTRAP_QT_IMPORT_ERROR", "")
             if detail:
                 _record_bootstrap_log("QT_FALLBACK", detail)
 
-    def _open_qt_view(self, snapshot=None):
+    def _open_qt_view(self, history=None):
         global HAS_PYSIDE6_BOOTSTRAP, _BOOTSTRAP_QT_IMPORT_ERROR
         QApplication, BootstrapDialog = _load_bootstrap_qt()
         app = QApplication.instance() or QApplication(sys.argv if sys.argv else [""])
         window = None
         try:
             from PySide6.QtGui import QFont
-            from main.qt.theme import register_fonts
+            from main.qt.theme import install_no_focus_lines, register_fonts
             register_fonts()
+            install_no_focus_lines(app)
             app_font = QFont("Montserrat", 10)
             app_font.setStyleHint(QFont.StyleHint.SansSerif)
             app.setFont(app_font)
             window = BootstrapDialog(self, _bootstrap_qt_context())
-            if snapshot is not None:
-                window.restore_snapshot(snapshot)
+            if history:
+                window.restore_history(history)
             window.show()
             app.processEvents()
             window.bind_dispatcher()
@@ -1430,26 +1496,16 @@ class BootstrapGUI:
             request["event"].set()
             return
         native = self._native_window
-        if native.held:
-            # Preserve the current pointer grab and reading position. The
-            # worker's bounded wait can expire while this safe UI retry stays
-            # pending; releasing the thumb then allows the same handoff.
-            native._later(100, lambda: self._promote_to_qt(request))
-            return
         try:
-            snapshot = native.snapshot()
-            self._open_qt_view(snapshot)
+            self._open_qt_view(native.snapshot())
             from PySide6.QtCore import QTimer
             try:
                 native.retire()
             except Exception as error:
-                # The Qt view is already shown and owns the queue. A native
-                # cleanup error must not roll back to a partly retired view.
-                _record_bootstrap_exception(f"Native setup view retirement error: {error}")
-                try:
-                    native.root.quit()
-                except Exception:
-                    pass  # A destroyed Tcl root already returns from mainloop.
+                # The Qt view is already shown and owns the queue. A cleanup
+                # error must not roll back to a partly retired view.
+                _record_bootstrap_exception(f"Setup console retirement error: {error}")
+                native.closed = True
             self._native_window = None
             _record_bootstrap_log("UI_SWITCH", "Python dependencies verified; original Qt setup window opened. Setup worker, elapsed time and log retained.")
             def active():
@@ -1460,8 +1516,8 @@ class BootstrapGUI:
             self._app = None
             self._window = native
             self._signals.attach(native.dispatch)
-            _record_bootstrap_exception(f"Original Qt setup window could not open; native setup continues: {error}")
-            self.log_warn("Could not open the original setup view; setup continues in this window. See the setup log for details.")
+            _record_bootstrap_exception(f"Qt setup window could not open; setup continues in text: {error}")
+            self.log_warn("Could not open the setup window; setup continues here. See the setup log for details.")
             request["event"].set()
 
     def _append(self, text: str, tag: str = "normal"):
@@ -1641,13 +1697,13 @@ class BootstrapGUI:
             self._native_window.pump()
 
     def mainloop_until_done(self):
-        # Tk quits during a successful view promotion. The same creating
+        # The text view ends during a successful promotion. The same creating
         # thread then owns Qt's event loop while the setup worker continues.
         if self._native_window is not None and self._app is None:
             try:
                 self._native_window.mainloop()
             except Exception as exc:
-                _record_bootstrap_exception(f"Bootstrap native mainloop error: {exc}")
+                _record_bootstrap_exception(f"Bootstrap console loop error: {exc}")
         if self._app is not None and self._window is not None and not self._closed:
             try:
                 self._app.exec()
@@ -4221,7 +4277,7 @@ _BOARD_TOOLCHAIN_MARKER_DIR = ".mcu-board-ready"
 _BOARD_TOOLCHAIN_MARKER_SCHEMA = 2
 _BOARD_TOOLCHAIN_PREPARE_LOCK = threading.RLock()
 _PLATFORMIO_SETUP_ATTEMPTS = 3
-_PLATFORMIO_SETUP_TIMEOUT_S = 1800
+_PLATFORMIO_SETUP_TIMEOUT_S = 300
 
 
 def _platform_manifest_path(pio_core_dir: str, platform: str) -> Path | None:
@@ -4425,7 +4481,7 @@ def _discover_first_use_coverage(
         return [], [], 0, 0, []
     arduino_catalog = [
         row for row in catalog
-        if not row.get("frameworks") or "arduino" in (row.get("frameworks") or set())
+        if "arduino" in (row.get("frameworks") or set())
     ]
     records = _load_downloaded_board_records()
     resolved: list[tuple[dict, dict]] = []
@@ -4457,14 +4513,35 @@ def _discover_first_use_coverage(
     if not groups:
         # No downloaded board matched (for example a custom/new core). Still
         # dynamically cover each Arduino MCU family exposed by the installed PIO platform.
-        for row in arduino_catalog:
-            mcu = _normalize_board_identity(row.get("mcu") or row.get("id")) or "generic"
-            board_id = str(row.get("id") or "")
-            if not board_id:
-                continue
-            previous = groups.get(mcu)
-            if previous is None or len(board_id) < len(previous[1]):
-                groups[mcu] = (0.0, board_id)
+        if platform.lower() in ("atmelavr", "atmelmegaavr"):
+            # Collapse AVR platform fallback to canonical Arduino AVR boards
+            canonical_avr = ["uno", "megaatmega2560", "leonardo", "nanoatmega328", "uno_wifi_rev2", "nona4809"]
+            catalog_by_id = {str(row.get("id")): row for row in arduino_catalog if row.get("id")}
+            for canon_id in canonical_avr:
+                row = catalog_by_id.get(canon_id)
+                if row:
+                    mcu = _normalize_board_identity(row.get("mcu") or canon_id) or "generic"
+                    previous = groups.get(mcu)
+                    if previous is None or len(canon_id) < len(previous[1]):
+                        groups[mcu] = (0.0, canon_id)
+            if not groups:
+                for row in arduino_catalog:
+                    mcu = _normalize_board_identity(row.get("mcu") or row.get("id")) or "generic"
+                    board_id = str(row.get("id") or "")
+                    if not board_id:
+                        continue
+                    previous = groups.get(mcu)
+                    if previous is None or len(board_id) < len(previous[1]):
+                        groups[mcu] = (0.0, board_id)
+        else:
+            for row in arduino_catalog:
+                mcu = _normalize_board_identity(row.get("mcu") or row.get("id")) or "generic"
+                board_id = str(row.get("id") or "")
+                if not board_id:
+                    continue
+                previous = groups.get(mcu)
+                if previous is None or len(board_id) < len(previous[1]):
+                    groups[mcu] = (0.0, board_id)
 
     coverage_keys = sorted(groups.keys())
     boards = [groups[key][1] for key in coverage_keys]
@@ -4553,6 +4630,24 @@ def _write_full_family_marker(
     marker.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _is_tool_package_dir_present(packages_root: Path, tool_name: str) -> bool:
+    """Check if tool_name or tool_name@* directory exists with package.json or .piopm."""
+    if not packages_root.is_dir():
+        return False
+    wanted = tool_name.lower().strip()
+    try:
+        for entry in packages_root.iterdir():
+            if not entry.is_dir():
+                continue
+            name_low = entry.name.lower()
+            if name_low == wanted or name_low.startswith(wanted + "@"):
+                if (entry / "package.json").is_file() or (entry / ".piopm").is_file():
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
     """Verify a PlatformIO platform inside THIS app's configured core directory.
 
@@ -4597,8 +4692,7 @@ def _platform_already_installed(pio_core_dir: str, platform: str) -> bool:
 
     # Upload tools (e.g. tool-avrdude for AVR) must be present so uploads never pause to download tools
     if platform in ("atmelavr", "atmelmegaavr"):
-        avrdude_dir = target_core / "packages" / "tool-avrdude"
-        if not avrdude_dir.is_dir() or (not (avrdude_dir / "package.json").is_file() and not (avrdude_dir / ".piopm").is_file()):
+        if not _is_tool_package_dir_present(target_core / "packages", "tool-avrdude"):
             return False
 
     # Readiness is certified by a successful tiny first-use PlatformIO build
@@ -4624,8 +4718,7 @@ def board_toolchain_ready(
     if not scons_manifest.is_file() or not scons_piopm.is_file():
         return False
     if platform in ("atmelavr", "atmelmegaavr"):
-        avrdude_dir = Path(pio_core_dir) / "packages" / "tool-avrdude"
-        if not avrdude_dir.is_dir() or (not (avrdude_dir / "package.json").is_file() and not (avrdude_dir / ".piopm").is_file()):
+        if not _is_tool_package_dir_present(Path(pio_core_dir) / "packages", "tool-avrdude"):
             return False
     marker = _board_toolchain_marker_path(pio_core_dir, platform, board_id, framework)
     if marker.is_file():
@@ -5007,6 +5100,14 @@ def _stream_platformio_setup(
 
     proc = None
     try:
+        if env is None:
+            env = dict(os.environ)
+        else:
+            env = dict(env)
+        env.setdefault("PLATFORMIO_NO_ANSI", "true")
+        env.setdefault("PLATFORMIO_DISABLE_COLOR", "true")
+        env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
+
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd) if cwd else None,
@@ -5024,6 +5125,9 @@ def _stream_platformio_setup(
 
         line_queue: queue.Queue = queue.Queue()
         reader_done = [False]
+        started_at = time.monotonic()
+        last_output_at = [started_at]
+        last_heartbeat_at = started_at
 
         def _reader():
             try:
@@ -5035,12 +5139,16 @@ def _stream_platformio_setup(
                             if buffer:
                                 line_queue.put("".join(buffer))
                             break
+                        last_output_at[0] = time.monotonic()
                         if ch in ("\r", "\n"):
                             if buffer:
                                 line_queue.put("".join(buffer))
                                 buffer.clear()
                         else:
                             buffer.append(ch)
+                            if len(buffer) >= 512:
+                                line_queue.put("".join(buffer))
+                                buffer.clear()
             except Exception:
                 pass
             finally:
@@ -5053,9 +5161,7 @@ def _stream_platformio_setup(
             name=f"Bootstrap-PIO-{label}",
         ).start()
 
-        started_at = time.monotonic()
-        last_output_at = started_at
-        last_heartbeat_at = started_at
+        exit_detected_at: float | None = None
 
         while True:
             now = time.monotonic()
@@ -5079,27 +5185,36 @@ def _stream_platformio_setup(
                 _terminate_tree(proc)
                 raise subprocess.TimeoutExpired(cmd, timeout)
 
+            if proc.poll() is not None:
+                if exit_detected_at is None:
+                    exit_detected_at = now
+
             try:
                 raw = line_queue.get(timeout=0.2)
             except queue.Empty:
+                if proc.poll() is not None:
+                    if reader_done[0] or (exit_detected_at is not None and now - exit_detected_at >= 3.0):
+                        break
+                    continue
+
                 # 600s (10 min) silence threshold to accommodate slow HDDs, eMMC, and background antivirus scans on low-end hardware
-                if now - last_output_at >= 600.0 and proc.poll() is None:
+                if now - last_output_at[0] >= 600.0 and proc.poll() is None:
                     _terminate_tree(proc)
                     raise RuntimeError(
-                        f"PlatformIO produced no output for {int(now - last_output_at)}s while processing "
+                        f"PlatformIO produced no output for {int(now - last_output_at[0])}s while processing "
                         f"{current_item or stage}"
                     )
                 # A silent Package Manager check is not necessarily frozen. Keep
                 # the UI explicit while still enforcing the absolute timeout.
                 if (
                     current_item and active_phase is None
-                    and now - last_output_at >= 3.0
+                    and now - last_output_at[0] >= 3.0
                     and now - last_heartbeat_at >= 1.0
                 ):
                     last_heartbeat_at = now
                     msg = (
                         f"{label}: checking {current_item}... "
-                        f"{int(now - last_output_at)}s since last PlatformIO output"
+                        f"{int(now - last_output_at[0])}s since last PlatformIO output"
                     )
                     if _gui:
                         _gui.set_status(msg)
@@ -5113,14 +5228,28 @@ def _stream_platformio_setup(
                 continue
 
             if raw is None:
-                if reader_done[0] and proc.poll() is not None:
+                if reader_done[0] or proc.poll() is not None:
                     break
                 continue
 
-            last_output_at = time.monotonic()
-            last_heartbeat_at = last_output_at
+            last_output_at[0] = time.monotonic()
+            last_heartbeat_at = last_output_at[0]
             for stripped in _platformio_output_segments(raw):
                 _record_line(stripped)
+
+            if proc.poll() is not None:
+                if exit_detected_at is None:
+                    exit_detected_at = time.monotonic()
+                if reader_done[0] and line_queue.empty():
+                    break
+                if time.monotonic() - exit_detected_at >= 3.0 and line_queue.empty():
+                    break
+
+        try:
+            if proc.stdout and not proc.stdout.closed:
+                proc.stdout.close()
+        except Exception:
+            pass
 
         rc = proc.wait(timeout=15)
         _notify_process(None)
@@ -5221,7 +5350,7 @@ def _prewarm_pio_platform(
                 stage=f"First-use compile validation for {board_id}",
                 progress_start=board_start,
                 progress_end=board_end,
-                timeout=1800,
+                timeout=120,
                 on_download_start=on_download_start,
             )
             if not build_ok:
@@ -5375,8 +5504,7 @@ def _ensure_platform_upload_tools(
     packages_root = Path(pio_core_dir) / "packages"
     all_ok = True
     for pkg_name, spec in specs:
-        pkg_dir = packages_root / pkg_name
-        if pkg_dir.is_dir() and ((pkg_dir / "package.json").is_file() or (pkg_dir / ".piopm").is_file()):
+        if _is_tool_package_dir_present(packages_root, pkg_name):
             continue
 
         if callable(on_status):
@@ -5501,6 +5629,8 @@ def ensure_board_toolchains() -> bool:
         _apply_bootstrap_compiler_budget(env, pio_core_dir)
         env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
+        env.setdefault("PLATFORMIO_NO_ANSI", "true")
+        env.setdefault("PLATFORMIO_DISABLE_COLOR", "true")
 
         warning_shown = [False]
         def _warn_once():
@@ -5518,7 +5648,7 @@ def ensure_board_toolchains() -> bool:
             stage=f"Checking PlatformIO platform {platform}",
             progress_start=5,
             progress_end=32,
-            timeout=1800,
+            timeout=300,
             on_download_start=_warn_once,
         )
         if not platform_ok:
@@ -5643,6 +5773,8 @@ def prepare_platformio_board_toolchain(
         _apply_bootstrap_compiler_budget(env, pio_core_dir)
         env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
         env.setdefault("PLATFORMIO_DISABLE_PROMPTS", "1")
+        env.setdefault("PLATFORMIO_NO_ANSI", "true")
+        env.setdefault("PLATFORMIO_DISABLE_COLOR", "true")
 
         if callable(on_status):
             try:
@@ -5900,6 +6032,15 @@ def _existing_bootstrap_board_source(source_root, *, package, architecture, inde
     return False
 
 
+_ARDUINO_AVR_RELEASE = {
+    "version": "1.8.6", "version_base": "1.8.6",
+    "url": "https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2",
+    "archive": "avr-1.8.6.tar.bz2",
+    "sha256": "ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6",
+    "size": 7127080,
+}
+
+
 def _arduino_avr_release_from_index(data, version):
     """Locate AVR's exact published archive instead of guessing a folder version."""
     for package in data.get("packages", []) if isinstance(data, dict) else []:
@@ -5919,6 +6060,10 @@ def _arduino_avr_release_from_index(data, version):
 
 
 def _load_arduino_avr_board_release(version):
+    if version == _ARDUINO_AVR_RELEASE["version"]:
+        # Published releases never change, and the archive is still verified
+        # against this checksum. An exact pin avoids fetching the entire index.
+        return dict(_ARDUINO_AVR_RELEASE)
     body = _fetch_url(ARDUINO_BOARD_INDEX_URL, timeout=30)
     if not body:
         return None
@@ -6490,6 +6635,8 @@ def _parallel_range_download(
     expected_size: int,
     display_name: str,
     timeout: int,
+    base_offset: int = 0,
+    total_size: int | None = None,
 ) -> None:
     """Download a large artifact using a few resumable HTTP range requests.
 
@@ -6518,8 +6665,9 @@ def _parallel_range_download(
     chunk_size = 64 * 1024 * 1024
     chunk_count = (expected_size + chunk_size - 1) // chunk_size
     cpu_count = os.cpu_count() or 1
-    worker_count = 1 if cpu_count <= 1 else (2 if cpu_count <= 5 else 3)
+    worker_count = 1 if cpu_count <= 1 else (2 if cpu_count <= 3 else (4 if cpu_count <= 5 else 6))
     worker_count = min(worker_count, chunk_count)
+    remote_total = total_size if total_size is not None else expected_size
 
     chunk_specs: list[tuple[int, int, Path, int]] = []
     for index in range(chunk_count):
@@ -6628,7 +6776,7 @@ def _parallel_range_download(
                 "Accept": "*/*",
                 "Accept-Encoding": "identity",
                 "Connection": "close",
-                "Range": f"bytes={request_start}-{start + expected_chunk_size - 1}",
+                "Range": f"bytes={base_offset + request_start}-{base_offset + start + expected_chunk_size - 1}",
             }
             request = urllib.request.Request(url, headers=headers)
             sock = None
@@ -6637,11 +6785,11 @@ def _parallel_range_download(
                     status_code = int(getattr(response, "status", response.getcode()) or 200)
                     content_range = str(response.headers.get("Content-Range", "") or "")
                     match = re.match(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", content_range, re.IGNORECASE)
-                    if status_code != 206 or not match or int(match.group(1)) != request_start:
+                    if status_code != 206 or not match or int(match.group(1)) != base_offset + request_start:
                         raise _RangeDownloadUnsupported(
                             f"range request was not honored for bytes {request_start}-{start + expected_chunk_size - 1}"
                         )
-                    if match.group(3) != "*" and int(match.group(3)) != expected_size:
+                    if match.group(3) != "*" and int(match.group(3)) != remote_total:
                         raise _RangeDownloadUnsupported("range response reported an unexpected total size")
 
                     # Enforce per-read socket timeout and register for abort cleanup
@@ -6837,7 +6985,7 @@ def _download_file(
     # large CPU, memory, or connection burden.  The normal resumable stream
     # below remains available when a CDN/proxy does not honor ranges.
     parallel_parts = partial.with_name(partial.name + ".parts")
-    if not preserve_failed and expected_size_i >= 256 * 1024 * 1024 and "github.com" in url.lower():
+    if expected_size_i >= 256 * 1024 * 1024 and "github.com" in url.lower():
         try:
             status(f"Downloading {dest.name} from GitHub using parallel ranges...")
             _parallel_range_download(
@@ -6853,6 +7001,8 @@ def _download_file(
                 expected_hash,
             )
             if not verified:
+                if preserve_failed:
+                    raise RetainedDownloadError(f"Downloaded archive retained at {partial}: {reason}")
                 safe_unlink(partial)
                 raise OSError(reason)
             if not safe_replace_file(partial, dest):
@@ -6863,10 +7013,13 @@ def _download_file(
                 _gui.set_progress_percent(100)
             ok(f"Saved and verified {dest.name}")
             return
+        except RetainedDownloadError:
+            raise
         except _RangeDownloadUnsupported as exc:
             # Keep the same GitHub URL and use the existing resumable stream.
             # This is a protocol compatibility path, not a source fallback.
-            safe_rmtree(parallel_parts)
+            if not preserve_failed:
+                safe_rmtree(parallel_parts)
             last_error = exc
             status(f"GitHub range download unavailable; continuing {dest.name} with a resumable stream...")
         except Exception as exc:
@@ -9289,7 +9442,7 @@ def _startup_app_fingerprint() -> str:
         SCRIPT_DIR / "main" / "qt" / "serial_panel.py",
         SCRIPT_DIR / "main" / "qt" / "signals.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap.py",
-        SCRIPT_DIR / "src" / "modules" / "bootstrap_native.py",
+        SCRIPT_DIR / "src" / "modules" / "bootstrap_console.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap_qt.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap_presentation.py",
         SCRIPT_DIR / "src" / "modules" / "bootstrap_dispatch.py",
@@ -9514,9 +9667,18 @@ def _available_application_update():
         if not app_update.automatic_updates_enabled(config):
             _record_bootstrap_log("UPDATE", "Automatic application updates are disabled by policy.")
             return None
-        checked = app_update.check_for_update(
-            SCRIPT_DIR, config=config, timeout=1.5,
-        )
+        outcome = []
+        # The request timeout does not cover name resolution, which can block for
+        # many seconds on poor Wi-Fi while no window is visible yet.
+        checker = threading.Thread(
+            target=lambda: outcome.append(app_update.check_for_update(SCRIPT_DIR, config=config, timeout=1.5)),
+            name="MCUApplicationUpdateCheck", daemon=True)
+        checker.start()
+        checker.join(2.0)
+        if not outcome:
+            _record_bootstrap_log("UPDATE", "Application update check exceeded its startup budget; continuing.")
+            return None
+        checked = outcome[0]
         if checked.status == "available":
             _record_bootstrap_log(
                 "UPDATE",
@@ -10426,7 +10588,7 @@ def _bootstrap_tool_store_lease(gui, core):
 
 def _run_setup_in_thread(gui: BootstrapGUI):
     """
-    Runs all dependency checks on a background thread so the Tk event loop
+    Runs all dependency checks on a background thread so the setup window
     stays responsive (spinner keeps animating, window stays draggable).
 
     When complete, posts a callback to the main thread to close the
@@ -10646,7 +10808,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         gui.root.after(0, lambda: gui.log_ok(
             "All core and application dependencies verified."
         ))
-        # The first-run native window stays visible during pip. Once Qt is
+        # A repaired runtime reports through plain text during pip. Once Qt is
         # verified, switch its view before the larger board-tool preparation.
         gui.request_qt_promotion()
         # Keep the application environment separate from the bootstrap host.
@@ -10923,6 +11085,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         # Main GUI process is running! Clean up empty crash log and
         # COMPLETELY dispose bootstrap immediately so it doesn't linger or lag.
+        _cleanup_release_packages(SCRIPT_DIR)
         if not _cleanup_platformio_prebuilt_archive(SCRIPT_DIR):
             gui.root.after(0, lambda: gui.log_warn(
                 "Bootstrap succeeded, but the temporary prebuilt ZIP is still present because Windows could not remove it."
@@ -10937,7 +11100,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         except Exception:
             pass
 
-        # Destroy Tk window, quit event loop, and terminate bootstrap process
+        # Close the setup window, quit its event loop and end the bootstrap process
         gui.root.after(0, gui.close)
 
     except InterruptedError as exc:

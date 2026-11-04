@@ -13,6 +13,8 @@ from pathlib import Path
 
 _RECEIPT = "build-receipt.json"
 _INPUT_STATE = "build-inputs.json"
+_USED_LIBRARIES = "mcu-used-libraries.json"
+_MAX_LIBRARY_ENTRIES = 40000
 _MAX_CONFIG = 128 * 1024
 _MAX_RECEIPT = 1024 * 1024
 _MAX_FILES = 128
@@ -107,47 +109,163 @@ def _config_hash(root: Path) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def input_signature(workspace: Path) -> dict:
-    """Bind configuration and configured library trees before and after a build.
-
-    PlatformIO's SCons database is not a safe dependency interchange format.
-    Conservatively hash each configured collection, including custom recipe
-    scripts/assets, with the existing 40,000-entry / 256 MiB worker bounds.
-    """
-    root = _workspace(workspace)
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read_string(_read_bounded(root / "platformio.ini", _MAX_CONFIG).decode("utf-8-sig"))
-    roots = []
+def _configured_library_roots(root: Path, parser) -> tuple[list[Path], list[Path]]:
+    """Return every configured collection plus the sketch's direct libraries."""
+    collections, direct = [], []
     for section in parser.sections():
         values = re.split(r"[,\r\n]", parser.get(section, "lib_extra_dirs", fallback=""))
+        for value in values:
+            value = value.strip()
+            if value:
+                path = Path(value)
+                collections.append((path if path.is_absolute() else root / path).resolve())
         for dependency in parser.get(section, "lib_deps", fallback="").splitlines():
             dependency = dependency.strip()
             if not dependency:
                 continue
             if not dependency.startswith("symlink://"):
                 raise ValueError("Saved-build reuse requires a directly prepared library source")
-            values.append(dependency[len("symlink://"):])
-        for value in values:
-            value = value.strip()
-            if not value:
-                continue
-            path = Path(value)
-            roots.append((path if path.is_absolute() else root / path).resolve())
-    collections = []
+            path = Path(dependency[len("symlink://"):])
+            direct.append((path if path.is_absolute() else root / path).resolve())
+    return collections, direct
+
+
+def _used_libraries(root: Path, environment: str) -> list[Path] | None:
+    """Read the libraries PlatformIO's finder selected for the last build."""
+    try:
+        record = json.loads(_read_bounded(root / ".pio" / "build" / environment / _USED_LIBRARIES, _MAX_RECEIPT))
+        libraries = record["libraries"]
+        if record.get("schema") != 1 or not isinstance(libraries, list):
+            return None
+        return [Path(item) for item in libraries if isinstance(item, str) and Path(item).is_absolute()]
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError):
+        return None
+
+
+def _library_members(roots, *, split_collections: bool):
+    """Name each library, so one changed library never implicates the others."""
+    members, seen = [], []
     for path in sorted(set(roots), key=lambda item: (len(item.parts), str(item))):
-        if not any(path.is_relative_to(parent) for parent in collections):
-            collections.append(path)
+        if any(path.is_relative_to(parent) for parent in seen):
+            continue
+        seen.append(path)
+        if not split_collections or not path.is_dir():
+            members.append((str(path), path))
+            continue
+        children = sorted(path.iterdir(), key=lambda item: item.name)
+        if any(not item.is_dir() for item in children) or not children:
+            # Loose collection files form one member of their own.
+            members.append((f"{path}|files", children))
+        members.extend((str(item), item) for item in children if item.is_dir())
+    return members
+
+
+def _measure(member) -> tuple[int, int]:
+    """Count before reading, so an oversized tree costs metadata only."""
+    entries = size = 0
+    for path in member if isinstance(member, list) else [member]:
+        if path.is_dir():
+            for directory, dirs, names in os.walk(path):
+                dirs[:] = [name for name in dirs if name.casefold() not in {".git", ".pio", "__pycache__"}]
+                entries += len(dirs) + len(names)
+                if entries > _MAX_LIBRARY_ENTRIES:
+                    return entries, size
+                for name in names:
+                    try:
+                        size += os.lstat(os.path.join(directory, name)).st_size
+                    except OSError:
+                        pass
+        elif path.exists():
+            entries += 1
+            size += path.lstat().st_size
+    return entries, size
+
+
+def _member_digest(member) -> str:
     from main.core.arduino_inputs import snapshot
-    libraries = snapshot(collections, all_files=True)
-    encoded = json.dumps(libraries, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return {"config_sha256": _config_hash(root), "libraries_sha256": hashlib.sha256(encoded).hexdigest()}
+    if isinstance(member, list):
+        digest = hashlib.sha256()
+        for path in member:
+            if path.is_dir():
+                continue
+            if not stat.S_ISREG(path.stat().st_mode):
+                raise RuntimeError("A library input is not a regular file")
+            digest.update(path.name.encode("utf-8", "surrogateescape") + b"\0" + file_digest(path).encode("ascii"))
+        return digest.hexdigest()
+    inventory = snapshot([member], all_files=True)
+    encoded = json.dumps(inventory, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _library_digests(roots, *, split_collections: bool) -> tuple[dict[str, str], str]:
+    """Hash each library within the shared entry and byte budget."""
+    digests, unverifiable = {}, ""
+    entries = size = 0
+    for key, member in _library_members(roots, split_collections=split_collections):
+        if not unverifiable:
+            count, bytes_used = _measure(member)
+            entries, size = entries + count, size + bytes_used
+            if entries > _MAX_LIBRARY_ENTRIES or size > _MAX_BYTES:
+                unverifiable = "the configured libraries exceed the verification limit"
+        if unverifiable:
+            digests[key] = "unverifiable"
+            continue
+        try:
+            digests[key] = _member_digest(member)
+        except RuntimeError as exc:
+            if "regular file" in str(exc):
+                raise  # A special file is never read as library content.
+            digests[key], unverifiable = "unverifiable", str(exc)
+    return digests, unverifiable
+
+
+def input_signature(workspace: Path, environment: str = "mcu_env") -> dict:
+    """Bind configuration and the libraries a build depends on.
+
+    PlatformIO's SCons database is not a safe dependency interchange format, so
+    actual bytes are hashed. Once the build hook has recorded what the finder
+    selected, only those libraries are hashed; other downloads cannot affect
+    this firmware. Until then every configured collection is covered. Trees over
+    the 40,000-entry / 256 MiB budget stop saved-build reuse, never the build.
+    """
+    root = _workspace(workspace)
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(_read_bounded(root / "platformio.ini", _MAX_CONFIG).decode("utf-8-sig"))
+    collections, direct = _configured_library_roots(root, parser)
+    used = _used_libraries(root, environment)
+    if used is None:
+        digests, unverifiable = _library_digests([*collections, *direct], split_collections=True)
+    else:
+        configured = [*collections, *direct]
+        selected = [path for path in used if any(path.is_relative_to(parent) for parent in configured)]
+        digests, unverifiable = _library_digests([*selected, *direct], split_collections=False)
+    encoded = json.dumps(digests, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    signature = {"config_sha256": _config_hash(root), "libraries_sha256": hashlib.sha256(encoded).hexdigest(),
+                 "libraries": digests}
+    if unverifiable:
+        signature["unverifiable"] = unverifiable
+    return signature
+
+
+def library_bytes_changed(previous: dict | None, current: dict) -> bool:
+    """True only when a library present in both signatures has different bytes.
+
+    A newly added or removed library is ordinary dependency work for SCons and
+    must not discard the framework objects that other sources still use.
+    """
+    before = previous.get("libraries") if isinstance(previous, dict) else None
+    after = current.get("libraries")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    return any(key in before and before[key] != digest and digest != "unverifiable"
+               and before[key] != "unverifiable" for key, digest in after.items())
 
 
 def read_input_signature(workspace: Path) -> dict | None:
     """Remember object inputs independently of a successful firmware receipt."""
     try:
         root = _workspace(workspace)
-        value = json.loads(_read_bounded(root / _INPUT_STATE, _MAX_CONFIG))
+        value = json.loads(_read_bounded(root / _INPUT_STATE, _MAX_RECEIPT))
         return value if isinstance(value, dict) else None
     except (OSError, ValueError, UnicodeError, RecursionError):
         return None
@@ -250,14 +368,16 @@ def write_receipt(workspace: Path, *, board_key: str, board_name: str, source_ha
                   environment: str = "mcu_env") -> dict:
     """Publish only after a successful build; failures leave no usable new receipt."""
     root = _workspace(workspace)
-    inputs = input_signature(root)
-    if build_inputs is not None and build_inputs != inputs:
+    inputs = input_signature(root, environment)
+    if build_inputs is not None and (build_inputs.get("config_sha256") != inputs["config_sha256"]
+                                     or library_bytes_changed(build_inputs, inputs)):
         raise ValueError("Build configuration or library inputs changed during compilation")
     receipt = {"schema": 1, "host": host_namespace(),
                "board_key": _identity(board_key, "board key", 512),
                "board": _identity(board_name, "board name", 1024),
                "source_hash": _identity(source_hash, "source hash", 4096),
-               **inputs, "environment": environment, "files": _output_hashes(root, environment),
+               "config_sha256": inputs["config_sha256"], "libraries_sha256": inputs["libraries_sha256"],
+               "environment": environment, "files": _output_hashes(root, environment),
                "metadata": {} if metadata is None else metadata}
     if not isinstance(receipt["metadata"], dict):
         raise ValueError("The compiled receipt metadata is invalid")
@@ -302,7 +422,9 @@ def validate_receipt(workspace: Path, *, board_key: str, source_hash: str,
                 ("source_hash", source_hash, "The sketch sources changed since compilation")):
             if not isinstance(expected, str) or not expected or receipt.get(key) != expected:
                 return False, reason
-        inputs = input_signature(root)
+        inputs = input_signature(root, environment)
+        if inputs.get("unverifiable"):
+            return False, f"Saved-build reuse is unavailable: {inputs['unverifiable']}"
         if receipt.get("config_sha256") != inputs["config_sha256"]:
             return False, "The board build configuration changed since compilation"
         if receipt.get("libraries_sha256") != inputs["libraries_sha256"]:

@@ -1,0 +1,18 @@
+# Native macOS Intel/Apple Silicon runtime. Every native dependency has a wheel for
+# both CPUs; PySide6 is universal2 and tagged macosx_14_0, which sets the minimum macOS.
+PySide6>=6.7,<7
+pyserial>=3.5,<4
+# Workspace ESP chip inspection and Soft/Hard Reset; independent of PIO tools.
+esptool>=4.11,<6
+psutil>=5.9,<8
+platformio>=6.1,<7
+# PlatformIO 6.x still uses Click APIs deprecated starting with Click 8.2.
+click>=8.1.8,<8.2
+# Mbed 6.17 requires legacy distutils APIs and a future release without imp.reload.
+setuptools==80.9.0
+future==1.0.0
+ptyprocess>=0.7,<1
+requests>=2.31,<3
+# The library sample viewer's separate Qt5 process.
+PyQt5>=5.15,<6
+QScintilla>=2.14,<3

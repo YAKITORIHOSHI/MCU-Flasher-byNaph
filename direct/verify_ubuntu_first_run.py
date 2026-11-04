@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Opt-in Ubuntu first-launch integration in a disposable temp/ application copy.
+"""Opt-in native first-launch integration in a disposable temp/ application copy.
 
 --execute downloads the real default native package plan into an empty store,
 creates an empty private Python environment through the native launcher, opens
 the actual workspace under the supplied display, and clicks Compile afterwards.
-It does not authenticate with apt, open a serial device, or change live settings.
+It does not authenticate with a package manager, open a serial device, or change
+live settings. It runs on every native POSIX host: Ubuntu, Linux Mint, Fedora and macOS.
 """
 from __future__ import annotations
 
@@ -187,10 +188,12 @@ def _environment(fixture: Path) -> dict[str, str]:
     (fixture / "runtime").chmod(0o700)
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # This copy has no update record, so it would replace the source under test.
+    env["MCU_FLASHER_DISABLE_APP_UPDATE"] = "1"
     # Pip subprocesses do not import the fixture's src package. Prevent a user's
     # pip configuration from redirecting private installs outside this fixture.
     env["PIP_CONFIG_FILE"] = os.devnull
-    env["QT_QPA_PLATFORM"] = "xcb"
+    env["QT_QPA_PLATFORM"] = "cocoa" if sys.platform == "darwin" else "xcb"
     env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
     return env
 
@@ -258,17 +261,46 @@ def _gui_result(fixture: Path, sketch: Path, runtime: Path) -> dict:
     return result
 
 
+def _host_launcher(app: Path, architecture: str) -> list[str]:
+    """The real entry a user of this host opens, chosen from admitted release data."""
+    if sys.platform == "darwin":
+        return ["/bin/bash", str(app / "LAUNCHER/MacOS.command")]
+    from src.modules.ubuntu_architecture import elf_matches_host
+    from src.modules.ubuntu_release import linux_distribution
+    name = {"ubuntu": "UBUNTU", "fedora": "FEDORA", "linuxmint": "LINUX_MINT"}[linux_distribution().family]
+    if architecture == "arm64":
+        if name == "LINUX_MINT":
+            raise RuntimeError("Linux Mint has no ARM64 release or launcher entry.")
+        name += "_ARM64"
+    launcher = app / "LAUNCHER" / name
+    if not elf_matches_host(launcher) or not os.access(launcher, os.X_OK):
+        raise RuntimeError(f"The first-launch fixture needs the executable for this host CPU: {launcher}")
+    return [str(launcher)]
+
+
+def _detached_gui_result(fixture: Path, seconds: float) -> None:
+    """macOS's launcher detaches from Terminal, so its exit does not end the GUI."""
+    if sys.platform != "darwin":
+        return
+    deadline = time.monotonic() + seconds
+    while not (fixture / "gui-result.json").is_file():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("The detached macOS workspace reported no result; see the macos-launch log in the app's logs folder")
+        time.sleep(0.5)
+    time.sleep(2)  # The result is written just before the window closes.
+
+
 def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
-    from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
+    from src.modules.ubuntu_architecture import host_architecture
 
     fixture.mkdir(parents=True, exist_ok=False)
     app = fixture / "app"
     app.mkdir()
     _copy_source(app)
     architecture = host_architecture()
-    launcher = app / "LAUNCHER" / ("UBUNTU_ARM64" if architecture == "arm64" else "UBUNTU")
-    if not elf_matches_host(launcher) or not os.access(launcher, os.X_OK):
-        raise RuntimeError(f"The first-launch fixture needs the executable for this host CPU: {launcher}")
+    launcher = _host_launcher(app, architecture)
+    # On a terminal, macOS's entry waits for Enter after a failure. Nobody is typing here.
+    tty = sys.platform != "darwin"
     env = _environment(fixture)
     if allow_small_runner:
         env["MCU_FIRST_RUN_ALLOW_SMALL_RUNNER"] = "1"
@@ -276,11 +308,11 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     sketch.mkdir()
     (sketch / "probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
     core = fixture / "data/mcu-flasher/platformio" / platform.machine()
-    runtime = app / ".venv-linux"
+    runtime = app / (".venv-macos" if sys.platform == "darwin" else ".venv-linux")
     if core.exists() or runtime.exists():
         raise RuntimeError("First run must start without native packages or a private runtime")
     report = {"success": False, "fixture": str(fixture), "host_machine": platform.machine(),
-              "architecture": architecture, "launcher": str(launcher), "initial_private_runtime_present": False,
+              "architecture": architecture, "launcher": launcher, "initial_private_runtime_present": False,
               "initial_native_store_present": False, "default_plan": json.loads((app / "direct/offline-packages.json").read_text()),
               "upload": False, "live_settings_modified": False, "system_packages_installed": False,
               "fixture_instrumentation": {
@@ -295,12 +327,13 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"First launch from empty runtime/store: {fixture}", flush=True)
     cold_log = fixture / "first-launch.log"
-    cold = _run([str(launcher), "--project", str(sketch)],
-                cwd=fixture, env=env, log=cold_log, timeout=timeout, tty=True)
+    cold = _run([*launcher, "--project", str(sketch)],
+                cwd=fixture, env=env, log=cold_log, timeout=timeout, tty=tty)
     report.update(first_launch_exit_code=cold, first_launch_log=str(cold_log))
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if cold:
         raise RuntimeError(f"Automatic first-launch Bootstrap failed with exit {cold}; see {cold_log}")
+    _detached_gui_result(fixture, 90)
     gui_result = _gui_result(fixture, sketch, runtime)
     shutil.copy2(fixture / "gui-result.json", fixture / "cold-gui-result.json")
     shutil.copy2(fixture / "workspace.png", fixture / "cold-workspace.png")
@@ -312,18 +345,19 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
         raise RuntimeError("Bootstrap did not certify the complete default package plan")
     python = runtime / "bin/python"
     check_log = fixture / "readiness-check.log"
-    checked = _run([str(launcher), "--check"], cwd=fixture, env=env,
+    checked = _run([*launcher, "--check"], cwd=fixture, env=env,
                    log=check_log, timeout=180)
     if checked:
         raise RuntimeError(f"Native launcher readiness failed after Bootstrap; see {check_log}")
     print("Full Bootstrap certificate and native launcher readiness: OK", flush=True)
     warm_log = fixture / "warm-launch.log"
     (fixture / "gui-result.json").unlink()  # A clean exit alone must not reuse the cold GUI observation.
-    warm = _run([str(launcher), "--project", str(sketch)], cwd=fixture, env=env,
-                log=warm_log, timeout=120, tty=True)
+    warm = _run([*launcher, "--project", str(sketch)], cwd=fixture, env=env,
+                log=warm_log, timeout=120, tty=tty)
     warm_text = warm_log.read_text(encoding="utf-8", errors="replace")
-    if warm or "Preparing Ubuntu system prerequisites" in warm_text:
+    if warm or "private runtime." in warm_text:
         raise RuntimeError(f"Prepared launch unexpectedly failed or repeated Bootstrap; see {warm_log}")
+    _detached_gui_result(fixture, 90)
     warm_gui_result = _gui_result(fixture, sketch, runtime)
     print("Prepared launcher opened the actual workspace without Bootstrap: OK", flush=True)
     compile_fixture = app / "temp/audit/first-compile"
@@ -379,15 +413,16 @@ def main(argv=None) -> int:
     if not args.execute:
         parser.print_help()
         return 0
-    if not sys.platform.startswith("linux"):
-        parser.error("First-launch integration requires native Ubuntu/Linux")
-    if not os.environ.get("DISPLAY"):
+    if sys.platform == "win32":
+        parser.error("First-launch integration requires native Linux or macOS")
+    if sys.platform != "darwin" and not os.environ.get("DISPLAY"):
         parser.error("Supply a desktop/Xvfb DISPLAY for the actual native workspace")
     if args.timeout < 60:
         parser.error("--timeout must be at least 60 seconds")
     sys.path.insert(0, str(ROOT))
-    from direct.ubuntu.preflight import host_preflight
-    host_preflight(require_display=True)  # Fail before cloning; never invoke apt during this probe.
+    if sys.platform != "darwin":
+        from direct.ubuntu.preflight import host_preflight
+        host_preflight(require_display=True)  # Fail before cloning; never invoke a package manager during this probe.
     parent = ROOT / "temp/audit/ubuntu-first-run"
     parent.mkdir(parents=True, exist_ok=True)
     fixture = args.fixture.resolve() if args.fixture else parent / (time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}")

@@ -46,6 +46,7 @@ jobs:
           python -B direct/verify_bootstrap_seed.py
           python -B direct/verify_bootstrap_archives.py
           python -B direct/verify_bootstrap_processes.py
+          python -B direct/verify_bootstrap_file_pool.py
       - name: Owned package I/O benchmark
         run: python -B direct/verify_bootstrap_io_performance.py --output temp/audit/bootstrap-performance/io.json
       - name: Retain benchmark evidence

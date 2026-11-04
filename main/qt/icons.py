@@ -33,10 +33,29 @@ def _render_icon(name, color, size):
     return result
 
 
+@lru_cache(maxsize=96)
+def _button_icon(name, active, disabled, size):
+    """One shared multi-state icon per name, ink pair and size."""
+    result = QIcon()
+    extent = QSize(size, size)
+    for mode, color in ((QIcon.Mode.Normal, active), (QIcon.Mode.Active, active),
+                        (QIcon.Mode.Disabled, disabled), (QIcon.Mode.Selected, active)):
+        rendered = icon(name, color, size=size)
+        for ratio in (1, 2):
+            pixmap = rendered.pixmap(extent, ratio)
+            result.addPixmap(pixmap, mode, QIcon.State.Off)
+            result.addPixmap(pixmap, mode, QIcon.State.On)
+    return result
+
+
 def _ink(widget, role, background, group=QPalette.ColorGroup.Active):
     palette = widget.palette()
     color = palette.color(group, role).name()
-    surface = palette.color(group, background).name()
+    surface = palette.color(group, background)
+    # A transparent surface says nothing about the pixels behind it.
+    if surface.alpha() == 0:
+        return color
+    surface = surface.name()
     return color if contrast_ratio(color, surface) >= 3 else readable_foreground(surface)
 
 
@@ -81,19 +100,16 @@ class ActionButton(QPushButton):
         name = getattr(self, "_icon_name", "")
         if not name or getattr(self, "_refreshing_icon", False):
             return
+        # Style, palette and enabled events are frequent and rarely change the ink.
+        key = (name, _ink(self, QPalette.ColorRole.ButtonText, QPalette.ColorRole.Button, QPalette.ColorGroup.Active),
+               _ink(self, QPalette.ColorRole.ButtonText, QPalette.ColorRole.Button, QPalette.ColorGroup.Disabled),
+               self.iconSize().width())
+        if key == getattr(self, "_icon_key", None):
+            return
+        self._icon_key = key
         self._refreshing_icon = True
         try:
-            result = QIcon()
-            for mode, group in ((QIcon.Mode.Normal, QPalette.ColorGroup.Active),
-                                (QIcon.Mode.Active, QPalette.ColorGroup.Active),
-                                (QIcon.Mode.Disabled, QPalette.ColorGroup.Disabled),
-                                (QIcon.Mode.Selected, QPalette.ColorGroup.Active)):
-                color = _ink(self, QPalette.ColorRole.ButtonText, QPalette.ColorRole.Button, group)
-                rendered = icon(name, color, size=self.iconSize().width())
-                for ratio in (1, 2):
-                    result.addPixmap(rendered.pixmap(self.iconSize(), ratio), mode, QIcon.State.Off)
-                    result.addPixmap(rendered.pixmap(self.iconSize(), ratio), mode, QIcon.State.On)
-            self.setIcon(result)
+            self.setIcon(_button_icon(*key))
         finally:
             self._refreshing_icon = False
 

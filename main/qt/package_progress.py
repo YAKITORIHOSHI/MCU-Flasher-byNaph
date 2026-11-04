@@ -87,7 +87,7 @@ class PackageProgressCard(QFrame):
             QLabel#package-title {{ font-weight: 600; }}
             QPushButton {{ background: {p['BG_MID']}; color: {p['TEXT']};
                 border: 1px solid {p['BORDER']}; border-radius: 4px; padding: 3px 6px; }}
-            QPushButton:hover, QPushButton:focus {{ border-color: {p['CYAN']}; }}
+            QPushButton:hover {{ border-color: {p['CYAN']}; }}
             QProgressBar {{ background: {p['BG_MID']}; border: none; border-radius: 3px; }}
             QProgressBar::chunk {{ background: {p['CYAN']}; border-radius: 3px; }}
         """)

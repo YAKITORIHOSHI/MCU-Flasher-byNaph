@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real read-only QScintilla sample viewing and isolated Tk launch checks.
+"""Real read-only QScintilla sample viewing and isolated viewer launch checks.
 
 Uses existing private dependencies, never installers, external viewers, settings
 writes, network or hardware. Run in a separate process from PySide6 checks.
@@ -10,12 +10,10 @@ import argparse
 import os
 import sys
 import tempfile
-import threading
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -179,140 +177,27 @@ class SampleViewerChecks(unittest.TestCase):
 
 
 class SampleLauncherChecks(unittest.TestCase):
+    """The package browser's own probe is covered by verify_package_browser.py."""
+
     def setUp(self):
-        import tkinter as tk
-        self.root = tk.Tk()
-        self.root.geometry("160x100")
-        self.root.update()
         directory = ROOT / "temp/audit/library-samples"
         directory.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=directory)
+        self.addCleanup(self.temporary.cleanup)
         self.folder = Path(self.temporary.name)
         self.files = [self.folder / "first.ino", self.folder / "latest.ino"]
         for file in self.files:
             file.write_text("void setup() {}", encoding="utf-8")
-        self.addCleanup(self.cleanup)
-        self.thread_ids = []
-        self.release = threading.Event()
-        self.started = threading.Event()
-        self.launch = patch.object(browser, "_launch_code_viewer").start()
-        self.info = patch.object(browser.messagebox, "showinfo").start()
-        self.error = patch.object(browser.messagebox, "showerror").start()
-        patch.object(config, "get_monitor_font_size", return_value=24).start()
-        patch.object(browser.subprocess, "Popen", side_effect=AssertionError("No external launch")).start()
-        patch.object(browser.subprocess, "run", side_effect=AssertionError("No real subprocess probe")).start()
-
-    def cleanup(self):
-        self.release.set()
-        try:
-            self.root.destroy()
-        except Exception:
-            pass
-        tasks = getattr(self.root, "_mcu_code_viewer_tasks", None)
-        deadline = time.monotonic() + 2
-        while tasks is not None and tasks._active and time.monotonic() < deadline:
-            time.sleep(.01)
-        patch.stopall()
-        self.temporary.cleanup()
-
-    def pump(self, condition, timeout=2):
-        deadline = time.monotonic() + timeout
-        while not condition() and time.monotonic() < deadline:
-            self.root.update()
-            time.sleep(.005)
-        self.assertTrue(condition())
-
-    def probe(self, cancel=None):
-        self.thread_ids.append(threading.get_ident())
-        self.started.set()
-        self.release.wait(1)
-        return None if cancel is not None and cancel.is_set() else sys.executable
-
-    def open(self, index=0, **kwargs):
-        browser._open_code_viewer(str(self.files[index]), list(map(str, self.files)), parent=self.root, **kwargs)
-
-    def test_bounded_probe_keeps_tk_responsive_and_opens_latest(self):
-        with patch.object(browser, "_find_code_viewer_python", side_effect=self.probe):
-            started = time.monotonic()
-            self.open()
-            self.assertLess(time.monotonic() - started, .08)
-            self.pump(self.started.is_set)
-            ticks = []
-            self.root.after(1, lambda: ticks.append(threading.get_ident()))
-            self.open(1)
-            self.pump(lambda: bool(ticks))
-            self.assertEqual(self.root._mcu_code_viewer_tasks._active, 1)
-            self.release.set()
-            self.pump(lambda: self.launch.called)
-            self.launch.assert_called_once()
-            self.assertEqual(self.launch.call_args.args[0], str(self.files[1]))
-            self.assertEqual(self.launch.call_args.kwargs["font_size"], 24)
-            self.assertTrue(all(value != threading.get_ident() for value in self.thread_ids))
-            self.assertEqual(ticks, [threading.get_ident()])
-
-    def test_changed_selection_does_not_launch_stale_sample(self):
-        selected = [True]
-        with patch.object(browser, "_find_code_viewer_python", side_effect=self.probe):
-            self.open(is_current=lambda: selected[0])
-            self.pump(self.started.is_set)
-            selected[0] = False
-            self.release.set()
-            self.pump(lambda: not self.root._mcu_code_viewer_tasks._active)
-            for _ in range(8):
-                self.root.update()
-                time.sleep(.01)
-            self.launch.assert_not_called()
-
-    def test_destroyed_parent_discards_probe_completion(self):
-        with patch.object(browser, "_find_code_viewer_python", side_effect=self.probe):
-            self.open()
-            self.pump(self.started.is_set)
-            tasks = self.root._mcu_code_viewer_tasks
-            self.root.destroy()
-            self.release.set()
-            deadline = time.monotonic() + 2
-            while tasks._active and time.monotonic() < deadline:
-                time.sleep(.01)
-            self.assertTrue(tasks.closed)
-            self.assertEqual(tasks._active, 0)
-            self.launch.assert_not_called()
-
-    def test_missing_dependency_prompts_bootstrap_without_installing(self):
-        with patch.object(browser, "_find_code_viewer_python", return_value=None):
-            self.open()
-            self.pump(lambda: self.info.called)
-            self.assertEqual(self.info.call_args.args[0], "Bootstrap required")
-            self.launch.assert_not_called()
-
-    def test_deleted_sample_reports_error_after_probe(self):
-        with patch.object(browser, "_find_code_viewer_python", side_effect=self.probe):
-            self.open()
-            self.pump(self.started.is_set)
-            self.files[0].unlink()
-            self.release.set()
-            self.pump(lambda: self.error.called)
-            self.launch.assert_not_called()
-
-    def test_queued_old_completion_cannot_open_an_extra_window(self):
-        with patch.object(browser, "_find_code_viewer_python", return_value=sys.executable):
-            self.open()
-            deadline = time.monotonic() + 2
-            while self.root._mcu_code_viewer_tasks._active and time.monotonic() < deadline:
-                time.sleep(.005)  # Finish the worker without draining Tk callbacks.
-            self.assertEqual(self.root._mcu_code_viewer_tasks._active, 0)
-            self.open()
-            self.pump(lambda: self.launch.called)
-            for _ in range(10):
-                self.root.update()
-                time.sleep(.01)
-            self.launch.assert_called_once()
 
     def test_launch_passes_prepared_interpreter_theme_and_font(self):
         before = os.environ.copy()
-        with patch.object(browser.subprocess, "Popen") as launch:
-            LAUNCH_VIEWER(str(self.files[0]), tuple(map(str, self.files)), parent=self.root,
+        with patch.object(browser.subprocess, "Popen") as launch, \
+                patch("src.modules.ubuntu_download_manager.remember_viewer") as remember:
+            LAUNCH_VIEWER(str(self.files[0]), tuple(map(str, self.files)),
                           python_exe=sys.executable, theme_mode="light", font_size=24)
         launch.assert_called_once()
+        if sys.platform != "win32":
+            remember.assert_called_once_with(launch.return_value)
         args, kwargs = launch.call_args
         self.assertEqual(args[0][0], sys.executable)
         self.assertEqual(Path(args[0][1]), ROOT / "src/qscintilla_viewer.py")
@@ -320,14 +205,6 @@ class SampleLauncherChecks(unittest.TestCase):
         self.assertEqual(kwargs["env"]["MCU_FLASHER_VIEWER_THEME"], "light")
         self.assertEqual(kwargs["env"]["MCU_FLASHER_VIEWER_FONT_SIZE"], "24")
         self.assertEqual(os.environ, before)
-
-    def test_probe_error_is_reported_without_requesting_installation(self):
-        with patch.object(browser, "_find_code_viewer_python", side_effect=RuntimeError("Probe unavailable")):
-            self.open()
-            self.pump(lambda: self.error.called)
-        self.assertIn("Probe unavailable", self.error.call_args.args[1])
-        self.info.assert_not_called()
-        self.launch.assert_not_called()
 
     def test_native_linux_probe_preserves_the_venv_symlink_spelling(self):
         host = self.folder / "host-python"

@@ -81,7 +81,7 @@ class SystemSetupChecks(unittest.TestCase):
     def test_non_tty_desktop_uses_os_authentication_agent(self):
         with patch.object(system_setup.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
                 patch.dict(os.environ, {"DISPLAY": ":fixture"}):
-            system_setup.install_system_packages(["python3-tk"])
+            system_setup.install_system_packages(["python3-venv"])
         self.assertTrue(all(call.args[0][:2] == ["/usr/bin/pkexec", "/usr/bin/apt-get"]
                             for call in self.run.call_args_list))
 
@@ -97,7 +97,7 @@ class SystemSetupChecks(unittest.TestCase):
                 system_setup.install_system_packages([package])
         with patch.object(system_setup.os, "geteuid", return_value=0):
             with self.assertRaisesRegex(RuntimeError, "normal desktop account"):
-                system_setup.install_system_packages(["python3-tk"])
+                system_setup.install_system_packages(["python3-venv"])
         self.run.assert_not_called()
 
     def test_no_authentication_surface_stops_with_exact_manual_alternative(self):

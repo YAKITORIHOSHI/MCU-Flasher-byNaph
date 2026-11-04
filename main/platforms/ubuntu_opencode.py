@@ -8,7 +8,8 @@ import time
 from collections import deque
 from pathlib import Path
 
-from src.modules.ubuntu_architecture import elf_matches_host, linux_tool_architecture
+from src.modules.platform_runtime import native_tools_name
+from src.modules.ubuntu_architecture import MACH_O_MAGICS, elf_matches_host, native_tool_architecture
 
 
 _WINDOWS_SUFFIXES = frozenset({".exe", ".cmd", ".bat", ".ps1"})
@@ -19,7 +20,7 @@ MANAGED_OWNER = "mcu-flasher-ubuntu-opencode"
 
 def managed_opencode_cli() -> str | None:
     """Locate a certified app-owned installation; Bootstrap verifies its hash."""
-    directory = ROOT / ".ubuntu-tools" / "opencode"
+    directory = ROOT / native_tools_name() / "opencode"
     certificate = directory / "installation.json"
     try:
         if directory.parent.is_symlink() or directory.is_symlink() or certificate.is_symlink():
@@ -30,7 +31,7 @@ def managed_opencode_cli() -> str | None:
         if state.get("owner") != MANAGED_OWNER or state.get("schema") != 1:
             return None
         # Legacy receipts were produced by the amd64-only installer.
-        if state.get("architecture", "linux-amd64") != linux_tool_architecture():
+        if state.get("architecture", "linux-amd64") != native_tool_architecture():
             return None
         executable = directory / "opencode"
         if executable.is_symlink():
@@ -61,8 +62,8 @@ def _native_executable(candidate) -> str | None:
             header = stream.read(4)
             if header[:2] == b"MZ":
                 return None
-        # PATH/npm wrappers remain valid; native ELF executables must match CPU.
-        if header == b"\x7fELF" and not elf_matches_host(path):
+        # PATH/npm wrappers remain valid; native binaries must match this OS and CPU.
+        if (header == b"\x7fELF" or header in MACH_O_MAGICS) and not elf_matches_host(path):
             return None
         return str(path)
     except (OSError, RuntimeError, TypeError, ValueError):

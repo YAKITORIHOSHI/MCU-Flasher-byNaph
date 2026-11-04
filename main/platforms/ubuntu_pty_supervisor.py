@@ -18,8 +18,12 @@ import time
 
 
 def _enable_subreaper() -> None:
+    if sys.platform == "darwin":
+        # macOS has no subreaper: a tool that fully detaches is adopted by launchd.
+        # Ending the session still terminates every descendant still in this tree.
+        return
     if not sys.platform.startswith("linux"):
-        raise RuntimeError("native PTY containment requires Linux")
+        raise RuntimeError("native PTY containment requires Linux or macOS")
     library = ctypes.CDLL(None, use_errno=True)
     library.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
                               ctypes.c_ulong, ctypes.c_ulong]

@@ -969,127 +969,6 @@ class ControlChecks(unittest.TestCase):
             settings.hide()
 
 
-class DownloaderChecks(unittest.TestCase):
-    def setUp(self):
-        # Previous disposable Tcl/Qt wrapper cycles must retire on this UI
-        # thread before the next fixture starts any catalog/disk workers.
-        gc.collect()
-        import tkinter as tk
-        from src.modules import arduino_lib_req as downloader
-        self.module = downloader
-        try:
-            self.root = tk.Tk()
-        except tk.TclError as error:
-            self.skipTest(f"Tk desktop unavailable: {error}")
-        self.root.withdraw()
-        self.addCleanup(self.root.destroy)
-        self.callback_errors = []
-        self.root.report_callback_exception = lambda *error: self.callback_errors.append(error)
-        self.addCleanup(lambda: self.assertEqual(self.callback_errors, [], "Tk callback failed"))
-        self.addCleanup(downloader.Theme.apply_theme, downloader.Theme.active_theme)
-        app = downloader.ArduinoBrowser.__new__(downloader.ArduinoBrowser)
-        app.root = self.root
-        app._busy, app._is_online, app._is_hidden = False, True, False
-        app._download_dir = str(ROOT / "temp/audit/fixture-download")
-        app._additional_board_urls, app._installed_items = [], []
-        # All package event writes stay inside this fixture's disposable folder.
-        import tempfile
-        fixture_root = ROOT / "temp/audit/downloader-jobs"
-        fixture_root.mkdir(parents=True, exist_ok=True)
-        event_fixture = tempfile.TemporaryDirectory(dir=fixture_root)
-        self.addCleanup(event_fixture.cleanup)
-        app._package_event_root = event_fixture.name
-        app._compute_installed_items_async = Mock()
-        app._compute_installed_items = Mock()
-        app._update_version_status = Mock()
-        app._build_ui()
-        self.app = app
-
-    def pump(self):
-        for _ in range(8):
-            self.root.update()
-            time.sleep(.025)
-
-    def test_tabs_sources_search_and_version_selection(self):
-        app = self.app
-        self.root.geometry("900x620+20+20")
-        self.root.deiconify()
-        self.pump()
-        self.assertEqual(len(app.notebook.tabs()), 3)
-        app.sources_btn.invoke()
-        self.pump()
-        self.assertTrue(app._sources_card.winfo_ismapped())
-        app.sources_btn.invoke()
-        self.assertFalse(app._sources_card.winfo_ismapped())
-        version = {"version": "1.0", "size": 1280, "url": "https://example.invalid/demo.zip"}
-        lib = {"name": "Demo sensors", "author": "Fixture", "maintainer": "", "category": "Sensors",
-               "architectures": ["*"], "sentence": "A library for device readings.",
-               "paragraph": "Pick a version, then download its archive.", "versions": [version]}
-        app.lib_tab.populate({lib["name"]: lib})
-        app.lib_tab.listbox.selection_set(0)
-        app.lib_tab._on_select()
-        self.assertEqual(app.lib_tab.version_var.get(), "1.0")
-        # The shared glass image is decoration; exactly one native details
-        # window must remain after selecting a package.
-        canvas = app.lib_tab.detail_canvas
-        content = [item for item in canvas.find_all() if canvas.type(item) == "window"]
-        self.assertEqual(content, [app.lib_tab._content_window])
-        self.assertEqual(canvas.itemcget(content[0], "window"), str(app.lib_tab._detail_content))
-        app.lib_tab.search_var.set("missing")
-        app.lib_tab._execute_search()
-        self.assertEqual(app.lib_tab.listbox.size(), 0)
-        app.notebook.select(2)
-        self.pump()
-        app._compute_installed_items_async.assert_called_once()
-
-    def test_invalid_urls_and_busy_folder_change_never_persist(self):
-        app, module = self.app, self.module
-        with patch.object(module, "_save_settings") as save, patch.object(module.messagebox, "showerror") as error:
-            app.board_urls_var.set("file:///bad.json")
-            app._apply_board_urls()
-            error.assert_called_once()
-            save.assert_not_called()
-            app._busy = True
-            app.folder_var.set("change-during-download")
-            app._apply_folder_entry()
-            self.assertEqual(app.folder_var.get(), app._download_dir)
-            save.assert_not_called()
-
-    def test_solarized_aliases_and_sleeping_window_recolor(self):
-        module, app = self.module, self.app
-        self.root.geometry("900x620+20+20")
-        self.root.deiconify()
-        self.pump()
-        version = {"version": "2.1.0", "size": 2560, "url": "https://example.invalid/fixture.zip"}
-        lib = {"name": "Sensor toolkit", "author": "Preview", "maintainer": "", "category": "Sensors",
-               "architectures": ["*"], "sentence": "Read sensors through a compact device interface.",
-               "paragraph": "Select the release you need. Downloads retain archive checksums and cancellation support.", "versions": [version]}
-        app.lib_tab.populate({lib["name"]: lib})
-        app.lib_tab.listbox.selection_set(0)
-        app.lib_tab._on_select()
-        self.assertEqual(module.Theme.apply_theme("SOLARIZED-DARK"), "solarized_dark")
-        for mode in ("light", "solarized_dark", "default"):
-            with patch.object(module, "_resolve_lib_req_theme", return_value=mode):
-                app._apply_current_theme()
-                self.assertEqual(app.root.cget("bg"), module.Theme.WINDOW_BG)
-            app.refresh_btn.event_generate("<Enter>")
-            self.assertEqual(app.refresh_btn.cget("bg"), app.refresh_btn._hover_bg)
-            if RENDER_DIR:
-                app.root.geometry("900x620+20+20")
-                app.root.deiconify()
-                self.pump()
-                # Capture only the fixture window through the native Qt platform.
-                screen = APP.primaryScreen()
-                grab = screen.grabWindow(int(app.root.winfo_id()))
-                self.assertFalse(grab.isNull())
-                self.assertTrue(grab.save(str(RENDER_DIR / f"downloader-{mode}.png")))
-                if mode == "solarized_dark":
-                    app.sources_btn.invoke()
-                    self.pump()
-                    self.assertTrue(screen.grabWindow(int(app.root.winfo_id())).save(str(RENDER_DIR / "downloader-indexes.png")))
-                    app.sources_btn.invoke()
-
-
 def main():
     global RENDER_DIR
     parser = argparse.ArgumentParser()
@@ -1098,8 +977,7 @@ def main():
     RENDER_DIR = args.render_dir
     if RENDER_DIR:
         RENDER_DIR.mkdir(parents=True, exist_ok=True)
-    suite = unittest.TestSuite((unittest.defaultTestLoader.loadTestsFromTestCase(ControlChecks),
-                               unittest.defaultTestLoader.loadTestsFromTestCase(DownloaderChecks)))
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(ControlChecks)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 

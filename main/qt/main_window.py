@@ -408,7 +408,7 @@ class MCUMainWindow(QMainWindow):
         from main.qt.compat_panel import CompatPanel
         from main.qt.notif_panel import NotifPanel
         from main.qt.syntax_panel import SyntaxPanel
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             from main.qt.posix_terminal_panel import PosixTerminalPanel as TerminalPanel
         else:
             from main.qt.terminal_panel import TerminalPanel
@@ -559,7 +559,7 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setTabToolTip(2, "Compatible Microcontroller Devices")
         self._bottom_tabs.setTabToolTip(3, "Notifications & Event Log")
         self._bottom_tabs.setTabToolTip(4, "Syntax Diagnostics & Code Analysis")
-        self._bottom_tabs.setTabToolTip(5, "Integrated Bash terminal" if sys.platform.startswith("linux") else "Integrated PowerShell / CMD terminal")
+        self._bottom_tabs.setTabToolTip(5, "Integrated Bash terminal" if sys.platform != "win32" else "Integrated PowerShell / CMD terminal")
         self._bottom_tabs.setTabToolTip(6, "AI file changes grouped by prompt, with timestamps and before/after previews")
 
         # Ensure Build Console is always the default active bottom tab on startup
@@ -579,7 +579,7 @@ class MCUMainWindow(QMainWindow):
         self._v_splitter.splitterMoved.connect(_on_v_splitter_moved)
 
         # ── AI side panel (hidden by default) ─────────────────────────────────
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             from main.qt.posix_ai_panel import PosixAIPanel as AIPanel
         else:
             from main.qt.ai_panel import AIPanel
@@ -784,7 +784,7 @@ class MCUMainWindow(QMainWindow):
         self._project_shortcut = QShortcut(QKeySequence("Ctrl+O"), self,
                                          activated=self._shortcut_open_project)
         self._workspace_shortcuts.extend((self._find_all_shortcut, self._project_shortcut))
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             # Native coding CLIs own these keys while their Qt view is focused,
             # just as Windows' embedded foreign assistant receives them.
             self._native_cli_shortcuts = self.findChildren(QShortcut)
@@ -1974,7 +1974,7 @@ class MCUMainWindow(QMainWindow):
             app = QApplication.instance()
             top_levels = [w for w in app.topLevelWidgets() if isinstance(w, MCUMainWindow) and w is not self] if app else []
             if not top_levels:
-                if sys.platform.startswith("linux"):
+                if sys.platform != "win32":
                     from main.core.config import clean_instance_config
                     from src.modules.ubuntu_download_manager import quit_if_last_workspace
                     clean_instance_config()

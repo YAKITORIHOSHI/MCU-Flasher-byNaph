@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create/repair the native Ubuntu environment without changing system Python."""
+"""Create/repair the native Linux environment without changing system Python."""
 from __future__ import annotations
 import argparse
 import os
@@ -29,26 +29,27 @@ def clean_native_bootstrap_environment() -> dict[str, str]:
 
 def prepare_environment_directory(directory: Path) -> None:
     """Repair only interpreter links inside the owned native venv; never clear it."""
+    name = directory.name
     if directory.is_symlink():
-        raise RuntimeError(".venv-linux must be a local directory, not a symbolic link.")
+        raise RuntimeError(f"{name} must be a local directory, not a symbolic link.")
     if not directory.exists():
         return
     if not directory.is_dir():
-        raise RuntimeError(".venv-linux is not a directory. Preserve it and choose a writable application folder.")
+        raise RuntimeError(f"{name} is not a directory. Preserve it and choose a writable application folder.")
     if any(directory.iterdir()) and not (directory / "pyvenv.cfg").is_file():
-        raise RuntimeError(".venv-linux contains unrecognized files without pyvenv.cfg. "
+        raise RuntimeError(f"{name} contains unrecognized files without pyvenv.cfg. "
                            "Move that directory aside before Bootstrap; it will not be deleted.")
     if (directory / "pyvenv.cfg").is_symlink():
-        raise RuntimeError(".venv-linux/pyvenv.cfg must be a local file, not a symbolic link.")
+        raise RuntimeError(f"{name}/pyvenv.cfg must be a local file, not a symbolic link.")
     for folder in ("bin", "lib", "include", f"lib/python3.{sys.version_info[1]}",
                    f"lib/python3.{sys.version_info[1]}/site-packages"):
         if (directory / folder).is_symlink():
-            raise RuntimeError(f".venv-linux/{folder} must be a local directory. "
+            raise RuntimeError(f"{name}/{folder} must be a local directory. "
                                "Move the linked environment aside before Bootstrap.")
     # Standard venv's lib64 alias is safe only when it stays in this venv.
     alias = directory / "lib64"
     if alias.is_symlink() and alias.resolve() != (directory / "lib").resolve():
-        raise RuntimeError(".venv-linux/lib64 points outside this environment. "
+        raise RuntimeError(f"{name}/lib64 points outside this environment. "
                            "Move the linked environment aside before Bootstrap.")
     base = Path(sys._base_executable).resolve()
     bin_dir = directory / "bin"
@@ -74,7 +75,7 @@ def main(argv=None) -> int:
                         help="Arduino declaration source root; repeat for multiple roots")
     args = parser.parse_args(argv)
     if not sys.platform.startswith("linux"):
-        print("This setup is for Ubuntu/Linux. Use direct/windows/run.vbs on Windows.", file=sys.stderr)
+        print("This setup is for native Linux. Use direct/windows/run.vbs on Windows.", file=sys.stderr)
         return 1
     if sys.version_info < (3, 10):
         print("Python 3.10 or newer is required.", file=sys.stderr)
@@ -86,13 +87,15 @@ def main(argv=None) -> int:
         print("Run setup as your normal desktop account, without sudo.", file=sys.stderr)
         return 1
     from src.modules.platform_runtime import native_platformio_dir
+    from src.modules.ubuntu_release import linux_label, package_manager
+    label = linux_label()
     env = clean_native_bootstrap_environment()
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         # A terminal inside the app can inherit its conditional Python guard.
         # Relaunch bootstrap before running installers in that interpreter.
         return subprocess.call([sys.executable, "-B", str(Path(__file__).resolve()),
                                 *(sys.argv[1:] if argv is None else argv)], env=env, cwd=ROOT)
-    stage = "Ubuntu prerequisites"
+    stage = f"{label} prerequisites"
     try:
         from direct.ubuntu.system_setup import ensure_system_dependencies
         ensure_system_dependencies(require_display=args.launch, env=env)
@@ -150,7 +153,7 @@ def main(argv=None) -> int:
                                  on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):
             subprocess.run(command, check=True, env=env, cwd=ROOT)
             finish_bootstrap(core)
-        print("Ubuntu runtime ready. Launch with: bash direct/ubuntu/run.sh")
+        print(f"{label} runtime ready. Launch with: bash direct/ubuntu/run.sh")
         if args.launch:
             command = [str(python), str(ROOT / "mcu_flash_gui.py")]
             if args.project:
@@ -161,15 +164,16 @@ def main(argv=None) -> int:
         return 0
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as exc:
         recovery = {
-            "Ubuntu prerequisites": "",
-            "private Python environment": "Install python3-venv (or the matching python3.X-venv for a custom interpreter), then rerun Bootstrap.",
-            "Python dependencies": "Check network access and available disk space, then rerun Bootstrap. Use 64-bit Ubuntu Python 3.10 or newer on amd64/ARM64; ARM64's Qt5 viewer uses Ubuntu's python3-pyqt5 and python3-pyqt5.qsci packages.",
-            "native runtime validation": "Read the dependency error above, install its Ubuntu prerequisites, then rerun Bootstrap.",
+            f"{label} prerequisites": "",
+            "private Python environment": ("Reinstall python3, then rerun Bootstrap." if package_manager() == "dnf" else
+                                           "Install python3-venv (or the matching python3.X-venv for a custom interpreter), then rerun Bootstrap."),
+            "Python dependencies": f"Check network access and available disk space, then rerun Bootstrap. Use 64-bit {label} Python 3.10 or newer on amd64/ARM64; ARM64's Qt5 viewer uses {label}'s native PyQt5 and QScintilla packages.",
+            "native runtime validation": f"Read the dependency error above, install its {label} prerequisites, then rerun Bootstrap.",
             "native Arduino CLI": "Check network access and the native CLI error above, then rerun Bootstrap; existing files are preserved.",
             "OpenCode AI Assistant": "Check network access and the native CLI error above, then rerun Bootstrap; existing files are preserved.",
             "native board toolchains": "Check the toolchain output above and network access, then rerun Bootstrap; prepared packages are preserved.",
         }
-        print(f"Ubuntu Bootstrap failed during {stage}: {exc}\n{recovery[stage]}", file=sys.stderr)
+        print(f"{label} Bootstrap failed during {stage}: {exc}\n{recovery[stage]}", file=sys.stderr)
         return 1
 
 

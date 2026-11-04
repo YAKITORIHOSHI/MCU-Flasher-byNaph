@@ -452,20 +452,26 @@ class RecoveryChecks(unittest.TestCase):
         recovery = self.recovery()
         from platformio.package.manager import _install as installer
         source, target = self.copy_fixture()
-        calls = []
+        calls, native_copies = [], []
         class NativeProxy:
             def __getattr__(self, name):
                 return getattr(shutil, name)
             def copytree(self, src, dst, *args, **kwargs):
                 calls.append(kwargs)
                 return shutil.copytree(src, dst, *args, **kwargs)
+            def copy2(self, src, dst, **kwargs):
+                native_copies.append(src)
+                return shutil.copy2(src, dst, **kwargs)
         original = shutil.copytree
         with patch.object(installer, "shutil", NativeProxy()), \
                 patch.object(recovery, "sys", SimpleNamespace(platform="win32")), \
                 patch.object(recovery, "_tree_signature", wraps=recovery._tree_signature) as signature, \
                 recovery.atomic_package_writes(self.core):
             installer.shutil.copytree(source, target, symlinks=True)
-        self.assertEqual(calls, [{"symlinks": True}])
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0]["symlinks"], True)
+        # Every file still passes through the platform's native copy2 (CopyFile2).
+        self.assertEqual(len(native_copies), sum(path.is_file() for path in source.rglob("*")))
         self.assertEqual(signature.call_count, 2)
         self.assertIs(shutil.copytree, original)
         self.assertEqual((target / "payload").read_bytes(), (source / "payload").read_bytes())

@@ -31,6 +31,10 @@ from src.modules.ubuntu_release import enforce_supported_ubuntu
 if not enforce_supported_ubuntu():
     raise SystemExit(1)
 
+# After admission: a refused host must not gain any per-user state.
+from src.modules.bytecode_cache import enable as _enable_bytecode_cache
+_enable_bytecode_cache()
+
 from src.modules.runtime_resources import enforce_minimum_cpu_requirement, configure_webengine_environment
 if not enforce_minimum_cpu_requirement():
     raise SystemExit(1)

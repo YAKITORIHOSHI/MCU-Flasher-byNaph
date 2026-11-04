@@ -39,7 +39,6 @@ class UbuntuReleasePackageChecks(unittest.TestCase):
                 patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": "26.04"}), \
                 patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="x86_64"), create=True), \
                 patch.object(preflight.importlib.util, "find_spec", return_value=object()), \
-                patch.object(preflight, "_check_tk"), \
                 patch.object(preflight.shutil, "which", return_value="/fixture/tool"), \
                 patch.object(preflight.ctypes.util, "find_library", side_effect=lambda name: None if name in {"asound", "glib-2.0"} else name), \
                 patch.object(preflight.ctypes, "CDLL", return_value=object()), \
@@ -87,7 +86,7 @@ class BootstrapEnvironmentChecks(unittest.TestCase):
                 patch("direct.ubuntu.runtime_architecture.check_runtime_architecture"), \
                 patch.object(preflight.importlib.util, "find_spec", return_value=None), \
                 patch.object(preflight.metadata, "version", return_value="8.5.0"), \
-                patch.object(preflight, "_check_tk", side_effect=AssertionError("Native imports ran")):
+                patch("src.modules.mbed_compat.prepare_dependencies", side_effect=AssertionError("Native imports ran")):
             with self.assertRaisesRegex(RuntimeError, "Click 8.5.0.*--repair"):
                 preflight.runtime_preflight(owning_root)
 
@@ -104,7 +103,7 @@ class BootstrapEnvironmentChecks(unittest.TestCase):
         with patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 11),
                                                             prefix=private, base_prefix="system")), \
                 patch.object(preflight.metadata, "version", return_value="6.12.0"), \
-                patch.object(preflight, "_check_tk", side_effect=AssertionError("Native validation ran")):
+                patch("src.modules.mbed_compat.prepare_dependencies", side_effect=AssertionError("Native validation ran")):
             with self.assertRaisesRegex(RuntimeError, "incompatible"):
                 preflight.runtime_preflight(owning_root)
 
@@ -211,7 +210,6 @@ class UbuntuBootstrapChecks(unittest.TestCase):
         patches = (
             patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="x86_64")),
             patch.object(preflight.importlib.util, "find_spec", return_value=object()),
-            patch.object(preflight, "_check_tk"),
             patch.object(preflight.shutil, "which", return_value="/fixture/native-tool"),
             patch.object(preflight.ctypes.util, "find_library", side_effect=lambda name: "lib" + name + ".so"),
             patch.object(preflight.ctypes, "CDLL", return_value=object()),
@@ -246,13 +244,13 @@ class UbuntuBootstrapChecks(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "sudo apt install libasound2t64 libxcb-cursor0"):
                 preflight.host_preflight()
 
-    def test_missing_tk_and_native_tools_report_once(self):
+    def test_missing_native_tools_report_once(self):
         self.host_mocks()
-        with patch.object(preflight, "_check_tk", side_effect=RuntimeError("Tk missing")), \
-                patch.object(preflight.shutil, "which", side_effect=lambda name: None if name in ("make", "gcc", "g++", "git") else name):
+        with patch.object(preflight.shutil, "which", side_effect=lambda name: None if name in ("make", "gcc", "g++", "git") else name):
             with self.assertRaises(RuntimeError) as result:
                 preflight.host_preflight()
-        self.assertIn("sudo apt install python3-tk git build-essential", str(result.exception))
+        self.assertIn("sudo apt install git build-essential", str(result.exception))
+        self.assertNotIn("python3-tk", str(result.exception))
         self.assertEqual(str(result.exception).split("sudo apt install ")[1].split("\n")[0].count("build-essential"), 1)
 
     def test_webengine_direct_libraries_are_detected_before_private_imports(self):
@@ -272,7 +270,7 @@ class UbuntuBootstrapChecks(unittest.TestCase):
 
     def test_unsupported_architecture_stops_before_dependency_work(self):
         with patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine="armv7l")), \
-                patch.object(preflight, "_check_tk", side_effect=AssertionError("Dependency work ran")), \
+                patch.object(preflight.importlib.util, "find_spec", side_effect=AssertionError("Dependency work ran")), \
                 patch.object(subprocess, "run", side_effect=AssertionError("Installer was invoked")):
             with self.assertRaisesRegex(RuntimeError, "64-bit Intel/AMD"):
                 preflight.host_preflight()

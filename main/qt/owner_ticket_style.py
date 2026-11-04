@@ -71,7 +71,6 @@ def portal_stylesheet(mode: str) -> str:
         }}
         QPushButton:hover {{ background: #ffe85b; }}
         QPushButton:pressed {{ background: #80c8ff; }}
-        QPushButton:focus {{ border: 2px dashed #2667c9; }}
         QPushButton[role="primary"] {{ background: #ffe85b; }}
         QPushButton[role="primary"]:hover {{ background: #ff91d5; }}
         QPushButton[role="icon"] {{ padding: 5px; }}

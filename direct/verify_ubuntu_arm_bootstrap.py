@@ -49,7 +49,6 @@ class HostChecks(IsolatedChecks):
                     stack.enter_context(patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": release}))
                     stack.enter_context(patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine=machine), create=True))
                     stack.enter_context(patch.object(preflight.importlib.util, "find_spec", return_value=object()))
-                    stack.enter_context(patch.object(preflight, "_check_tk"))
                     stack.enter_context(patch.object(preflight.shutil, "which", return_value="/fixture/tool"))
                     stack.enter_context(patch.object(preflight.ctypes.util, "find_library", side_effect=lambda name: None if name in absent else name))
                     stack.enter_context(patch.object(preflight.ctypes, "CDLL", return_value=object()))
@@ -86,7 +85,6 @@ class HostChecks(IsolatedChecks):
                     stack.enter_context(patch.object(preflight.platform, "freedesktop_os_release", return_value={"ID": "ubuntu", "VERSION_ID": release}))
                     stack.enter_context(patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine=machine), create=True))
                     stack.enter_context(patch.object(preflight.importlib.util, "find_spec", return_value=object()))
-                    stack.enter_context(patch.object(preflight, "_check_tk"))
                     stack.enter_context(patch.object(preflight.shutil, "which", return_value="/fixture/tool"))
                     stack.enter_context(patch.object(preflight.ctypes.util, "find_library", side_effect=lambda name: name))
                     stack.enter_context(patch.object(preflight.ctypes, "CDLL", return_value=object()))
@@ -109,7 +107,7 @@ class HostChecks(IsolatedChecks):
                     patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 12))), \
                     patch.object(preflight.os, "uname", return_value=SimpleNamespace(machine=machine), create=True), \
                     patch.object(preflight.struct, "calcsize", return_value=pointer_size), \
-                    patch.object(preflight, "_check_tk", side_effect=AssertionError("Native check ran")):
+                    patch.object(preflight.importlib.util, "find_spec", side_effect=AssertionError("Native check ran")):
                 with self.assertRaisesRegex(RuntimeError, "64-bit"):
                     preflight.host_preflight()
 
@@ -169,7 +167,7 @@ class QtNativePreflightChecks(IsolatedChecks):
         with patch.object(preflight, "sys", SimpleNamespace(platform="linux", version_info=(3, 14), prefix=private, base_prefix="system")), \
                 patch.object(preflight, "host_architecture", return_value="arm64"), \
                 patch.object(preflight.importlib.util, "find_spec", return_value=SimpleNamespace(origin=str(root.parent / "__init__.py"))), \
-                patch.object(preflight, "_check_tk", side_effect=AssertionError("Native imports ran before linker validation")), \
+                patch("src.modules.mbed_compat.prepare_dependencies", side_effect=AssertionError("Native imports ran before linker validation")), \
                 patch.object(subprocess, "run", side_effect=replies) as run:
             with self.assertRaises(RuntimeError) as error:
                 preflight.runtime_preflight(self.root)

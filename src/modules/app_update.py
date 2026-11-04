@@ -37,6 +37,10 @@ REPOSITORY = "YAKITORIHOSHI/MCU-Flasher-byNaph"
 REPOSITORY_URL = f"https://github.com/{REPOSITORY}.git"
 DEFAULT_BRANCH = "main"
 COMMIT_API_URL = f"https://api.github.com/repos/{REPOSITORY}/commits/{{branch}}"
+# Page 2 omits the changed-file list, which keeps this response to a few kilobytes.
+COMPARE_API_URL = f"https://api.github.com/repos/{REPOSITORY}/compare/{{base}}...{{head}}?page=2&per_page=1"
+# A release ZIP records the commit it was built from, beside its other generated data.
+BUNDLED_REVISION_FILE = "src/dbs/source_revision.json"
 SOURCE_ARCHIVE_URL = f"https://codeload.github.com/{REPOSITORY}/zip/{{commit}}"
 
 STATE_SCHEMA = 2
@@ -76,7 +80,7 @@ _WINDOWS_RESERVED_BASENAMES = frozenset((
 _PROTECTED_TOP_LEVEL = frozenset((
     ".git", ".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode",
     ".clangd", ".opencode", "temp", "logs", "env", ".venv", ".venv-linux",
-    ".ubuntu-tools", "index_json", "installers",
+    ".venv-macos", ".ubuntu-tools", ".macos-tools", "index_json", "installers",
 ))
 _PROTECTED_DYNAMIC_FILES = frozenset((
     "src/dbs/bootstrap_config.json",
@@ -350,6 +354,38 @@ def _read_remote_commit(*, branch: str, timeout: float,
     return parse_remote_commit(payload, branch)
 
 
+def _bundled_commit(install_root: Path) -> str | None:
+    """Return the commit a release ZIP was built from, if this copy records one."""
+    commit = _read_json(install_root / BUNDLED_REVISION_FILE, limit=4096).get("commit")
+    return commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) else None
+
+
+def _branch_offers_newer_source(bundled: str, candidate: SourceCandidate, *, timeout: float,
+                                opener: Callable[..., Any] = urlopen) -> bool:
+    """Ask GitHub how the branch relates to this copy's commit.
+
+    A fresh release may be newer than the update branch, so "different" alone must
+    never replace it. A rewritten branch has diverged and is still followed.
+    """
+    operation = "GitHub source comparison"
+    deadline = _network_deadline(timeout, operation)
+    request = Request(COMPARE_API_URL.format(base=bundled, head=candidate.commit),
+                      headers={"Accept": "application/vnd.github+json", "User-Agent": "MCU-Flasher-Bootstrap/11"})
+    try:
+        with opener(request, timeout=_remaining_network_timeout(deadline, operation)) as response:
+            if not _api_response_is_allowed(response.geturl()):
+                raise ApplicationUpdateError("GitHub source comparison redirected to an unsafe location.")
+            raw = _read_limited_response(response, maximum=MAX_METADATA_BYTES, deadline=deadline, operation=operation)
+        status = json.loads(raw.decode("utf-8")).get("status")
+    except ApplicationUpdateError:
+        raise
+    except (HTTPError, URLError, OSError, TimeoutError, UnicodeError, ValueError, AttributeError) as exc:
+        raise ApplicationUpdateError(f"GitHub source comparison is unavailable: {exc}") from exc
+    if status not in ("ahead", "behind", "identical", "diverged"):
+        raise ApplicationUpdateError("GitHub returned an unrecognized source comparison.")
+    return status in ("ahead", "diverged")
+
+
 def _matching_applied_commit(state: dict[str, Any], candidate: SourceCandidate) -> bool:
     return (
         state.get("schema") == STATE_SCHEMA
@@ -376,6 +412,14 @@ def check_for_update(root: Path | str, *, config: object | None = None, timeout:
     state_file = update_state_path(install_root, state_base=state_base)
     state = _read_json(state_file)
     current = _matching_applied_commit(state, candidate)
+    bundled = _bundled_commit(install_root) if not state.get("applied_commit") else None
+    if bundled and not current:
+        # No update has replaced this release yet, so its own commit is what is installed.
+        try:
+            current = bundled == candidate.commit or not _branch_offers_newer_source(
+                bundled, candidate, timeout=timeout, opener=opener)
+        except ApplicationUpdateError as exc:
+            return UpdateCheck("unavailable", detail=str(exc))
     cached = {
         "schema": STATE_SCHEMA,
         "repository": candidate.repository,

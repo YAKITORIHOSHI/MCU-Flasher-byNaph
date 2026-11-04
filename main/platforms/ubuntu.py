@@ -56,7 +56,7 @@ def _refresh_platformio_core_environment(script_dir: Path = SCRIPT_DIR) -> tuple
 
 def find_pio_executable() -> list[str] | None:
     """Use PlatformIO installed in the guarded native interpreter, never PATH exe shims."""
-    if not sys.platform.startswith("linux") or sys.executable.lower().endswith(".exe"):
+    if not sys.platform != "win32" or sys.executable.lower().endswith(".exe"):
         return None
     try:
         if importlib.util.find_spec("platformio") is not None:

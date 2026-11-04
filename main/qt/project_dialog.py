@@ -160,23 +160,11 @@ class _ProjectFileRowDelegate(QStyledItemDelegate):
 
 
 class _ProjectTabBar(WorkspaceTabBar):
-    """Project navigation uses the dialog's palette and native key handling."""
+    """Project pages share the workspace tab bar under their own accessible name."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._focus_ink = "#80d9ce"
         self.setAccessibleName("Project selection pages")
-
-    def paintEvent(self, event):
-        # Skip WorkspaceTabBar's global-palette ring: startup has no workspace
-        # to apply Theme.*, and this picker also supports independent fixtures.
-        QTabBar.paintEvent(self, event)
-        if self.hasFocus() and self.currentIndex() >= 0:
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor(self._focus_ink), 1, Qt.PenStyle.DashLine))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(self.tabRect(self.currentIndex()).adjusted(4, 4, -5, -5), 5, 5)
 
 
 class _ProjectPrompt(QMessageBox):

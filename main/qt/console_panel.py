@@ -581,7 +581,7 @@ class ConsolePanel(QPlainTextEdit):
         self._patterns.clear()
         self._entry_number = 0
         self._flush_timer.stop()
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             self._follow.clear_document(super().clear)
         else:
             super().clear()

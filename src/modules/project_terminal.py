@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-if __name__ == "__main__" and sys.platform.startswith("linux"):
+if __name__ == "__main__" and sys.platform != "win32":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from src.modules.ubuntu_release import enforce_supported_ubuntu
     if not enforce_supported_ubuntu():

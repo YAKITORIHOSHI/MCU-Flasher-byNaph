@@ -40,6 +40,7 @@ class ResetBuildCacheChecks(unittest.TestCase):
         self.boot_app.write_bytes(b"boot app fixture" * 128)
         self.calls = []
         self.compile_effect = None
+        self.upload_returncode = 0
         self.stack.enter_context(patch.object(web_bridge, "SCRIPT_DIR", self.root))
         self.stack.enter_context(patch.object(web_bridge, "SUPPORTED_BOARDS", BOARDS))
         self.stack.enter_context(patch.object(web_bridge, "load_gui_config", return_value={}))
@@ -89,8 +90,9 @@ class ResetBuildCacheChecks(unittest.TestCase):
                 (output / name).write_bytes((name.encode("ascii") + b" fixture\n") * 128)
             if self.compile_effect:
                 self.compile_effect(workspace)
-        result = Mock(returncode=0, stdout=io.StringIO("[SUCCESS]\n"))
-        result.wait.return_value = result.poll.return_value = 0
+        code = self.upload_returncode if "upload" in command else 0
+        result = Mock(returncode=code, stdout=io.StringIO("[SUCCESS]\n"))
+        result.wait.return_value = result.poll.return_value = code
         return result
 
     def test_soft_then_hard_and_another_sketch_share_one_exact_reset_build(self):
@@ -161,12 +163,26 @@ class ResetBuildCacheChecks(unittest.TestCase):
     def test_cached_avr_soft_reset_uploads_without_compiling(self):
         self.api = self.new_api("Fixture Uno")
         self.api.soft_reset()
-        self.assertEqual(len(self.calls), 1)
-        self.assertNotIn("nobuild", self.calls[-1][0])
+        # The build is certified separately, before any port access.
+        self.assertEqual(len(self.calls), 2)
+        self.assertNotIn("upload", self.calls[0][0])
+        self.assertNotIn("nobuild", self.calls[0][0])
+        self.assertIn("nobuild", self.calls[1][0])
+        self.assertIn("upload", self.calls[1][0])
+        self.api.soft_reset()
+        self.assertEqual(len(self.calls), 3)
+        self.assertIn("nobuild", self.calls[-1][0])
+        self.assertEqual(self.calls[0][1], self.calls[2][1])
+
+    def test_failed_avr_upload_keeps_the_certified_reset_build(self):
+        self.api = self.new_api("Fixture Uno")
+        self.upload_returncode = 1
         self.api.soft_reset()
         self.assertEqual(len(self.calls), 2)
+        self.upload_returncode = 0
+        self.api.soft_reset()
+        self.assertEqual(len(self.calls), 3, "A failed upload made the next reset recompile")
         self.assertIn("nobuild", self.calls[-1][0])
-        self.assertEqual(self.calls[0][1], self.calls[1][1])
 
     def test_avr_hard_reset_uses_dedicated_reset_project(self):
         self.api = self.new_api("Fixture Uno")

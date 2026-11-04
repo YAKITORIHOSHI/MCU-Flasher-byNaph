@@ -272,22 +272,22 @@ class UbuntuDispatchChecks(OwnedFixture):
                 self.assertIn(b"LAUNCHER", result.stderr)
                 destination.unlink()
 
-    def test_unavailable_platforms_only_report_notice_and_refuse(self):
-        for name, display in (("FEDORA", "Fedora"), ("LINUX_MINT", "Linux Mint")):
+    def test_every_named_linux_entry_uses_the_same_guarded_dispatcher(self):
+        # run.sh decides admission from OS release data, never from the entry's name.
+        arguments = ["--project", "Sketch Ω", ""]
+        for name in ("UBUNTU", "FEDORA", "LINUX_MINT"):
             with self.subTest(name=name):
-                result = self.invoke(name=name)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn(("MCU Flasher for " + display + " is not available").encode(),
-                              result.stdout + result.stderr)
-                self.assertNotIn(b"\0", result.stdout + result.stderr)
-                self.assertEqual(sorted(path.name for path in self.sandbox.iterdir()), [self.project.name])
+                self.assert_dispatch(self.invoke(arguments, name=name), arguments)
 
-    def test_macos_notice_does_not_invoke_the_application_dispatcher(self):
+    def test_macos_entry_reports_the_wrong_host_without_starting_anything(self):
+        # On Linux the real entry must refuse before any setup, leaving no state.
+        before = sorted(path.name for path in self.sandbox.iterdir())
         result = subprocess.run(["/bin/bash", str(self.project / "LAUNCHER/MacOS.command")],
                                 cwd=self.sandbox, env=self.env, capture_output=True, timeout=10, check=False)
         self.assertEqual(result.returncode, 1)
-        self.assertIn(b"MCU Flasher for macOS is not available", result.stdout + result.stderr)
+        self.assertIn(b"direct/macos/run.sh", result.stdout + result.stderr)
         self.assertNotIn(b"\0", result.stdout + result.stderr)
+        self.assertEqual(sorted(path.name for path in self.sandbox.iterdir()), before)
 
 
 @unittest.skipUnless(os.name == "nt", "Native Windows Script Host is required")

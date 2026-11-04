@@ -21,7 +21,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-EXCLUDED = {'.git', '.venv-linux', '.venv', 'env', '_python', '.ubuntu-tools',
+EXCLUDED = {'.git', '.venv-linux', '.venv-macos', '.venv', 'env', '_python', '.ubuntu-tools', '.macos-tools',
             '.mcu_flasher_build_cache', '.mcu_ai_edits', '.pio', '.vscode',
             '.clangd', '.opencode', 'temp', 'logs', 'test', 'tests', '__pycache__'}
 STATE_NAMES = {'.mcu_gui_config.json', 'gui_config.json', 'dbs_notif.json',
@@ -34,9 +34,8 @@ REQUIRED_RUNTIME = ('python.exe', 'pythonw.exe', 'python3.dll', 'python314.dll',
                     'vcruntime140.dll', 'vcruntime140_1.dll', 'Lib/os.py',
                     'Lib/encodings/__init__.py', 'Lib/site.py',
                     'Lib/ensurepip/__init__.py', 'Lib/venv/__init__.py',
-                    'Lib/tkinter/__init__.py', 'DLLs/_tkinter.pyd',
-                    'DLLs/tcl90.dll', 'DLLs/tcl9tk90.dll',
-                    'tcl/libtcl9.0.4.zip', 'tcl/libtk9.0.4.zip')
+                    'Lib/site-packages/PySide6/QtWidgets.pyd')
+BUNDLED_REVISION = 'src/dbs/source_revision.json'
 REQUIRED_LAUNCHERS = ('LAUNCHER/WINDOWS.exe', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU_ARM64',
                       'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA', 'LAUNCHER/FEDORA_ARM64',
                       'LAUNCHER/LINUX_MINT', 'LAUNCHER/README.md')
@@ -71,6 +70,14 @@ def validate_launcher_entries(entries):
         raise RuntimeError('Invalid Windows GUI launcher executable.')
     if not entries['LAUNCHER/MacOS.command'][0].startswith(b'#!/bin/bash\n'):
         raise RuntimeError('Invalid executable macOS launcher entry.')
+
+
+def bundled_revision_entry(commit):
+    """Let the installed copy recognize its own commit, so a first launch never downgrades it."""
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise RuntimeError(f'Invalid release commit: {commit}')
+    return json.dumps({'repository': 'YAKITORIHOSHI/MCU-Flasher-byNaph', 'commit': commit},
+                      indent=2).encode('ascii') + b'\n'
 
 
 def digest_file(path):
@@ -214,6 +221,10 @@ def build(output, report_dir):
                         bundle.writestr(info_for(member.name, mode), data)
                         entries.append({'path': member.name, 'sha256': hashlib.sha256(data).hexdigest(),
                                         'size': len(data), 'mode': oct(mode)})
+                revision = bundled_revision_entry(commit)
+                bundle.writestr(info_for(BUNDLED_REVISION, 0o644), revision)
+                entries.append({'path': BUNDLED_REVISION, 'sha256': hashlib.sha256(revision).hexdigest(),
+                                'size': len(revision), 'mode': oct(0o644)})
                 print(f'Adding {len(runtime_files)} private Windows runtime files...', flush=True)
                 for path in runtime_files:
                     add_local(bundle, path, 0o644)
@@ -250,6 +261,8 @@ def build(output, report_dir):
             validate_launcher_entries(launcher_entries)
             if json.loads(bundle.read('src/dbs/bootstrap_config.json')) != {'skip_updates': False}:
                 raise RuntimeError('The committed Bootstrap defaults are not fresh.')
+            if json.loads(bundle.read(BUNDLED_REVISION)).get('commit') != commit:
+                raise RuntimeError('The release does not record the commit it was built from.')
         if runtime_files != windows_runtime_files():
             raise RuntimeError('Private Windows runtime inventory changed during packaging.')
         runtime_entries = {item['path']: item for item in entries if item['path'].startswith('src/_python/')}

@@ -4,138 +4,71 @@ from __future__ import annotations
 
 import argparse
 import copy
-import os
-import sys
-import time
-import tkinter as tk
-import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
+import sys
+import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault('QT_QPA_PLATFORM', 'windows' if sys.platform == 'win32' else 'offscreen')
-from PySide6.QtWidgets import QApplication
+from direct.qt_browser_fixture import QtBrowserFixture
+from main.core.theme import Theme
+from main.qt import package_browser as pb
 from src.modules import arduino_lib_req as downloader
-from src.modules import tk_glass
 from src.modules.ui_metrics import WorkArea
 
-APP = QApplication.instance() or QApplication([])
 RENDER_DIR = None
 
 
-class CustomBoardDialogChecks(unittest.TestCase):
+class CustomBoardDialogChecks(QtBrowserFixture):
     def setUp(self):
-        self.root = tk.Tk()
-        self.scale = float(os.environ.get('QT_SCALE_FACTOR', '1'))
-        self.root.tk.call('tk', 'scaling', self.scale * 96 / 72)
-        self.root.geometry('180x80+30+30')
-        self.root.update()
-        self.addCleanup(self.root.destroy)
-        self.errors = []
-        self.root.report_callback_exception = lambda *error: self.errors.append(error)
-        self.addCleanup(lambda: self.assertEqual(self.errors, []))
-        self.addCleanup(downloader.Theme.apply_theme, downloader.Theme.active_theme)
-        self.app = downloader.ArduinoBrowser.__new__(downloader.ArduinoBrowser)
-        self.app.root = self.root
-        self.app._busy = False
-        self.app._board_platformio_associations = {}
-        self.app._set_status = Mock()
-        self.app._post_ui = lambda callback: callback()
-        self.app._tasks = SimpleNamespace(start=lambda callback, failed=None: callback())
+        super().setUp()
         self.item = {'name': 'Custom vendor sensor boards', 'package': 'fixture-vendor',
                      'architecture': 'fixture-arch', 'index_url': 'https://example.invalid/package.json',
-                     'versions': [{'version': '1.2.3', 'boards': [{'name': 'Sensor board'}]}]}
-        self.tab = SimpleNamespace(listbox=SimpleNamespace(curselection=lambda: (0,)),
-                                   filtered_names=[self.item['name']], all_items={self.item['name']: self.item},
-                                   version_var=tk.StringVar(self.root, value='1.2.3'))
+                     'versions': [{'version': '1.2.3', 'url': 'https://example.invalid/core.zip',
+                                   'boards': [{'name': 'Sensor board'}]}]}
         self.key = self.app._board_association_key(self.item)
 
-    def pump(self):
-        # Configure bursts debounce glass drawing for 160 ms. Await actual
-        # paint/layout idleness, keeping the mapping and containment assertions.
-        def pending(widget):
-            busy = any(getattr(widget, name, None) is not None
-                       for name in ('_redraw_id', '_fit_after', '_reveal_after'))
-            fitter = getattr(widget, '_dialog_fit', None)
-            busy = busy or (fitter is not None and fitter._pending is not None)
-            return busy or any(pending(child) for child in widget.winfo_children())
-        def geometry(widget):
-            return ((str(widget), widget.winfo_geometry(), widget.winfo_ismapped()),
-                    tuple(geometry(child) for child in widget.winfo_children()))
-        deadline = time.monotonic() + 10
-        earliest = time.monotonic() + .25
-        quiet_since = None
-        previous_geometry = None
-        while time.monotonic() < deadline:
-            self.root.update()
-            current_geometry = geometry(self.root)
-            if pending(self.root) or current_geometry != previous_geometry:
-                quiet_since = None
-            else:
-                quiet_since = quiet_since or time.monotonic()
-                if time.monotonic() >= earliest and time.monotonic() - quiet_since >= .18:
-                    return
-            previous_geometry = current_geometry
-            time.sleep(.02)
-        self.fail('Custom board dialog paint/layout did not become idle')
-
-    def open_dialog(self):
-        self.app._edit_board_platform(self.tab)
+    def open_dialog(self, *, area=None):
+        configuration = self.app._board_platformio_associations.get(self.key) or {}
+        if area is None:
+            dialog = pb.BoardPlatformDialog(self.app, self.item, configuration, self.key)
+        else:
+            with patch('main.qt.responsive.work_area', return_value=area):
+                dialog = pb.BoardPlatformDialog(self.app, self.item, configuration, self.key)
+        self.addCleanup(dialog.deleteLater)
+        dialog.show()
         self.pump()
-        return next(child for child in self.root.winfo_children() if isinstance(child, tk.Toplevel))
+        return dialog
 
     def capture(self, dialog, name):
         if RENDER_DIR:
-            capture = APP.primaryScreen().grabWindow(int(dialog.winfo_id()))
-            self.assertFalse(capture.isNull())
-            self.assertTrue(capture.save(str(RENDER_DIR / (name + '.png'))))
+            self.assertTrue(dialog.grab().save(str(RENDER_DIR / (name + '.png'))))
 
-    def test_all_themes_fit_short_monitors_keep_actions_and_scroll_focus_visible(self):
+    def test_all_themes_fit_short_monitors_keep_actions_and_scroll_form(self):
         self.app._board_platformio_associations[self.key] = {
             'platform': 'fixture-vendor/sensor-platform@1.2.3',
             'board_ids': {'sensor_rev_a': 'sensor_board_rev_a', 'sensor_rev_b': 'sensor_board_rev_b'},
         }
         for theme in ('default', 'light', 'solarized_dark'):
-            downloader.Theme.apply_theme(theme)
-            self.app._configure_styles()
-            for size in ('regular', 'compact'):
-                width = min(round((760 if size == 'regular' else 420) * self.scale), 1840)
-                height = min(round((620 if size == 'regular' else 320) * self.scale), 920)
-                area = WorkArea(40, 35, width, height)
-                with patch.object(tk_glass, 'native_work_area', return_value=area):
-                    dialog = self.open_dialog()
-                    if size == 'compact':
-                        # Exercise scrolling at the dialog's bounded minimum;
-                        # multiplying the available monitor height by 200% can
-                        # otherwise leave enough room for the entire form.
-                        minimum_height = dialog.minsize()[1]
-                        dialog.geometry(f'{max(1, width - 60)}x{max(1, min(height - 64, minimum_height))}')
-                        self.pump()
-                    frame, _handle = tk_glass._native_frame(dialog)
-                    self.assertGreaterEqual(frame.x, area.x)
-                    self.assertGreaterEqual(frame.y, area.y)
-                    self.assertLessEqual(frame.x + frame.width, area.x + area.width)
-                    self.assertLessEqual(frame.y + frame.height, area.y + area.height)
-                    for button in dialog._platform_save.master.winfo_children():
-                        self.assertTrue(button.winfo_ismapped())
-                        self.assertGreaterEqual(button.winfo_rooty(), dialog.winfo_rooty())
-                        self.assertLessEqual(button.winfo_rooty() + button.winfo_height(),
-                                             dialog.winfo_rooty() + dialog.winfo_height())
-                    entry = dialog._platform_entry
-                    self.assertGreaterEqual(entry.winfo_height(), entry.winfo_reqheight())
+            with patch.object(downloader, '_resolve_lib_req_theme', return_value=theme):
+                self.app._apply_current_theme(force=True)
+            for size, width, height in (('regular', 760, 620), ('compact', 420, 320)):
+                with self.subTest(theme=theme, size=size):
+                    dialog = self.open_dialog(area=WorkArea(40, 35, width, height))
+                    self.assertLessEqual(dialog.width(), width)
+                    self.assertLessEqual(dialog.height(), height)
+                    for button in (dialog.save_button, dialog.cancel_button):
+                        self.assertTrue(button.isVisible())
+                        position = button.mapTo(dialog, button.rect().bottomRight())
+                        self.assertLessEqual(position.y(), dialog.height())
+                        self.assertLessEqual(position.x(), dialog.width())
+                    self.assertGreaterEqual(dialog.platform.height(), dialog.platform.fontMetrics().height())
                     self.capture(dialog, f'custom-board-{theme}-{size}')
-                    form = dialog._platform_form
-                    dialog._platform_mappings.focus_force()
+                    dialog.mappings.setFocus()
                     self.pump()
-                    self.assertGreater(form.canvas.winfo_height(), 0)
-                    self.assertGreaterEqual(dialog._platform_mappings.winfo_rooty(), form.canvas.winfo_rooty() - 1)
-                    if size == 'compact':
-                        self.assertGreater(form.body.winfo_height(), form.canvas.winfo_height())
-                        self.capture(dialog, f'custom-board-{theme}-{size}-mappings')
-                    dialog.destroy()
-                    self.pump()
+                    self.assertGreater(dialog.form_scroll.viewport().height(), 0)
+                    dialog.close()
 
     def test_literal_values_save_and_failed_save_preserves_previous_associations(self):
         literal = 'https://example.invalid/platform.git#sensor-release-1.2.3'
@@ -147,65 +80,54 @@ class CustomBoardDialogChecks(unittest.TestCase):
             with patch.object(downloader, '_load_settings', return_value=copy.deepcopy(settings)), \
                  patch.object(downloader, '_save_settings', return_value=success) as save:
                 dialog = self.open_dialog()
-                self.assertEqual(dialog._platform_entry.get(), previous['platform'])
-                dialog._platform_entry.delete(0, 'end')
-                dialog._platform_entry.insert(0, literal)
-                dialog._platform_mappings.delete('1.0', 'end')
-                dialog._platform_mappings.insert('1.0', 'arduino_sensor = exact_pio_sensor\nsecond_id = second_pio_board')
-                dialog._platform_save.invoke()
-                self.pump()
+                self.assertEqual(dialog.platform.text(), previous['platform'])
+                dialog.platform.setText(literal)
+                dialog.mappings.setPlainText('arduino_sensor = exact_pio_sensor\nsecond_id = second_pio_board')
+                dialog.save_button.click()
+                self.until(lambda: save.called and (not dialog.isVisible() or dialog.save_button.isEnabled()))
                 value = {'platform': literal, 'board_ids': {'arduino_sensor': 'exact_pio_sensor',
-                                                          'second_id': 'second_pio_board'}}
+                                                            'second_id': 'second_pio_board'}}
                 saved = save.call_args.args[0]
                 self.assertEqual(saved['board_platformio_associations'][self.key], value)
                 self.assertEqual(saved['additional_board_urls'], settings['additional_board_urls'])
                 self.assertEqual(saved['other'], 'preserve')
                 if success:
                     self.assertEqual(self.app._board_platformio_associations[self.key], value)
-                    self.assertFalse(dialog.winfo_exists())
+                    self.assertFalse(dialog.isVisible())
                 else:
                     self.assertEqual(self.app._board_platformio_associations[self.key], previous)
-                    self.assertEqual(dialog._platform_save.cget('state'), 'normal')
-                    self.assertIn('could not be saved', dialog._platform_status.cget('text'))
+                    self.assertTrue(dialog.save_button.isEnabled())
+                    self.assertIn('could not be saved', dialog.status.text())
                     self.capture(dialog, 'custom-board-save-failure')
-                    dialog.destroy()
+                    dialog.close()
 
     def test_cancel_and_invalid_mappings_never_save(self):
         with patch.object(downloader, '_load_settings') as load, \
              patch.object(downloader, '_save_settings') as save:
             dialog = self.open_dialog()
-            dialog._platform_entry.insert(0, 'vendor/platform@1.2.3')
-            dialog._platform_mappings.insert('1.0', 'duplicate = board_a\nduplicate = board_b')
-            dialog._platform_save.invoke()
+            dialog.platform.setText('vendor/platform@1.2.3')
+            dialog.mappings.setPlainText('duplicate = board_a\nduplicate = board_b')
+            dialog.save_button.click()
             self.pump()
-            self.assertIn('unique', dialog._platform_status.cget('text'))
-            next(button for button in dialog._platform_save.master.winfo_children()
-                 if button.cget('text') == 'Cancel').invoke()
+            self.assertIn('unique', dialog.status.text())
+            dialog.cancel_button.click()
             self.pump()
+            self.assertFalse(dialog.isVisible())
             load.assert_not_called()
             save.assert_not_called()
             self.assertEqual(self.app._board_platformio_associations, {})
 
-    @unittest.skipUnless(sys.platform == 'win32', 'Windows native placement fixture')
-    def test_native_fit_preserves_negative_monitor_coordinates(self):
-        import ctypes
-        widget = SimpleNamespace(winfo_exists=lambda: True, winfo_width=lambda: 600,
-                                 winfo_height=lambda: 450, minsize=Mock(), geometry=Mock(),
-                                 update_idletasks=Mock())
-        fitter = tk_glass.DialogFit.__new__(tk_glass.DialogFit)
-        fitter.dialog, fitter._pending, fitter._scale = widget, None, 1
-        fitter._minimum = (320, 240)
-        fitter._fitting = False
-        area = WorkArea(-1920, 40, 960, 540)
-        with patch.object(tk_glass, '_native_frame', return_value=(WorkArea(-2200, -100, 616, 488), 123)), \
-             patch.object(ctypes.windll.user32, 'SetWindowPos') as position:
-            fitter._fit(area)
-        handle, owner, x, y, width, height, flags = position.call_args.args
-        self.assertEqual(handle, 123)
-        self.assertEqual((x, y), (-1912, 48))
-        self.assertEqual((width, height), (0, 0))
-        self.assertEqual(flags, 0x0001 | 0x0004 | 0x0010)
-        self.assertFalse(fitter._fitting)
+    def test_busy_download_refuses_a_platform_change(self):
+        with patch.object(downloader, '_save_settings') as save:
+            dialog = self.open_dialog()
+            dialog.platform.setText('vendor/platform@1.2.3')
+            self.app._busy = True
+            dialog.save_button.click()
+            self.pump()
+            self.assertIn('Wait for the current download', dialog.status.text())
+            save.assert_not_called()
+            self.app._busy = False
+            dialog.close()
 
 
 if __name__ == '__main__':

@@ -1,12 +1,9 @@
-"""Compact catalog caches and bounded workers for the Tk package browser."""
+"""Compact catalog caches and bounded workers for the package browser, without a toolkit."""
 from __future__ import annotations
 
 import json
 import os
-import queue
-import sys
 import threading
-import time
 from collections import OrderedDict
 
 _CATALOGS = OrderedDict()
@@ -18,7 +15,7 @@ CATALOG_SCHEMA = 3  # Release-local board identity and requested index provenanc
 
 
 def search_catalog(request, cancel):
-    """Rank catalog names off Tk; keep only the latest query's result."""
+    """Rank catalog names off the GUI thread; keep only the latest query's result."""
     items, query = request
     starts, contains = [], []
     for name in items:
@@ -35,10 +32,10 @@ def search_catalog(request, cancel):
 
 
 class CatalogPublisher:
-    """Coalesce equal catalogs on the worker before native list delivery.
+    """Coalesce equal catalogs on the worker before list delivery.
 
     Keep only the last two catalog references. Cached and fresh publications
-    may both be queued before Tk receives either, so comparing only against
+    may both be queued before the view receives either, so comparing only against
     the currently displayed objects would still rebuild the same rows twice.
     """
 
@@ -144,124 +141,6 @@ def load_catalog(cache_path, sources, builder):
         while len(_CATALOGS) > 2:
             _CATALOGS.popitem(last=False)
     return items
-
-
-class TkTasks:
-    """Workers enqueue callbacks; only the Tk thread calls Tcl or schedules after."""
-
-    def __init__(self, root):
-        self.root = root
-        self._queue = queue.SimpleQueue()
-        self._latest = {}
-        self._lock = threading.Lock()
-        self._active = 0
-        self._timer = None
-        self.closed = False
-        self._cancellations = []
-        root.bind('<Destroy>', self._destroy, add='+')
-
-    def begin(self):
-        with self._lock:
-            if self.closed:
-                return False
-            self._active += 1
-        if self._timer is None:
-            self._timer = self.root.after(25, self._drain)
-        return True
-
-    def end(self):
-        with self._lock:
-            self._active = max(0, self._active - 1)
-
-    def post(self, callback, *args, key=None):
-        with self._lock:
-            if self.closed:
-                return
-            if key is not None:
-                self._latest[key] = (callback, args)
-            else:
-                self._queue.put((callback, args))
-
-    def start(self, target, *args, failed=None):
-        if not self.begin():
-            return False
-        launch_lock = threading.Lock()
-        entered = released = False
-
-        def run():
-            nonlocal entered, released
-            with launch_lock:
-                if released:
-                    return
-                entered = True
-            try:
-                target(*args)
-            except Exception as error:
-                if failed:
-                    self.post(failed, str(error))
-            finally:
-                with launch_lock:
-                    release = not released
-                    released = True
-                if release:
-                    self.end()
-
-        try:
-            threading.Thread(target=run, daemon=True, name='BrowserTask').start()
-        except Exception as error:
-            with launch_lock:
-                # A worker that already entered owns its slot and completion.
-                # A delayed worker must not begin after startup was rolled back.
-                release = not entered and not released
-                if release:
-                    released = True
-            if release:
-                self.end()
-                if failed:
-                    self.post(failed, str(error))
-                return False
-        return True
-
-    def _drain(self):
-        self._timer = None
-        deadline = time.perf_counter() + .004
-        for _ in range(32):
-            try:
-                callback, args = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            self._call(callback, args)
-            if time.perf_counter() >= deadline:
-                break
-        with self._lock:
-            latest, self._latest = self._latest, {}
-        for callback, args in latest.values():
-            self._call(callback, args)
-        with self._lock:
-            pending = self._active or self._latest or not self._queue.empty()
-        # A completion callback can begin another task and schedule the next
-        # drain itself. Do not replace its timer ID and orphan that callback;
-        # destruction must be able to cancel the one remaining timer.
-        if pending and not self.closed and self._timer is None:
-            self._timer = self.root.after(25, self._drain)
-
-    def _call(self, callback, args):
-        if not self.closed:
-            try:
-                callback(*args)
-            except Exception:
-                self.root.report_callback_exception(*sys.exc_info())
-
-    def _destroy(self, event):
-        if event.widget is self.root:
-            with self._lock:
-                self.closed = True
-                self._latest.clear()
-            for cancel in self._cancellations:
-                cancel()
-            if self._timer is not None:
-                self.root.after_cancel(self._timer)
-                self._timer = None
 
 
 class LatestScan:

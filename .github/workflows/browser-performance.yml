@@ -9,17 +9,15 @@ on:
       - main/qt/main_window.py
       - src/modules/arduino_lib_req.py
       - src/modules/browser_loading.py
-      - src/modules/tk_*.py
       - src/modules/ubuntu_download_manager.py
       - src/modules/ui_palette.py
       - src/modules/ui_metrics.py
       - src/modules/runtime_resources.py
       - src/fonts/**
-      - src/assets/tk_fontconfig_legacy.conf
-      - direct/tk_*.py
+      - direct/qt_browser_fixture.py
+      - main/qt/package_browser.py
       - direct/verify_browser_loading.py
-      - direct/verify_downloader_performance.py
-      - direct/verify_downloader_appearance.py
+      - direct/verify_package_browser.py
       - direct/verify_performance.py
       - direct/verify_ubuntu_download_manager.py
       - main/qt/posix_terminal_panel.py
@@ -52,17 +50,15 @@ on:
       - main/qt/main_window.py
       - src/modules/arduino_lib_req.py
       - src/modules/browser_loading.py
-      - src/modules/tk_*.py
       - src/modules/ubuntu_download_manager.py
       - src/modules/ui_palette.py
       - src/modules/ui_metrics.py
       - src/modules/runtime_resources.py
       - src/fonts/**
-      - src/assets/tk_fontconfig_legacy.conf
-      - direct/tk_*.py
+      - direct/qt_browser_fixture.py
+      - main/qt/package_browser.py
       - direct/verify_browser_loading.py
-      - direct/verify_downloader_performance.py
-      - direct/verify_downloader_appearance.py
+      - direct/verify_package_browser.py
       - direct/verify_performance.py
       - direct/verify_ubuntu_download_manager.py
       - main/qt/posix_terminal_panel.py
@@ -155,7 +151,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$BROWSER_AUDIT_DIR"
           sudo apt-get update 2>&1 | tee "$BROWSER_AUDIT_DIR/display-dependencies.log"
-          sudo apt-get install -y xvfb python3-venv python3-tk desktop-file-utils libegl1 libgl1 libnss3 libnspr4 libgbm1 libdbus-1-3 libfontconfig1 libfreetype6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1 libxcb-dri3-0 2>&1 | tee -a "$BROWSER_AUDIT_DIR/display-dependencies.log"
+          sudo apt-get install -y xvfb python3-venv desktop-file-utils libegl1 libgl1 libnss3 libnspr4 libgbm1 libdbus-1-3 libfontconfig1 libfreetype6 libx11-xcb1 libxext6 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxrender1 libxtst6 libxkbfile1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 libxcb-render0 libxcb-util1 libxcb-dri3-0 2>&1 | tee -a "$BROWSER_AUDIT_DIR/display-dependencies.log"
           read -r -a qt_runtime_packages <<< "$(python -c 'from direct.ubuntu.preflight import normalize_packages, system_libraries; print(" ".join(normalize_packages(package for _, package in system_libraries())))')"
           sudo apt-get install -y "${qt_runtime_packages[@]}" 2>&1 | tee -a "$BROWSER_AUDIT_DIR/display-dependencies.log"
       - name: Private Ubuntu fixture runtime
@@ -180,8 +176,8 @@ jobs:
           }
           Invoke-BrowserCheck 'loading.log' @('direct/verify_browser_loading.py')
           foreach ($scale in '1', '2') {
-            Invoke-BrowserCheck "downloader-performance-scale-$scale.log" @('direct/verify_downloader_performance.py', '--scale', $scale)
-            Invoke-BrowserCheck "downloader-appearance-scale-$scale.log" @('direct/verify_downloader_appearance.py', '--scale', $scale, '--render-dir', "$env:BROWSER_AUDIT_DIR/captures-scale-$scale")
+            $env:QT_SCALE_FACTOR = $scale
+            Invoke-BrowserCheck "package-browser-scale-$scale.log" @('direct/verify_package_browser.py', '--render-dir', "$env:BROWSER_AUDIT_DIR/captures-scale-$scale")
           }
           foreach ($scale in '1', '1.25', '1.5', '1.75', '2') {
             $env:QT_SCALE_FACTOR = $scale
@@ -223,8 +219,7 @@ jobs:
             run_check release-sources.log direct/verify_release_sources.py
             run_check pty-readiness.log direct/verify_pty_readiness.py
             for scale in 1 2; do
-              run_check "downloader-performance-scale-$scale.log" direct/verify_downloader_performance.py --scale "$scale"
-              run_check "downloader-appearance-scale-$scale.log" direct/verify_downloader_appearance.py --scale "$scale" --render-dir "$BROWSER_AUDIT_DIR/captures-scale-$scale"
+              QT_SCALE_FACTOR="$scale" run_check "package-browser-scale-$scale.log" direct/verify_package_browser.py --render-dir "$BROWSER_AUDIT_DIR/captures-scale-$scale"
             done
             for scale in 1 1.25 1.5 1.75 2; do
               QT_SCALE_FACTOR="$scale" run_check "embedded-scale-$scale.log" direct/verify_embedded_viewports.py --report "$BROWSER_AUDIT_DIR/embedded-scale-$scale.json" --render-dir "$BROWSER_AUDIT_DIR/embedded-scale-$scale"

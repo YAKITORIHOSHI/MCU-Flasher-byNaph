@@ -55,7 +55,7 @@ def checks(group, scale, output):
             yield "verify_shutdown", ["--repeat", "3"]
             yield render("verify_runtime", "workspace", "--no-finalize")
     if group in ("all", "resources", "responsive"):
-        yield render("verify_downloader_appearance", "resources", "--scale", scale)
+        yield render("verify_package_browser", "resources")
         yield render("verify_bootstrap_headers", "setup")
         yield render("verify_svg_icons", "icons")
     if group in ("all", "auxiliary") and scale in ("1", "2"):
@@ -78,7 +78,6 @@ def checks(group, scale, output):
         yield "verify_theme_readability", []
         yield "verify_panel_readability", []
         yield "verify_build_console", []
-        yield "verify_svg_icons", ["--native-tk"]
 
 
 def main():
@@ -96,8 +95,7 @@ def main():
         scaled = output / ("scale-" + scale)
         scaled.mkdir(parents=True, exist_ok=True)
         for script, options in checks(args.group, scale, scaled):
-            variant = "-native-tk" if "--native-tk" in options else ""
-            log_path = scaled / (script + variant + ".log")
+            log_path = scaled / (script + ".log")
             env = os.environ.copy()
             env.update(QT_SCALE_FACTOR=scale, PYTHONDONTWRITEBYTECODE="1",
                        PYTHONFAULTHANDLER="1")

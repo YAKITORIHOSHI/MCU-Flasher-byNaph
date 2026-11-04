@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Isolated bootstrap journal visuals; no installers, live settings or launch."""
 from __future__ import annotations
+from types import SimpleNamespace
 import argparse
 from pathlib import Path
 import sys
@@ -93,11 +94,7 @@ class BootstrapHeaderChecks(ControlChecks):
             dialog.resize(420, 440)
             title = "Preparing board frameworks and upload tools for a long selected package name"
             result = "The complete diagnostic must wrap onto several reading lines and keep its mark beside the first"
-            dialog._restore_summary({"presentation": {}, "auto_scroll": False, "summary": {
-                "text": title + "\n  " + result + "\n\n", "runs": [
-                    {"text": title + "\n", "tags": ["section"]},
-                    {"text": "  " + result + "\n\n", "tags": ["warn"]},
-                ]}})
+            dialog._append_summaries([SimpleNamespace(text=title, tag="section"), SimpleNamespace(text=result, tag="warn")])
             APP.processEvents()
             view = dialog.summary_edit
             self.assertGreater(view.document().firstBlock().layout().lineCount(), 1)
@@ -222,8 +219,7 @@ class BootstrapHeaderChecks(ControlChecks):
                         if expanded:
                             dialog._on_log(label, tag)
                         else:
-                            dialog._restore_summary({"presentation": {}, "summary": {
-                                "text": label + "\n", "runs": [{"text": label + "\n", "tags": [tag]}]}})
+                            dialog._append_summaries([SimpleNamespace(text=label, tag=tag)])
                         cursor = view.document().find(label)
                         self.assertFalse(cursor.isNull())
                         ink = cursor.charFormat().foreground().color().name()
@@ -240,30 +236,6 @@ class BootstrapHeaderChecks(ControlChecks):
                     self.assertTrue(dialog.grab().save(str(RENDER_DIR / f"readable-{mode}-{expanded}.png")))
             self.assertEqual(dialog._context.palette, original, "Readability must not mutate shared theme tokens")
             dialog.hide()
-
-    def test_native_log_tags_contrast_without_importing_qt(self):
-        code = '''
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path("direct").resolve()))
-from verify_bootstrap_native import fixture, Theme
-from src.modules.ui_palette import contrast_ratio
-for mode in Theme.PALETTES:
-    gui, _ = fixture(mode)
-    try:
-        for view in (gui._native_window.log_edit, gui._native_window.summary_edit):
-            for tag in ("normal", "dim", "section", "subsection", "ok", "warn", "fail", "update", "pip_row", "failed_step"):
-                ink = view.tag_cget(tag, "foreground")
-                assert contrast_ratio(ink, view.cget("bg")) >= 4.5, (mode, tag, ink)
-            assert contrast_ratio(view.cget("selectforeground"), view.cget("selectbackground")) >= 4.5
-    finally:
-        gui.close()
-assert not any(name == "PySide6" or name.startswith("PySide6.") for name in sys.modules)
-print("Native setup semantic tags and selection: all three themes readable without Qt")
-'''
-        result = subprocess.run([sys.executable, "-B", "-c", code], cwd=ROOT,
-                                capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_long_headers_reflow_and_keep_selection_at_compact_widths(self):
         dialog = self.dialog()
@@ -287,21 +259,18 @@ print("Native setup semantic tags and selection: all three themes readable witho
         if RENDER_DIR:
             self.assertTrue(dialog.grab().save(str(RENDER_DIR / "headers-compact.png")))
 
-    def test_restored_native_summary_retains_header_rules_and_selection(self):
+    def test_history_from_the_text_view_keeps_header_rules_and_status(self):
         dialog = self.dialog()
-        raw = "Earlier result\n\nChecking Arduino-CLI\n  Arduino-CLI is ready\n"
-        start = raw.index("Arduino-CLI is ready")
-        dialog._restore_summary({"presentation": {}, "auto_scroll": False, "summary": {
-            "text": raw, "runs": [
-                {"text": "Earlier result\n\n", "tags": ["normal"]},
-                {"text": "Checking Arduino-CLI\n", "tags": ["section"]},
-                {"text": "  Arduino-CLI is ready\n", "tags": ["ok"]},
-            ], "selection": (start, start + len("Arduino-CLI is ready")),
-        }})
+        dialog._gui._status_text, dialog._gui._overall_progress = "Fixture status", 40
+        dialog.restore_history([("Earlier result", "ok"), ("\n── Checking Arduino-CLI ──", "section"),
+                                ("Arduino-CLI is ready", "ok")])
         APP.processEvents()
-        self.assertEqual(dialog.summary_edit.toPlainText(), raw)
-        self.assertEqual(dialog.summary_edit.textCursor().selectedText(), "Arduino-CLI is ready")
+        summary = dialog.summary_edit.toPlainText()
+        self.assertIn("Checking Arduino-CLI", summary)
+        self.assertIn("Arduino-CLI is ready", summary)
+        self.assertIn("Arduino-CLI is ready", dialog.log_edit.toPlainText())
         self.assertEqual(len(list(dialog.summary_edit.heading_dividers())), 1)
+        self.assertIn("Fixture status", dialog.status_lbl.text())
 
 
 def main():

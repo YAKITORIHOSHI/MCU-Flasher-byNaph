@@ -104,7 +104,7 @@ class DownloadInterruptionChecks(unittest.TestCase):
         self.addCleanup(self.close_server)
         self.url = f"http://127.0.0.1:{self.server.server_port}/archive.zip"
         self.partial = self.folder / "archive.zip.part"
-        self.app = object.__new__(browser.ArduinoBrowser)
+        self.app = object.__new__(browser.BrowserEngine)
         self.tab = object()
         self.app.board_tab = object()
         self.app._cancel_event = threading.Event()

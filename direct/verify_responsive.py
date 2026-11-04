@@ -22,7 +22,7 @@ os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
 # Preserve an explicit platform choice for headless fixture runs.
 if sys.platform == 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
-from verify_controls import ControlChecks, DownloaderChecks, APP, bootstrap_fixture
+from verify_controls import ControlChecks, APP, bootstrap_fixture
 from PySide6.QtCore import QRect, QPoint, QSize, QObject, Signal, Qt, QTimer, QEvent
 from PySide6.QtGui import QIcon, QColor
 from PySide6.QtTest import QTest
@@ -1170,214 +1170,6 @@ class QtResponsiveChecks(ControlChecks):
             self.assertEqual(refreshed, [], 'The old screen must be disconnected')
 
 
-class TkResponsiveChecks(DownloaderChecks):
-    def setUp(self):
-        import tkinter as tk
-        create_root = tk.Tk
-        def scaled_root(*args, **kwargs):
-            root = create_root(*args, **kwargs)
-            root.tk.call('tk', 'scaling', float(os.environ.get('QT_SCALE_FACTOR', '1')) * 96 / 72)
-            return root
-        with patch.object(tk, 'Tk', side_effect=scaled_root):
-            super().setUp()
-
-    def test_short_panes_preserve_selection_and_valid_user_sash(self):
-        import tkinter as tk
-        from src.modules.tk_glass import GlassCard, ResponsivePanes, ScrollBody, ui_scale
-        from src.modules.arduino_lib_req import Theme
-        dialog = tk.Toplevel(self.root)
-        self.addCleanup(dialog.destroy)
-        scale = ui_scale(dialog)
-        width = min(round(480 * scale), 1024 - 48, self.root.winfo_screenwidth() - 48)
-        tall = min(round(300 * scale), self.root.winfo_screenheight() - 80)
-        short = min(round(120 * scale), tall - 20)
-        # Match the production downloader pane's explicit theme surface;
-        # Windows otherwise supplies the symbolic SystemButtonFace color.
-        pane = tk.PanedWindow(dialog, orient=tk.HORIZONTAL, sashwidth=2, bd=0,
-                              bg=Theme.WINDOW_BG)
-        pane.pack(fill='both', expand=True)
-        left = GlassCard(pane, Theme, padding=7, expand=True)
-        right = GlassCard(pane, Theme, padding=9, expand=True)
-        pane.add(left)
-        pane.add(right)
-        items = tk.Listbox(left.body, font=('Consolas', 10), exportselection=False)
-        items.pack(fill='both', expand=True)
-        items.insert('end', 'Selected board', 'Other board')
-        items.selection_set(0)
-        details = ScrollBody(right.body, Theme.BG_DARKEST)
-        details.pack(fill='both', expand=True)
-        value = tk.StringVar(value='Selected board details')
-        entry = tk.Entry(details.body, textvariable=value, font=('Consolas', 10))
-        entry.pack(fill='x')
-        reflow = ResponsivePanes(pane, left, right)
-        dialog.geometry(f'{width}x{tall}+20+20')
-        self.pump()
-        self.assertTrue(reflow._vertical)
-        pane.sash_place(0, 0, round(tall * .45))
-        user_position = pane.sash_coord(0)[1]
-        dialog.geometry(f'{width}x{tall - round(12 * scale)}+20+20')
-        self.pump()
-        self.assertLessEqual(abs(pane.sash_coord(0)[1] - user_position), 1)
-        for height in (short, tall, short):
-            dialog.geometry(f'{width}x{height}+20+20')
-            self.pump()
-            self.assertTrue(details.canvas.winfo_ismapped(), 'Resizing must retain a visible details viewport')
-            self.assertGreater(details.canvas.winfo_height(), 20)
-            self.assertEqual(items.curselection(), (0,))
-            self.assertEqual(value.get(), 'Selected board details')
-
-    def test_header_and_panes_at_native_font_scales(self):
-        app = self.app
-        from tkinter import font
-        from src.modules.tk_glass import ui_scale
-        scale = ui_scale(self.root)
-        maximum = self.root.winfo_screenwidth() - 48
-        wide = min(round(1040 * scale), maximum)
-        narrow = min(round(480 * scale), maximum)
-        height = min(round(660 * scale), self.root.winfo_screenheight() - 80)
-        bounded_width = min(narrow, 1024 - 48)
-        bounded_height = min(height, 768 - 80)
-        for width, height in ((wide, height), (narrow, height), (wide, height),
-                              (bounded_width, bounded_height)):
-            self.root.geometry(f'{width}x{height}+20+20')
-            self.root.deiconify()
-            self.pump()
-            self.assertEqual(app.lib_tab._responsive_panes._vertical,
-                             app.lib_tab._responsive_panes.pane.winfo_width() < round(660 * scale))
-            for button in (app.sources_btn, app.refresh_btn):
-                self.assertTrue(button.winfo_ismapped())
-                self.assertLessEqual(button.winfo_rootx() + button.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
-                self.assertLessEqual(button.winfo_y() + button.winfo_height(), button.master.winfo_height())
-            self.assertTrue(app.progress.winfo_ismapped())
-            self.assertLessEqual(app.progress.winfo_rooty() + app.progress.winfo_height(), self.root.winfo_rooty() + self.root.winfo_height())
-            app.notebook.select(2)
-            self.pump()
-            self.assertEqual(app.installed_tab._responsive_panes._vertical,
-                             app.installed_tab._responsive_panes.pane.winfo_width() < round(660 * scale))
-            detail = app.installed_tab
-            for control in (detail.search_entry, detail.lbl_search_status):
-                self.assertTrue(control.winfo_ismapped())
-                self.assertLessEqual(control.winfo_x() + control.winfo_width(), control.master.winfo_width())
-            self.assertGreater(detail.search_entry.winfo_width(), round(70 * scale))
-            self.assertIs(detail._details_view._root(), self.root, 'Do not shadow Tk base methods')
-            detail.lbl_placeholder.pack_forget()
-            detail._details_view.pack(fill='both', expand=True, padx=10, pady=8)
-            detail.lbl_name.configure(text='Installed device toolkit')
-            detail.lbl_type.configure(text='Type: Library')
-            detail.lbl_path.configure(text=str(ROOT / 'temp/audit/fixture-download/device-toolkit'))
-            self.pump()
-            canvas = detail._details_view.canvas
-            self.assertTrue(canvas.winfo_ismapped(), 'Installed metadata needs a visible reading viewport')
-            self.assertGreaterEqual(canvas.winfo_height(), detail.lbl_name.winfo_reqheight(),
-                                    'A complete padded title line must fit at the native font scale')
-            # The composited material is a background image, not scrollable
-            # metadata. Measure the same content window used by ScrollBody.
-            bounds = canvas.bbox(detail._details_view._window)
-            self.assertIsNotNone(bounds, 'Installed metadata needs a scrollable content region')
-            content_height = max(1, bounds[3] - bounds[1])
-            content = detail._details_view.body
-            for label in (detail.lbl_name, detail.lbl_type, detail.lbl_path_header,
-                          detail.lbl_path, detail.lbl_examples_header):
-                relative_top = 0
-                ancestor = label
-                while ancestor is not content:
-                    relative_top += ancestor.winfo_y()
-                    ancestor = ancestor.master
-                    self.assertIsNotNone(ancestor, 'Metadata must remain in its owned scroll body')
-                line_height = font.Font(root=self.root, font=label.cget('font')).metrics('linespace')
-                inset = sum(label.winfo_pixels(label.cget(name))
-                            for name in ('pady', 'borderwidth', 'highlightthickness'))
-                text_height = label.winfo_height() - 2 * inset
-                for offset in range(0, text_height, line_height):
-                    line_top = relative_top + inset + offset
-                    line_bottom = min(line_top + line_height, relative_top + label.winfo_height() - inset)
-                    target = min(max(bounds[1], line_top), bounds[3] - canvas.winfo_height())
-                    canvas.yview_moveto((target - bounds[1]) / content_height)
-                    self.root.update_idletasks()
-                    self.assertGreaterEqual(line_top, canvas.canvasy(0) - 1, label.cget('text'))
-                    self.assertLessEqual(line_bottom, canvas.canvasy(canvas.winfo_height()) + 1,
-                                         'Every native metadata line must be reachable without clipping')
-            canvas.yview_moveto(1)
-            self.pump()
-            self.assertAlmostEqual(canvas.yview()[1], 1.0, places=2)
-            if RENDER_DIR:
-                from direct.tk_capture import save_tk_capture
-                save_tk_capture(self.root, RENDER_DIR / f'installed-{width}.png', capture_app=APP)
-            app.notebook.select(0)
-            self.pump()
-            if RENDER_DIR:
-                from direct.tk_capture import save_tk_capture
-                save_tk_capture(self.root, RENDER_DIR / f'downloader-{width}.png', capture_app=APP)
-
-    def test_board_preparation_controls_and_source_status_wrap_on_short_screen(self):
-        app = self.app
-        from src.modules.tk_glass import ui_scale
-        scale = ui_scale(self.root)
-        # Bound this case to a 1024x768 runner even on a larger local monitor.
-        # Native Tk fonts stay scaled while header/footer chrome consumes the
-        # same short work area that exposed the unmapped details pane in CI.
-        width = min(round(480 * scale), 1024 - 48, self.root.winfo_screenwidth() - 48)
-        height = min(round(510 * scale), 768 - 80, self.root.winfo_screenheight() - 80)
-        board = dict(name='ESP8266 device core', package='esp8266', architecture='esp8266', maintainer='Community',
-                     category='Device support', boards=['NodeMCU 1.0 (ESP-12E Module)', 'NodeMCU 0.9 (ESP-12 Module)'],
-                     versions=[dict(version='3.1.2', url='https://fixture.invalid/esp8266.zip', size=12000)])
-        app.board_tab.populate({board['name']: board})
-        app.board_tab.listbox.selection_set(0)
-        app.board_tab._on_select()
-        app.notebook.select(1)
-        self.root.geometry(f'{width}x{height}+20+20')
-        self.root.deiconify()
-        self.pump()
-        app.board_tab.detail_canvas.yview_moveto(1)
-        self.pump()
-        # On short panes, controls cannot all be mapped at once. Use Tk canvas
-        # coordinates for the embedded controls: native Windows widgets such as
-        # ttk.Combobox can report root coordinates in a different DPI space.
-        controls = (app.board_tab.version_combo, app.board_tab.download_btn, app.board_tab.prepare_btn)
-        for index, control in enumerate(controls):
-            canvas = app.board_tab.detail_canvas
-            content = app.board_tab._detail_content
-            self.assertTrue(canvas.winfo_ismapped(), 'Board details canvas must be visible')
-            # The full-owner material image moves to continue the backdrop
-            # after scrolling; it is not part of the scrollable detail body.
-            # Use the same owned window as the production scrollregion.
-            bounds = canvas.bbox(app.board_tab._content_window)
-            self.assertIsNotNone(bounds, 'Board details need a scrollable content region')
-            content_height = max(1, bounds[3] - bounds[1])
-            viewport_height = max(1, canvas.winfo_height())
-            relative_top = 0
-            ancestor = control
-            while ancestor is not content:
-                self.assertIsNotNone(ancestor.master, 'Board control must belong to the details content')
-                relative_top += ancestor.winfo_y()
-                ancestor = ancestor.master
-            window_top = canvas.coords(app.board_tab._content_window)[1]
-            control_top = window_top + relative_top
-            control_bottom = control_top + control.winfo_height()
-            max_offset = max(bounds[1], bounds[3] - viewport_height)
-            desired_top = min(max(bounds[1], control_top - max(0, (viewport_height - control.winfo_height()) // 2)),
-                              max_offset)
-            canvas.yview_moveto((desired_top - bounds[1]) / content_height)
-            self.pump()
-            visible_top = canvas.canvasy(0)
-            visible_bottom = canvas.canvasy(canvas.winfo_height())
-            self.assertGreater(control.winfo_width(), 0, f'{control.winfo_class()} must have a laid-out width')
-            self.assertGreater(control.winfo_height(), 0, f'{control.winfo_class()} must have a laid-out height')
-            self.assertGreaterEqual(control_top, visible_top - 1,
-                                    f'{control.winfo_class()} is above the details viewport')
-            self.assertLessEqual(control_bottom, visible_bottom + 1,
-                                 f'{control.winfo_class()} is below the details viewport')
-            if RENDER_DIR:
-                from direct.tk_capture import save_tk_capture
-                save_tk_capture(self.root, RENDER_DIR / f'board-control-{index}.png', capture_app=APP)
-            self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), self.root.winfo_rootx() + self.root.winfo_width())
-        app.sources_status.configure(text='https://vendor.invalid/package/device/index.json: Refresh failed; using saved catalog')
-        app.sources_btn.invoke()
-        self.pump()
-        self.assertGreater(app.sources_status.winfo_height(), 12)
-        self.assertLessEqual(app.sources_status.winfo_width(), app.sources_status.master.winfo_width())
-
-
 def main():
     global RENDER_DIR
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1389,10 +1181,9 @@ def main():
     if RENDER_DIR:
         RENDER_DIR.mkdir(parents=True, exist_ok=True)
     suite = unittest.TestSuite()
-    for cls in (QtResponsiveChecks, TkResponsiveChecks):
-        for name in cls.__dict__:
-            if name.startswith('test_') and (not args.only or any(fragment in name for fragment in args.only)):
-                suite.addTest(cls(name))
+    for name in QtResponsiveChecks.__dict__:
+        if name.startswith('test_') and (not args.only or any(fragment in name for fragment in args.only)):
+            suite.addTest(QtResponsiveChecks(name))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     print(f'Qt display scale: {APP.primaryScreen().devicePixelRatio():g}')
     return 0 if result.wasSuccessful() else 1

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+_INSTALLER_MODULE = "platformio.package.manager._install"
 _enabled = False
 _FIREBASE_AUTH_HOSTS = frozenset({
     "identitytoolkit.googleapis.com",
@@ -24,7 +25,8 @@ def network_access_disabled():
 
 
 def bootstrap_instruction(detail="Missing offline dependency"):
-    entry = "bash direct/ubuntu/run.sh --repair" if sys.platform.startswith("linux") else "direct/windows/run.vbs --repair"
+    from src.modules.platform_runtime import repair_command
+    entry = repair_command()
     return f"{detail}. Prepare it in bootstrap while online: {entry}. The main app does not download packages."
 
 
@@ -92,7 +94,42 @@ def activate(offline=True):
     _enabled = True
     # The site hook also runs in nested SCons/framework Python children. Their
     # package managers must retain installed-only behavior in online mode too.
-    guard_platformio()
+    # Children such as esptool never import PlatformIO, so apply the guard when
+    # its installer loads rather than importing all of it into every process.
+    if _INSTALLER_MODULE in sys.modules:
+        guard_platformio()
+    elif not any(isinstance(finder, _InstallerGuardFinder) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _InstallerGuardFinder())
+
+
+class _GuardedInstallerLoader:
+    """Delegate to the real loader, then guard the installer it just executed."""
+
+    def __init__(self, loader):
+        self._loader = loader
+
+    def __getattr__(self, name):
+        return getattr(self._loader, name)
+
+    def create_module(self, spec):
+        return self._loader.create_module(spec)
+
+    def exec_module(self, module):
+        self._loader.exec_module(module)
+        guard_platformio()
+
+
+class _InstallerGuardFinder:
+    """Guard PlatformIO's installer however and whenever it is first imported."""
+
+    def find_spec(self, name, path=None, target=None):
+        if name != _INSTALLER_MODULE:
+            return None
+        from importlib.machinery import PathFinder
+        spec = PathFinder.find_spec(name, path, target)
+        if spec is not None and spec.loader is not None:
+            spec.loader = _GuardedInstallerLoader(spec.loader)
+        return spec
 
 
 def guard_platformio():

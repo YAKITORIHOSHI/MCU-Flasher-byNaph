@@ -181,12 +181,15 @@ def recover_packages(core, log=print):
     return results
 
 
-def _tree_signature(folder, *, sync=False):
+def _tree_signature(folder, *, sync=False, progress=None):
+    """Hash a package tree concurrently; the result is independent of file order."""
+    from src.modules.bootstrap_file_pool import run_all
     from src.modules.bootstrap_platformio import extended_windows_path
     folder = Path(extended_windows_path(folder))
-    result = {}
-    for root, dirs, files in os.walk(folder, followlinks=False):
-        for name in dirs + files:
+    result, files, roots = {}, [], []
+    for root, dirs, names in os.walk(folder, followlinks=False):
+        roots.append(root)
+        for name in dirs + names:
             path = Path(root) / name
             info = path.lstat()
             relative = str(path.relative_to(folder))
@@ -195,21 +198,58 @@ def _tree_signature(folder, *, sync=False):
             elif stat.S_ISDIR(info.st_mode):
                 result[relative] = ("directory", stat.S_IMODE(info.st_mode))
             elif stat.S_ISREG(info.st_mode):
-                digest = hashlib.sha256()
-                with path.open("rb") as stream:
-                    while data := stream.read(1024 * 1024):
-                        digest.update(data)
-                    # Windows FlushFileBuffers needs a writable handle; source
-                    # archives may legitimately contain read-only payloads.
-                    # Publication still waits for the complete verified copy.
-                    if sync and sys.platform != "win32":
-                        os.fsync(stream.fileno())
-                result[relative] = ("file", info.st_size, stat.S_IMODE(info.st_mode), digest.hexdigest())
+                files.append((path, relative, info))
             else:
                 raise RuntimeError(f"Unsupported package payload entry: {path}")
-        if sync:
+
+    def hash_file(entry):
+        path, relative, info = entry
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while data := stream.read(1024 * 1024):
+                digest.update(data)
+            # Windows FlushFileBuffers needs a writable handle; source
+            # archives may legitimately contain read-only payloads.
+            # Publication still waits for the complete verified copy.
+            if sync and sys.platform != "win32":
+                os.fsync(stream.fileno())
+        # Dictionary assignment is atomic; each worker owns one distinct key.
+        result[relative] = ("file", info.st_size, stat.S_IMODE(info.st_mode), digest.hexdigest())
+
+    run_all(hash_file, files, progress=progress)
+    if sync:
+        for root in roots:
             _sync_dir(root)
     return result
+
+
+def _parallel_copytree(copier, source, staging, args, kwargs, log=None):
+    """Copy with the same native copy2 per file, only concurrently.
+
+    Windows copy2 uses CopyFile2 (attributes and alternate data streams), so the
+    copied bytes and metadata match a serial copytree. Directory metadata is
+    applied again afterwards, since files are still arriving when copytree first
+    applies it. Custom copy policies keep the original serial call.
+    """
+    from src.modules.bootstrap_file_pool import FilePool, Progress
+    total = sum(len(names) for _, _, names in os.walk(source, followlinks=False))
+    if args or set(kwargs) - {"symlinks"}:
+        copier.copytree(source, str(staging), *args, **kwargs)
+        return total
+    progress = Progress(log, "Copying", total)
+    with FilePool() as pool:
+        def copy_file(src, dst):
+            def work():
+                copier.copy2(src, dst)
+                progress.step()
+            pool.submit(work)
+            return dst
+        copier.copytree(source, str(staging), copy_function=copy_file, **kwargs)
+    source_root = str(source)
+    for root, _dirs, _names in os.walk(source, followlinks=False):
+        relative = os.path.relpath(root, source_root)
+        copier.copystat(root, os.path.normpath(os.path.join(str(staging), relative)))
+    return total
 
 
 def _file_identity(info):
@@ -272,7 +312,7 @@ def _stream_copy_options(args, kwargs, copy2):
     return options
 
 
-def _copy_package_stream(source, staging, copier, args, kwargs):
+def _copy_package_stream(source, staging, copier, args, kwargs, log=None):
     """Hash the exact source copy stream, then independently verify staged bytes.
 
     Source staging belongs to the installer. Identity checks detect ordinary
@@ -281,8 +321,11 @@ def _copy_package_stream(source, staging, copier, args, kwargs):
     Unsupported/custom copy policies retain the two independent tree hashes.
     """
     def original_copy():
-        copier.copytree(source, str(staging), *args, **kwargs)
-        if _tree_signature(Path(source)) != _tree_signature(staging, sync=True):
+        from src.modules.bootstrap_file_pool import Progress
+        total = _parallel_copytree(copier, source, staging, args, kwargs, log)
+        # One bar across both independent hash passes, so it only ever advances.
+        progress = Progress(log, "Verifying", total * 2) if log else None
+        if _tree_signature(Path(source), progress=progress) != _tree_signature(staging, sync=True, progress=progress):
             raise RuntimeError(f"Package copy bytes failed verification; staging retained: {staging}")
         return None
 
@@ -357,6 +400,13 @@ def _publish_absent(source, destination):
         if native.renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1):
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code), str(destination))
+    elif sys.platform == "darwin":
+        # macOS's equivalent of the Linux guard; RENAME_EXCL is 0x4 in <stdio.h>.
+        import ctypes
+        native = ctypes.CDLL(None, use_errno=True)
+        if native.renamex_np(os.fsencode(source), os.fsencode(destination), 0x4):
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code), str(destination))
     else:
         from src.modules.bootstrap_platformio import extended_windows_path
         # Windows rename refuses an existing destination, including empty trees.
@@ -364,8 +414,24 @@ def _publish_absent(source, destination):
     _sync_dir(destination.parent)
 
 
+def _remove_extracted_files(path):
+    """Delete an unpacked tree's files concurrently; rmtree then finishes the rest."""
+    from src.modules.bootstrap_file_pool import run_all
+    from src.modules.bootstrap_platformio import extended_windows_path
+    files = [os.path.join(root, name) for root, _dirs, names
+             in os.walk(extended_windows_path(path), followlinks=False) for name in names]
+
+    def remove(file_path):
+        try:
+            os.unlink(file_path)
+        except OSError:
+            pass  # The original rmtree retries read-only files and reports failures.
+
+    run_all(remove, files)
+
+
 @contextmanager
-def atomic_package_writes(core):
+def atomic_package_writes(core, log=None):
     """Scope durable metadata and verified tree publication to this app core."""
     _bootstrap_only()
     if core is None:
@@ -374,7 +440,7 @@ def atomic_package_writes(core):
     from platformio.package.meta import PackageMetadata
     from platformio.package.manager import _install as installer
     core = Path(os.path.abspath(core))
-    original_dump, original_shutil = PackageMetadata.dump, installer.shutil
+    original_dump, original_shutil, original_fs = PackageMetadata.dump, installer.shutil, installer.fs
 
     def owned(path):
         return Path(os.path.abspath(path)).is_relative_to(core)
@@ -397,7 +463,7 @@ def atomic_package_writes(core):
         stage_parent.mkdir(exist_ok=True)
         staging = stage_parent / uuid4().hex
         # Upstream handles native extended Windows paths via its captured proxy.
-        source_receipt = _copy_package_stream(source, staging, original_shutil, args, kwargs)
+        source_receipt = _copy_package_stream(source, staging, original_shutil, args, kwargs, log)
         _sync_dir(stage_parent)
         if source_receipt and _source_inventory(source_receipt[0]) != source_receipt[1]:
             raise RuntimeError(f"Package source changed before publication; staging retained: {staging}")
@@ -409,8 +475,17 @@ def atomic_package_writes(core):
         def __getattr__(self, name):
             return copytree if name == "copytree" else getattr(original_shutil, name)
 
-    PackageMetadata.dump, installer.shutil = dump, ShutilProxy()
+    def rmtree(path):
+        if Path(os.path.abspath(path)).name.startswith("pkg-installing-") and owned(path):
+            _remove_extracted_files(path)
+        return original_fs.rmtree(path)
+
+    class FsProxy:
+        def __getattr__(self, name):
+            return rmtree if name == "rmtree" else getattr(original_fs, name)
+
+    PackageMetadata.dump, installer.shutil, installer.fs = dump, ShutilProxy(), FsProxy()
     try:
         yield
     finally:
-        PackageMetadata.dump, installer.shutil = original_dump, original_shutil
+        PackageMetadata.dump, installer.shutil, installer.fs = original_dump, original_shutil, original_fs

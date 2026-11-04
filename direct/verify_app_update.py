@@ -223,6 +223,63 @@ class SourceUpdateChecks(unittest.TestCase):
         self.assertEqual(result.status, "current")
         writer.assert_not_called()
 
+    def bundled_check(self, *, bundled="1" * 40, remote="2" * 40, comparison="behind", state=None):
+        """Check a release ZIP's first launch with GitHub's two responses fabricated."""
+        import json as json_module
+        revision = self.install / app_update.BUNDLED_REVISION_FILE
+        revision.parent.mkdir(parents=True, exist_ok=True)
+        revision.write_text(json_module.dumps({"commit": bundled}), encoding="utf-8")
+        if state is not None:
+            path = app_update.update_state_path(self.install, state_base=self.state)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json_module.dumps(state), encoding="utf-8")
+        requested = []
+
+        def opener(request, **_kwargs):
+            requested.append(request.full_url)
+            if "/commits/" in request.full_url:
+                return _Response(json_module.dumps({"sha": remote}).encode(), "https://api.github.com/commits")
+            if isinstance(comparison, Exception):
+                raise comparison
+            return _Response(json_module.dumps({"status": comparison}).encode(), "https://api.github.com/compare")
+        return app_update.check_for_update(self.install, state_base=self.state, opener=opener), requested
+
+    def test_release_zip_is_never_replaced_by_an_older_update_branch(self):
+        checked, requested = self.bundled_check(comparison="behind")
+        self.assertEqual(checked.status, "current")
+        self.assertIn(f"/compare/{'1' * 40}...{'2' * 40}?page=2&per_page=1", requested[1])
+
+    def test_release_zip_on_the_branch_commit_needs_no_second_request_or_replacement(self):
+        checked, requested = self.bundled_check(remote="1" * 40)
+        self.assertEqual(checked.status, "current")
+        self.assertEqual(len(requested), 1)
+
+    def test_release_zip_follows_a_branch_that_is_newer_or_was_rewritten(self):
+        for comparison in ("ahead", "diverged"):
+            with self.subTest(comparison=comparison):
+                checked, _ = self.bundled_check(comparison=comparison)
+                self.assertEqual(checked.status, "available")
+                self.assertEqual(checked.candidate.commit, "2" * 40)
+
+    def test_release_zip_is_left_alone_when_the_comparison_cannot_be_trusted(self):
+        for comparison in (OSError("offline"), "unknown-status"):
+            with self.subTest(comparison=comparison):
+                checked, _ = self.bundled_check(comparison=comparison)
+                self.assertEqual(checked.status, "unavailable")
+
+    def test_applied_update_record_outranks_the_bundled_commit(self):
+        # After an update, the installed source is the applied commit, not the original ZIP's.
+        applied = {"schema": app_update.STATE_SCHEMA, "repository": app_update.REPOSITORY,
+                   "branch": app_update.DEFAULT_BRANCH, "applied_commit": "3" * 40}
+        checked, requested = self.bundled_check(comparison=AssertionError("Not asked"), state=applied)
+        self.assertEqual(checked.status, "available")
+        self.assertEqual(len(requested), 1)
+
+    def test_malformed_bundled_revision_keeps_the_previous_behavior(self):
+        checked, requested = self.bundled_check(bundled="not-a-commit", comparison=AssertionError("Not asked"))
+        self.assertEqual(checked.status, "available")
+        self.assertEqual(len(requested), 1)
+
     def test_metadata_deadline_rejects_a_trickled_response(self):
         clock = [0.0]
         response = _SlowResponse(

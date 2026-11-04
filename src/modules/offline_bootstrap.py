@@ -305,6 +305,9 @@ def clean_bootstrap_environment(env=None):
     env["PLATFORMIO_NO_TELEMETRY"] = "1"
     env["PLATFORMIO_SETTING_ENABLE_TELEMETRY"] = "false"
     env["PLATFORMIO_DISABLE_UPGRADE_CHECK"] = "true"
+    env["PLATFORMIO_NO_ANSI"] = "true"
+    env["PLATFORMIO_DISABLE_COLOR"] = "true"
+    env["PLATFORMIO_DISABLE_PROMPTS"] = "1"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     if sys.platform == "win32":
@@ -442,7 +445,7 @@ def package_plan(platform, boards, log=None, unavailable=None, allowed_framework
         # platform default even on Linux. This reviewed release has Windows
         # archives only; preserve required/custom/newer declarations instead
         # of suppressing arbitrary package installation failures.
-        if (sys.platform.startswith("linux") and not spec.external
+        if (sys.platform != "win32" and not spec.external
                 and (spec.owner, spec.name, str(spec.requirements)) ==
                 ("platformio", "tool-mconf", "~1.4060000.0")
                 and (spec.owner, spec.name) not in active_packages):
@@ -615,16 +618,59 @@ def _bootstrap_http_timeouts(connect_timeout=10, read_timeout=30):
             http.HTTPSession.request = original
 
 
+def prefetch_package_archives(core, specs, *, log=print, workers=6):
+    """Download missing archives together, before the serial install loop.
+
+    PlatformIO's manager holds one store lock per install, so its downloads run
+    one at a time. This fills the same checksum-verified download cache. A failure
+    here is only a lost optimization: the install below repeats it and reports it.
+    """
+    import logging
+    from concurrent.futures import ThreadPoolExecutor
+    from platformio.package.manager.tool import ToolPackageManager
+    from platformio.registry.mirror import RegistryFileMirrorIterator
+    store = str(Path(core) / "packages")
+    existing = ToolPackageManager(store)
+    pending = [spec for spec in specs if not spec.external and not existing.get_package(spec)]
+    if not pending:
+        return 0
+    log(f"Downloading {len(pending)} missing package archives together...")
+
+    def fetch(spec):
+        manager = ToolPackageManager(store)
+        manager.set_log_level(logging.WARNING)  # Silent: no interleaved progress.
+        package = manager.fetch_registry_package(spec)
+        version = manager.pick_best_registry_version(package["versions"], spec)
+        archive = manager.pick_compatible_pkg_file(version["files"]) if version else None
+        if not archive:
+            return False
+        for url, checksum in RegistryFileMirrorIterator(archive["download_url"]):
+            manager.download(url, checksum or archive["checksum"]["sha256"])
+            return True
+        return False
+
+    def attempt(spec):
+        try:
+            return fetch(spec)
+        except Exception as exc:  # pylint: disable=broad-except
+            log(f"Concurrent download skipped for {spec.humanize()}: {exc}")
+            return False
+
+    with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="mcu-package-download") as executor:
+        return sum(1 for done in executor.map(attempt, pending) if done)
+
+
 def prepare(core, plan=None, log=print, jobs=None, event=None, requested_targets=None, board_sources=()):
     from src.modules.ubuntu_release import require_supported_ubuntu
     require_supported_ubuntu()
     if os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME") or os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME"):
         raise RuntimeError("Offline packages can only be prepared by bootstrap, outside the workspace process")
-    from src.modules.bootstrap_platformio import archive_paths
+    from src.modules.bootstrap_platformio import archive_paths, parallel_archive_writes
     from src.modules.bootstrap_package_recovery import atomic_package_writes
     from src.modules.platformio_locks import package_locks
     with timed_stage(log, "complete offline package preparation"):
-        with _bootstrap_http_timeouts(), package_locks(), archive_paths(), atomic_package_writes(core):
+        with _bootstrap_http_timeouts(), package_locks(), parallel_archive_writes(), archive_paths(), \
+                atomic_package_writes(core, log=log):
             return _prepare(core, plan, log, jobs=jobs, event=event,
                             requested_targets=requested_targets, board_sources=board_sources)
 
@@ -786,6 +832,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         log(f"Bootstrap plan: {platform.name}: {len(specs)} package specifications; "
             f"{len(probes)} initial builder probes")
         files.add(str((Path(package.path) / "platform.json").relative_to(core)))
+        with timed_stage(log, f"concurrent package downloads: {platform.name}"):
+            prefetch_package_archives(core, specs, log=log)
         for spec in specs:
             log(f"Preparing {spec.humanize()}")
             report("preparing", message=f"Preparing {spec.humanize()}", platform=name, progress=None)

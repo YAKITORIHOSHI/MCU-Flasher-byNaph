@@ -33,7 +33,7 @@ class LogFollow(QObject):
         self._plain = isinstance(view, QPlainTextEdit)
         self._pending_scroll = None
         self._resize_state = None
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             self._retired_scroll_states = {}
             self._retire_scroll_timer = QTimer(self)
             self._retire_scroll_timer.setSingleShot(True)
@@ -58,7 +58,7 @@ class LogFollow(QObject):
         # A drag can finish outside the scrollbar or viewport. Observe release
         # at the application boundary so a lost grab cannot leave Auto anchored.
         app = QApplication.instance()
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             # Application filters force Shiboken to wrap every Qt-internal
             # QObject, including objects still under construction. Native
             # Linux WebEngine can reenter that wrapper conversion and crash.
@@ -71,7 +71,7 @@ class LogFollow(QObject):
             app.installEventFilter(self)
 
     def _watch_release_widgets(self):
-        if not sys.platform.startswith("linux"):
+        if not sys.platform != "win32":
             return
         if not self.scrollbar_held or not isValid(self.view):
             return
@@ -120,7 +120,7 @@ class LogFollow(QObject):
         self._cancel_settle()
         self._resume_timer.stop()
         self.scrollbar_held = True
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             # Do not traverse native widget trees inside an input event filter.
             self._release_scan_timer.start(0)
 
@@ -138,7 +138,7 @@ class LogFollow(QObject):
         self._resize_state = None
 
     def _retire_scroll_states(self, *states):
-        if not sys.platform.startswith("linux"):
+        if not sys.platform != "win32":
             return
         # Qt can emit scrollbar signals while finishEdit() still iterates its
         # QTextCursorPrivate list. Dropping a captured cursor in that signal
@@ -173,7 +173,7 @@ class LogFollow(QObject):
 
     def _release(self):
         self.scrollbar_held = False
-        if sys.platform.startswith("linux"):
+        if sys.platform != "win32":
             self._unwatch_release_widgets()
         # The scrollbar applies its final drag/track position after its event
         # filter and can also emit sliderReleased during that handler.
@@ -212,7 +212,7 @@ class LogFollow(QObject):
         if not isValid(self.view):
             return False
         kind = event.type()
-        if (sys.platform.startswith("linux") and self.scrollbar_held
+        if (sys.platform != "win32" and self.scrollbar_held
                 and kind in (QEvent.Type.ChildRemoved, QEvent.Type.ChildPolished,
                              QEvent.Type.ParentChange)):
             self._release_scan_timer.start(0)
