@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
+import concurrent.futures.thread
 import contextlib
 import hashlib
 import json
@@ -766,7 +767,7 @@ class CloudSketchService:
             ids = [_safe_id(key) for key in value]
             # An owned, finite pool keeps metadata-only listing inexpensive and never
             # downloads every source/history just to show the project selector.
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cloud-list") as pool:
+            with concurrent.futures.thread.ThreadPoolExecutor(max_workers=2, thread_name_prefix="cloud-list") as pool:
                 rows = list(pool.map(self._meta, ids))
             return sorted(rows, key=lambda row: row.get("updated_at", 0), reverse=True)
 

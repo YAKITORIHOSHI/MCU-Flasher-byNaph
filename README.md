@@ -1,8 +1,8 @@
 # 🛠️ MCU Flasher by Naph v11
 
-> **A glass desktop workspace for compiling, flashing, monitoring, and coding microcontrollers on Windows and Ubuntu, including Ubuntu ARM64 on Raspberry Pi.**
+> **A glass desktop workspace for compiling, flashing, monitoring, and coding microcontrollers on Windows, Ubuntu (including ARM64 on Raspberry Pi), Linux Mint, Fedora and macOS.**
 
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Ubuntu-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Ubuntu%20%7C%20Mint%20%7C%20Fedora%20%7C%20macOS-blue)
 ![Version](https://img.shields.io/badge/version-v11-brightgreen)
 ![Architecture](https://img.shields.io/badge/architecture-PySide6%20%7C%20Qt%20for%20Python-41CD52)
 ![Python](https://img.shields.io/badge/python-3.10%2B%20(Private%20Runtime)-blue)
@@ -10,6 +10,15 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
+
+The November 5 update makes Windows Bootstrap's package work concurrent, so
+per-file antivirus scanning no longer multiplies into tens of minutes, and it
+reports progress through quiet phases. A one-line edit now recompiles one unit
+instead of every library, Hard and Soft Reset keep their own builds, and the
+Library and Board Browser moved from Tk to PySide6 with virtualized lists. Tk is
+gone from the application. Buttons and tabs no longer take keyboard focus or
+draw focus lines. Linux Mint 22.x, Fedora 44 or newer and macOS 14 or newer now
+run the real application; see [what is verified where](audit/PLATFORM_VERIFICATION.md).
 
 The October 31 source update aligns the editor's reading surface and source tabs
 with the active workspace theme, applies saved fonts and resource settings before
@@ -76,11 +85,11 @@ tooltips, and inactive/minimized Controls stop marquee animations. See the
 Double-click entries now live in [`LAUNCHER/`](LAUNCHER/README.md): `WINDOWS.exe`
 and native `UBUNTU` / `UBUNTU_ARM64` executables use the existing production
 startup paths. The folder contains no `.desktop` shortcuts.
-`MacOS.command`, native `FEDORA` / `FEDORA_ARM64` and `LINUX_MINT` currently
-show availability notices because those application ports are unfinished.
-Windows ARM64 is also pending. See the [current OS verification matrix](audit/PLATFORM_VERIFICATION.md)
-for actual support, source gaps and the distinction between editor checks and
-full application qualification.
+Native `FEDORA` / `FEDORA_ARM64` and `LINUX_MINT` use the same guarded launch with
+their own package adapters, and `MacOS.command` opens the macOS path. Windows ARM64
+is still refused. See the [current OS verification matrix](audit/PLATFORM_VERIFICATION.md)
+for what each host has actually been tested on, and the
+[Linux Mint, Fedora and macOS guide](direct/OTHER_PLATFORMS.md).
 
 The editor now uses an [Arduino-inspired syntax palette](src/editor/ARDUINO_PALETTE.md),
 adapted from Arduino's official Light/Dark colors with small-text contrast
@@ -350,7 +359,7 @@ display options and Copy/Clear into **Options** when needed, keeping baud,
 Reset, Pause and Send reachable. Syntax Check uses the chosen content font.
 Qt sizing uses logical pixels and follows the window's current monitor and
 available work area, including taskbars and negative monitor coordinates.
-Qt applies display scaling once; Tk uses its own native font and pixel metrics.
+Qt applies display scaling once.
 Monitor and resize changes are coalesced without an idle polling loop.
 Embedded Windows terminal and assistant windows use their native host's client
 bounds, including fractional display scales. Monaco fills its available CSS
@@ -521,18 +530,14 @@ Library samples open in a separate read-only viewer with the selected theme and
 saved content font. Its tabs, syntax, selection, line numbers and scrollbars
 follow Glass, Frosted Light and Solarized palettes. The complete window frame
 fits the monitor's logical work area, including compact and portrait displays.
-Interpreter probes run off the Tk thread with one active and one latest request;
+Interpreter probes run off the GUI thread with one active and one latest request;
 superseded or closed-window results never open another viewer. Missing viewer
 dependencies direct users to Bootstrap. Viewing samples never installs packages
 or writes sample files/settings. Verify with `direct/verify_library_samples.py`
 in a separate process from the PySide6 checks.
-If a browser worker cannot start, it reports the failure on the Tk thread and
+If a browser worker cannot start, it reports the failure on the GUI thread and
 restores Download/Update controls and progress. Pending work is not replayed;
 the next explicit click retries normally.
-On Linux with libXft older than 2.3.5, the standalone downloader uses monochrome
-font fallback for Unicode symbols. This avoids unsupported color-glyph requests
-that can crash older Tk. Text, saved fonts and user Fontconfig files are preserved;
-the adjustment stays in the downloader process. Newer libXft keeps color fonts.
 The editor engine is offline Monaco with automatic resource settings; Settings
 does not offer the unused legacy lightweight-engine selector.
 
@@ -727,9 +732,8 @@ contain no decorative emoji. Icons follow the active text/semantic ink and retai
 normal, active, disabled and compact states in Glass Dark, Frosted Light and
 Solarized Dark. Developer Access retains its solid paper palette.
 
-Qt reads the same local SVG assets on Windows and Ubuntu. Cold Tk setup uses a
-bounded standard-library renderer of those assets, with no Qt, Pillow, external
-icon font, network request or live animation requirement. Native window icons
+Qt reads the same local SVG assets on every host, with no external icon font,
+network request or live animation requirement. Native window icons
 retain the OS-required ICO/PNG formats. Setup log icon gutters remain transparent
 over the glass in both summary and technical views; ordinary Build Console gutters
 retain their opaque reading surface. Log marks live beside copyable text;
@@ -970,9 +974,10 @@ Expanding the configured platforms and frameworks can take substantial time and 
 Subsequent launches verify local files without a network check. Windows and
 Ubuntu need their own native prepared stores.
 
-On a fresh Windows copy, Python's bundled Tk shows setup progress immediately
-while Python dependencies install. After Qt passes verification, setup opens
-the original Qt design before preparing board tools. The same worker, elapsed
+The Windows release ships Qt in its private runtime, so setup opens its Qt window
+immediately. If those packages are missing or damaged, a plain console view shows
+progress until they are repaired, then setup moves to the Qt window before
+preparing board tools. The same worker, elapsed
 timer, log, progress, preferences and reading position continue through this
 change. Holding the scrollbar delays the switch until release. A display error
 keeps the native window working; it does not restart installation. Worker output
@@ -1243,17 +1248,15 @@ glass cards reduce their decorative padding to keep a complete native text
 line visible; longer details remain reachable by scrolling.
 Static shaded glass rims, reflections and panel headings now match the workspace
 in Glass, Frosted Light and Solarized. Headings yield to reading space on short
-panes; folder, vendor URL and version rows reflow using native Tk font widths.
+panes; folder, vendor URL and version rows reflow to the available width.
 Utility reading panes use a composited frosted tint instead of black fills, with
-soft cyan/blue reflected light and a single smooth rim. Resources, cold setup,
-Qt setup and the direct-link downloader share this treatment. On Ubuntu, the
-bundled Montserrat faces are registered only inside the Tk process; no system
-font installation or user Fontconfig rewrite is needed. Package names use the
+soft cyan/blue reflected light and a single smooth rim. Resources, setup and the
+direct-link downloader share this treatment. Package names use the
 UI typeface, while paths and technical logs retain their appropriate fixed fonts.
 Download forms resize and scroll, keeping the focused action reachable; rounded
 fields retain native editing and buttons keep a visible keyboard focus ring.
 The full native frame is fitted after window moves. Windows uses the current
-monitor work area; Ubuntu uses desktop work-area hints with a Tk fallback.
+monitor work area, from the screen geometry Qt reports.
 
 Ubuntu Bootstrap also prepares the configured AVR, ESP32 and ESP8266 Arduino
 platform definitions and native tools in Online Mode. Existing SCons-only
@@ -1297,13 +1300,17 @@ direct\windows\run.vbs
 python mcu_flash_gui.py
 ```
 
+On other systems, open [`LAUNCHER/`](LAUNCHER/README.md) and use the entry named for
+yours: `UBUNTU` / `UBUNTU_ARM64`, `LINUX_MINT`, `FEDORA` / `FEDORA_ARM64` or
+`MacOS.command`. See the [Linux Mint, Fedora and macOS guide](direct/OTHER_PLATFORMS.md).
+
 ### First-Run Auto-Bootstrap Pipeline
 
-Setup uses smoked glass cards, static reflections and an original circuit-chip icon family shared with the workspace. The first-run Tk view and the later Qt view both open with a clean activity summary. Larger, bold stage headers separate Python, board tools, drivers and update checks, with indented results beneath each header. Package progress occupies compact rows; completed groups collapse to a count. **Technical details** reveals the retained installer output, while the detailed run log keeps the full diagnostics. Resolver chatter and repeated success messages stay out of the default summary; warnings and failures remain visible. The status shows a short action or package count instead of a long dependency list.
+Setup uses smoked glass cards, static reflections and an original circuit-chip icon family shared with the workspace. The setup window opens with a clean activity summary. Larger, bold stage headers separate Python, board tools, drivers and update checks, with indented results beneath each header. Package progress occupies compact rows; completed groups collapse to a count. **Technical details** reveals the retained installer output, while the detailed run log keeps the full diagnostics. Resolver chatter and repeated success messages stay out of the default summary; warnings and failures remain visible. The status shows a short action or package count instead of a long dependency list.
 
 The display handoff preserves both logs, selections, reading positions, the details disclosure, progress and preferences without restarting setup. Auto-Scroll applies to both views: a held scrollbar pauses following, release resumes when enabled, and Auto OFF preserves the reading position. Glass painting is cached and changes only with size, palette or actual setup state.
 
-Setup starts at 70% of the active monitor's width and height. Qt logical sizing, preferred 520×420 floors and native frame fitting to the usable work area keep it usable on smaller displays; it remains resizable. Tk keeps its own native metrics.
+Setup starts at 70% of the active monitor's width and height. Qt logical sizing, preferred 520×420 floors and native frame fitting to the usable work area keep it usable on smaller displays; it remains resizable.
 
 1. **Drive Storage Verification**: Inspects installation drive for storage speed and integrity.
 2. **Private Python Auto-Healing**: Verifies and heals the isolated portable Python 3 runtime at `src/_python/` using bundled offline installers in `installers/.handsoff/`.
@@ -2002,11 +2009,10 @@ verification; board compilation/upload still requires separate target checks.
 - **`src/modules/dedicated_AI.py`**: OpenCode AI assistant process controller (HTTP server + WebSocket + pywinpty).
 - **`src/modules/project_terminal.py`**: Standalone project terminal server & PTY backend for integrated multi-terminal sessions.
 - **`src/modules/win_subprocess_hide.py`**: Enforces `CREATE_NO_WINDOW` on all background subprocesses.
-- **`src/modules/arduino_lib_req.py`**: Tk/ttk glass browser for Arduino libraries, board packages and installed items. Keeps search, version selection, checksum verification and cancellation; **Board indexes** reveals advanced vendor URLs. Closing sleeps with loaded catalogs/UI retained in RAM; reopening performs no catalog reload or inventory scan. Final workspace shutdown still releases the process. Equal refreshes and unchanged searches preserve the existing list.
-- **`src/modules/tk_glass.py`**: Antialiased static glass materials, rounded SVG buttons/tabs and a reflective browser header. Native Tk paints the same materials on Ubuntu and Windows without optional image packages, compositor blur or an animation loop. Large surfaces retain one size/theme cache; package reading fonts and native keyboard actions remain intact. Compact headers yield their subtitle before reducing the details pane.
-- **`src/modules/tk_raster.py`**: One bounded CPU-only image worker per Tk root, latest requests per surface, cancellation and a single completed PNG. Native images, geometry and widget changes stay on Tk; obsolete size/theme/hidden-window results are discarded.
-- **`src/modules/browser_loading.py`**: Source-validated compact catalog caches, atomic background cache writes, bounded disk scans and demand-driven Tk callback delivery.
-- **`main/qt/responsive.py`** and **`src/modules/ui_metrics.py`**: Shared work-area fitting, dialog placement and event-driven monitor tracking. Keep Qt logical coordinates separate from Tk native pixels.
+- **`main/qt/package_browser.py`**: PySide6 Library and Board Browser with virtualized lists; the window appears before any catalog is read.
+- **`src/modules/arduino_lib_req.py`**: Toolkit-free engine behind that browser for Arduino libraries, board packages and installed items. Keeps search, version selection, checksum verification and cancellation; **Board indexes** reveals advanced vendor URLs. Closing sleeps with loaded catalogs/UI retained in RAM; reopening performs no catalog reload or inventory scan. Final workspace shutdown still releases the process. Equal refreshes and unchanged searches preserve the existing list.
+- **`src/modules/browser_loading.py`**: Source-validated compact catalog caches, atomic background cache writes, bounded disk scans and one-latest-request scan workers.
+- **`main/qt/responsive.py`** and **`src/modules/ui_metrics.py`**: Shared work-area fitting, dialog placement and event-driven monitor tracking.
 - **`src/modules/detector.py`**: USB serial port auto-detection and board identification helper.
 - **`src/modules/downloader.py`**: Resumable multi-threaded downloader with SHA-256 validation and Google Drive virus-scan bypass.
 - **`src/modules/reset_editor.py`**: Historical settings tool for older Tkinter releases. It does not switch or repair the current Qt editor; use the editor's Reload recovery control.
@@ -2080,9 +2086,9 @@ store, with `src/gui_config.json` retained for portable-copy compatibility:
 ## 🛠️ Development & Contributing
 
 ### System Requirements
-- **Operating System**: Windows 10/11 (AMD64) or native Ubuntu 24.04 or newer (amd64 or ARM64). Windows ARM64 startup is currently refused. Ubuntu 24.04/26.04 have x86-64 and ARM64 CI targets; check the completed results for the revision being used. X11/Xvfb checks do not certify native Wayland, keyring or USB behavior.
+- **Operating System**: Windows 10/11 (AMD64); native Ubuntu 24.04 or newer (amd64 or ARM64); Linux Mint 22.x (amd64); Fedora 44 or newer (x86_64 or aarch64); or macOS 14 or newer (Intel or Apple Silicon). Windows ARM64 startup is refused. Unknown or malformed OS release data is always refused, and a relative distribution is never admitted from `ID_LIKE`. See [what is verified where](audit/PLATFORM_VERIFICATION.md).
 - **Hardware**: Minimum **4 CPU cores** (physical topology when available, logical threads as fallback; enforced at startup)
-- **Python**: Ubuntu source setup uses native Python 3.10+ and creates `.venv-linux`. ARM64 uses Ubuntu's release-matched `/usr/bin/python3` for the native sample-viewer packages. Windows uses its private runtime and bundled installer; no system Python is required.
+- **Python**: Linux setup uses the distribution's Python 3.10+ and creates `.venv-linux`. macOS downloads a pinned, hash-verified private Python and creates `.venv-macos`, with no administrator rights or Homebrew. ARM64 uses Ubuntu's release-matched `/usr/bin/python3` for the native sample-viewer packages. Windows uses its private runtime and bundled installer; no system Python is required.
 - **Version Control**: Git with Git LFS (`git lfs install`)
 
 Free-space planning for the default AVR / ESP32 / ESP8266 Arduino plan:
@@ -2267,9 +2273,8 @@ metadata writes, failed-update preservation and user-file ownership in isolated
 fixtures under `temp/`.
 The responsive verifier covers narrow/wide control rows, readable baud values,
 settings and setup on small work areas, wrapped board filters, popup scrolling,
-monitor-change coalescing and native Tk details. Start a fresh process for each
-`QT_SCALE_FACTOR` value (1, 1.25, 1.5, 1.75 and 2); the Tk fixture also simulates its
-native point scaling. Couple physical screen dimensions to each scale, convert
+monitor-change coalescing. Start a fresh process for each
+`QT_SCALE_FACTOR` value (1, 1.25, 1.5, 1.75 and 2). Couple physical screen dimensions to each scale, convert
 to Qt logical coordinates once, and subtract taskbar space. Include half-monitor
 and full-width workspaces, portrait screens and chosen content fonts; check the
 effective rendered font, complete frames and readable viewports. Short setup

@@ -61,6 +61,10 @@ class RecoveryChecks(unittest.TestCase):
                 return getattr(shutil, name)
 
             def copytree(self, source, destination, *args, **kwargs):
+                if after:
+                    # The real copy function only queues work. Finish copying first:
+                    # Windows refuses to open a file another thread is still writing.
+                    kwargs.pop("copy_function", None)
                 result = shutil.copytree(source, destination, *args, **kwargs)
                 if after:
                     after(Path(source), Path(destination))
@@ -201,6 +205,7 @@ class RecoveryChecks(unittest.TestCase):
         target.parent.mkdir()
         real = shutil.copytree
         def damaged(src, dst, *args, **kwargs):
+            kwargs.pop("copy_function", None)  # Finish copying before damaging the stage.
             result = real(src, dst, *args, **kwargs)
             (Path(dst) / "payload").write_bytes(b"silently damaged")
             return result

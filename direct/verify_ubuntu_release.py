@@ -56,7 +56,7 @@ class ReleaseChecks(unittest.TestCase):
                 release.require_supported_ubuntu()
 
     def test_linux_mint_is_admitted_only_on_its_reviewed_ubuntu_base(self):
-        # Field values come from Mint's published release table; Mint 22 has no minor.
+        # Fields match /usr/lib/os-release in Mint's own base-files 13ubuntu10mint22.3.0.
         for version in ("22", "22.1", "22.2", "22.3"):
             record = {"ID": "linuxmint", "ID_LIKE": "ubuntu debian", "VERSION_ID": version, "UBUNTU_CODENAME": "noble"}
             with self.subTest(version=version), patch.object(release.sys, "platform", "linux"), \

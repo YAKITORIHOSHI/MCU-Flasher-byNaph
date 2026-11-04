@@ -158,6 +158,22 @@ class InstallCommands(unittest.TestCase):
             self.install(FEDORA, ["git-core"], tools=False)
 
 
+class NewerPython(unittest.TestCase):
+    def source_files(self):
+        for folder in ("main", "src/modules"):
+            yield from (ROOT / folder).rglob("*.py")
+
+    def test_thread_pools_come_from_their_defining_module(self):
+        # Fedora 45 ships Python 3.15, whose concurrent.futures exposes the pool as a lazy
+        # import. Inside the PySide6 process that form reached the caller unresolved, and
+        # catalog loading failed with "'lazy_import' object is not callable".
+        for path in self.source_files():
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            with self.subTest(path=path.relative_to(ROOT).as_posix()):
+                self.assertNotRegex(text, r"from concurrent\.futures import [^\n]*ThreadPoolExecutor")
+                self.assertNotRegex(text, r"\bfutures\.ThreadPoolExecutor\b")
+
+
 class Terminals(unittest.TestCase):
     def chosen(self, record):
         started = []

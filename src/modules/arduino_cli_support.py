@@ -14,7 +14,9 @@ import sys
 import tempfile
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+# From its own module: Python 3.15's concurrent.futures exposes this as a lazy import.
+from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 

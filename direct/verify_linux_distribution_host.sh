@@ -24,6 +24,12 @@ as_builder() {
 echo '--- Admission from the real os-release, in shell and Python'
 as_builder bash -c 'source direct/ubuntu/release_guard.sh && require_supported_ubuntu && printf "%s %s.%s %s\n" "$mcu_linux_family" "$mcu_ubuntu_release_major" "$mcu_ubuntu_release_minor" "$mcu_linux_label"'
 as_builder /usr/bin/python3 -B -c 'from src.modules.ubuntu_release import linux_distribution; print(linux_distribution())'
+# Passing on the wrong policy proves nothing about the distribution this job claims to test.
+family="$(as_builder /usr/bin/python3 -B -c 'from src.modules.ubuntu_release import linux_distribution; print(linux_distribution().family)')"
+if [[ -n "${EXPECTED_LINUX_FAMILY:-}" && "$family" != "$EXPECTED_LINUX_FAMILY" ]]; then
+    printf 'This job qualifies %s, but the host was admitted as %s.\n' "$EXPECTED_LINUX_FAMILY" "$family" >&2
+    exit 1
+fi
 echo '--- Hardware-free adapter checks'
 as_builder /usr/bin/python3 -B direct/verify_ubuntu_release.py
 as_builder /usr/bin/python3 -B direct/verify_linux_distributions.py

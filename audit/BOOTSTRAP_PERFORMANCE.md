@@ -1,4 +1,42 @@
-# Bootstrap performance correction — October 23, 2026
+# Bootstrap performance
+
+## Windows package work — November 5, 2026
+
+A Windows user reported Bootstrap staying on the Arduino AVR step and taking about
+30 minutes, against seconds on Ubuntu. The same code does the same work on both, so
+the difference has to be per-file cost, and package trees hold tens of thousands of files.
+
+| Finding | Before | After |
+| --- | --- | --- |
+| Package copy and both hash passes | One file at a time | Concurrent through `bootstrap_file_pool.py`, with the same native `copy2` and both independent hash passes |
+| Archive extraction | One member at a time | Concurrent, with bounded pending work and bytes |
+| Progress during copy and verify | Silent, so it looked stuck | `Package files: Copying N%` and one `Verifying` bar that never moves backward |
+| First-run seed download | Whole archive, including 942,585,255 unused bytes | Only the pinned 842,773,200-byte package tail, over up to 6 connections |
+| Arduino AVR 1.8.6 lookup | Fetched the whole package index | Pinned release |
+| Update check | Could delay launch | Bounded by a 2-second join |
+| Earlier uncommitted edits to `ensure_board_toolchains` | Targeted a function nothing calls | Reported, not relied on |
+
+### Measurements
+
+All of these ran on Linux. The delay is simulated, so they show how much scaling the
+change allows, not how long a Windows run takes.
+
+| Case | Serial | Concurrent |
+| --- | ---: | ---: |
+| Real MegaCore install with a 2 ms per-open delay, standing in for antivirus | 227 s | 38 s |
+| Real selective seed, 804 MiB verified | 59.9 s (one stream) | 38.5 s |
+
+A real cold AVR stage from an empty store on tmpfs took 63.9 s for 20 packages and 72,036
+entries. `direct/verify_bootstrap_io_performance.py` runs in
+`bootstrap-performance.yml` on hosted Windows; see
+[the verification record](PLATFORM_VERIFICATION.md) for that evidence. Windows Defender
+exclusions remain opt-in: this change does not add or rely on one.
+
+The original 30-minute log was never available, so this names the most likely cost
+rather than a confirmed one. To confirm on the affected machine, send the Bootstrap log
+and `logs/startup-timing.log`.
+
+## October 23, 2026 correction
 
 Implementation: `7973c67`; native fixture correction: `c10bf07`, on
 `codex/rust-tauri-migration`.

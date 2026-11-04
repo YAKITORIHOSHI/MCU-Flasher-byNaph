@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, theme-matched cold editor loading, action readiness, incremental builds and dedicated reset reuse, responsive layouts, Ghost Sketch saves, safe shutdown, Bootstrap performance, native Rust preview, embedded terminals and launchers. Use for app changes and platform verification; firmware work follows sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, the PySide6 Library and Board Browser, theme-matched cold editor loading, action readiness, incremental builds and dedicated reset reuse, responsive layouts, Ghost Sketch saves, safe shutdown, Bootstrap performance, Linux Mint, Fedora and macOS host adapters, native Rust preview, embedded terminals and launchers. Use for app changes and platform verification; firmware work follows sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -59,13 +59,14 @@ workflow: finish private-runtime integrity checks before removing native runtime
 dependencies, then package the intended committed revision. Preserve the complete
 private Windows runtime and local settings. A source push or launcher binary does
 not establish that the packaged application has passed on every named OS.
-macOS/Fedora/Mint entries currently show availability notices and Windows ARM
-refuses. Keep this distinction explicit. Native editor component checks do not
+Fedora, Mint and macOS entries run the real application through their own adapters
+and Windows ARM refuses. `audit/PLATFORM_VERIFICATION.md` records what each host has
+been tested on; keep that distinction explicit. Native editor component checks do not
 qualify application startup, setup, tools, drivers or USB. Current Windows ARM
 PySide6-WebEngine wheels lack native browser modules; record capability absence
 and skipped rendering, never a host-rendering pass. Use production Ubuntu
 `preflight.system_libraries()` for that CPU's CI dependencies and the release's
-native Python/Tcl/Tk ABI. Portable Windows WSH forwarding must quote empty,
+native Python ABI. Portable Windows WSH forwarding must quote empty,
 embedded-quote and trailing-backslash arguments and shield literal percent paths
 through preflight/repair as well as final launch. Keep its fixtures read-only,
 with tracked descendant cleanup on timeout; archive validation preserves every
@@ -429,87 +430,57 @@ The editor-review capture guard accepts only resolved checkout `temp/` or
 `audit/migration/captures/` descendants; preserve root and nested-symlink escape
 refusals when adding CI capture paths.
 
-## Native browser glass
+## Linux Mint, Fedora and macOS
 
-Native SVG action request heights include artwork and hit-area padding. Reserve
-them in short detail cards before headings/rims. Compressed vertical list/detail
-panes allocate complete reading/control minima when their sum fits, retaining
-saved fonts and valid user sash positions. Verify board controls at 200% plus
-the standalone compact SVG-card fixture in downloader appearance checks.
+The admission policy is `src/modules/ubuntu_release.py`, mirrored in shell builtins by
+`direct/ubuntu/release_guard.sh`. Change both together. Each distribution is explicit:
+Ubuntu 24.04+, Mint 22.x whose `UBUNTU_CODENAME` is `noble`, Fedora 44+ and macOS 14+
+(the floor comes from PySide6's `macosx_14_0` wheel tag). `ID_LIKE` never admits a host.
+Mint behaves as its Ubuntu base; LMDE has no such base and stays refused. Adding a release
+means its own verified package tables and CI row, not a looser check.
 
-`tk_glass.py` precomposes antialiased static materials using only the standard
-library. Follow the user-provided project selector reference: a framed browser
-header, directional reflection and lit rounded rims. Buttons retain native
-Tk command/focus/state behavior and SVG marks, and rounded notebook skins retain
-native traversal. Keep the material's text contrast at least 4.5:1, including
-bright reflections, hover/disabled inks and selected package rows after themes.
-Large materials cache only their current size/theme; no animation timer or
-compositor dependency. Compact headers yield their subtitle before saved content
-fonts or the last complete detail line. Verify the browser at five native scales
-on Ubuntu and Windows via `direct/verify_downloader_appearance.py`; captures use
-isolated selected/empty catalogs and belong under `temp/audit/`.
+- Fedora's package names live in `direct/ubuntu/fedora_packages.py`, one per SONAME or tool,
+  because many do not follow from the library name. Confirm changes against Fedora's
+  repository metadata. `system_setup.py` runs `dnf` or `apt-get` from the same allowlisted
+  flow; Atomic desktops get `rpm-ostree` guidance rather than a failing `dnf`.
+- macOS has no system Python to rely on: `direct/macos/run.sh` (bash 3.2 syntax only) fetches
+  a pinned, hash-verified private Python into `.macos-tools`, then `direct/macos/setup.py`
+  creates `.venv-macos`. `elf_matches_host` checks Mach-O there, including universal
+  binaries. `sys.platform != "win32"` is the native POSIX gate; `startswith("linux")` remains
+  only for what is truly Linux: `/proc` mount data, `renameat2`, `prctl`, UNO Q link paths.
+- macOS has no subreaper, so a tool that fully detaches outlives its terminal session.
+- Verify with `direct/verify_ubuntu_release.py`, `direct/verify_linux_distributions.py` and
+  `direct/verify_macos_adapter.py`. `other-platforms.yml` runs the cold first launch on real
+  userlands. A container has no physical desktop or USB, so that remains separately open.
 
-Resources and direct-link forms use `resource_palette`, preserving the original
-four theme surface stops for their directional material. `GlassScene` owns the
-shared backdrop; `tk_material.py` supplies `GlassBody` and `GlassLabel` to paint
-the owner's image at each group's screen/scroll offset. Captions, folder/status
-rows and nested detail groups must not obscure it with opaque dark fills.
-`GlassNotebook` and `GlassListbox` retain their real native widgets for geometry,
-selection, pointer handling and keyboard traversal, while compositing the shared
-material behind tabs and unselected rows. Keep painted rows bounded to the native
-viewport. Tabs retain rounded unselected borders, brighter hover rims and cyan
-selected rims/bottom accents like the monitor tabs. Activate the notebook's
-image client only after a full-sized crop is ready; never tile a 1px placeholder
-across its client. Settle geometry while hidden and paint material on Map.
-Cache tab state images and separate hover/focus painting from page material
-refresh. Propagate material only when its source/offset/viewport changes and
-only through mapped descendants. Share one bounded row snapshot/paint between
-the list and icon rail, retaining the native font. Never rasterize an empty
-pane's unused background when its owner already supplies glass. Reflow native
-Scene/Card/Header geometry immediately during resize, but retire older raster
-callbacks and paint the latest viewport after the burst. Keep palette lookup
-tables and state-image caches bounded. Verify these work/resource limits with
-`direct/verify_downloader_performance.py`, plus the native appearance matrix.
-Large resource Scene/Card/Header PNGs now use `tk_raster.py`: one CPU-only
-worker per Tk root, at most 16 current surface requests and one completed PNG
-of at most 8 MiB. Keep native PhotoImage creation/material propagation on Tk,
-retain the previous image, and preserve immediate geometry. Cancel superseded,
-unmapped/destroyed surfaces and reject stale size/theme results. Release unused
-ready bytes even when drawing returns early or raises. Worker encoding yields
-between 16-row batches and checks cancellation; PNG bytes remain identical.
-No worker may retain widgets, bound UI methods or Tcl interpreters. Stop the
-delivery timer and worker when idle, and keep thread-start/error recovery.
-Use native font metrics directly for repeated button refresh; named font
-changes must still update sizing. Appearance fixtures must await pending
-resource requests as well as ordinary draw callbacks before inspecting images.
-Native fields and selected rows retain readable fills and existing
-callbacks, including one double-click action and modifier/drag selection.
-`DialogFit` must stop geometry/minimum writes for unchanged observed inputs,
-including when a window manager declines a correction. Keep a completed-input
-key covering work area, native frame/handle, client size, minimum and scale;
-changed inputs refit and failed native requests remain retryable. Never turn
-Configure feedback into a 60 ms idle loop. Native appearance checks verify
-unchanged writes, changed monitors and failed-request retries. Own selection,
-hover and visible rows before pixel/input fixture assertions; wait for bounded
-actual paint/layout completion instead of a delay shorter than the glass debounce.
-Rounded controls composite their corners over the current owner image; refresh
-their owner offsets on resizing, scrolling and theme changes. Keep quiet utility
-actions and one accented Download action;
-do not repeat availability badges or retain empty link rows. Do not use whole-window
-opacity or add blur, animation or image-package dependencies. Setup retains its
-existing `frosted_palette` and material. Register the bundled Regular/Bold
-Montserrat faces through process-local Fontconfig for native Linux Tk, with no
-font installation or user-config write. Rounded field surrounds retain actual
-Entry widgets. ScrollForm must reveal the focused control after viewport/content
-resizes and cancel queued callbacks on close. Verify native fonts, field bytes,
-focus rings, all themes, compact scrolling and the standalone file downloader in
-the appearance verifier, plus cold/Qt setup and responsive fixtures. No fixture
-may start downloads, Bootstrap installers, accounts or live metadata workers.
-Use `direct/tk_capture.py` for native Tk evidence: validate painted pixels and
-release X11 images/displays. A non-null but uniform black screenshot is a failure.
-Verify material alignment through nested groups, scrolling, resizing and theme
-changes. Exercise StringVar captions/status updates and close pending redraws
-without Tcl callback errors; variable-trace callbacks receive three arguments.
+## Library and Board Browser
+
+The application contains no Tk. `main/qt/package_browser.py` is a PySide6 window over
+`arduino_lib_req.BrowserEngine`, which owns every catalog, download, checksum and
+archive behavior and imports no toolkit. The window paints before any catalog is read.
+
+- Lists are `QAbstractListModel` plus `QListView` with uniform item sizes, so thousands
+  of rows cost only what is on screen. Never add per-row widgets or "load more" batches.
+- Workers report through `QtTasks`, one queued boundary with coalescing keys and no idle
+  timer. `browser_loading.LatestScan` keeps one active scan plus one latest request.
+  Workers never touch a widget; stale results are discarded by revision.
+- Close hides the window with its loaded state; only workspace shutdown ends the process.
+  `ubuntu_download_manager` stays toolkit-free, and the window watches its channel with
+  `QSocketNotifier`. Windows keeps its `.dm_hwnd` and trigger files, polled by `QTimer`.
+- Text contrast stays at least 4.5:1 in all three palettes, including selected rows and
+  disabled inks. Selected-row icons are rendered for that row's background.
+- Verify with `direct/verify_package_browser.py`, `direct/verify_browser_loading.py` and
+  the isolated `direct/qt_browser_fixture.py`, offscreen. No fixture may start downloads,
+  Bootstrap installers, accounts or live metadata workers.
+
+First-run setup opens PySide6 from the private runtime. If those packages are missing
+or damaged, `bootstrap_console.py` shows toolkit-free text until they are repaired,
+then the display moves to Qt without restarting the worker.
+
+`install_no_focus_lines` in `main/qt/theme.py` removes focus from buttons, tabs, sliders
+and non-editable dropdowns in one style polish per widget, and the stylesheet's universal
+`outline: none` removes the remaining rectangles. Text fields, lists, the editor and
+terminals keep keyboard focus. Every Qt application entry point must install it.
 
 ## SVG action contract
 
@@ -531,8 +502,7 @@ top-level windows can clamp requested sizes or apply an older splitter minimum
 before delivering resize. Validate actual reading/view bounds, retry a bounded
 resize after reflow, and reveal complete actions through nested scroll areas on
 short monitors. WebEngine CSS dimensions follow its actual contents rectangle
-and zoom. Keep geometry/reading/focus assertions intact. Installed Tk metadata
-queues its existing card/pane timers when content changes without outer resize.
+and zoom. Keep geometry/reading/focus assertions intact.
 
 Use the local `src/assets/icons/actions/*.svg` family for application-owned marks.
 Keep geometry original: chamfered silhouettes, routed strokes and open terminals.
@@ -540,9 +510,8 @@ Keep text and SVG state separate; no decorative emoji or icon-font glyphs in
 controls, generated app messages or editor chrome. Retain accessible action names
 when compact buttons hide text. Render normal/active/disabled inks from the actual
 widget palette, including colored action fills; Developer Access retains its
-paper inks. Qt and cold Tk read identical assets. The Tk renderer must remain
-bounded, cached and standard-library-only so first-run setup works before Qt.
-Preserve native listbox selection/scroll callbacks and explicit CLI board choices.
+paper inks.
+Preserve list selection/scroll callbacks and explicit CLI board choices.
 Compatibility warnings use `SOFT_WARNING_PREFIX` and the shared classifier,
 including older stored cautions; never infer severity from an empty prefix.
 Log status marks paint beside literal text and never enter copied journals.
@@ -1162,26 +1131,13 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   range. Do not restore their old `--no-finalize` workaround to conceal a native
   binding defect. Existing WebEngine/runtime probes have separate teardown
   constraints; failed assertions and surviving-worker checks remain failures.
-- On Linux, native downloader resize can unset X11 input focus before reflow.
-  `NativeResizeFocus` retains the prior control and restores only when X11 has
-  no focused client; never force focus over another application. Cancel the
-  owned coalesced callback on destruction. Await actual bounded paint idleness
-  in appearance fixtures at large scales, retaining static-glass assertions.
-- Recalculate Tk list/details pane minima from the available native pixels even
-  when orientation stays unchanged. Preserve valid user sash positions and
-  selected-item/detail state. Bound responsive board fixtures to a 1024x768
-  work area so a larger verification monitor cannot hide high-font-scale
-  details-pane collapse; keep Qt and Tk sizing independent.
 - Developer reading text coalesces font/style/content measurement through a
   parented single-shot timer. Never mutate its separate QTextDocument from a
   QTextEdit font/style virtual callback; schedule a refresh after native event
   dispatch and reuse the last completed heights in pending geometry queries.
   Preserve the displayed document, literal copy,
   selection and bounded reading-height/scroll behavior through that refresh.
-- Short expanding Tk glass cards reserve a complete padded native text line
-  before their vertical rims. Verify installed metadata at bounded 1024x768
-  work areas through 200% scale, including every line's scroll reachability.
-  Use direct/verify_qt_binding_lifetime.py to isolate native Qt binding lifetime
+- Use direct/verify_qt_binding_lifetime.py to isolate native Qt binding lifetime
   failures from app services; run older mutable-None Python in a fresh process.
 - Ubuntu Python 3.10/3.11 must resolve PySide6 below 6.12; the native Linux
   6.12.0 wheel loses None references in application-free setters and callbacks.
@@ -1205,7 +1161,7 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
 - Ubuntu's root `MCU_Flasher` is a compiled native amd64 executable; root `MCU_Flasher-arm64` is the compiled ARM64 executable for Raspberry Pi and other ARM64 computers. Ship both with executable permissions beside the application folders, built from `src/launcher_ubuntu.c`; users double-click the matching CPU's file. The October 16 correction replaces the earlier Bash root entry. `direct/ubuntu/build_launcher.sh` defaults to `MCU_Flasher` on amd64 or `MCU_Flasher-arm64` on ARM64, accepts an explicit output path and rejects Windows `.exe` outputs. Resolve the executable's folder rather than cwd and forward literal arguments without shell interpolation to `direct/ubuntu/run.sh`. Keep `bash direct/ubuntu/run.sh` as a fallback for either CPU and keep native launch independent of Python so missing-Python recovery still works. `direct/ubuntu/launch.py` checks native dependencies/private readiness, opens a first-run Bootstrap terminal only when needed, and launches the workspace with `.venv-linux`. `--check` stays read-only and opens no dialogs. The optional local folder shortcut resolves the standalone Desktop Entry `%k` filename/local URI through fixed Bash code, decodes URI escapes once and invokes `/bin/bash` with literal path/Repair arguments; never interpolate a path into source or use eval. Keep the shortcut beside the app, without a stale `Path=`. Only the optional Applications entry stores absolute paths and needs regeneration after moves with `bash direct/ubuntu/run.sh --install-shortcut`. Verify emitted shortcut decoding, relocation and argument forwarding in `direct/verify_ubuntu_launcher.py` using isolated shell fixtures; native GLib checks are separate. Verify executable ELF CPU identity, permissions and actual desktop MIME recognition; source or cross-build checks do not prove native execution of the ARM64 binary. Source `afe091a` verifies the shipped native ARM64 executable through fresh Bootstrap, warm GUI launch and ESP32 compilation on both LTS runners; hosted CPU checks do not prove physical Pi USB/graphics. Preserve native `execv` failure status before diagnostics and compile with strict warnings. Keep Windows launchers, installers and dependency ranges unchanged.
 - Ubuntu icon registration uses `src/assets/mcu_icon.png`, the exact existing 256px PNG embedded in `mcu_icon.ico`, without a prototype dependency. Explicit shortcut generation registers it under the user's XDG hicolor icon tree, then emits `Icon=mcu-flasher` in both shortcuts. Validate absolute XDG paths and read the source before any write; report registration errors and skip unchanged writes. Preserve `%k` relocation; regenerate on another machine/account and refresh the fixed menu entry after moving. Set Qt's Linux desktop filename to `mcu-flasher` before windows; X11 `StartupWMClass=MCU Flasher by Naph` matches the measured Qt class. Verify isolated generation, exact PNG reuse, native theme loading and identity; never install into the live user account during verification. Raw ELF files can retain the desktop's generic executable icon; keep Allow Launching guidance. Python/icon changes require no ELF rebuild or runtime reset. Do not replace production wrappers with the incomplete Rust/Tauri prototype.
 - Windows and Ubuntu Bootstrap prepare the configured common Arduino platform/tool/library packs even in Online Mode; SCons-only runtime preparation cannot resolve or compile ESP32 Dev Module and other retained declarations. Use the existing `offline_bootstrap.py` full configured-plan path and reuse certified packs with `--coverage-only`; preserve the saved Online/Offline Mode. Windows `startup_ready` and Ubuntu launcher readiness require host board-pack certification, upgrading old SCons-only installations automatically. Verify Windows Online/repair/source/failure paths with `direct/verify_windows_board_setup.py`, mocking all installers. Use `direct/verify_target_resolution.py --compile-native-esp32 temp/.../core` for an explicitly provisioned native fixture and the actual Compile button; isolate package leases/events and all persistence under temp, never upload during verification.
-- `direct/ubuntu/preflight.py` checks Tk/native libraries/tools before setup mutations and validates Qt6/PySide6/WebEngine plus Qt5/QScintilla in separate processes. Missing system packages enter Ubuntu Bootstrap automatically. `system_setup.py` refreshes apt indexes and installs only detected, allowlisted prerequisites (including Ubuntu's ALSA package rename) through visible OS-owned sudo/pkexec authentication. Elevate only absolute apt-get commands; keep setup Python and the GUI under the desktop user. Recheck prerequisites before private setup; stop on cancellation, apt errors or failed rechecks without automatic retries. `run.sh` can install missing system Python through the same visible terminal flow; `--check` never authenticates or installs. Admit only 64-bit amd64/x86_64 or ARM64/aarch64; run the shell CPU guard before missing-Python rescue. ARM64 uses PySide6 wheels and release-matched Ubuntu PyQt5/QScintilla/SIP through the narrow private-venv import hook in `arm_qt5.py`; never enable broad system-site-packages. Detect copied CPU receipts/native extensions before pip, force reinstall foreign Ubuntu requirements, and validate actual ELF identity before accepting runtime or managed tools. Keep amd64 wheel and Windows dependency paths unchanged. Verify ARM bootstrap fixtures with `direct/verify_ubuntu_arm_bootstrap.py`, CPU/tool boundaries with `direct/verify_ubuntu_architecture.py`, and native LTS execution with `.github/workflows/ubuntu-arm64.yml`; fixtures do not prove physical Pi USB behavior. Repair only owned venv interpreter links; preserve packages and refuse external symlink paths/unrecognized content. Verify with isolated `direct/verify_ubuntu_bootstrap.py`, `direct/verify_ubuntu_system_setup.py` and `direct/verify_ubuntu_launcher.py`; mock apt/elevation and do not run live setup during checks.
+- `direct/ubuntu/preflight.py` checks native libraries/tools before setup mutations and validates Qt6/PySide6/WebEngine plus Qt5/QScintilla in separate processes. Missing system packages enter Ubuntu Bootstrap automatically. `system_setup.py` refreshes apt indexes and installs only detected, allowlisted prerequisites (including Ubuntu's ALSA package rename) through visible OS-owned sudo/pkexec authentication. Elevate only absolute apt-get commands; keep setup Python and the GUI under the desktop user. Recheck prerequisites before private setup; stop on cancellation, apt errors or failed rechecks without automatic retries. `run.sh` can install missing system Python through the same visible terminal flow; `--check` never authenticates or installs. Admit only 64-bit amd64/x86_64 or ARM64/aarch64; run the shell CPU guard before missing-Python rescue. ARM64 uses PySide6 wheels and release-matched Ubuntu PyQt5/QScintilla/SIP through the narrow private-venv import hook in `arm_qt5.py`; never enable broad system-site-packages. Detect copied CPU receipts/native extensions before pip, force reinstall foreign Ubuntu requirements, and validate actual ELF identity before accepting runtime or managed tools. Keep amd64 wheel and Windows dependency paths unchanged. Verify ARM bootstrap fixtures with `direct/verify_ubuntu_arm_bootstrap.py`, CPU/tool boundaries with `direct/verify_ubuntu_architecture.py`, and native LTS execution with `.github/workflows/ubuntu-arm64.yml`; fixtures do not prove physical Pi USB behavior. Repair only owned venv interpreter links; preserve packages and refuse external symlink paths/unrecognized content. Verify with isolated `direct/verify_ubuntu_bootstrap.py`, `direct/verify_ubuntu_system_setup.py` and `direct/verify_ubuntu_launcher.py`; mock apt/elevation and do not run live setup during checks.
 - Ubuntu alone constrains Click to `>=8.1.8,<8.2` while PlatformIO uses parsing APIs deprecated in Click 8.2. Keep requirements and `check_platformio_click_compatibility` aligned; validate metadata before native imports and route incompatible existing environments into Bootstrap repair. Verify real missing-platform CLI dispatch with deprecations treated as errors. Do not suppress warnings or change Windows dependency ranges.
 - Cloud working-folder guards reject directory junctions on Windows Python 3.11 using the lstat mount-point reparse tag when `Path.is_junction` is unavailable. Preserve the modern method, Ubuntu behavior and ordinary/cloud-placeholder folders. Keep the real native Windows replacement regression and isolated old-Python cases; never follow redirected replacement roots.
 - Ubuntu folder/source pickers use parented Qt dialogs. POSIX PTY input drains a bounded nonblocking byte queue, retaining partial writes, UTF-8, capability replies and paste. Report an input rejected by the 4 MiB bound; never replay queued input after close. Verify Linux pickers and a real local PTY with `direct/verify_ubuntu_runtime.py`, without hardware or authenticated assistant commands.
@@ -1220,7 +1176,7 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
 - Ubuntu reset command spelling is selected from the prepared esptool distribution's major version: use v5 `erase-flash`/`image-info`, retain v4 names, and preserve Windows command strings. Native chip probing uses the nondeprecated `connect_first_available` alias target when available, with the same exact port and retry arguments; v4 retains its legacy connector. Verify with `direct/verify_ubuntu_resets.py` under deprecation warnings as errors, local image bytes and command help only; never open hardware to audit deprecations.
 - Native Ubuntu PTYs use `ubuntu_pty_process.py` to allocate `openpty` descriptors and launch private Python's standalone `ubuntu_pty_supervisor.py` through native `Popen` session setup. Never use Python `fork`, `forkpty` or a `preexec_fn` inside the threaded Qt process. The fresh supervisor acquires its controlling terminal and foreground process group, then establishes Linux child-subreaper custody before spawning; keep cwd/env/stdio and terminal signal/job-control behavior, restore inherited ignored signals in the child, and bound identity-checked descendant cleanup/reaping before EOF. This must cover detached tools whose CLI already exited. Fail visibly without spawning an unowned command if custody cannot be established. Do not return from `finally` during close: reap the owned child while preserving descriptor-close errors. Verify mocked close/escalation/error propagation with `direct/verify_native_pty_close.py` on either host. Verify threaded launch, controlling tty, resizing, failed-launch descriptor cleanup, actual detached children, exit status, Ctrl-C and Bash job control through the isolated PTY lifecycle fixtures with warnings treated as errors; never signal a dead leader's reused PID.
 - Native assistant preparation must finish project guidance and the exact requested durable hardware-state revision off Qt, never accept an older revision for the same folder. `ubuntu_pty.py` bounds passive prompt observation and keeps process discovery/persistence off GUI while forwarding original input unchanged. Close owned tool descendants through checked process identities outside Qt, including tools with separate sessions. Native CLI focus disables only Linux workspace shortcuts; restore them on editor focus. Renderer termination retains the protected assistant card and requires explicit fresh-session Retry without replay. Verify `direct/verify_ubuntu_pty_lifecycle.py` and `verify_ubuntu_ai_panel.py --workspace-renderer` with mocked metadata, real local fixture PTYs and offline Monaco; preserve Windows controllers and shortcut behavior.
-- Ubuntu Download Manager reserves same-account, per-checkout IPC before constructing Tk or caches, wakes the existing instance and drains bounded commands without blocking Tk. `DownloadManagerChannel.watch` uses Tk socket readiness with no idle timer; incomplete clients alone retain their finite deadline timer. Unsupported Tk handlers fall back to polling. Final-workspace close excludes live sibling processes from the same checkout before requesting internal quit, and closes only owned sample viewers. Keep Windows HWND/trigger logic unchanged. Verify `direct/verify_ubuntu_download_manager.py` with isolated socket/child/Tk fixtures and `direct/verify_library_samples.py`; never open a live installer for verification.
+- The native Download Manager reserves same-account, per-checkout IPC before constructing Qt or caches, wakes the existing instance and drains bounded commands without blocking the GUI. The window watches `DownloadManagerChannel.fileno()` with `QSocketNotifier` and no idle timer; incomplete clients alone retain their finite deadline timer. macOS has no abstract sockets, so it uses a path socket in the per-user temporary folder, checks `LOCAL_PEERCRED` and clears a crashed owner's file. Final-workspace close excludes live sibling processes from the same checkout before requesting internal quit, and closes only owned sample viewers. Keep Windows HWND/trigger logic unchanged. Verify `direct/verify_ubuntu_download_manager.py` with isolated socket/child/Tk fixtures and `direct/verify_library_samples.py`; never open a live installer for verification.
 - Ubuntu port enumeration uses `main/platforms/ubuntu_ports.py` metadata to omit blank/N/A entries without real device details. Preserve meaningful descriptions or use supplied product/interface/manufacturer/hardware IDs; bare tty names and link paths are insufficient. Filter in the backend scan so startup, refresh and hotplug caches agree; never open/probe a serial port to populate the picker. Keep Windows enumeration/registry and upload/reset presence checks unchanged. Verify with isolated `direct/verify_ubuntu_ports.py`, mocking enumeration, persistence and hardware.
 - Ubuntu build/upload presentation lives in `main/platforms/ubuntu_logs.py`, selected only on Linux. Reuse the Windows box/image-progress renderers without changing Windows routing or programmer commands. Show exact selected target/framework plus actual PlatformIO platform/hardware/package metadata, the UPLOADING banner, actual esptool chip/features/crystal/MAC details and a success-only Upload Summary. Never probe a board to fill logging fields; nonserial transports omit serial speed. Map strict esptool 4 progress addresses before invoking the shared helper, retain unknown/diagnostic output and bounded metadata, and preserve the native worker's write/cancellation gate before presentation. Verify through `direct/verify_ubuntu_logging.py`, `direct/verify_build_log_routing.py` and mocked native-worker checks in `direct/verify_platforms.py`; transcript replay outputs belong in temp/.
 - Pointer recovery must not install Python filters on QApplication on either host: wrapping private Qt/WebEngine objects can reenter Shiboken and crash during creation or teardown. Watch constructed owned widgets, queue child-polish/reparent scans after event dispatch and release unowned/deleted wrappers. Linux log mouse-release observation uses the same local scope; preserve Windows log filtering and release/deactivation handling across dialogs. Verify a real native WebEngine event loop and both host registration paths with `direct/verify_ubuntu_event_filters.py`.
@@ -1290,8 +1246,8 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - Keep toolbar recovery available through the persistent `View > Toolbars` menu. Use each toolbar's `toggleViewAction()` so the menu stays synchronized with Qt's native toolbar context menu, and include `View > Show All Toolbars` so both bars can be recovered after hiding them. Verify both hidden and restored states in `direct/verify_runtime.py`.
    - Keep keyboard focus on checkboxes visually confined to the indicator; do not draw a focus border around the full checkbox label.
    - Anchor the Workspace heading to the actions column, above Detach Editor or the compact Options button. Put spare width between the checkbox pair and actions; check heading alignment and complete action visibility through wide/compact transitions with `direct/verify_responsive.py`.
-   - Keep palette and semantic contrast helpers in `main/core/theme.py` and `main/core/log_colors.py`. PyQt5/QScintilla sample processes must never import `main.qt`, whose signal bus loads PySide6. The read-only sample viewer inherits the saved content font and theme, colors every lexer style and fits the complete native frame in logical work-area units. Probe only prepared host interpreters off Tk; preserve Ubuntu venv symlink spelling. Bound requests and reject already-queued superseded completions. Missing dependencies require Bootstrap; never install on a View Source click. Verify real sample copy/navigation, themes and scaling with `direct/verify_library_samples.py` in its own process.
-   - Balance Tk worker slots when thread construction/start fails, report failure through queued callbacks and release scan busy state without replay. Wire Catalog, Download and Update failure callbacks to their existing UI reset paths. A subsequent explicit click can retry. Verify resource failures and archive preservation with `direct/verify_browser_loading.py`.
+   - Keep palette and semantic contrast helpers in `main/core/theme.py` and `main/core/log_colors.py`. PyQt5/QScintilla sample processes must never import `main.qt`, whose signal bus loads PySide6. The read-only sample viewer inherits the saved content font and theme, colors every lexer style and fits the complete native frame in logical work-area units. Probe only prepared host interpreters off the GUI thread; preserve Ubuntu venv symlink spelling. Bound requests and reject already-queued superseded completions. Missing dependencies require Bootstrap; never install on a View Source click. Verify real sample copy/navigation, themes and scaling with `direct/verify_library_samples.py` in its own process.
+   - Balance worker slots when thread construction/start fails, report failure through queued callbacks and release scan busy state without replay. Wire Catalog, Download and Update failure callbacks to their existing UI reset paths. A subsequent explicit click can retry. Verify resource failures and archive preservation with `direct/verify_browser_loading.py`.
    - Setup derives readable text inks with `src/modules/ui_palette.py` against solid native reading surfaces or static Qt glass/reflection bounds. Include selected log text and failed Solarized stages; preserve semantic hues and the shared palette. Keep this helper free of Qt imports so native fallback can paint before dependencies are available. Verify actual character formats and composited backgrounds with `direct/verify_bootstrap_headers.py`.
 
    **Startup readiness contract**
@@ -1601,13 +1557,13 @@ MCU Flasher by Naph/
 - Read update versions from the same explicit interpreter used by pip, with fresh distribution metadata and PEP440 ordering. Reject conflicting metadata, verify actual installed versions after upgrades and keep the base runtime separate from the application venv. Never seed or sync individual missing package/metadata trees in either direction; use target pip for missing dependencies. An incomplete check must not report all utilities current. Use `direct/verify_bootstrap_updates.py` without installing packages.
 - Serial output wraps to the viewport by default (`serial_line_wrap`), with a saved Wrap lines action in the output context menu and compact Options. Reflow changes display only; Copy retains original logical line breaks. Anchor wrapped output by UTF-16 character and visual row, retain the character across consecutive resizes, and coalesce deferred layout following with one owned timer. Cancel pending restoration on reader input, selection changes and Clear. Verify with `direct/verify_serial_wrap.py`.
 - `main/qt/log_follow.py` preserves log anchors, selection, focus and horizontal position around output mutations. Build and Serial opt into `hold_to_pause`: Auto ON follows new visible output unless the mouse/scrollbar is held; release resumes at the true wrapped bottom without waiting for new output. Wheel/key/manual scrolling must remain usable during idle output, without an immediate resume timer or range-layout snap. Preserve the idle reading anchor through resize/rebuild, and skip restoration for no-content-change output transactions (empty flushes, paused rendering and unfinished ANSI controls). Track actual document contentsChange rather than QTextDocument.revision, which also advances for empty edit blocks. Checking Auto ON resumes, or waits for an active hold to end. Coalesce release callbacks with one owned timer, suppress programmatic scroll feedback, preserve selections/horizontal position and the hold through Clear. Auto OFF keeps the reading anchor through output, release and reflow. Notifications retain their independent reading position. Bootstrap opts into `resume_on_release`: holding or dragging freezes its view, release resumes following immediately even above the bottom, and checking Auto ON resumes unless a hold is still active. Apply the final release after the scrollbar's event handler and recheck the checkbox and held state. Bounded history may evict an anchor and clamp it. Keep assistant HTML fallback reading interaction equivalent to workspace logs and preserve native xterm following. Verify real idle wheel/key/hold events with `direct/verify_performance.py`, serial wrapped geometry with `direct/verify_serial_wrap.py`, and Bootstrap with `direct/verify_controls.py`, using mocked persistence/hardware.
-- `bootstrap_native.py` provides immediate standard-library Tk feedback while first-run Python dependencies install. After successful fresh target-interpreter verification, promote only the display to the original lazily imported `bootstrap_qt.py` view before bulk board-tool preparation. Preserve the same setup worker, installer results, durable log and elapsed start time; never restart setup or install Qt into the base runtime again. `bootstrap_dispatch.py` owns one bounded queue and main-thread sink: every remaining event in a drained batch must reach the new sink. Acknowledge the worker only after Qt's event loop starts, defer the switch while a scrollbar is held, and retain functional Tk on a promotion error. Transfer tagged bounded displayed text, committed/live tables, failed-step state, selection, scroll anchor, Auto-Scroll and Skip Updates preferences. Prefer env Qt before initial imports, retry imports even if the env path is already present, and never unload a foreign loaded Qt/shiboken native graph. Fit Tk native pixels separately from Qt logical geometry. Verify cold construction with `direct/verify_bootstrap_native.py` and promotion/rollback/held/OFF/queue/close interactions with `direct/verify_bootstrap_promotion.py` in isolated fixtures; mock setup, hardware and persistence. Cold absence proof must not borrow Qt; promotion proof may use only the fixture's prepared environment after that boundary.
+- `bootstrap_console.py` shows toolkit-free progress only when the private runtime's Qt is missing or damaged. After successful fresh target-interpreter verification, promote only the display to the lazily imported `bootstrap_qt.py` view before bulk board-tool preparation. Preserve the same setup worker, installer results, durable log and elapsed start time; never restart setup or install Qt into the base runtime again. `bootstrap_dispatch.py` owns one bounded queue and main-thread sink: every remaining event in a drained batch must reach the new sink. Verify with `direct/verify_bootstrap_console.py` and `direct/verify_bootstrap_promotion.py` in isolated fixtures; mock setup, hardware and persistence.
 - Release-seed publication in `bootstrap_seed.py` retries only Windows errors 5/32/33, with at most eight rename attempts and six seconds of total backoff. Recheck `lexists` before each attempt and after failures so occupied and dangling junction destinations are never replaced. Never alter ACLs, remove staging or retry unrelated/POSIX errors. Preserve the original exhaustion error, ZIP and staged payload. `direct/verify_bootstrap_seed.py` covers real native held-file publication, persistent failure retention, competing destinations and a real dangling Windows junction in isolated retained fixtures.
 - A failed bootstrap step recolors its whole retained output, including subsections and later progress; reset only at the next step. Plain stdout cannot retroactively recolor past output. `direct/verify_bootstrap_download_failure.py` uses real loopback HTTP 503 with the actual downloader and failure callback, but requires the seed explicitly in its fixture and runs no fallback installers. Preserve its partial checkpoint and capture/log evidence; do not call it a complete production setup run.
-- Setup uses a resizable PySide6 glass dialog after Python dependency verification. Keep immediate Tk feedback usable before Qt is installed. Share theme tokens for status and live progress; persistent QTextCursor anchors must survive log trimming. Closing/hiding must not be undone by the topmost timer. Never unload Qt/shiboken extensions from a foreign or failed partial native import while promoting the view.
+- Setup uses a resizable PySide6 glass dialog after Python dependency verification. Share theme tokens for status and live progress; persistent QTextCursor anchors must survive log trimming. Closing/hiding must not be undone by the topmost timer. Never unload Qt/shiboken extensions from a foreign or failed partial native import while promoting the view.
 - Journal stage headings use visible-block-only circuit divider painting, separate from selectable/copied text. Preserve markers on native snapshot restoration, reflow long headings, and select failed-stage text from the tracked cursor's position using a fresh collapsed cursor rather than its advancing anchor. Update checks start their own top-level stage before skip/offline outcomes. Verify with `direct/verify_bootstrap_headers.py`, controls and promotion fixtures.
-- Setup summary stages use larger bold headers, a blank line before each new group, and two-space result indentation. Subsections remain smaller bold headings. Preserve the same displayed summary text in Tk and Qt and restore header type even when the failed-step tag overrides its color. Raw installer details and presenter events remain unchanged. The editor and all tool tabs fill the central workspace without outer margins or pane borders; preserve controls' inner padding, text reading padding, tab focus and splitter handles.
-- Setup defaults to a clean activity summary with an explicit Technical details disclosure. `bootstrap_presentation.py` is toolkit-independent presentation only: keep original events flowing to raw details and the durable run log, filter resolver/path chatter, deduplicate success only within a top-level stage and retain warnings, errors and useful failure context. Bound summary history to 700 events/128,000 characters and package rows to 96. Use compact native/Qt progress components rather than drawing text bars in the summary; collapse completed groups, keep real phase percentages and use an em dash when a percentage is unknown. Shorten visible statuses without changing pipeline state. Transfer presenter state and both views' text, selections, scroll anchors and disclosure through promotion; never reconstruct summaries by replaying installer work. Failed-step coloring resets only at the next top-level stage. Glass reflections, rims and chip branding use cached static painting in every palette, with no perpetual spinner or blur effects. The native title-bar mark loads the app-owned PNG through stdlib Tk; exported SVG/PNG/ICO assets must match the shared brand geometry.
+- Setup summary stages use larger bold headers, a blank line before each new group, and two-space result indentation. Subsections remain smaller bold headings. Preserve the same displayed summary text in the console and Qt views and restore header type even when the failed-step tag overrides its color. Raw installer details and presenter events remain unchanged. The editor and all tool tabs fill the central workspace without outer margins or pane borders; preserve controls' inner padding, text reading padding, tab focus and splitter handles.
+- Setup defaults to a clean activity summary with an explicit Technical details disclosure. `bootstrap_presentation.py` is toolkit-independent presentation only: keep original events flowing to raw details and the durable run log, filter resolver/path chatter, deduplicate success only within a top-level stage and retain warnings, errors and useful failure context. Bound summary history to 700 events/128,000 characters and package rows to 96. Use compact native/Qt progress components rather than drawing text bars in the summary; collapse completed groups, keep real phase percentages and use an em dash when a percentage is unknown. Shorten visible statuses without changing pipeline state. Transfer presenter state and both views' text, selections, scroll anchors and disclosure through promotion; never reconstruct summaries by replaying installer work. Failed-step coloring resets only at the next top-level stage. Glass reflections, rims and chip branding use cached static painting in every palette, with no perpetual spinner or blur effects. Exported SVG/PNG/ICO assets must match the shared brand geometry.
 - Qt embeds Python support modules with relative `shibokensupport/*.py` labels. They are virtual ZIP entries, not paths relative to the sketch or process working directory. Exempt only recognized support aliases with the exact `signature_bootstrap.EmbeddableZipImporter`, absent spec origin and verified absolute PySide6/shiboken6 package anchors in the target environment. Continue rejecting foreign package/native origins and arbitrary relative origins; never unload loaded native modules. Verify QtWidgets preimport during warm construction and promotion after a recoverable view error.
 - `bootstrap_output.py` reads available pipe chunks and parses newline-free percentages into one live row per download/unpack phase. Route Tool/Platform/Library Manager installation confirmations through `log_ok`, warnings through `log_warn` and final errors through `log_fail`. Mark failed phases interrupted at the last reported percentage; only reported completion or a verified installation completes unpacking. Strip split ANSI controls, decode split UTF-8, coalesce queued progress and preserve bounded delivery plus full raw setup output.
 - The offline output queue stays bounded without evicting warnings, errors or clear events. Coalesce progress and evict ordinary chatter first; apply backpressure only on the background setup worker when all queued events are critical. GUI flushes never wait, and shutdown releases waiting producers. Verify burst retention and shutdown with `direct/verify_offline.py`.
@@ -1622,17 +1578,17 @@ MCU Flasher by Naph/
 - Mbed 6.17 needs `setuptools==80.9.0` for `distutils.spawn`/`LooseVersion` and `future==1.0.0` to avoid removed `imp.reload`. Both host setup paths install and validate these providers normally. `mbed_compat.py` preloads their packages only when importing the installed Mbed adapter inside the selected package store, before its bundled future/past can shadow them. Validate pinned distribution/module origins and APIs; reject stale already-loaded providers without evicting them. Bootstrap scopes the lazy finder reversibly; guarded runtime installs it idempotently and never installs dependencies. Warm health checks fingerprint required provider files and selector sources. Verify synthetic bundled-provider precedence, missing/version/origin failures, package containment and hook/guard preservation with `direct/verify_mbed_compat.py`; no live builders or package edits in verification.
 - Reviewed STM32 20.0.0 Arduino preparation groups boards only by exact core and full package specifications after matching platform, framework and nested variant script fingerprints. Its Arduino checks reduce from 163 to 7; retain every other framework's probes and separate checks for unknown or modified scripts. Replan after package preparation so missing scripts cannot grant sharing. Verify isolated signatures and source edits with `direct/verify_bootstrap_builders.py`.
 - Scope extended paths to PlatformIO's installer-module copying and cleanup only after canonical containment within the configured package/platform/library store or its `pkg-installing` staging directories. Preserve literal trailing-dot TAR entries; leave global filesystem modules and unrelated/native Linux calls untouched. Verify local TAR entries, deep ZIP/TAR paths, overwrite/version detachment, traversal rejection, junction escapes and hook restoration with `direct/verify_bootstrap_archives.py`; no live install/cache writes in verification.
-- The downloader (`arduino_lib_req.py`) retains Tk/ttk network and archive workflows. `tk_glass.py` supplies the selector-style static glass scene, framed header and cards around package lists, details and installed items in all three palettes; `tk_material.py` composites captions/groups over their owner without opaque backgrounds. Advanced URLs live behind **Board indexes**. Normalize comma/newline-separated HTTP(S) sources, validate extensible package structures, deduplicate URLs and retain usable catalogs on source errors. Failed atomic settings writes preserve the previous active/saved list and report failure. Preserve search, installed-item details, version selection, checksum validation and extraction cancellation. Reopening refreshes the per-user theme without rebuilding widgets or losing state. Updates initiated from Installed automatically choose an extracted folder without a format prompt; ordinary catalog downloads retain the archive/folder choices. Extracted/both downloads start explicit background preparation; Archive Only remains unprepared until **Prepare board support** is chosen. Retain the previous extracted payload if promotion fails and use nonmodal completion status/history.
+- The downloader's engine (`arduino_lib_req.py`) keeps the network and archive workflows; `main/qt/package_browser.py` presents them in all three palettes. Advanced URLs live behind **Board indexes**. Normalize comma/newline-separated HTTP(S) sources, validate extensible package structures, deduplicate URLs and retain usable catalogs on source errors. Failed atomic settings writes preserve the previous active/saved list and report failure. Preserve search, installed-item details, version selection, checksum validation and extraction cancellation. Reopening refreshes the per-user theme without rebuilding widgets or losing state. Updates initiated from Installed automatically choose an extracted folder without a format prompt; ordinary catalog downloads retain the archive/folder choices. Extracted/both downloads start explicit background preparation; Archive Only remains unprepared until **Prepare board support** is chosen. Retain the previous extracted payload if promotion fails and use nonmodal completion status/history.
   Use bounded static directional reflections and lit rounded rims. Native fields
   and package lists retain solid editing/selection fills. Headings yield to native reading-line budgets on short
-  panes; folder, vendor URL and version rows reflow from native Tk font widths.
+  panes; folder, vendor URL and version rows reflow to the available width.
   Fit the complete frame on monitor changes without applying Qt scaling.
-  Verify `direct/verify_downloader_appearance.py` in fresh native processes at
+  Verify `direct/verify_package_browser.py` in fresh native processes at
   100/125/150/175/200% scale with mocked persistence and no installers.
-- `browser_loading.py` validates compact catalogs against source path/mtime/size and schema, rebuilding damaged or stale derived caches. Cache writes are atomic and bounded. Keep large raw JSON out of the RAM cache, publish cached data before HTTP refresh, and use two network workers on constrained hosts (four otherwise). `TkTasks` is the Tk-thread delivery boundary; workers never call Tcl. Search ranking, selected-version status, installed inventories and detail selections use one active scan plus one latest request; cancel stale scans and stop dispatcher timers when idle. Preserve active search on catalog updates, batch list/label delivery and cancel closed-widget callbacks. Verify with `direct/verify_browser_loading.py` using temporary catalogs and mocked HTTP. Its shared `direct/tk_downloader_fixture.py` must stay Tk-only: do not import the Qt Controls fixture or construct QApplication in the downloader process.
+- `browser_loading.py` validates compact catalogs against source path/mtime/size and schema, rebuilding damaged or stale derived caches. Cache writes are atomic and bounded. Keep large raw JSON out of the RAM cache, publish cached data before HTTP refresh, and use two network workers on constrained hosts (four otherwise). `QtTasks` is the GUI-thread delivery boundary; workers never touch a widget. Search ranking, selected-version status, installed inventories and detail selections use one active scan plus one latest request; cancel stale scans and stop dispatcher timers when idle. Preserve active search on catalog updates, batch list/label delivery and cancel closed-widget callbacks. Verify with `direct/verify_browser_loading.py` using temporary catalogs and mocked HTTP. Its shared fixture is `direct/qt_browser_fixture.py`.
   `CatalogPublisher` compares catalog contents only on the worker and reuses
   unchanged current/queued catalog objects, including cached/fresh deliveries
-  queued before Tk handles either. Never compare a complete catalog in a Tk
+  queued before the GUI handles either. Never compare a complete catalog in a GUI
   callback. Unchanged completed searches skip list replacement. A bounded
   64-entry schema/path/mtime/size summary avoids reparsing a validated large
   source only to decide whether it needs refresh; application writes revoke
@@ -1650,7 +1606,7 @@ MCU Flasher by Naph/
   animation only when eligible. Signal-blocked port updates/selection rollback
   must explicitly refresh full text/tooltips/timer policy without changing data.
 - Settings' legacy `graphics_acceleration` key controls continuous splitter resize, not the GPU. Unsaved defaults use divider previews on constrained devices; preserve explicit choices. Save a complete preference set once and report persistence failure. Reset controls must revalidate target/framework/port and busy state in their callbacks.
-- `main/qt/responsive.py` owns current-monitor work-area fitting and coalesced screen/font signals. Qt screen geometry and font widths are logical pixels: never multiply them by DPI/DPR. Use `ui_metrics.py` for coordinate arithmetic, including negative monitor origins and frame clearance. Reflow Controls, serial headers and dialog fields; do not let wide size hints lock compact windows. Preserve saved editor/terminal fonts. Tk uses its own native point/pixel scale, coalesced panes and scrollable installed details; cancel bound callbacks on destruction.
+- `main/qt/responsive.py` owns current-monitor work-area fitting and coalesced screen/font signals. Qt screen geometry and font widths are logical pixels: never multiply them by DPI/DPR. Use `ui_metrics.py` for coordinate arithmetic, including negative monitor origins and frame clearance. Reflow Controls, serial headers and dialog fields; do not let wide size hints lock compact windows. Preserve saved editor/terminal fonts.
 - Bootstrap's cached Windows seed receives one full checksum immediately before
   import. Completed pip downloads may move within their owned temporary root;
   retain copy2 fallback/link materialization and independent installed-package
@@ -1689,8 +1645,6 @@ MCU Flasher by Naph/
   their shared profile. Verify normal exit with `direct/verify_shutdown.py`,
   including attached/detached/reattached editors and close vetoes. A successful
   renderer assertion followed by `os._exit` does not establish normal shutdown.
-  Tk scroll fixtures use the embedded content window's bounds, excluding the
-  moving full-owner material backdrop, without weakening visibility assertions.
 - Main windows permit a complete frame of half the current monitor's available width in Qt logical pixels. Subtract measured horizontal native borders from the client minimum, using native QWindow frame margins when QWidget frame geometry has not settled. Recalculate after show, monitor and window-state changes without polling or multiplying DPI again. Allow wider resizing and normal maximization, including saved maximized state. Verify decorated windows with `direct/verify_window_alignment.py` at five scales, including native Wayland and xcb separately; client-only or frameless fixtures cannot qualify desktop snapping. Wayland global positioning is compositor-owned, so do not claim exact left/right placement from ignored move calls. Detached editor and explicit dialog sizing keep their own contracts.
 - Verify screen changes and 100/125/150/175/200% scale in fresh processes with `direct/verify_responsive.py`. Couple physical screen dimensions with each scale and taskbar/work-area reservation; convert once to Qt logical pixels. Include half-monitor and full-width windows, portrait and short laptop areas, and chosen content fonts. Assert effective rendered fonts, complete button visibility through ancestors and a complete padded text line. Keep the same hardware-free persistence mocks as the controls verifier. Check full baud digits beside combo padding/arrows and footer visibility. Narrow, short Controls use fewer rows; very short windows retain Timestamps/Skip Compile in Options. Serial Options retains collapsed display/Copy/Clear actions, and all layouts restore when space returns. Reserve Build/Serial output using the document's chosen font, reading margin and scrollbar/frame chrome, and refit after font changes.
 - Short-screen pane budgets use the active tool's minimum size hint. Keep log views shrinkable while preserving headers and serial send controls. Check every tool tab in the runtime preview. Mock terminal session creation for layout probes; real PTY checks belong in `direct/verify_terminal.py`.
@@ -1722,7 +1676,7 @@ MCU Flasher by Naph/
 
 ### Hardware-free verification
 
-Preserve Bootstrap's chip-branded glass header, concise wrapped status, clean activity view, expandable raw details, compact package progress and preference rows. Start at 70% of the active monitor's full Qt logical screen geometry, with preferred 520×420 floors and shared native frame fitting to the work area; preserve resizing. Reduce card chrome and active package rows on short windows; use a package count with retained technical details when rows would consume reading space. Reserve at least two text lines, text padding and the raw horizontal scrollbar without shrinking content fonts. Verify populated clean and details fixtures in all three palettes. Tk uses native metrics separately; retain card Configure callbacks with add='+' when adding wrap/budget callbacks, and check wrapped footer bodies remain inside their cards.
+Preserve Bootstrap's chip-branded glass header, concise wrapped status, clean activity view, expandable raw details, compact package progress and preference rows. Start at 70% of the active monitor's full Qt logical screen geometry, with preferred 520×420 floors and shared native frame fitting to the work area; preserve resizing. Reduce card chrome and active package rows on short windows; use a package count with retained technical details when rows would consume reading space. Reserve at least two text lines, text padding and the raw horizontal scrollbar without shrinking content fonts. Verify populated clean and details fixtures in all three palettes. Check wrapped footer bodies remain inside their cards.
 
 Actions must wait for Monaco's WebChannel save acknowledgement, not the immediate `runJavaScript` Promise result. Reload must use the editor's reload/dirty-state routine. Reset workers reserve busy state before dispatch and capture the confirmed target. Prepare and validate ESP32 recovery images before erase; restore only bootloader/partition/boot_app0 for Hard Reset. Keep write failure terminal. Run `direct/verify_actions.py` for isolated lifecycle, recovery ordering and Clean preservation checks. Clean must preserve settings, user source directories and AI edit journals, and report deletion failures.
 
@@ -1745,7 +1699,7 @@ Use the app's private runtime. On Windows:
 & src/_python/python.exe -B direct/verify_bootstrap_seed.py
 & src/_python/python.exe -B direct/verify_bootstrap_updates.py
 & src/_python/python.exe -B direct/verify_bootstrap_download_failure.py
-& src/_python/python.exe -B direct/verify_bootstrap_native.py --report-dir temp/audit/bootstrap-cold
+& src/_python/python.exe -B direct/verify_bootstrap_console.py
 & src/_python/python.exe -B direct/verify_bootstrap_promotion.py --report-dir temp/audit/bootstrap-promotion
 & src/_python/python.exe -B direct/verify_bootstrap_pip_paths.py
 & src/_python/python.exe -B direct/verify_controls.py
@@ -1781,7 +1735,7 @@ hardware requests.
 `verify_controls.py` extracts only bootstrap UI definitions and uses a downloader
 fixture without its constructor. Keep installation, launch, network and live
 configuration writes mocked. Native captures use `QT_QPA_PLATFORM=windows` or
-Ubuntu `xcb` under a desktop/Xvfb; headless Tk skips must be reported.
+Ubuntu `xcb` under Xvfb, never on the developer's own desktop.
 `verify_package_jobs.py` runs real private-runtime lease children against fake
 stores under `temp/`: concurrent readers, exclusive/queued writers, cancellation,
 crash cleanup, denied writes, atomic preservation, record/retention bounds,
@@ -1803,8 +1757,8 @@ validation and notification links with isolated report files.
 `verify_custom_board_dialog.py` mocks settings persistence and checks literal
 platform specifications, failed-save retry, cancellation and all palettes on
 short monitors. Keep its actions pinned, reveal focused fields by scrolling and
-use `tk_glass.DialogFit` for measured native frames and negative monitor origins;
-do not multiply Qt scaling into Tk metrics. Check at 100/125/150/175/200%.
+use `main/qt/responsive.fit_dialog` for measured native frames and negative monitor
+origins; never multiply geometry by DPI. Check at 100/125/150/175/200%.
 
 Patch persistence, hardware and metadata generation in verifier fixtures; never
 write live sketch/cache/journal state. Store screenshots and scratch scripts in

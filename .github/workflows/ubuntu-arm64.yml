@@ -58,7 +58,7 @@ jobs:
           # Keep the shipped executable intact for all launch/first-run checks.
           mkdir -p temp/audit/arm64/native-build
           bash direct/ubuntu/build_launcher.sh "$PWD/temp/audit/arm64/native-build/MCU_Flasher-arm64"
-          ./MCU_Flasher-arm64 --help
+          temp/audit/arm64/native-build/MCU_Flasher-arm64 --help
           for check in native_esp32_fixture ubuntu_architecture ubuntu_arm_bootstrap platforms private_runtimes ubuntu_release ubuntu_launcher ubuntu_bootstrap ubuntu_system_setup ubuntu_arduino_cli ubuntu_opencode_setup ubuntu_opencode ubuntu_maintenance; do
             .venv-linux/bin/python -B "direct/verify_${check}.py"
           done

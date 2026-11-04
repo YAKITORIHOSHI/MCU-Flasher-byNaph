@@ -626,7 +626,8 @@ def prefetch_package_archives(core, specs, *, log=print, workers=6):
     here is only a lost optimization: the install below repeats it and reports it.
     """
     import logging
-    from concurrent.futures import ThreadPoolExecutor
+    # From its own module: Python 3.15's concurrent.futures exposes this as a lazy import.
+    from concurrent.futures.thread import ThreadPoolExecutor
     from platformio.package.manager.tool import ToolPackageManager
     from platformio.registry.mirror import RegistryFileMirrorIterator
     store = str(Path(core) / "packages")
@@ -922,7 +923,8 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
         worker_count = max(1, min(jobs, len(isolated_probes)))
         log(f"Running {len(isolated_probes)} reviewed builder probes across platforms "
             f"({worker_count} concurrent workers)...")
-        from concurrent.futures import ThreadPoolExecutor
+        # From its own module: Python 3.15's concurrent.futures exposes this as a lazy import.
+        from concurrent.futures.thread import ThreadPoolExecutor
         def run_isolated(probe):
             worker, item = probe
             try:

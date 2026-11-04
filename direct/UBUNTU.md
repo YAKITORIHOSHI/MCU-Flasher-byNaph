@@ -35,8 +35,8 @@ Ubuntu Bootstrap path. `WINDOWS.exe` is the matching Windows GUI entry. No
 `.desktop` file is required in `LAUNCHER`; retain Unix executable permissions
 when copying. The older root entries and optional menu shortcut remain
 compatible. See [the launcher guide](../LAUNCHER/README.md) and
-[exact verification](../audit/LAUNCHER_EXECUTABLES.json). Other named OS entries
-remain availability notices while their full application ports are pending.
+[exact verification](../audit/LAUNCHER_EXECUTABLES.json). Linux Mint, Fedora and macOS
+now have their own paths; see [their guide](OTHER_PLATFORMS.md).
 
 ## Native launcher correction — 2026-10-16
 
@@ -190,7 +190,7 @@ For manual provisioning, the equivalent desktop dependencies are:
 
 ```bash
 sudo apt update
-sudo apt install python3-venv python3-tk build-essential git libegl1 libgl1 libnss3 \
+sudo apt install python3-venv build-essential git libegl1 libgl1 libnss3 \
   libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
   libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 \
   libxcb-shape0 libxcb-randr0 libxcb-sync1 libxcb-shm0 libxcb-xfixes0 \
@@ -388,7 +388,7 @@ startup failure; confirm the editor's behavior on the Ubuntu desktop.
 
 ## Bootstrap preparation
 
-First launch checks Ubuntu's Tk, native libraries and build tools before any
+First launch checks Ubuntu's native libraries and build tools before any
 dependency install. Missing OS packages such as `libxcb-cursor0` and
 `libxcb-xinerama0` enter Bootstrap automatically. Only Ubuntu's `apt-get` runs
 with administrator rights through `sudo` in the setup terminal, or `pkexec`
@@ -588,7 +588,7 @@ checks for 600 ms on constrained PCs. Unchanged diagnostic tables retain their
 rows and reading state. Fewer than four physical CPU
 cores prevents startup with a compatibility notice. If physical topology cannot
 be reported, the check falls back to logical threads. Logical CPU detection failure
-also stops startup. A desktop Ubuntu session uses a Tk notice when available,
+also stops startup. A desktop session shows a native dialog when one is available,
 and headless sessions print the same notice to stderr.
 
 The shared interface uses translucent gradients, rounded surfaces, vector
@@ -779,14 +779,13 @@ Compile button. To run that optional integration locally with already installed
 native packages, use `.venv-linux/bin/python -B direct/verify_target_resolution.py
 --compile-installed-avr`. An explicit `--avr-core /path/to/native/store` is also
 accepted. The probe refuses missing packages and performs no install or upload.
-The controls verifier uses native Tk package-browser fixtures and isolated Qt
-setup classes to check Actions, Settings, reset guards and all three palettes.
-It never runs setup installation or writes live preferences. Use a desktop or
-`xvfb-run -a env QT_QPA_PLATFORM=xcb` for Tk screenshots; headless Tk checks
-otherwise skip. The setup dialog is rendered for UI verification only: Ubuntu
+The controls verifier uses isolated Qt package-browser fixtures and setup classes to check Actions, Settings, reset guards and all three palettes.
+It never runs setup installation or writes live preferences. Run verifiers without
+a display on a desktop you are using: `direct/run_verifiers.py` strips `DISPLAY` and
+`WAYLAND_DISPLAY`, because refusal fixtures would otherwise open real dialogs. The setup dialog is rendered for UI verification only: Ubuntu
 launches through its native environment, without the Windows bootstrap pipeline.
 The responsive verifier also exercises small work areas, negative monitor
-origins, compact control rows, popup scrolling and native Tk font scaling.
+origins, compact control rows and popup scrolling.
 Use separate processes at `QT_SCALE_FACTOR=1`, `1.25`, `1.5` and `2`.
 
 On 2026-10-11, Ubuntu 26.04.1 with Python 3.14.4 and PySide6 6.12.0 passed

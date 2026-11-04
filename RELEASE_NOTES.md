@@ -2,12 +2,66 @@
 
 > **Version:** v11 — Stable Release<br>
 > **Release Codename:** *Quantum Bridge & Core Shield*<br>
-> **Target Platforms:** Windows 10/11 (AMD64) · Native Ubuntu 24.04 or newer (amd64 / ARM64)<br>
+> **Target Platforms:** Windows 10/11 (AMD64) · Native Ubuntu 24.04 or newer (amd64 / ARM64) · Linux Mint 22.x (amd64) · Fedora 44 or newer (x86_64 / aarch64) · macOS 14 or newer (Intel / Apple Silicon)<br>
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 2, 2026<br>
+> **Notes Updated:** November 5, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
+
+---
+
+## November 5 Update: Faster Windows Setup and Builds, PySide6 Browser, More Systems
+
+**Windows Bootstrap.** Package extraction ran one file at a time, and on Windows
+each file open can wait on antivirus scanning. Copies and both verification hash
+passes now run concurrently through the same native copy calls, and each quiet
+phase reports `Package files:` progress, so the Arduino AVR step no longer looks
+stuck. The first-run seed downloads only the packages it needs instead of an
+archive with 942 MB of unused data. With a simulated 2 ms per-file scanner delay,
+one real MegaCore install took 38 seconds instead of 227. That is a measurement on
+Linux with a simulated delay, not a timed Windows run; the
+[Bootstrap record](audit/BOOTSTRAP_PERFORMANCE.md) holds the details and the hosted
+Windows evidence.
+
+**Compile.** A one-line edit now recompiles one unit. Previously Compile and Upload
+used different environments, so PlatformIO saw a changed project and deleted
+`.pio/build` between them. All actions now share one environment. Reuse checks hash
+only the libraries a build actually used, and identical objects are shared across
+sketches and after Clean. The first compile after this update rebuilds once
+because its workspace key changed.
+
+**Hard and Soft Reset** keep dedicated builds, independent of your sketch and of
+project Clean. Non-ESP Soft Reset builds and certifies first, then uploads.
+
+**Editor and GUI startup.** Python bytecode now caches outside the installation, so
+launches stop recompiling every module. A 6-core/12-thread PC no longer gets
+Chromium's low-end rendering mode. `logs/startup-timing.log` records each launch's
+phases, so a slow machine can show where the time went.
+
+**Library and Board Browser.** Rebuilt in PySide6 with virtualized lists: the window
+appears at once and thousands of rows cost only what is on screen. All download,
+checksum, archive and catalog logic carried over unchanged. Tk is gone from the
+application, including the file downloader and first-run setup, which falls back to
+a plain console view if Qt is ever damaged.
+
+**Focus lines.** Buttons, tabs and non-editable dropdowns no longer take keyboard
+focus or draw dashed lines. They work the same by mouse and shortcut, and clicking
+one leaves your cursor where you were typing. Text fields, lists, the editor and
+terminals keep focus as before.
+
+**Linux Mint, Fedora and macOS.** These launcher entries were availability notices.
+They now run the real application, each with its own reviewed admission and package
+adapter. Fedora uses `dnf` with package names confirmed against Fedora's repository
+metadata. macOS downloads a pinned private Python and uses the Keychain. Mint is
+admitted only as 22.x on its Ubuntu 24.04 base; LMDE and relatives that merely list
+a supported family in `ID_LIKE` stay refused. Windows ARM64 is still refused. No
+board has been flashed on these three systems yet, so USB upload there is
+unverified; see [what is verified where](audit/PLATFORM_VERIFICATION.md).
+
+**Source updates.** A release ZIP now records the commit it was built from, and
+Bootstrap replaces source only when GitHub reports the update branch is really newer.
+Previously a fresh ZIP replaced itself with whatever `main` held, even older code.
 
 ---
 

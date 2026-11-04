@@ -94,7 +94,8 @@ class CloudManifestChecks(unittest.TestCase):
             self.assertEqual(self.backend.get_cloud_project_files(), {"success": False, "files": []})
 
     def test_supported_sources_and_existing_pruning_remain_compatible(self):
-        case_note = "notes_lower.h" if sys.platform == "win32" else "notes.h"
+        # Windows and macOS default to case-insensitive volumes, where this would be Notes.h again.
+        case_note = "notes_lower.h" if sys.platform in ("win32", "darwin") else "notes.h"
         included = [self.create(name) for name in ("main.ino", "logic.cpp", "driver.c", "Notes.h", case_note, "config.hpp", "NOTE.txt", "notes/extra.txt")]
         for name in (".hidden.txt", "src/internal.cpp", "build/internal.h", "assets/image.png"):
             self.create(name)

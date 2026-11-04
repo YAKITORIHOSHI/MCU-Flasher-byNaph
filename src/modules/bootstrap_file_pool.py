@@ -7,7 +7,8 @@ frozen. Those waits release the GIL, so a small pool multiplies throughput.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+# From its own module: Python 3.15's concurrent.futures exposes this as a lazy import.
+from concurrent.futures.thread import ThreadPoolExecutor
 import os
 import threading
 import time

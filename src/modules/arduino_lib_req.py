@@ -1629,7 +1629,8 @@ class BrowserEngine:
 
     def _load_both(self, force_refresh=False):
         """Publish cached catalogs before HTTP requests; bound refresh concurrency."""
-        from concurrent.futures import ThreadPoolExecutor
+        # From its own module: Python 3.15's concurrent.futures exposes this as a lazy import.
+        from concurrent.futures.thread import ThreadPoolExecutor
         from src.modules.runtime_resources import performance_profile
         from src.modules.browser_loading import CatalogPublisher
         publications = CatalogPublisher(getattr(getattr(self, 'lib_tab', None), 'all_items', {}),
