@@ -114,10 +114,13 @@ class PrivateRuntimeChecks(unittest.TestCase):
         environment_setup = source.split("' Bootstrap may", 1)[1].split("' Reject unsupported", 1)[0]
         environment_setup = "' Bootstrap may" + environment_setup
         helpers = []
-        # The setup slice reads launcher arguments. Without its helper it reports through
-        # MsgBox, which waits forever in a session nobody can click in.
+        # A MsgBox waits forever in a session nobody can click in, so report through stdout:
+        # a gap in this script then fails with its message rather than timing out.
+        environment_setup = environment_setup.replace("MsgBox ", "WScript.Echo ")
+        environment_setup = environment_setup.replace(', vbCritical, "MCU Flasher"', "")
         for name, kind in (("IsPythonExeValid", "Function"), ("RepairVenvInPlace", "Sub"),
-                           ("ReadLauncherArguments", "Function")):
+                           ("ReadLauncherArguments", "Function"),
+                           ("ClearLauncherArgumentPayload", "Sub")):
             pattern = rf"^{kind} {name}\(.*?^End {kind}"
             helpers.append(re.search(pattern, source, re.M | re.S).group())
         clean = os.environ.copy()
