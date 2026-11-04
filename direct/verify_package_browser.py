@@ -580,13 +580,14 @@ class AppearanceChecks(QtBrowserFixture):
         window.show()
         window.resize(480, 520)
         self.pump(.05)
-        self.assertFalse(window._brand.isVisible())
+        self.assertEqual(window._brand.isVisible(), window.width() >= 560)
         button = tab.download_btn
         corner = button.mapTo(tab.detail_scroll.viewport(), button.rect().topRight())
         self.assertLessEqual(corner.x(), tab.detail_scroll.viewport().width(), "Download must not be clipped")
+        # A small screen at a high scale factor may not offer this width at all.
         window.resize(700, 520)
         self.pump(.05)
-        self.assertTrue(window._brand.isVisible())
+        self.assertEqual(window._brand.isVisible(), window.width() >= 560)
 
     def test_board_controls_and_source_status_wrap_on_a_short_screen(self):
         window, tab = self.app, self.app.board_tab

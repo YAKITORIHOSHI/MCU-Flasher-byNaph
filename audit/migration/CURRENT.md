@@ -5,6 +5,12 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- 5 November 2026: the shipping Python application now runs on Fedora, Linux Mint
+  and macOS through its own adapters, and Tk is gone from it. Older bullets below
+  that call those launcher entries availability notices, or describe a Tk browser,
+  record the state on their date. See [the shipping verification record](../PLATFORM_VERIFICATION.md).
+  This changes nothing for the Rust replacement: its required matrix, gates and
+  capability ledger stand unchanged, and no Rust host adapter was added.
 - Latest launcher requirement: `LAUNCHER/` contains native `WINDOWS.exe`,
   `UBUNTU` / `UBUNTU_ARM64`, `FEDORA` / `FEDORA_ARM64`, `LINUX_MINT`, executable
   `MacOS.command` and README, with no `.desktop` shortcuts. Ubuntu and Windows

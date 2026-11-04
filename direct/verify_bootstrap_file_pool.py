@@ -258,7 +258,7 @@ class ThroughputChecks(Fixture):
         with patch.object(pool_module, "file_workers", return_value=12):
             parallel = _tree_signature(source)
         self.assertEqual(serial, parallel)
-        self.assertEqual(serial["a/b/f0"][0], "file")
+        self.assertEqual(serial[os.path.join("a", "b", "f0")][0], "file")
 
 
 class ProgressChecks(unittest.TestCase):

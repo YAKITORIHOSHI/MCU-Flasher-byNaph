@@ -114,7 +114,10 @@ class PrivateRuntimeChecks(unittest.TestCase):
         environment_setup = source.split("' Bootstrap may", 1)[1].split("' Reject unsupported", 1)[0]
         environment_setup = "' Bootstrap may" + environment_setup
         helpers = []
-        for name, kind in (("IsPythonExeValid", "Function"), ("RepairVenvInPlace", "Sub")):
+        # The setup slice reads launcher arguments. Without its helper it reports through
+        # MsgBox, which waits forever in a session nobody can click in.
+        for name, kind in (("IsPythonExeValid", "Function"), ("RepairVenvInPlace", "Sub"),
+                           ("ReadLauncherArguments", "Function")):
             pattern = rf"^{kind} {name}\(.*?^End {kind}"
             helpers.append(re.search(pattern, source, re.M | re.S).group())
         clean = os.environ.copy()
@@ -143,7 +146,7 @@ class PrivateRuntimeChecks(unittest.TestCase):
         ]), encoding="utf-8")
         contaminated = dict(clean, PYTHONHOME=str(self.linux), PYTHONPATH=str(self.linux))
         result = subprocess.run(["cscript.exe", "//nologo", str(script)], env=contaminated,
-                                capture_output=True, text=True, timeout=240)
+                                capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(str(base.parent), config.read_text())
         print(result.stdout.strip())

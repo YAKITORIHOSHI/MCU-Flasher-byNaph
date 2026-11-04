@@ -30,6 +30,13 @@ UI, WebKit, runtime and firmware-tool closure before packaging; Rust's minimum
 deployment target alone does not set this application's supported version.
 These version gaps remain open requirements, not silent exclusions or passes.
 
+The shipping Python application gained its own Fedora, Mint and macOS paths on
+5 November 2026; [its record](../PLATFORM_VERIFICATION.md) holds that evidence. Those
+paths do not satisfy any row above, which all describe the Rust replacement. They
+do show which package names and host differences a Rust adapter will meet:
+`direct/ubuntu/fedora_packages.py` lists Fedora's providers from its repository
+metadata, and Mint's real identity comes from its own `base-files` package.
+
 Exact existing receipts remain authoritative: native UI `49ab312` / runtime
 `eb9d13c` in [session evidence](native-project-sessions.json), backend `29ec2b0`
 in [package metadata evidence](rust-avr-package-metadata.json), and the local

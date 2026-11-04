@@ -105,7 +105,14 @@ class ArduinoPaletteChecks(fixture.EmbeddedViewportChecks):
                             "editorInstance.setSelection(new monaco.Range(1,1,1,2));"
                             "editorInstance.setScrollTop(0);editorInstance.focus();"
                             "window.paletteFocused=document.activeElement;"
-                            f"setEditorTheme({json.dumps(mode)});forceEditorLayout();true")
+                            f"setEditorTheme({json.dumps(mode)});forceEditorLayout();"
+                            "editorInstance.getModel().tokenization?.forceTokenization?.("
+                            "editorInstance.getModel().getLineCount());true")
+                    # A slow host paints after tokenizing: an untokenized line is a single span.
+                    fixture.wait_for(lambda: self.js(
+                        "[...document.querySelectorAll('.view-lines .view-line')]"
+                        ".some(line=>line.textContent.includes('#include')&&line.querySelectorAll('span span').length>1)"),
+                        "Monaco did not paint tokenized source")
                     QTest.qWait(100)
                     data = self.state(r"""
                       const editor=editorInstance, font=editor.getOption(monaco.editor.EditorOption.fontInfo);
