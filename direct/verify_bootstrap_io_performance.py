@@ -25,6 +25,7 @@ from uuid import uuid4
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.modules import bootstrap_file_pool as file_pool
 from src.modules import bootstrap_package_recovery as recovery
 
 
@@ -142,6 +143,34 @@ def _fixture_environment(core, events):
         yield
 
 
+def _concurrency(source, root, repeats):
+    """Copy and hash the same tree with one worker and with the normal pool.
+
+    Both publication policies above share the concurrent code, so they cannot show
+    what concurrency itself gains on this host. Waits that release the GIL, such as
+    real-time antivirus scanning, are what make the pool pay off.
+    """
+    workers = file_pool.file_workers()
+    trials = {"one_worker": {"copy": [], "hash": []}, "pool": {"copy": [], "hash": []}}
+    for repeat in range(repeats):
+        order = ("one_worker", "pool") if repeat % 2 == 0 else ("pool", "one_worker")
+        for label in order:
+            staging = root / f"concurrency-{label}-{repeat}"
+            with patch.object(file_pool, "file_workers", return_value=1 if label == "one_worker" else workers):
+                started = time.perf_counter()
+                recovery._parallel_copytree(shutil, source, staging, (), {"symlinks": True})
+                trials[label]["copy"].append(time.perf_counter() - started)
+                started = time.perf_counter()
+                recovery._tree_signature(staging)
+                trials[label]["hash"].append(time.perf_counter() - started)
+            shutil.rmtree(staging)
+    median = {label: {phase: statistics.median(values) for phase, values in phases.items()}
+              for label, phases in trials.items()}
+    return {"pool_workers": workers, "median_seconds": median, "trials": trials,
+            "one_worker_over_pool": {phase: median["one_worker"][phase] / median["pool"][phase]
+                                     for phase in ("copy", "hash")}}
+
+
 def benchmark(*, output, size_mib=32, small_files=4096, repeats=3):
     output = _owned_output(output)
     if os.environ.get("MCU_FLASHER_WORKSPACE_RUNTIME") or os.environ.get("MCU_FLASHER_OFFLINE_RUNTIME"):
@@ -188,6 +217,11 @@ def benchmark(*, output, size_mib=32, small_files=4096, repeats=3):
                         "baseline_median_seconds": baseline, "current_median_seconds": current,
                         "baseline_over_current_ratio": baseline / current,
                         "trials": trials}
+            workload["concurrency"] = _concurrency(source, root, repeats)
+            comparison = workload["concurrency"]
+            print(f"{shape}: one worker vs {comparison['pool_workers']} workers: "
+                  f"copy {comparison['median_seconds']['one_worker']['copy']:.3f}s vs {comparison['median_seconds']['pool']['copy']:.3f}s, "
+                  f"hash {comparison['median_seconds']['one_worker']['hash']:.3f}s vs {comparison['median_seconds']['pool']['hash']:.3f}s", flush=True)
             report["workloads"].append(workload)
             print(f"{shape}: {files + 1} files, {size_mib} MiB; baseline {baseline:.3f}s, current {current:.3f}s", flush=True)
     output.parent.mkdir(parents=True, exist_ok=True)
