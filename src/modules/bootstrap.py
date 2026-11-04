@@ -2146,7 +2146,8 @@ def run_update_checks(auto_update: bool = False):
         )
         return "offline"
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+    from concurrent.futures.thread import ThreadPoolExecutor
 
     results: dict[str, dict] = {}
 
@@ -3076,6 +3077,7 @@ def ensure_pip_packages_parallel(
     all specs are now marked ``critical``.
     """
     import concurrent.futures
+    import concurrent.futures.thread
     import tempfile
     import threading
 
@@ -3186,7 +3188,7 @@ def ensure_pip_packages_parallel(
     importlib.invalidate_caches()
 
     # Checks are read-only, so running these concurrently is safe.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, max(1, len(active_specs)))) as executor:
+    with concurrent.futures.thread.ThreadPoolExecutor(max_workers=min(3, max(1, len(active_specs)))) as executor:
         installed_flags = list(executor.map(_check, active_specs))
 
     with table_lock:
@@ -3385,7 +3387,7 @@ def ensure_pip_packages_parallel(
         # Downloads/resolution are isolated from the environment, so this is the
         # safe place to use parallel pip processes.
         completed_downloads = 0
-        with concurrent.futures.ThreadPoolExecutor(
+        with concurrent.futures.thread.ThreadPoolExecutor(
             max_workers=download_workers,
             thread_name_prefix="BootstrapPipDownload",
         ) as executor:
@@ -6646,7 +6648,8 @@ def _parallel_range_download(
     promotion to the target.
     """
     import urllib.request
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+    from concurrent.futures.thread import ThreadPoolExecutor
 
     if expected_size <= 0:
         raise ValueError("parallel download requires an expected size")

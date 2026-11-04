@@ -189,6 +189,8 @@ Classify paths before changing attributes or deleting anything:
   unlink targets only when their destination belongs to this checkout's exact
   Windows store or modules. Revalidate markers, receipts and reviewed targets
   after confirmation. Refuse unknown envs, linked roots and changed plans.
+- macOS keeps `.venv-macos` and `.macos-tools` beside the Linux folders, excluded from
+  Git, release ZIPs and source updates; it has no cleaner entry yet.
 - Ubuntu uses system Python to remove its validated `.venv-linux`; Runtime also
   handles receipt-authenticated native tools/extras. Removing the shared XDG
   store needs `--include-native-store` and a current Linux/architecture receipt.
@@ -263,8 +265,12 @@ verify every archived file and retain its SHA-256 manifest before distribution.
 The public `LAUNCHER/` folder contains `WINDOWS.exe`, `UBUNTU`, `UBUNTU_ARM64`,
 `FEDORA`, `FEDORA_ARM64`, `LINUX_MINT`, `MacOS.command` and `README.md`, without
 `.desktop` entries. Preserve Unix executable modes and matching ELF CPUs/Windows
-GUI PE headers. Fedora/Mint/macOS entries currently show availability notices;
-Windows ARM64 and those application ports remain unqualified. The shipping GUI
+GUI PE headers. Fedora and Mint entries dispatch to the same guarded `run.sh`, and
+`MacOS.command` to `direct/macos/run.sh`; keep it `#!/bin/bash` and bash 3.2 compatible.
+Rebuild every Linux entry on its native CPU from the same source and commit those
+bytes together; `other-platforms.yml` retains them as `launcher-binaries-*`. Windows
+ARM64 stays refused. Record per-host evidence in `audit/PLATFORM_VERIFICATION.md`;
+USB upload on Mint, Fedora and macOS is unqualified. The shipping GUI
 is Python/PySide6; native Rust preview receipts do not expand shipping support.
 Use `direct/verify_launcher_folder.py` and `direct/verify_release_sources.py` for
 isolated launcher and archive-selection checks before Fresh removes their runtime.
@@ -287,8 +293,13 @@ in per-user state, outside the application installation. They may replace only
 verified tracked application source files. Preserve `src/dbs` settings, user
 instructions, project/build caches, private runtimes, installers, catalog data
 and active launchers. A source checkout is managed by Git and must be skipped.
-Defer source replacement while any workspace is live. Do not treat a source
-refresh as a packaged release: it cannot replace the verified Windows runtime
+Defer source replacement while any workspace is live. `build_release.py` writes the
+release's commit to `src/dbs/source_revision.json`. With no update record yet, the
+updater compares that commit with the branch through GitHub and replaces source only
+when the branch is ahead or diverged, since a fresh ZIP may be newer than `main`; a
+failed comparison means no update. Pushing `main` reaches every installation
+automatically on its next launch, so treat that as a rollout decision of its own.
+Do not treat a source refresh as a packaged release: it cannot replace the verified Windows runtime
 or establish release qualification. Keep Git LFS installer objects unhydrated
 and use `direct/verify_app_update.py` and `direct/verify_ubuntu_launcher.py`
 with disposable fixtures for source-update changes.

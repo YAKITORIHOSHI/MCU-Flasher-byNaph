@@ -437,7 +437,8 @@ class CatalogIOChecks(unittest.TestCase):
         self.assertLessEqual(len(module._PIO_MANIFEST_RAM_CACHE), 2)
         self.assertEqual(module._PIO_MANIFEST_RAM_BYTES, sum(row[2] for row in module._PIO_MANIFEST_RAM_CACHE.values()))
         with patch.object(module, "_PIO_MANIFEST_RAM_MAX_BYTES", 1):
-            module._read_platformio_manifest(paths[0], module._manifest_stat_identity(paths[0].stat()))
+            # Force a read: which file the bound kept above depends on directory order.
+            module._read_platformio_manifest(paths[0], module._manifest_stat_identity(paths[0].stat()), force_read=True)
         self.assertEqual(module._PIO_MANIFEST_RAM_BYTES, 0)
         paths[0].unlink()
         self.assertNotIn("board0", {row["id"] for row in module._load_platformio_board_catalog(self.core)})

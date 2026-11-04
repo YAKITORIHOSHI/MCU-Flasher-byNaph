@@ -39,6 +39,17 @@ from src.modules.bootstrap_platformio import parallel_archive_writes
 from src.modules.bootstrap_seed import import_missing, open_release_tail
 
 
+def load_bootstrap():
+    """Import bootstrap.py without its handoff to the private runtime, which CI lacks."""
+    modules = str(ROOT / "src/modules")
+    if modules not in sys.path:
+        sys.path.insert(0, modules)
+    import private_python_guard
+    with patch.object(private_python_guard, "enforce_private_python"):
+        from src.modules import bootstrap
+    return bootstrap
+
+
 def tree(path):
     result = {}
     for item in sorted(Path(path).rglob("*")):
@@ -333,8 +344,7 @@ class SelectiveReleaseChecks(Fixture):
         return f"http://127.0.0.1:{server.server_address[1]}/seed.zip"
 
     def bootstrap(self):
-        from src.modules import bootstrap
-        return bootstrap
+        return load_bootstrap()
 
     def test_only_the_verified_tail_is_transferred_and_imports_normally(self):
         bootstrap = self.bootstrap()
@@ -387,7 +397,7 @@ class SelectiveReleaseChecks(Fixture):
 
 class AvrReleasePin(unittest.TestCase):
     def test_exact_release_needs_no_index_download(self):
-        from src.modules import bootstrap
+        bootstrap = load_bootstrap()
         with patch.object(bootstrap, "_fetch_url", side_effect=AssertionError("Fetched the whole index")):
             release = bootstrap._load_arduino_avr_board_release("1.8.6")
         self.assertEqual(release["size"], 7127080)

@@ -1,6 +1,6 @@
 {
-  "updated": "2026-10-23 Asia/Manila",
-  "scope": "Direct executable entry packaging for current Python app; no native Rust production switch",
+  "updated": "2026-11-05 Asia/Manila",
+  "scope": "Direct executable entries for the current Python app. Every Linux entry dispatches to direct/ubuntu/run.sh, which admits from OS release data; MacOS.command dispatches to direct/macos/run.sh.",
   "entries": {
     "WINDOWS.exe": {
       "sha256": "2c6713083229e3cec8806fce6b1d127ae85fe6e06841b405d4617f380f6e48e3",
@@ -8,64 +8,59 @@
       "mode": "0o644"
     },
     "UBUNTU": {
-      "sha256": "4bf7ba38915b3518ab760e73e42185382b08a1ae1d2409f826ffca53120b013d",
-      "bytes": 16776,
+      "sha256": "e8136465e5f383fc60e0991e68cbe2f8185c36c6627ffe18d81deec98969562b",
+      "bytes": 16520,
       "mode": "0o755"
     },
     "UBUNTU_ARM64": {
-      "sha256": "a3f9ce5d5482a6c4f8af388edfab18391ad42006a967e6cc580771b245b52ba6",
-      "bytes": 71216,
+      "sha256": "993bb81e58bd9a11e1e4a19d2bf96eaae6edc4d377dda5e52cd7699300843782",
+      "bytes": 70896,
       "mode": "0o755"
     },
     "MacOS.command": {
-      "sha256": "aed97c06aca5456d4a7defc64de4cd44acb58887864d11198962d11d01ca1454",
-      "bytes": 416,
+      "sha256": "df59933554427469e87950a274dcde0d63c01e137743f84ad77b5ed8c037e619",
+      "bytes": 559,
       "mode": "0o755"
     },
     "FEDORA": {
-      "sha256": "4bf7ba38915b3518ab760e73e42185382b08a1ae1d2409f826ffca53120b013d",
-      "bytes": 16776,
+      "sha256": "e8136465e5f383fc60e0991e68cbe2f8185c36c6627ffe18d81deec98969562b",
+      "bytes": 16520,
       "mode": "0o755"
     },
     "FEDORA_ARM64": {
-      "sha256": "a3f9ce5d5482a6c4f8af388edfab18391ad42006a967e6cc580771b245b52ba6",
-      "bytes": 71216,
+      "sha256": "993bb81e58bd9a11e1e4a19d2bf96eaae6edc4d377dda5e52cd7699300843782",
+      "bytes": 70896,
       "mode": "0o755"
     },
     "LINUX_MINT": {
-      "sha256": "4bf7ba38915b3518ab760e73e42185382b08a1ae1d2409f826ffca53120b013d",
-      "bytes": 16776,
+      "sha256": "e8136465e5f383fc60e0991e68cbe2f8185c36c6627ffe18d81deec98969562b",
+      "bytes": 16520,
       "mode": "0o755"
     },
     "README.md": {
-      "sha256": "5f96fcdbd4861cb7553b3a24ef1c461e9e391ddae33fc4233ab98d7689bc2620",
-      "bytes": 2417,
+      "sha256": "ccb349732dc844f64a76aafc42b6acd3315224243ebe85f66d1139e7ab800932",
+      "bytes": 2943,
       "mode": "0o664"
     }
   },
   "sourceSha256": {
-    "src/launcher_folder_linux.c": "1c17ec251a836abb6ae12b17d8f1a2663b62df27dd27b08d24808e6e65c13b99",
+    "src/launcher_folder_linux.c": "cf512ee7014ed3fe05be139227287457d8298c7e314e33871b69fe36bcbbf23a",
     "src/launcher_folder_windows.cs": "5ab382ebc6cda55910e9ea978888533394ad792eaf0439c76191d74b91d5bec1",
     "direct/build_launcher_folder.py": "6455edfba3677a317a1fa6c728786f3d05078d357cf6548313bdf976ccdc9f8c",
-    "direct/verify_launcher_folder.py": "b96c355dca83ff0121128a74f67ec4366f603affb51a20e08799de4a350627f2",
-    "direct/build_release.py": "b46a1559117c191e9b9a30e738d23cb94e7c5d8c281958f47971fc2b36ed95af",
-    "direct/verify_release_sources.py": "28940e36083302c7508d091ef6018dd4ea2a22c52938ecd30e9ede739a324b24"
+    "direct/verify_launcher_folder.py": "dc00f42f4468f94534d4dc27b4a3a7c9dc810c41b60159c7cdcf1eb48538a281",
+    "direct/build_release.py": "6f5fc2702efe57b4a64306b48fe6f0dfcd94941296e7a1c91b83ee2ff1e076e5",
+    "direct/verify_release_sources.py": "d1671d6dd7b2aa4bc2830fab6e4060120fdf0768a131650f7780308b72100d0b"
   },
   "buildRun": {
-    "id": 39824882032,
-    "source": "4a99205a5eadc02f3351a6310d6f0a17ecf48cac",
-    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/39824882032",
-    "result": "success",
+    "id": 41878061398,
+    "source": "98aed66",
+    "url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/41878061398",
+    "result": "success (launcher-binaries jobs)",
     "nativeBuilds": [
       "Ubuntu24 AMD64",
-      "Ubuntu24 ARM64",
-      "WindowsServer2022 AMD64"
+      "Ubuntu24 ARM64"
     ],
-    "nativeOnlyChecks": {
-      "linuxAmd64": "9 pass /7 other-OS skips",
-      "linuxArm64": "8 pass /8 other-OS or Mint-CPU skips; Fedora ARM subcase passes",
-      "windows": "9 pass /7 Linux skips"
-    }
+    "note": "WINDOWS.exe is unchanged from the 23 October record."
   },
   "finalLocal": {
     "launcherChecks": "15 pass /7 Windows skips",

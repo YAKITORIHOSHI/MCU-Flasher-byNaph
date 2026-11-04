@@ -772,7 +772,8 @@ class BrowserLoadingChecks(QtBrowserFixture):
                 self.until(lambda: len(received) == 2 and tasks_idle(tasks))
                 self.assertEqual(received[-1], ('retry', None, ui_thread))
                 scan.assert_called_once()
-                self.assertFalse(worker._running)
+                # The worker marks itself idle just after delivering its result.
+                self.until(lambda: not worker._running)
 
     def test_catalog_launch_failure_restores_busy_controls_and_status(self):
         app = self.app

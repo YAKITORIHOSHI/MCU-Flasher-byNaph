@@ -120,7 +120,8 @@ def _extract_executable(archive: Path, destination: Path) -> None:
         with source, destination.open("xb") as output:
             shutil.copyfileobj(source, output, length=1024 * 1024)
     if not elf_matches_host(destination):
-        raise RuntimeError(f"Arduino CLI archive executable is not native {("macOS" if sys.platform == "darwin" else "Linux")} {host_architecture()}.")
+        host = "macOS" if sys.platform == "darwin" else "Linux"
+        raise RuntimeError(f"Arduino CLI archive executable is not native {host} {host_architecture()}.")
     destination.chmod(0o755)
 
 

@@ -368,7 +368,7 @@ class BrowseTab(QWidget):
         version_row.addWidget(QLabel("Version"))
         self.version_combo = QComboBox()
         self.version_combo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.version_combo.setMinimumWidth(110)
+        self.version_combo.setMinimumWidth(72)
         self.version_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.version_combo.currentIndexChanged.connect(lambda _index: self.app._update_version_status(self))
         version_row.addWidget(self.version_combo, 1)
@@ -462,7 +462,7 @@ class BrowseTab(QWidget):
         self.listbox.selectionModel().blockSignals(blocker)
         total = len(names)
         if total:
-            self.lbl_search_status.setText(f"Found {total:,} matches")
+            self.lbl_search_status.setText(f"Found {total:,} {'match' if total == 1 else 'matches'}")
         elif not getattr(self.app, "_is_online", True) and not self.all_items:
             self.lbl_search_status.setText("Offline: connect to the internet to browse the catalog")
         else:
@@ -1207,7 +1207,8 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
         root.setSpacing(8)
 
         header = QHBoxLayout()
-        brand = QLabel("Library & Board Browser")
+        # The title bar already names the window, so a clipped copy is only noise.
+        self._brand = brand = QLabel("Library & Board Browser")
         brand.setObjectName("package-brand")
         header.addWidget(brand)
         header.addStretch(1)
@@ -1269,6 +1270,7 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
         bottom.addWidget(self.progress)
         root.addLayout(bottom)
         QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
+        self.lib_tab.search_entry.setFocus()
 
     def _focus_search(self):
         page = self.notebook.currentWidget()
@@ -1289,6 +1291,10 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
             self._central.invalidate_cache()
             for tab in (self.lib_tab, self.board_tab, self.installed_tab):
                 tab.model.refresh_icons()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._brand.setVisible(self.width() >= 560)
 
     def closeEvent(self, event):
         """Retain the loaded window; only workspace shutdown ends this process."""
@@ -1417,6 +1423,8 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
         self.sources_btn.setText("Hide indexes" if visible else "Board indexes")
 
     def _on_tab_changed(self, index):
+        # Typing searches. It must never land in the download folder by accident.
+        self.notebook.widget(index).search_entry.setFocus()
         if index == 2:
             if self.installed_tab.installed_items is not self._installed_items:
                 self.installed_tab.populate(self._installed_items)

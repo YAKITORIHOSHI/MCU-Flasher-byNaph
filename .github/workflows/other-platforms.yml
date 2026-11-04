@@ -60,15 +60,19 @@ jobs:
           - name: fedora-44-x86_64
             image: registry.fedoraproject.org/fedora:44
             runner: ubuntu-24.04
+            family: fedora
           - name: fedora-44-aarch64
             image: registry.fedoraproject.org/fedora:44
             runner: ubuntu-24.04-arm
+            family: fedora
           - name: fedora-45-x86_64
             image: registry.fedoraproject.org/fedora:45
             runner: ubuntu-24.04
+            family: fedora
           - name: linux-mint-22.3-x86_64
             image: docker.io/linuxmintd/mint22.3-amd64:latest
             runner: ubuntu-24.04
+            family: linuxmint
     runs-on: ${{ matrix.runner }}
     container:
       image: ${{ matrix.image }}
@@ -78,6 +82,7 @@ jobs:
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
       # Containers forbid the namespaces Chromium's sandbox needs. Production keeps it.
       QTWEBENGINE_DISABLE_SANDBOX: '1'
+      EXPECTED_LINUX_FAMILY: ${{ matrix.family }}
     steps:
       - name: Fixture tools only; the application's own prerequisites install later
         run: |
@@ -86,6 +91,9 @@ jobs:
               util-linux-script xorg-x11-server-Xvfb xorg-x11-xauth
           else
             apt-get update
+            # This image enables Mint's repositories but keeps Ubuntu's identity files.
+            # A real Mint system gets them from Mint's own base-files, so install that.
+            apt-get install -y --allow-downgrades base-files/zena
             apt-get install -y --no-install-recommends ca-certificates git tar sudo bsdutils python3 xvfb xauth
           fi
       - uses: actions/checkout@v6

@@ -25,9 +25,8 @@ Keep text and SVG state separate; no decorative emoji or icon-font glyphs in
 controls, generated app messages or editor chrome. Retain accessible action names
 when compact buttons hide text. Render normal/active/disabled inks from the actual
 widget palette, including colored action fills; Developer Access retains its
-paper inks. Qt and cold Tk read identical assets. The Tk renderer must remain
-bounded, cached and standard-library-only so first-run setup works before Qt.
-Preserve native listbox selection/scroll callbacks and explicit CLI board choices.
+paper inks.
+Preserve list selection/scroll callbacks and explicit CLI board choices.
 Compatibility warnings use `SOFT_WARNING_PREFIX` and the shared classifier,
 including older stored cautions; never infer severity from an empty prefix.
 Log status marks paint beside literal text and never enter copied journals.
@@ -72,11 +71,9 @@ rewriting user configuration. Keep rounded native fields, keyboard focus and
 selection ink tied to the actual highlight after palette changes.
 At narrow widths the header subtitle yields before saved
 package fonts or the last complete detail line. Check all three palettes at
-100–200% with `direct/verify_downloader_appearance.py`; optional `--render-dir`
-captures both selected and empty states, without live catalogs or hardware.
-Exercise StringVar caption/status updates, material alignment after scrolling,
-theme changes and destruction of queued redraws; Tcl trace callbacks receive
-three arguments and must not produce callback warnings or errors.
+100–200% with `direct/verify_package_browser.py`, without live catalogs or hardware.
+Exercise status updates, scrolling, theme changes and closing with queued work;
+none may produce callback warnings or errors.
 
 ## MCU Flasher workspace contract
 
@@ -131,8 +128,8 @@ allow wider resizing and maximization. Project selection asks whether to use
 the current window or a separate sketch window; show full paths for running
 projects. Keep the current project's buffers, focus and terminal sessions when
 opening another window, and resolve unsaved changes before switching projects.
-Carry the same palette into native setup and the Tk downloader on Ubuntu 24.04
-or newer. Use native Tk font measurements for folder, URL and version reflow,
+Carry the same palette into native setup and the PySide6 browser on every host.
+Reflow folder, URL and version rows to the available width, with
 static rounded rims/reflections and opaque reading surfaces. Cloud host, viewport
 and content remain transparent over the owning glass; synchronize the standalone
 dialog backdrop on theme changes. Keep AI Review/History on one compact row with
@@ -162,8 +159,8 @@ Keep inner toolbar/control and reading padding, tab focus and splitter handles.
 Preserve native Linux downloader focus through reflow without forcing focus over
 another active client. Check selected-tab and button contrast in all three palettes, including after
 a sleeping downloader is reopened. Coalesce static card redraws on resize.
-Use Qt logical coordinates without multiplying by DPI or devicePixelRatio;
-Tk uses native pixel/point metrics. Reduce chrome spacing before reducing text.
+Use Qt logical coordinates without multiplying by DPI or devicePixelRatio.
+Reduce chrome spacing before reducing text.
 Embedded Windows child windows use the host's native GetClientRect bounds;
 SetWindowPos must not receive Qt logical dimensions. Monaco takes its actual
 CSS viewport dimensions and refreshes after a DPR change without reloading

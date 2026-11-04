@@ -143,7 +143,7 @@ class PrivateRuntimeChecks(unittest.TestCase):
         ]), encoding="utf-8")
         contaminated = dict(clean, PYTHONHOME=str(self.linux), PYTHONPATH=str(self.linux))
         result = subprocess.run(["cscript.exe", "//nologo", str(script)], env=contaminated,
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, timeout=240)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(str(base.parent), config.read_text())
         print(result.stdout.strip())

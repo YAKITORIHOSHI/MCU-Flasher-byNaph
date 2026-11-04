@@ -182,10 +182,15 @@ class DownloadInterruptionChecks(unittest.TestCase):
         start = time.monotonic()
         thread.start()
         self.assertTrue(self.server.sent.wait(1))
+        # Sent bytes may still be in flight. Cancel only once the worker holds its
+        # checkpoint: a cancel before that correctly leaves nothing to retain.
+        deadline = time.monotonic() + 1
+        while not self.partial.exists() and time.monotonic() < deadline:
+            time.sleep(0.005)
         self.app._cancel_event.set()
         thread.join(2)
         self.assertFalse(thread.is_alive())
-        self.assertLess(time.monotonic() - start, 2)
+        self.assertLess(time.monotonic() - start, 3)
         self.assert_no_success()
         self.app._download_cancelled.assert_called_once()
         self.app._download_error.assert_not_called()

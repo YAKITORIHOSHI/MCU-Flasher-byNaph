@@ -11,6 +11,8 @@ and "light" (Glass Frosted Light), with static glass tab surfaces.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+
 from main.core.theme import get_palette
 
 # Resolve project root for font paths
@@ -45,7 +47,9 @@ def install_no_focus_lines(app=None) -> bool:
                 target.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             return super().polish(target)
 
-    app.setStyle(NoFocusLineStyle(app.style()))
+    # The native macOS style measures controls differently from what the glass stylesheet
+    # draws, which clips checkbox labels. Fusion lays them out as on every other host.
+    app.setStyle(NoFocusLineStyle("Fusion" if sys.platform == "darwin" else app.style()))
     app.setProperty("mcuNoFocusLinesInstalled", True)
     return True
 

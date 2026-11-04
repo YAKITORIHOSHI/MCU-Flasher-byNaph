@@ -112,7 +112,7 @@ class BrowserWindowChecks(QtBrowserFixture):
             self.pump(pb.SEARCH_DELAY_MS / 1000 + .05)
         search.assert_called_once()
         self.assertEqual(tab.model.rows(), ["Alpha"])
-        self.assertEqual(tab.lbl_search_status.text(), "Found 1 matches")
+        self.assertEqual(tab.lbl_search_status.text(), "Found 1 match")
 
     def test_library_and_board_details_show_every_field(self):
         window = self.app
@@ -306,6 +306,7 @@ class BrowserWindowChecks(QtBrowserFixture):
         buttons["Archive Only (ZIP)"].click()
         self.assertEqual(available.result_option, "zip")
 
+    @unittest.skipIf(sys.platform == "win32", "Windows retires through its trigger files, tested separately")
     def test_sleeping_window_retains_its_process_and_force_exit_retires_everything(self):
         window = self.app
         window.show()
@@ -559,6 +560,34 @@ class AppearanceChecks(QtBrowserFixture):
                 if RENDER_DIR:
                     self.assertTrue(window.grab().save(str(RENDER_DIR / f"browser-{width}.png")))
 
+    def test_typing_reaches_search_rather_than_the_download_folder(self):
+        window = self.app
+        window.show()
+        self.pump(.05)
+        for index, tab in enumerate((window.lib_tab, window.board_tab, window.installed_tab)):
+            with self.subTest(tab=index):
+                window.notebook.setCurrentIndex(index)
+                self.pump(.02)
+                self.assertIs(window.focusWidget(), tab.search_entry)
+        window.notebook.setCurrentIndex(0)
+        self.assertIs(window.focusWidget(), window.lib_tab.search_entry)
+
+    def test_controls_fit_and_the_title_yields_at_the_smallest_width(self):
+        window, tab = self.app, self.app.lib_tab
+        tab.populate({"Sensor": library("Sensor", "2.0.0")})
+        self.settle()
+        self.select(tab)
+        window.show()
+        window.resize(480, 520)
+        self.pump(.05)
+        self.assertFalse(window._brand.isVisible())
+        button = tab.download_btn
+        corner = button.mapTo(tab.detail_scroll.viewport(), button.rect().topRight())
+        self.assertLessEqual(corner.x(), tab.detail_scroll.viewport().width(), "Download must not be clipped")
+        window.resize(700, 520)
+        self.pump(.05)
+        self.assertTrue(window._brand.isVisible())
+
     def test_board_controls_and_source_status_wrap_on_a_short_screen(self):
         window, tab = self.app, self.app.board_tab
         item = board("ESP8266 device core")
@@ -609,8 +638,10 @@ class AppearanceChecks(QtBrowserFixture):
         window.show()
         self.pump()
         from PySide6.QtCore import QTimer
+        # Windows keeps one slow fallback beside its directory watcher for its wake files.
+        fallback = getattr(window, "_trigger_timer", None)
         active = [timer for timer in window.findChildren(QTimer)
-                  if timer.isActive() and timer.parent() is not window._screen_watcher]
+                  if timer.isActive() and timer.parent() is not window._screen_watcher and timer is not fallback]
         self.assertEqual(active, [], "An idle window must not wake on a timer")
 
 

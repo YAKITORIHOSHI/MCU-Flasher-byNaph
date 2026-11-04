@@ -189,7 +189,8 @@ def _extract_zip(archive: Path, destination: Path) -> None:
 def _finish_executable(destination: Path) -> None:
     destination.chmod(0o755)
     if not elf_matches_host(destination):
-        raise RuntimeError(f"OpenCode archive does not contain a native {("macOS" if sys.platform == "darwin" else "Linux")} {host_architecture()} executable.")
+        host = "macOS" if sys.platform == "darwin" else "Linux"
+        raise RuntimeError(f"OpenCode archive does not contain a native {host} {host_architecture()} executable.")
 
 
 @contextmanager
