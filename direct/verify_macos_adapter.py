@@ -121,9 +121,10 @@ class HostPaths(unittest.TestCase):
         update = (ROOT / "src/modules/app_update.py").read_text(encoding="utf-8")
         self.assertIn('".venv-macos"', update)
         self.assertIn('".macos-tools"', update)
-        ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
-        self.assertIn(".venv-macos/", ignored)
-        self.assertIn(".macos-tools/", ignored)
+        ignored = ROOT / ".gitignore"
+        if ignored.exists():  # A first-launch application copy has no Git files.
+            self.assertIn(".venv-macos/", ignored.read_text(encoding="utf-8"))
+            self.assertIn(".macos-tools/", ignored.read_text(encoding="utf-8"))
 
     def test_macos_uses_the_shared_native_backend(self):
         self.assertEqual(get_platform_backend("darwin").__name__, "main.platforms.ubuntu")

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PySide6.QtCore import QEventLoop
+from PySide6.QtCore import QEvent, QEventLoop
 from PySide6.QtWidgets import QApplication
 
 from main.core.theme import Theme
@@ -78,7 +78,9 @@ class QtBrowserFixture(unittest.TestCase):
         window.close()
         window.deleteLater()
         APP.processEvents()
-        APP.sendPostedEvents(None, 0)
+        # Event type 0 excludes deferred deletes. Every retired window would then stay
+        # alive, and each later stylesheet change would repolish all of them.
+        APP.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
     def set_download_dir(self, path):
         os.makedirs(path, exist_ok=True)
