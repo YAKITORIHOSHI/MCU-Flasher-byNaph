@@ -95,6 +95,26 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B direct/verify_build_console.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native Windows glass, taskbar properties and interface size
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          foreach ($scale in '1', '1.25', '1.5', '1.75', '2') {
+            $env:QT_SCALE_FACTOR = $scale
+            python -B direct/verify_glass.py
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Remove-Item Env:QT_SCALE_FACTOR
+          python -B direct/verify_taskbar_identity.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B direct/verify_interface_size.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B direct/verify_renderer_color_depth.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B direct/verify_renderer_color_depth.py --gpu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Native Ubuntu SVG controls and package browser rendering
         if: runner.os == 'Linux'
         run: |
@@ -106,6 +126,12 @@ jobs:
           QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_theme_readability.py
           QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_panel_readability.py
           QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_build_console.py
+          for scale in 1 1.25 1.5 1.75 2; do
+            QT_QPA_PLATFORM=xcb QT_SCALE_FACTOR="$scale" xvfb-run -a python -B direct/verify_glass.py
+          done
+          python -B direct/verify_taskbar_identity.py
+          python -B direct/verify_interface_size.py
+          QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_renderer_color_depth.py
       - name: SVG theme captures
         if: always()
         uses: actions/upload-artifact@v6

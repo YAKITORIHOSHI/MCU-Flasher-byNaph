@@ -26,6 +26,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+QT_PLATFORM_CLAMPS_WINDOWS = not os.environ["QT_QPA_PLATFORM"].startswith("offscreen")
 os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
@@ -568,14 +569,17 @@ class WindowsPanelChecks(unittest.TestCase):
         panel.hide()
 
     def test_themes_recolor_the_panel_without_hard_coded_dark_surfaces(self):
+        from main.core.log_colors import glass_inks
         from main.core.theme import get_palette
+        from main.qt.theme import glass_tokens
         for mode in ("default", "light", "solarized_dark"):
             self.panel.apply_theme(mode)
             palette = get_palette(mode)
-            self.assertIn(palette["BG_DARK"], self.panel._header.styleSheet())
+            self.assertIn("transparent", self.panel._header.styleSheet())
+            # A native child window cannot be translucent, so it keeps the theme's surface.
             self.assertIn(palette["BG_DARKEST"], self.panel._embed_container.styleSheet())
-            self.assertIn(palette["BG_DARKEST"], self.panel._loader_card.styleSheet())
-            self.assertIn(palette["TEXT_DIM"], self.panel._status_badge.styleSheet())
+            self.assertIn(glass_tokens(mode)["reading"], self.panel._loader_card.styleSheet())
+            self.assertIn(glass_inks(mode)["normal"], self.panel._status_badge.styleSheet())
 
 
 class LoaderChecks(unittest.TestCase):
@@ -655,7 +659,11 @@ class LoaderChecks(unittest.TestCase):
     def test_every_size_keeps_the_words_and_long_errors_scroll(self):
         widget = self.loader()
         widget.show()
+        available = widget.screen().availableGeometry().size()
         for width, height in ((620, 560), (300, 360), (300, 150), (240, 90), (240, 47), (2560, 1400)):
+            # A real desktop keeps a top-level window on its monitor; a CI screen can be small.
+            if QT_PLATFORM_CLAMPS_WINDOWS and (width > available.width() or height > available.height()):
+                continue
             widget.resize(width, height)
             widget.show_progress("Loading your workspace…", 1)
             self.pump()

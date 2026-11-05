@@ -24,10 +24,12 @@ if TYPE_CHECKING:
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QCheckBox, QSpinBox, QGroupBox, QScrollArea,
     QMessageBox, QBoxLayout,
 )
+from main.qt.glass import GlassDialog
+from main.qt.interface_size import INTERFACE_SIZES, interface_choice
 from main.qt.icons import ActionButton as QPushButton
 
 from main.core.constants import board_reset_capabilities
@@ -47,7 +49,7 @@ from main.qt.responsive import fit_dialog, ScreenWatcher
 
 from main.qt.icons import IconLabel as QLabel
 
-class SettingsDialog(QDialog):
+class SettingsDialog(GlassDialog):
     """
     Comprehensive application settings dialog.
     Scrollable multi-section layout with live applying capabilities.
@@ -113,14 +115,15 @@ class SettingsDialog(QDialog):
             self._offline_box.setMaximumWidth(max(0, self.width() - 52))
 
     def _apply_dialog_theme(self, mode: str) -> None:
-        from main.qt.theme import get_palette
+        from main.core.log_colors import themed_log_colors
+        from main.qt.theme import get_palette, glass_tokens
         pal = get_palette(mode)
         bg, fg = pal["BG_DARK"], pal["TEXT"]
-        scroll_bg, scroll_bar = pal["BG_DARKEST"], pal["BG_DARK"]
-        scroll_handle, scroll_handle_hover = pal["BORDER"], pal["CYAN"]
-        group_bg, group_border, group_title = pal["BG_MID"], pal["BORDER"], pal["CYAN"]
-        combo_bg, combo_fg, combo_border = pal["BG_DARKEST"], pal["TEXT"], pal["BORDER"]
-        chk_bg, chk_border = pal["BG_DARK"], pal["BORDER"]
+        glass = glass_tokens(mode)
+        group_bg, group_border = glass["glass"], glass["rim"]
+        group_title = themed_log_colors(mode)["system"]
+        combo_bg, combo_fg, combo_border = glass["well"], pal["TEXT"], glass["rim"]
+        chk_bg, chk_border = glass["well"], glass["rim"]
         chk_checked_bg, chk_checked_hover = pal["CYAN_DIM"], pal["BTN_MONITOR_H"]
 
         self.setStyleSheet(f"""
@@ -132,35 +135,10 @@ class SettingsDialog(QDialog):
                 background: transparent;
                 border: none;
             }}
-            QScrollBar:vertical {{
-                background: {scroll_bar};
-                width: 14px;
-                margin: 0px;
-                border-left: 1px solid {group_border};
-            }}
-            QScrollBar::handle:vertical {{
-                background: {scroll_handle};
-                border-radius: 5px;
-                min-height: 28px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {scroll_handle_hover};
-            }}
-            QScrollBar::handle:vertical:pressed {{
-                background: {scroll_handle_hover};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-                background: none;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
             QGroupBox {{
                 background-color: {group_bg};
                 border: 1px solid {group_border};
-                border-radius: 12px;
+                border-radius: 14px;
                 margin-top: 10px;
                 padding-top: 14px;
                 color: {group_title};
@@ -169,7 +147,7 @@ class SettingsDialog(QDialog):
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 padding: 0 6px;
-                background-color: {group_bg};
+                background: transparent;
             }}
             QLabel {{
                 color: {fg};
@@ -178,7 +156,7 @@ class SettingsDialog(QDialog):
                 background-color: {combo_bg};
                 color: {combo_fg};
                 border: 1px solid {combo_border};
-                border-radius: 4px;
+                border-radius: 10px;
                 padding: 4px 8px;
                 min-height: 22px;
             }}
@@ -197,7 +175,7 @@ class SettingsDialog(QDialog):
             QCheckBox::indicator {{
                 width: 16px;
                 height: 16px;
-                border-radius: 3px;
+                border-radius: 5px;
                 border: 1px solid {chk_border};
                 background: {chk_bg};
             }}
@@ -385,7 +363,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(perf_box)
 
         # ── 2. Appearance & Theme ─────────────────────────────────────────────
-        theme_box = QGroupBox("Appearance & Theme")
+        theme_box = QGroupBox("Appearance && Theme")
         tv = QVBoxLayout(theme_box)
         tv.setSpacing(10)
 
@@ -420,7 +398,21 @@ class SettingsDialog(QDialog):
         tv.addWidget(self.cb_theme_system)
         self._on_theme_system_toggled(cur_follow_sys)
 
-        theme_note = QLabel("Changing the theme applies across the main UI, editor, and integrated terminal.")
+        size_row = QHBoxLayout()
+        size_label = QLabel("Interface size:")
+        size_label.setFixedWidth(158)
+        size_row.addWidget(size_label)
+        self.size_combo = QComboBox()
+        for label, value in INTERFACE_SIZES:
+            self.size_combo.addItem(label, userData=value)
+        self.size_combo.setCurrentIndex(max(0, self.size_combo.findData(interface_choice())))
+        self.size_combo.setToolTip("Automatic enlarges the interface on small, high-resolution screens and "
+                                   "tightens it on small screens at a high display scale.")
+        size_row.addWidget(self.size_combo, stretch=1)
+        tv.addLayout(size_row)
+
+        theme_note = QLabel("Theme changes apply across the main UI, editor and terminal right away. "
+                            "Interface size applies the next time a window opens.")
         theme_note.setProperty("role", "dim")
         theme_note.setWordWrap(True)
         tv.addWidget(theme_note)
@@ -712,6 +704,7 @@ class SettingsDialog(QDialog):
         self.cb_theme_system.setChecked(False)
         self.theme_combo.setEnabled(True)
         self.theme_combo.setCurrentText(self._theme_rev["default"])
+        self.size_combo.setCurrentIndex(0)
 
         self.cb_autosave.setChecked(False)
         self.autosave_spin.setValue(1500)
@@ -911,6 +904,7 @@ class SettingsDialog(QDialog):
 
         data["shared"]["theme_mode"] = saved_mode
         data["shared"]["theme_follow_system"] = follow_sys
+        data["shared"]["interface_size"] = self.size_combo.currentData()
 
         # Preserve legacy editor_mode data; the Qt workspace uses offline Monaco
         # with an automatic resource profile and has no alternative engine.

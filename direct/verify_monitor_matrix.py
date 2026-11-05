@@ -39,13 +39,63 @@ OTHER_MONITORS = (
     (1680, 1050, 1, 48), (1920, 1080, 1.25, 48), (1920, 1080, 1.75, 48), (1920, 1080, 2, 48), (1920, 1200, 1, 48),
     (2256, 1504, 1.5, 48), (2560, 1080, 1, 48), (2560, 1440, 1, 48), (2560, 1440, 1.5, 48), (2880, 1800, 2, 48),
     (3840, 1600, 1, 48), (3840, 2160, 1.5, 48), (3840, 2160, 2, 48), (5120, 2880, 2, 48), (7680, 4320, 1, 48),
+    # What Automatic interface size arrives at on small and high-density screens.
+    (1366, 768, 1.3125, 48), (1920, 1080, 1.125, 48), (3840, 2160, 1.125, 48), (3840, 2160, 1.25, 48),
     (1080, 1920, 1.25, 48), (1200, 1920, 1, 48), (1440, 2560, 1, 48), (800, 1280, 1, 48),
 )
+
+
+HAIRLINE_CONTRAST = 72
 
 
 def monitor_name(monitor) -> str:
     width, height, scale, _reserved = monitor
     return f"{width}x{height}@{round(scale * 100)}"
+
+
+def bright_hairlines(image):
+    """Long, colorless straight lines far brighter than the pixels on both sides of them.
+
+    Glass rims are soft and a focused field's outline is the accent color, so neither counts.
+    A native frame line in the text color or a tab bar's base line is what this catches.
+    """
+    from PySide6.QtGui import QImage
+    image = image.convertToFormat(QImage.Format.Format_RGB32)
+    width, height, stride = image.width(), image.height(), image.bytesPerLine()
+    data = bytes(image.constBits())
+    sample = data[::997 * 4]
+    if sum(sample) / max(1, len(sample)) > 170:
+        return []  # The bright pixels on a light theme are its surfaces, not lines.
+
+    def luminance(x, y):
+        offset = y * stride + x * 4
+        return (data[offset + 2] * 2126 + data[offset + 1] * 7152 + data[offset] * 722) / 10000
+
+    def colorless(x, y):
+        offset = y * stride + x * 4
+        channels = data[offset], data[offset + 1], data[offset + 2]
+        return max(channels) - min(channels) <= 48
+
+    found = []
+    for y in range(1, height - 1):
+        run = best = 0
+        for x in range(0, width, 2):
+            value = luminance(x, y)
+            run = run + 2 if (value - luminance(x, y - 1) > HAIRLINE_CONTRAST
+                              and value - luminance(x, y + 1) > HAIRLINE_CONTRAST and colorless(x, y)) else 0
+            best = max(best, run)
+        if best >= max(150, width // 3):
+            found.append(("row", y, best))
+    for x in range(1, width - 1):
+        run = best = 0
+        for y in range(0, height, 2):
+            value = luminance(x, y)
+            run = run + 2 if (value - luminance(x - 1, y) > HAIRLINE_CONTRAST
+                              and value - luminance(x + 1, y) > HAIRLINE_CONTRAST and colorless(x, y)) else 0
+            best = max(best, run)
+        if best >= max(150, height // 3):
+            found.append(("column", x, best))
+    return found
 
 
 # ── One monitor, in its own process ──────────────────────────────────────────
@@ -54,7 +104,8 @@ def check_monitor(render_dir: Path | None) -> int:
     sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "direct"))
     from unittest.mock import Mock, patch
-    from PySide6.QtCore import QEvent, QObject, QPoint, QRect
+    from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF
+    from PySide6.QtGui import QPainterPath
     from PySide6.QtWidgets import (QAbstractButton, QAbstractScrollArea, QApplication, QComboBox, QLineEdit,
                                    QPlainTextEdit, QTextEdit, QToolButton, QWidget)
 
@@ -64,6 +115,7 @@ def check_monitor(render_dir: Path | None) -> int:
     from verify_responsive import QtResponsiveChecks, bootstrap_fixture
     from verify_runtime import PreviewBackend
     from main.core import config, file_utils
+    from main.qt.glass import bar_pane, pane_for, pane_radius
     from main.qt.main_window import MCUMainWindow
 
     problems: list[tuple[str, str]] = []
@@ -99,8 +151,16 @@ def check_monitor(render_dir: Path | None) -> int:
             problems.append((state, f"{name} is cut off: {cut}"))
 
     def capture(widget, name):
+        image = widget.grab()
+        if bright_hairlines(image.toImage()):
+            # A web page rasterizes in tiles. While a very large one catches up, its sheet's
+            # rim can stand alone over an unpainted tile. A real stray line is still there later.
+            pump(1.5)
+            image = widget.grab()
+        for axis, position, length in bright_hairlines(image.toImage()):
+            problems.append((name, f"stray bright line: {axis} {position}, {length} pixels long"))
         if render_dir is not None:
-            assert widget.grab().save(str(render_dir / f"{name}.png"))
+            assert image.save(str(render_dir / f"{name}.png"))
 
     def require_on_screen(state, window):
         area = window.screen().availableGeometry()
@@ -118,6 +178,50 @@ def check_monitor(render_dir: Path | None) -> int:
                 self.count += 1
             return False
 
+    def require_inside_sheet(state, window, widget, sheet, name):
+        """The reported defect: a square button corner poking out past a rounded pane."""
+        rect, radius = sheet
+        shape = QPainterPath()
+        shape.addRoundedRect(QRectF(rect), radius, radius)
+        # What a clipping ancestor already hides cannot poke out of anything.
+        seen = widget.visibleRegion().boundingRect()
+        if seen.isEmpty():
+            return
+        box = QRectF(widget.mapTo(window, seen.topLeft()).toPointF(), seen.size().toSizeF())
+        for corner in (box.topLeft(), box.topRight(), box.bottomLeft(), box.bottomRight()):
+            if not shape.contains(corner):
+                problems.append((state, f"{name} {box.getRect()} leaves its sheet {rect.getRect()} r{radius}"))
+                return
+
+    def check_sheets(state, window):
+        radius = pane_radius(window.height())
+        primary, controls = window._primary_toolbar, window._controls_toolbar
+        for bar in (primary, controls):
+            if bar.isVisible():
+                sheet = (bar_pane(bar, window), radius)
+                for control in bar.findChildren(QWidget):
+                    if (isinstance(control, (QAbstractButton, QComboBox, QLineEdit)) and control.isVisible()
+                            and not control.objectName().startswith("qt_")):
+                        require_inside_sheet(state, window, control, sheet, control.objectName() or type(control).__name__)
+        tabs = window._bottom_tabs
+        if tabs.isVisible():
+            sheet = (pane_for(tabs, window), radius)
+            page = tabs.currentWidget()
+            for control in page.findChildren(QWidget):
+                if (isinstance(control, (QAbstractButton, QComboBox, QLineEdit, QAbstractScrollArea)) and control.isVisible()
+                        and not control.objectName().startswith("qt_")):
+                    require_inside_sheet(state, window, control, sheet, control.objectName() or type(control).__name__)
+            bar = tabs.tabBar()
+            for index in range(tabs.count()):
+                tab = bar.tabRect(index)
+                # The tab's own margins are clear space inside this rectangle.
+                inner = QRect(bar.mapTo(window, tab.topLeft()), tab.size()).adjusted(0, 3, -4, -2)
+                shape = QPainterPath()
+                shape.addRoundedRect(QRectF(sheet[0]), radius, radius)
+                if not all(shape.contains(QPointF(point)) for point in
+                           (inner.topLeft(), inner.topRight(), inner.bottomLeft(), inner.bottomRight())):
+                    problems.append((state, f"tool tab {index} {inner.getRect()} leaves its sheet {sheet[0].getRect()} r{radius}"))
+
     def check_workspace(window, state):
         tabs, bar = window._bottom_tabs, window._bottom_tabs.tabBar()
         toolbar, controls = window._primary_toolbar, window._controls_bar
@@ -129,7 +233,10 @@ def check_monitor(render_dir: Path | None) -> int:
         if any(button.isVisible() for button in toolbar.findChildren(QToolButton, "qt_toolbar_ext_button")):
             problems.append((state, "native toolbar overflow is hiding actions"))
         if any(button.isVisible() for button in bar.findChildren(QToolButton)):
-            problems.append((state, f"tool tabs need scrolling at {bar.width()} wide"))
+            titles = [tabs.tabText(index) for index in range(tabs.count())]
+            problems.append((state, f"tool tabs need scrolling at {bar.width()} wide: {titles}, "
+                                    f"chrome {getattr(bar, '_text_tab_chrome', None)}, compact {tabs.property('compactPane')}, "
+                                    f"widths {[bar.tabRect(index).width() for index in range(tabs.count())]}"))
         if bar.tabRect(tabs.count() - 1).right() > bar.width():
             problems.append((state, f"tool tabs end at {bar.tabRect(tabs.count() - 1).right()} of {bar.width()}"))
         if not bar.tabRect(0).width() or any(not bar.tabToolTip(index) for index in range(tabs.count())):
@@ -158,6 +265,7 @@ def check_monitor(render_dir: Path | None) -> int:
                     cut = clipped(control, page)
                     if cut:
                         problems.append((state, f"tab {index} {type(control).__name__} {control.objectName()!r} is cut off: {cut}"))
+            check_sheets(f"{state} tab {index}", window)
             view = {0: window._console_panel, 1: window._serial_panel._output}.get(index)
             if view is not None:
                 lines[index] = view.viewport().height() // max(1, view.fontMetrics().lineSpacing())
@@ -271,6 +379,10 @@ def check_monitor(render_dir: Path | None) -> int:
             problems.append(("themes", f"changing theme bumped the primary toolbar to {sorted(heights)} from {before}"))
 
         window.detach_editor()
+        # Toolbar layout settles on a queued pass, which a very large window paints slowly.
+        settled = time.monotonic() + 3
+        while time.monotonic() < settled and not window._primary_toolbar.btn_compile.isVisibleTo(window._detached_window):
+            pump(.05)
         pump(.3)
         require_on_screen("detached", window._detached_window)
         require_on_screen("detached-main", window)

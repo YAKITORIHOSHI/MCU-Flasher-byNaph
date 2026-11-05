@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton, QMenu,
 )
 
+from main.qt.glass import GlassDialog
 from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
 from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, CloudLocalConflict, CloudError, read_project_link
@@ -78,7 +79,7 @@ def _fit_prompt_fields(fields):
         field.setMinimumHeight(max(32, field.fontMetrics().height() + 18))
 
 
-class _CloudUploadDialog(QDialog):
+class _CloudUploadDialog(GlassDialog):
     """Choose a local project only when the user asks to upload one."""
 
     def __init__(self, root="", parent=None):
@@ -148,7 +149,7 @@ class _CloudUploadDialog(QDialog):
             self.name.setText(Path(path).name)
 
 
-class _CloudSketchActionDialog(QDialog):
+class _CloudSketchActionDialog(GlassDialog):
     """Compact rename/collision prompt with pinned actions and a scrolling body."""
 
     def __init__(self, name, parent, *, matches=None):
@@ -220,7 +221,7 @@ class _CloudSketchActionDialog(QDialog):
         self.accept() if choice else self.reject()
 
 
-class _CloudLocalReplaceDialog(QDialog):
+class _CloudLocalReplaceDialog(GlassDialog):
     """Explain exactly which local sources an explicitly approved pull replaces."""
 
     def __init__(self, conflict, parent):
@@ -1420,22 +1421,24 @@ class CloudSketchPanel(QWidget):
         for card in self._cards:
             card.set_palette(original)
         primary = readable_foreground(pal["BTN_COMPILE"])
+        from main.qt.theme import glass_tokens
+        glass = glass_tokens(mode)
         self.setStyleSheet(f"""
             QWidget#cloud-sketch-panel {{ background: transparent; }}
             QWidget#cloud-content, QScrollArea {{ background: transparent; }}
             QLabel {{ color: {pal['TEXT']}; background: transparent; font-size: 12px; }}
             QLabel#cloud-heading {{ font-size: 15px; font-weight: 700; color: {pal['TEXT_BRIGHT']}; }}
             QLabel#cloud-secondary {{ color: {pal['TEXT_DIM']}; font-size: 11px; }}
-            QLineEdit, QComboBox {{ color: {pal['TEXT_BRIGHT']}; background: {pal['BG_DARKEST']}; border: 1px solid {pal['BORDER']}; border-radius: 6px; padding: 7px; }}
+            QLineEdit, QComboBox {{ color: {pal['TEXT_BRIGHT']}; background: {glass['well']}; border: 1px solid {glass['rim']}; border-radius: 10px; padding: 7px; }}
             QLineEdit:focus, QComboBox:focus, QListWidget:focus {{ border-color: {pal['CYAN']}; }}
             QCheckBox {{ color: {pal['TEXT']}; background: transparent; font-size: 12px; }}
-            QListWidget {{ color: {pal['TEXT']}; background: {pal['BG_DARKEST']}; border: 1px solid {pal['BORDER']}; border-radius: 6px; }}
+            QListWidget {{ color: {pal['TEXT']}; background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}
             QListWidget::item {{ padding: 7px; }}
-            QListWidget::item:selected {{ background: {pal['BG_HOVER']}; color: {pal['TEXT_BRIGHT']}; }}
-            QPushButton {{ color: {pal['TEXT_BRIGHT']}; background: {pal['BG_MID']}; border: 1px solid {pal['BORDER']}; border-radius: 6px; padding: 7px 10px; font-size: 12px; font-weight: 600; }}
-            QPushButton:hover {{ background: {pal['BG_HOVER']}; border-color: {pal['BORDER_LIT']}; }}
+            QListWidget::item:selected {{ background: {glass['selection']}; color: {pal['TEXT_BRIGHT']}; }}
+            QPushButton {{ color: {pal['TEXT_BRIGHT']}; background: {glass['button']}; border: 1px solid {glass['button_rim']}; border-radius: 10px; padding: 7px 10px; font-size: 12px; font-weight: 600; }}
+            QPushButton:hover {{ background: {glass['button_hover']}; border-color: {pal['BORDER_LIT']}; }}
             QPushButton[cloudPrimary="true"]:enabled {{ background: {pal['BTN_COMPILE']}; color: {primary}; border-color: {pal['BORDER_LIT']}; }}
-            QPushButton:disabled {{ color: {pal['TEXT_DIM']}; background: {pal['BG_DARK']}; }}
+            QPushButton:disabled {{ color: {glass['disabled_ink']}; background: {glass['button_disabled']}; }}
         """)
         for field in self.findChildren(QLineEdit):
             field.setMinimumHeight(max(32, field.fontMetrics().height() + 18))
@@ -1448,7 +1451,7 @@ class CloudSketchPanel(QWidget):
         self.palette_changed.emit(original)
 
 
-class CloudSketchDialog(QDialog):
+class CloudSketchDialog(GlassDialog):
     def __init__(self, backend, parent=None, *, on_pulled=None):
         super().__init__(parent)
         self.setWindowTitle("Cloud sketches — MCU Flasher")

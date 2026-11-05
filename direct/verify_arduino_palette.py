@@ -16,20 +16,23 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from direct import verify_embedded_viewports as fixture
 from PySide6.QtTest import QTest
+from main.core.log_colors import contrast_ratio
+from main.core.theme import glass_worst
 from main.qt.editor_panel import editor_page_background
+from main.qt.theme import css_color, glass_tokens
 
 REPORT = []
 CAPTURES = None
 EXPECTED = {
-    "light": {"background":"#f1f7fc", "foreground":"#4e5b61", "identifier":"#434f54",
-        "comment":"#657375", "type":"#007a7f", "function":"#bf4b00",
-        "literal":"#005c5f", "control":"#607700", "directive":"#826c59"},
-    "default": {"background":"#101b2a", "foreground":"#dae3e3", "identifier":"#dae3e3",
-        "comment":"#839091", "type":"#0ca1a6", "function":"#f39c12",
-        "literal":"#7fcbcd", "control":"#c586c0", "directive":"#569cd6"},
-    "solarized_dark": {"background":"#001b22", "foreground":"#dae3e3", "identifier":"#dae3e3",
-        "comment":"#839091", "type":"#0ca1a6", "function":"#f39c12",
-        "literal":"#7fcbcd", "control":"#c586c0", "directive":"#569cd6"}
+    "light": {"foreground":"#4e5b61", "identifier":"#434f54",
+        "comment":"#606d6f", "type":"#00767b", "function":"#b74700",
+        "literal":"#005c5f", "control":"#5d7300", "directive":"#7b6654"},
+    "default": {"foreground":"#dae3e3", "identifier":"#dae3e3",
+        "comment":"#959fa0", "type":"#22b0b5", "function":"#f39c12",
+        "literal":"#7fcbcd", "control":"#c688c1", "directive":"#65a2d8"},
+    "solarized_dark": {"foreground":"#dae3e3", "identifier":"#dae3e3",
+        "comment":"#959fa0", "type":"#22b0b5", "function":"#f39c12",
+        "literal":"#7fcbcd", "control":"#c688c1", "directive":"#65a2d8"}
 }
 
 INO = '\n'.join((
@@ -57,6 +60,12 @@ C = '\n'.join((
     '}',
     'int class = 1;',
 ))
+
+
+def alpha_rounded(color):
+    """Chromium and Python round the same alpha differently past two places."""
+    head, _, alpha = color.rpartition(",")
+    return f"{head},{float(alpha.rstrip(') ')):.2f}"
 
 
 def rgb(hex_color):
@@ -140,9 +149,13 @@ class ArduinoPaletteChecks(fixture.EmbeddedViewportChecks):
                     self.assertEqual(data["selection"]["startColumn"], 1)
                     self.assertEqual(data["selection"]["endColumn"], 2)
                     self.assertEqual(data["tabs"], [f["name"] for f in sources])
-                    for key in ("background", "hostBackground", "bodyBackground"):
-                        self.assertEqual(data[key], rgb(colors["background"]))
-                        self.assertEqual(data[key], rgb(editor_page_background(mode)))
+                    # Monaco paints nothing over the glass, and the well holds the page's smoke.
+                    self.assertEqual(data["background"], "rgba(0, 0, 0, 0)")
+                    reading = css_color(glass_tokens(mode)["reading"]).replace("0.667", "0.667")
+                    self.assertEqual(alpha_rounded(data["hostBackground"]), alpha_rounded(reading))
+                    self.assertEqual(data["bodyBackground"], rgb(editor_page_background(mode)))
+                    for category, ink in colors.items():
+                        self.assertGreaterEqual(contrast_ratio(ink, glass_worst(mode)["reading"]), 4.5, category)
                     offset = 1 if index == 0 else 0
                     expected = [(1,"#include","directive"), (2,"setup()","comment"),
                         (3,"uint8_t","type"), (3,"ledPin","identifier"), (3,"13","literal"),

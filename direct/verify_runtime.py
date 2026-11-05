@@ -168,6 +168,8 @@ class RuntimeChecks(unittest.TestCase):
                 resources.configure_webengine_environment()
                 self.assertNotIn("--disable-background-timer-throttling", os.environ["QTWEBENGINE_CHROMIUM_FLAGS"])
                 self.assertIn("--num-raster-threads=1", os.environ["QTWEBENGINE_CHROMIUM_FLAGS"])
+                # Low-end mode alone rasterizes with the GPU at 4 bits per channel.
+                self.assertIn("--disable-rgba-4444-textures", os.environ["QTWEBENGINE_CHROMIUM_FLAGS"])
         self.assertFalse(resources.performance_profile(8, 8).constrained)
         self.assertTrue(resources.performance_profile(8, 8, physical_cores=4).constrained)
         self.assertTrue(resources.performance_profile(12, 8, physical_cores=6).constrained)

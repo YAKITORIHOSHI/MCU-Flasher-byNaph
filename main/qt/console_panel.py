@@ -34,6 +34,7 @@ class ConsolePanelHeader(QWidget):
         self._console = console
         self._backend = backend
         self.setObjectName("console-header")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(36)
 
@@ -338,7 +339,6 @@ class ConsolePanel(QPlainTextEdit):
         self._theme_name = theme_name
         self._formats.clear()
         palette = self.palette()
-        palette.setColor(palette.ColorRole.Base, QColor(pal.get("BG_DARKEST", "#0a0e14")))
         palette.setColor(palette.ColorRole.Text, QColor(pal.get("TEXT", "#e0e6ed")))
         self.setPalette(palette)
         self._rebuild_document()

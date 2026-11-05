@@ -224,7 +224,10 @@ def main() -> int:
         _startup_mark("packages_checked")
 
         # ── Qt Application ────────────────────────────────────────────────────
+        from main.qt.interface_size import prepare_interface_size, settle_interface_size
+        interface_factor = prepare_interface_size()
         app = QApplication.instance() or QApplication(sys.argv)
+        settle_interface_size(app, interface_factor)
         _startup_mark("qapplication")
         from main.qt.garbage_collection import install_gui_garbage_collector
         cycle_collector = install_gui_garbage_collector(app)

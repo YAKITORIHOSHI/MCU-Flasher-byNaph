@@ -10,11 +10,14 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSocketNotifier, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QStackedWidget
 
-from main.qt.log_colors import themed_terminal_colors
+from main.core.log_colors import glass_terminal_colors
+from main.core.theme import get_palette
+from main.qt.glass import PageBackdrop, page_surface
 from main.platforms.ubuntu_pty import PromptObserver, close_pty_tree
 from src.modules.runtime_resources import performance_profile
 
@@ -352,6 +355,9 @@ class PosixTerminalPanel(QWidget):
                 return
             argv = [shell, "-i"]
         view = QWebEngineView(self)
+        view.page().setBackgroundColor(QColor(get_palette(self._theme)["BG_DARKEST"]))
+        view._glass_backdrop = PageBackdrop(
+            view, lambda values: view.page().runJavaScript(f"window.setGlassBackdrop?.({json.dumps(values)})"))
         channel = QWebChannel(view.page())
         session = PtySession(self._cwd(), argv, view)
         channel.registerObject("terminalBridge", session)
@@ -387,9 +393,13 @@ class PosixTerminalPanel(QWidget):
         self._label.setText("Terminal view stopped. Start a new session.")
 
     def _configure(self, view):
-        theme = themed_terminal_colors(self._theme)
+        theme = glass_terminal_colors(self._theme)
         scrollback = performance_profile().terminal_scrollback
+        view.page().runJavaScript(f"window.setGlassSurface?.({json.dumps(page_surface(self._theme))})")
         view.page().runJavaScript(f"window.configureTerminal?.({json.dumps(theme)}, {self._font_size}, {scrollback})")
+        backdrop = getattr(view, "_glass_backdrop", None)
+        if backdrop is not None:
+            backdrop.forget()
 
     def _clear(self):
         view = self._tabs.currentWidget()

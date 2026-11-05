@@ -112,13 +112,16 @@ captures must come from isolated fixtures, with no live setup or accounts.
 
 For this application's Qt/Monaco UI, refine the existing smoked/frosted glass
 palette and Montserrat navigation rather than introducing website sections.
-Editor page, gutter and reading surfaces use the actual native BG_DARKEST token;
-source tabs use the surrounding theme tokens. Apply initial theme/font/resource
+Editor page, gutter and reading surfaces are smoked glass over the window's scene;
+source tabs are pills on the same sheet, with the selected one a solid chip. Apply initial theme/font/resource
 options before Monaco construction, and use quiet static loading feedback rather
 than animation. Keep syntax contrast at least 4.5:1 on the chosen reading surface.
 Keep board/port selection in Controls and keep the editor dominant; do not add
-a target-board banner. Use static gradients and theme tokens, opaque reading
-surfaces, clear selected tabs and separate keyboard focus. Avoid compositor blur
+a target-board banner. Glass means a real scene behind every surface: an out-of-focus board in
+the theme's own colors from `src/assets/glass/`, frosted under each sheet in `main/qt/glass.py`.
+A gradient is not glass, and neither is a pane floating on a flat color or an opaque panel with a
+sheen. Show the scene through reading surfaces too. Keep theme tokens, large rounded sheets with thin
+lit rims, solid selected chips, keyboard focus and nothing leaving its sheet. Avoid compositor blur
 and continuous animation on four/six-core devices. Preserve source-tab dirty
 indicators, drag order and buffer identity. Capture compact/wide and dark/light
 layouts, check native widget ownership, and verify only explicitly requested
@@ -131,7 +134,7 @@ projects. Keep the current project's buffers, focus and terminal sessions when
 opening another window, and resolve unsaved changes before switching projects.
 Carry the same palette into native setup and the PySide6 browser on every host.
 Reflow folder, URL and version rows to the available width, with
-static rounded rims/reflections and opaque reading surfaces. Cloud host, viewport
+static rounded rims and smoked reading surfaces. Cloud host, viewport
 and content remain transparent over the owning glass; synchronize the standalone
 dialog backdrop on theme changes. Keep AI Review/History on one compact row with
 optional metadata yielding before essential actions. Verify Glass, Frosted Light

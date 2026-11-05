@@ -151,6 +151,11 @@ jobs:
           cd "$fixture/app"
           QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_package_browser.py
           QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_browser_loading.py
+          QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_glass.py
+          QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_interface_size.py
+          QT_QPA_PLATFORM=offscreen .venv-macos/bin/python -B direct/verify_taskbar_identity.py
+          QT_QPA_PLATFORM=offscreen QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu .venv-macos/bin/python -B direct/verify_renderer_color_depth.py
+          .venv-macos/bin/python -B direct/verify_monitor_matrix.py
           .venv-macos/bin/python -B direct/verify_macos_adapter.py
       - name: Retain first-launch evidence
         if: always()

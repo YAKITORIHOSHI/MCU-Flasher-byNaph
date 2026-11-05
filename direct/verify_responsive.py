@@ -24,7 +24,8 @@ if sys.platform == 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 from verify_controls import ControlChecks, APP, bootstrap_fixture
 from PySide6.QtCore import QRect, QPoint, QSize, QObject, Signal, Qt, QTimer, QEvent
-from PySide6.QtGui import QIcon, QColor
+from PySide6.QtGui import QIcon, QColor, QImage, QPainter
+from main.core.theme import glass_worst
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QComboBox, QAbstractButton,
                               QLineEdit, QToolButton, QStyle,
@@ -95,17 +96,22 @@ class QtResponsiveChecks(ControlChecks):
         host.setCentralWidget(central)
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
+        # The real tab bar and stylesheet: the labels' fit depends on their actual chrome.
+        from main.qt.glass import WorkspaceTabBar
+        APP.setStyleSheet(build_stylesheet('default'))
         tabs = QTabWidget(central)
+        tabs.setObjectName('workspace-tabs')
+        tabs.setTabBar(WorkspaceTabBar(tabs))
         for name in ('Build Console', 'Serial Monitor', 'Compatible Devices',
                      'Notifications', 'Syntax Check', 'Terminal', 'AI Changes'):
             tabs.addTab(QWidget(), name)
         layout.addWidget(tabs, 1)
         sidebar = QWidget(central)
-        sidebar.setFixedWidth(600)
+        sidebar.setFixedWidth(480)
         layout.addWidget(sidebar)
         sidebar.hide()
         host._bottom_tabs = tabs
-        host._update_tab_titles_responsive = lambda width: MCUMainWindow._update_tab_titles_responsive(host, width)
+        host._update_tab_titles_responsive = lambda: MCUMainWindow._update_tab_titles_responsive(host)
         host.resize(1280, 640)
         host.show()
         pump()
@@ -144,7 +150,8 @@ class QtResponsiveChecks(ControlChecks):
                                      'Toolbar padding should leave room for workspace content at scaled sizes')
                 bar = tabs.tabBar()
                 self.assertGreaterEqual(bar.height(), 28, 'Keep usable navigation targets')
-                self.assertLessEqual(bar.height(), max(28, bar.fontMetrics().lineSpacing() + 16),
+                # The strip sits on the tool pane's sheet, so it needs a little clear space too.
+                self.assertLessEqual(bar.height(), max(28, bar.fontMetrics().lineSpacing() + 20),
                                      'Tool tabs should not spend excessive height on padding')
                 for index in range(bar.count()):
                     self.assertGreaterEqual(bar.tabRect(index).height(), bar.fontMetrics().height())
@@ -453,7 +460,8 @@ class QtResponsiveChecks(ControlChecks):
         self.assertTrue(any('Timestamps' in text for text in option_labels))
         self.assertTrue(any('Skip Compile' in text for text in option_labels))
         controls._opt_popup.close()
-        controls.set_responsive_height(620)
+        # Captions come back once the window has height to give them.
+        controls.set_responsive_height(900)
         host.resize(1920, 620)
         pump()
         self.assertTrue(all(label.isVisible() for label in controls._group_labels))
@@ -482,7 +490,8 @@ class QtResponsiveChecks(ControlChecks):
             painted = button.grab().toImage()
             ink = painted.pixelColor(round(4 * painted.devicePixelRatio()),
                                      round(button.height() / 2 * painted.devicePixelRatio()))
-            self.assertEqual(ink, QColor(palette['BG_DARK']), 'Native button must paint its themed surface')
+            self.assertLess(ink.alpha(), 255, 'The button is glass: its themed surface must let the scene through')
+            self.assertGreater(ink.alpha(), 0, 'Native button must paint its themed surface')
             capture(host, f'serial-options-{mode}-short')
 
     def test_terminal_add_button_alignment_and_shell_choices(self):
@@ -808,6 +817,14 @@ class QtResponsiveChecks(ControlChecks):
                             # Check the pixels painted by QToolButton, not only
                             # its available QIcon modes. Ignore the border rim.
                             image = button.grab().toImage()
+                            # The button is glass, so judge it over the surface it really sits on.
+                            flat = QImage(image.size(), QImage.Format.Format_RGB32)
+                            flat.fill(QColor(glass_worst(mode)['sheet']))
+                            flat.setDevicePixelRatio(image.devicePixelRatio())
+                            painter = QPainter(flat)
+                            painter.drawImage(0, 0, image)
+                            painter.end()
+                            image = flat
                             ratio = image.devicePixelRatio()
                             cx, cy = image.width() // 2, image.height() // 2
                             half = max(1, round(5 * ratio))

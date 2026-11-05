@@ -5,14 +5,17 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
-from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, QLabel,
     QProgressBar, QPlainTextEdit, QCheckBox, QFrame, QSizePolicy, QPushButton, QStackedWidget, QWidget)
 from PySide6.QtCore import Qt, QTimer, Slot, QPointF
-from PySide6.QtGui import (QIcon, QTextCursor, QTextCharFormat, QColor, QFont,
+from PySide6.QtGui import (QTextCursor, QTextCharFormat, QColor, QFont,
     QTextBlockUserData, QPainter, QPainterPath, QPen, QLinearGradient)
+from main.core.theme import Theme
 from main.qt.log_follow import LogFollow, preserve_log_view
+from main.qt.glass import GlassDialog
 from main.qt.icons import icon
 from main.qt.setup_components import GlassCard, VectorGlyph, StatusChip, SetupProgressRow
+from main.qt.taskbar import window_hidden, window_shown
 from src.modules.bootstrap_presentation import BootstrapPresentation, concise_status
 from src.modules.ui_palette import setup_text_palette, frosted_palette
 
@@ -81,7 +84,7 @@ class SetupActivityEdit(QPlainTextEdit):
         painter.end()
 
 
-class BootstrapDialog(QDialog):
+class BootstrapDialog(GlassDialog):
     SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(self, gui, context):
@@ -136,6 +139,8 @@ class BootstrapDialog(QDialog):
         icon_checked_dim = (icons_dir / "checkbox_checked_disabled.svg").as_posix()
 
         pal, mode = self._context.resolve_theme()
+        # The scene behind this window follows the same theme as everything drawn on it.
+        Theme.apply_theme(mode)
         from src.modules.svg_icons import control_assets
         controls = control_assets(mode)
         icon_checked, icon_checked_hover = controls["hover"], controls["setup-hover"]
@@ -144,6 +149,8 @@ class BootstrapDialog(QDialog):
         self._theme_pal = pal
         self._theme_mode = mode
 
+        from main.qt.theme import glass_tokens
+        glass = glass_tokens(mode)
         bg_darkest  = pal["T_BG_DARKEST"]
         bg_dark     = pal["T_BG_DARK"]
         bg_mid      = pal["T_BG_MID"]
@@ -190,9 +197,9 @@ class BootstrapDialog(QDialog):
                 font-family: 'Consolas', monospace;
                 font-size: 12px;
                 font-weight: bold;
-                background: {bg_darkest};
-                border: 1px solid {border};
-                border-radius: 8px;
+                background: {glass['well']};
+                border: 1px solid {glass['rim']};
+                border-radius: 10px;
                 padding: 8px 12px;
                 qproperty-alignment: AlignCenter;
             }}
@@ -225,8 +232,8 @@ class BootstrapDialog(QDialog):
                 border-radius: 2px;
             }}
             QPlainTextEdit#logEdit {{
-                background-color: {bg_darkest};
-                border: 1px solid {border};
+                background: {glass['reading']};
+                border: 1px solid {glass['reading_rim']};
                 border-radius: 12px;
                 color: {text};
                 font-family: 'Consolas', 'Cascadia Code', monospace;
@@ -235,17 +242,16 @@ class BootstrapDialog(QDialog):
             }}
             /* ── High-Visibility Modern Pill ScrollBars ────────── */
             QScrollBar:vertical {{
-                background: {bg_darkest};
+                background: transparent;
                 width: 13px;
                 margin: 0px;
                 border: none;
-                border-left: 1px solid {border};
             }}
             QScrollBar::handle:vertical {{
-                background: {border};
+                background: {glass['handle']};
                 min-height: 26px;
                 border-radius: 4px;
-                margin: 2px 2px 2px 2px;
+                margin: 3px;
             }}
             QScrollBar::handle:vertical:hover {{
                 background: {cyan};
@@ -262,17 +268,16 @@ class BootstrapDialog(QDialog):
                 background: none;
             }}
             QScrollBar:horizontal {{
-                background: {bg_darkest};
+                background: transparent;
                 height: 13px;
                 margin: 0px;
                 border: none;
-                border-top: 1px solid {border};
             }}
             QScrollBar::handle:horizontal {{
-                background: {border};
+                background: {glass['handle']};
                 min-width: 26px;
                 border-radius: 4px;
-                margin: 2px 2px 2px 2px;
+                margin: 3px;
             }}
             QScrollBar::handle:horizontal:hover {{
                 background: {cyan};
@@ -306,9 +311,9 @@ class BootstrapDialog(QDialog):
             QCheckBox::indicator {{
                 width: 15px;
                 height: 15px;
-                border-radius: 4px;
-                border: 1px solid {border};
-                background-color: {bg_darkest};
+                border-radius: 5px;
+                border: 1px solid {glass['rim']};
+                background: {glass['well']};
             }}
             QCheckBox::indicator:hover {{
                 border-color: {cyan};
@@ -453,8 +458,8 @@ class BootstrapDialog(QDialog):
         self._follow = LogFollow(self.log_edit, resume_on_release=True)
         self._summary_follow = LogFollow(self.summary_edit, resume_on_release=True)
         from main.qt.svg_gutter import SvgLogGutter
-        self._raw_svg_gutter = SvgLogGutter(self.log_edit, self._log_icon, transparent=True)
-        self._summary_svg_gutter = SvgLogGutter(self.summary_edit, self._log_icon, transparent=True)
+        self._raw_svg_gutter = SvgLogGutter(self.log_edit, self._log_icon)
+        self._summary_svg_gutter = SvgLogGutter(self.summary_edit, self._log_icon)
         self._step_start_cursor = QTextCursor(self.log_edit.document())
         self._step_start_cursor.setKeepPositionOnInsert(True)
         self._summary_step_start = QTextCursor(self.summary_edit.document())
@@ -929,6 +934,14 @@ class BootstrapDialog(QDialog):
             func(*args)
         except Exception as e:
             self._context.record_exception(f"Bootstrap callback error: {e}")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        window_shown(self)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        window_hidden(self, event)
 
     def closeEvent(self, event):
         if getattr(self, "_allow_close", False) or getattr(self._gui, "_closed", False):

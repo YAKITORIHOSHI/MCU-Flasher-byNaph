@@ -29,7 +29,8 @@ from PySide6.QtWidgets import (
 )
 from main.qt.icons import ActionButton as QPushButton, IconLabel as QLabel, icon
 from main.qt.setup_components import GlassCard
-from main.qt.glass import WorkspaceTabBar
+from main.qt.glass import GlassDialog, WorkspaceTabBar, paint_scene
+from main.qt.taskbar import window_hidden, window_shown
 from src.modules.ui_palette import readable_foreground, setup_text_palette
 
 from main.core.constants import is_application_codebase_dir
@@ -172,14 +173,9 @@ class _ProjectPrompt(QMessageBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._glass = GlassCard(self, radius=0, accent=True)
-        self._glass.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._glass.lower()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._glass.setGeometry(self.rect())
-        self._glass.lower()
+    def paintEvent(self, event):
+        paint_scene(self, veiled=True)
 
 
 def _get_project_files_fast(folder_path: Path | str) -> list[str]:
@@ -201,7 +197,7 @@ def _get_project_files_fast(folder_path: Path | str) -> list[str]:
         return []
 
 
-class ProjectDialog(QDialog):
+class ProjectDialog(GlassDialog):
     """
     Open / Create Project dialog for MCU Flasher by Naph.
 
@@ -285,6 +281,7 @@ class ProjectDialog(QDialog):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        window_shown(self)
         # Ensure centered on active screen work area on initial show
         if not getattr(self, "_centered", False):
             self._centered = True
@@ -326,13 +323,11 @@ class ProjectDialog(QDialog):
         for timer in self._foreground_timers:
             timer.stop()
         super().hideEvent(event)
+        window_hidden(self, event)
 
     def _setup_ui(self) -> None:
         self.setObjectName("project-selector")
-        self._glass_backdrop = GlassCard(self, radius=0)
-        self._glass_backdrop.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._glass_backdrop.lower()
-        self._glass_cards = [self._glass_backdrop]
+        self._glass_cards = []
         self._tab_scrolls = []
 
         root = QVBoxLayout(self)
@@ -372,6 +367,7 @@ class ProjectDialog(QDialog):
         self._tabs.setObjectName("project-tabs")
         self._tabs.setTabBar(_ProjectTabBar(self._tabs))
         self._tabs.setDocumentMode(True)
+        self._tabs.tabBar().setDrawBase(False)
         body.addWidget(self._tabs)
         root.addWidget(self._body_card, 1)
 
@@ -402,10 +398,8 @@ class ProjectDialog(QDialog):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if not hasattr(self, "_glass_backdrop"):
+        if not hasattr(self, "_header_card"):
             return
-        self._glass_backdrop.setGeometry(self.rect())
-        self._glass_backdrop.lower()
         compact = self.width() < 560 or self.height() < 430
         self.layout().setContentsMargins(10 if compact else 14, 8 if compact else 12,
                                         10 if compact else 14, 8 if compact else 12)
@@ -569,7 +563,7 @@ class ProjectDialog(QDialog):
         if not theme_mode:
             from main.core.config import get_theme_mode
             theme_mode = get_theme_mode()
-        from main.qt.theme import get_palette
+        from main.qt.theme import get_palette, glass_tokens
         original = get_palette(theme_mode)
         # Reading inks are checked against all static glass/reflection bounds.
         adjusted = setup_text_palette({"T_" + key: value for key, value in original.items()}, glass=True)
@@ -582,8 +576,9 @@ class ProjectDialog(QDialog):
         self._brand_mark.setPixmap(icon("brand", pal["CYAN"], size=40).pixmap(40, 40))
         self._tabs.tabBar()._focus_ink = pal["CYAN"]
         primary_ink = readable_foreground(pal["BTN_COMPILE"])
+        glass = glass_tokens(theme_mode)
         self.setStyleSheet(f"""
-            QDialog#project-selector {{ background: {pal['BG_DARKEST']}; color: {pal['TEXT']}; }}
+            QDialog#project-selector {{ color: {pal['TEXT']}; }}
             QLabel {{ background: transparent; color: {pal['TEXT']}; font-size: 12px; }}
             QLabel#project-heading {{ color: {pal['TEXT_BRIGHT']}; font-size: 17px; font-weight: 700; }}
             QLabel#project-subheading {{ color: {pal['TEXT_DIM']}; font-size: 11px; }}
@@ -591,44 +586,44 @@ class ProjectDialog(QDialog):
             QTabWidget#project-tabs::pane {{ border: 0; background: transparent; }}
             QTabBar {{ background: transparent; border: 0; }}
             QTabBar::tab {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {pal['BG_MID']},stop:1 {pal['BG_DARK']});
-                color: {pal['TEXT_DIM']}; border: 1px solid {pal['BORDER']}; border-radius: 7px;
+                background: {glass['button']};
+                color: {pal['TEXT']}; border: 1px solid {glass['rim']}; border-radius: 11px;
                 padding: 8px 10px; margin-right: 4px; font-size: 11px; font-weight: 600;
             }}
-            QTabBar::tab:selected {{ background: {pal['BG_HOVER']}; color: {pal['TEXT_BRIGHT']}; border-color: {pal['BORDER_LIT']}; }}
-            QTabBar::tab:hover:!selected {{ background: {pal['BG_MID']}; color: {pal['TEXT_BRIGHT']}; }}
-            QTabBar QToolButton {{ background: {pal['BG_MID']}; color: {pal['TEXT']}; border: 1px solid {pal['BORDER']}; }}
+            QTabBar::tab:selected {{ background: {glass['chip']}; color: {glass['chip_ink']}; border-color: {glass['chip']}; }}
+            QTabBar::tab:hover:!selected {{ background: {glass['button_hover']}; color: {pal['TEXT_BRIGHT']}; }}
+            QTabBar QToolButton {{ background: {glass['button']}; color: {pal['TEXT']}; border: 1px solid {glass['rim']}; }}
             QScrollArea#project-page-scroll, QWidget#project-page-content {{ background: transparent; }}
             QLineEdit, QComboBox {{
-                background: {pal['BG_DARKEST']}; color: {pal['TEXT_BRIGHT']};
-                border: 1px solid {pal['BORDER']}; border-radius: 7px; padding: 7px 9px; font-size: 12px;
-                selection-background-color: {pal['BG_HOVER']}; selection-color: {pal['TEXT_BRIGHT']};
+                background: {glass['well']}; color: {pal['TEXT_BRIGHT']};
+                border: 1px solid {glass['rim']}; border-radius: 10px; padding: 7px 9px; font-size: 12px;
+                selection-background-color: {glass['selection']}; selection-color: {pal['TEXT_BRIGHT']};
             }}
             QLineEdit:focus, QComboBox:focus {{ border-color: {pal['CYAN']}; }}
-            QComboBox QAbstractItemView {{ background: {pal['BG_DARKEST']}; color: {pal['TEXT']};
+            QComboBox QAbstractItemView {{ background: {pal['BG_MID']}; color: {pal['TEXT']};
                 selection-background-color: {pal['BG_HOVER']}; selection-color: {pal['TEXT_BRIGHT']}; }}
             QGroupBox#project-form {{ background: transparent; border: 0; margin: 0; padding: 0; }}
             QLabel#project-section-title {{ color: {pal['TEXT_BRIGHT']}; font-weight: 600; font-size: 12px; }}
-            QLabel#project-reading {{ background: {pal['BG_DARKEST']}; color: {pal['TEXT']};
-                border: 1px solid {pal['BORDER']}; border-radius: 8px; padding: 9px 10px; font-size: 11px; }}
-            QListWidget {{ background: {pal['BG_DARKEST']}; color: {pal['TEXT']}; border: 1px solid {pal['BORDER']};
-                border-radius: 8px; padding: 4px; font-size: 12px; outline: none; }}
-            QListWidget::item {{ padding: 8px 9px; border: 1px solid transparent; border-radius: 5px; }}
-            QListWidget::item:hover {{ background: {pal['BG_MID']}; }}
-            QListWidget::item:selected {{ background: {pal['BG_HOVER']}; color: {pal['TEXT_BRIGHT']}; border-color: {pal['BORDER_LIT']}; }}
+            QLabel#project-reading {{ background: {glass['reading']}; color: {pal['TEXT']};
+                border: 1px solid {glass['reading_rim']}; border-radius: 10px; padding: 9px 10px; font-size: 11px; }}
+            QListWidget {{ background: {glass['reading']}; color: {pal['TEXT']}; border: 1px solid {glass['reading_rim']};
+                border-radius: 10px; padding: 4px; font-size: 12px; outline: none; }}
+            QListWidget::item {{ padding: 8px 9px; border: 1px solid transparent; border-radius: 7px; }}
+            QListWidget::item:hover {{ background: {glass['hover']}; }}
+            QListWidget::item:selected {{ background: {glass['selection']}; color: {pal['TEXT_BRIGHT']}; border-color: {pal['BORDER_LIT']}; }}
             QListWidget:focus {{ border-color: {pal['CYAN']}; }}
             QListWidget#existing-project-files::item {{ padding: 0px 7px; border-width: 0px; }}
             QCheckBox {{ color: {pal['TEXT']}; font-size: 12px; background: transparent; }}
-            QPushButton {{ min-height: 18px; padding: 7px 12px; border: 1px solid {pal['BORDER']};
-                border-radius: 7px; color: {pal['TEXT_BRIGHT']}; font-size: 12px; font-weight: 600;
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {pal['BG_MID']},stop:1 {pal['BG_DARK']}); }}
-            QPushButton:hover {{ background: {pal['BG_HOVER']}; border-color: {pal['BORDER_LIT']}; }}
-            QPushButton:pressed {{ background: {pal['BG_DARKEST']}; }}
+            QPushButton {{ min-height: 18px; padding: 7px 12px; border: 1px solid {glass['button_rim']};
+                border-radius: 10px; color: {pal['TEXT_BRIGHT']}; font-size: 12px; font-weight: 600;
+                background: {glass['button']}; }}
+            QPushButton:hover {{ background: {glass['button_hover']}; border-color: {pal['BORDER_LIT']}; }}
+            QPushButton:pressed {{ background: {glass['button_pressed']}; }}
             QPushButton:focus {{ border: 2px solid {pal['CYAN']}; padding: 6px 11px; }}
             QPushButton[projectAction="primary"]:enabled {{ color: {primary_ink}; border-color: {pal['BORDER_LIT']};
                 background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {pal['BTN_COMPILE_H']},stop:1 {pal['BTN_COMPILE']}); }}
             QPushButton[projectAction="primary"]:enabled:hover {{ background: {pal['BTN_COMPILE_H']}; }}
-            QPushButton:disabled {{ background: {pal['BG_DARK']}; color: {pal['TEXT_DIM']}; border-color: {pal['BORDER']}; }}
+            QPushButton:disabled {{ background: {glass['button_disabled']}; color: {glass['disabled_ink']}; border-color: {glass['rim']}; }}
         """)
         for label in self.findChildren(QLabel):
             tone = label.property("projectTone")
@@ -1244,8 +1239,6 @@ class ProjectDialog(QDialog):
             pal = get_palette(getattr(self, "_theme_mode", None) or get_theme_mode())
         except Exception:
             pal = {}
-        if isinstance(prompt, _ProjectPrompt):
-            prompt._glass.set_palette(pal)
         bg = pal.get("BG_DARK", "#151922")
         surface = pal.get("BG_MID", "#1c2333")
         hover = pal.get("BG_HOVER", "#2a3a55")

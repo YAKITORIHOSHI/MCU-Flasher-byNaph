@@ -11,9 +11,10 @@ from typing import Callable
 from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QCheckBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
+from main.qt.glass import GlassDialog
 
 SKETCH_EXTENSIONS = frozenset({".ino", ".h", ".hpp", ".cpp", ".c", ".txt"})
 MAX_FILES = 512
@@ -146,7 +147,7 @@ def search_project(project: Path, query: str, *, case_sensitive: bool = False,
     return result
 
 
-class ProjectSearchDialog(QDialog):
+class ProjectSearchDialog(GlassDialog):
     """One cancellable scan and one latest pending query per owned dialog."""
 
     _finished = Signal(dict)

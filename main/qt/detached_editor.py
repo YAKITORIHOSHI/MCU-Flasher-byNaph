@@ -16,6 +16,8 @@ from PySide6.QtCore import Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QIcon, QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QPushButton
 
+from main.qt.glass import bar_pane, paint_scene, pane_gutters, pane_radius
+
 
 class DetachedEditorWindow(QMainWindow):
     """Independent standalone window hosting the detached Monaco Code Editor."""
@@ -65,6 +67,11 @@ class DetachedEditorWindow(QMainWindow):
             toolbar.style().polish(toolbar)
         toolbar.set_responsive_width(toolbar.width())
 
+    def paintEvent(self, event) -> None:
+        toolbar = self._primary_toolbar
+        visible = toolbar is not None and toolbar.isVisible() and toolbar.window() is self
+        paint_scene(self, ((bar_pane(toolbar, self), pane_radius(self.height())),) if visible else ())
+
     def event(self, event):
         result = super().event(event)
         if (hasattr(self, "_toolbar_layout_timer")
@@ -78,6 +85,12 @@ class DetachedEditorWindow(QMainWindow):
         if hasattr(self, "_toolbar_layout_timer"):
             self._toolbar_layout_timer.start(0)
         cw = self.centralWidget()
+        if cw and cw.layout() is not None:
+            # The window's scene shows around the page's sheet, as it does in the workspace.
+            side, edge, _handle = pane_gutters(self.width(), self.height())
+            margins = cw.layout().contentsMargins()
+            if (margins.left(), margins.top()) != (side, edge):
+                cw.layout().setContentsMargins(side, edge, side, side)
         if cw and hasattr(cw, "force_layout"):
             cw.force_layout()
 

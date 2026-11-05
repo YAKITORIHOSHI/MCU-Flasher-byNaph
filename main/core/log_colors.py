@@ -1,7 +1,7 @@
 """Framework-neutral readable theme colors for logs and terminal renderers."""
 from __future__ import annotations
 
-from main.core.theme import get_palette
+from main.core.theme import get_palette, glass_worst
 
 
 def _luminance(color: str) -> float:
@@ -20,15 +20,31 @@ def contrast_ratio(foreground: str, background: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
+def _mixed(color: str, target: str, share: float) -> str:
+    channels = [round(int(color[index:index + 2], 16) * (1 - share) + int(target[index:index + 2], 16) * share)
+                for index in (1, 3, 5)]
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
+
+
 def themed_log_colors(theme_name: str = "default", *, background: str | None = None) -> dict[str, str]:
-    """Map log semantics to readable colors from the active workspace theme."""
+    """Map log semantics to readable colors from the active workspace theme.
+
+    With no background named, they are for a reading surface: smoked glass over the scene,
+    judged at its hardest point rather than at the theme's own surface color.
+    """
     palette = get_palette(theme_name)
-    background = background or palette["BG_DARKEST"]
+    background = background or glass_worst(theme_name)["reading"]
 
     def readable(token: str, dark: str, light: str) -> str:
-        for color in (palette[token], dark, light, palette["TEXT"], "#000000", "#ffffff"):
+        for color in (palette[token], dark, light):
             if contrast_ratio(color, background) >= 4.5:
                 return color
+        # Nothing the theme offers reads here. Keep this color's hue and move it clear of the surface.
+        target = "#ffffff" if _luminance(background) < .18 else "#000000"
+        for step in range(1, 21):
+            mixed = _mixed(palette[token], target, step / 20)
+            if contrast_ratio(mixed, background) >= 4.5:
+                return mixed
         return palette["TEXT"]
 
     colors = {
@@ -57,6 +73,11 @@ def themed_log_colors(theme_name: str = "default", *, background: str | None = N
         "severe_alert": readable("RED", "#cf222e", "#ff7b75"),
     }
     return colors
+
+
+def glass_inks(theme_name: str = "default") -> dict[str, str]:
+    """The same semantics for text written straight on a sheet of glass, the brightest surface."""
+    return themed_log_colors(theme_name, background=glass_worst(theme_name)["sheet"])
 
 
 def themed_ansi_colors(theme_name: str = "default") -> dict[int, str]:
@@ -97,4 +118,18 @@ def themed_terminal_colors(theme_name: str = "default") -> dict[str, str]:
     for index, name in enumerate(("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white")):
         colors[name] = ansi[30 + index]
         colors["bright" + name.title()] = ansi[90 + index]
+    return colors
+
+
+def glass_terminal_colors(theme_name: str = "default") -> dict[str, str]:
+    """For a terminal page painting its own glass: xterm draws no fill of its own over it.
+
+    The color is still the surface's, at zero alpha, because xterm judges minimum contrast
+    from it and a real surface color keeps that judgment honest.
+    """
+    colors = themed_terminal_colors(theme_name)
+    worst = glass_worst(theme_name)["reading"]
+    red, green, blue = (int(worst[index:index + 2], 16) for index in (1, 3, 5))
+    colors["background"] = f"rgba({red}, {green}, {blue}, 0)"
+    colors["cursorAccent"] = worst
     return colors

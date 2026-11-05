@@ -9,10 +9,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from PySide6.QtCore import QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QVBoxLayout, QWidget
 
 from main.core.theme import Theme
+from main.qt.glass import PANE_SHADOW, pane_image
 from main.qt.icons import icon
 
 
@@ -36,7 +37,7 @@ def _alpha(color: str, opacity: int) -> QColor:
 
 
 class GlassCard(QFrame):
-    """An opaque reading surface beneath static reflections and a beveled rim."""
+    """A translucent pane over the window's scene, lit from above by a soft rim."""
 
     def __init__(self, parent=None, palette=None, radius: int = 12, accent: bool = False):
         super().__init__(parent)
@@ -65,89 +66,24 @@ class GlassCard(QFrame):
     def paintEvent(self, event):
         if self.width() <= 0 or self.height() <= 0:
             return
-        if self._cached_surface is None or self._cached_surface.size() != self.size():
-            self._cached_surface = self._make_surface()
+        ratio = self.devicePixelRatioF()
+        surface = self._cached_surface
+        if surface is None or surface.size() != self.size() * ratio or surface.devicePixelRatio() != ratio:
+            self._cached_surface = self._make_surface(ratio)
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self._cached_surface)
 
-    def _make_surface(self) -> QPixmap:
-        surface = QPixmap(self.size())
+    def _make_surface(self, ratio: float = 1.0) -> QPixmap:
+        # Drawn at device pixels so the rim stays one crisp pixel at fractional display scales.
+        surface = QPixmap(self.size() * ratio)
+        surface.setDevicePixelRatio(ratio)
         surface.fill(Qt.GlobalColor.transparent)
         painter = QPainter(surface)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        radius = min(self._radius, bounds.width() / 2, bounds.height() / 2)
-        path = QPainterPath()
-        path.addRoundedRect(bounds, radius, radius)
-        colors = self._colors
-        light = QColor(colors["BG_DARKEST"]).lightness() > 128
-        body = QLinearGradient(0, 0, self.width() * 0.25, self.height())
-        body.setColorAt(0, QColor(colors["BG_LIGHT"]))
-        body.setColorAt(0.22, QColor(colors["BG_MID"]))
-        body.setColorAt(0.72, QColor(colors["BG_DARK"]))
-        body.setColorAt(1, QColor(colors["BG_DARKEST"]))
-        painter.fillPath(path, body)
-
-        # These directional bands are baked into one cached surface. They
-        # suggest thick glass without sampling the desktop or blurring text.
-        # Specular light remains white in the light palette too; ink colors
-        # are never used as reflection colors.
-        painter.save()
-        painter.setClipPath(path)
-        reflection = QLinearGradient(0, 0, 0, max(1, self.height() * 0.8))
-        reflection.setColorAt(0, _alpha("#ffffff", 92 if light else 46))
-        reflection.setColorAt(0.38, _alpha("#ffffff", 34 if light else 17))
-        reflection.setColorAt(1, _alpha("#ffffff", 0))
-        band = QPainterPath()
-        band.moveTo(0, 0)
-        band.lineTo(self.width() * 0.62, 0)
-        band.lineTo(self.width() * 0.36, self.height() * 0.8)
-        band.lineTo(0, self.height() * 0.52)
-        band.closeSubpath()
-        painter.fillPath(band, reflection)
-        streak = QPainterPath()
-        streak.moveTo(self.width() * 0.64, 0)
-        streak.lineTo(self.width() * 0.68, 0)
-        streak.lineTo(self.width() * 0.43, self.height() * 0.8)
-        streak.lineTo(self.width() * 0.40, self.height() * 0.8)
-        streak.closeSubpath()
-        sheen = QLinearGradient(0, 0, 0, max(1, self.height() * 0.8))
-        sheen.setColorAt(0, _alpha("#ffffff", 55 if light else 23))
-        sheen.setColorAt(1, _alpha("#ffffff", 0))
-        painter.fillPath(streak, sheen)
-        painter.restore()
-
-        # An inset bevel contributes actual edge depth at small card heights.
-        # The bottom and right edge darken while the upper edge catches light.
-        bevel = QLinearGradient(0, 0, self.width() * 0.25, self.height())
-        bevel.setColorAt(0, _alpha("#ffffff", 190 if light else 115))
-        bevel.setColorAt(0.35, _alpha("#ffffff", 8))
-        bevel.setColorAt(0.75, _alpha("#000000", 15 if light else 40))
-        bevel.setColorAt(1, _alpha("#000000", 45 if light else 105))
-        painter.setPen(QPen(bevel, 1.5))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(bounds.adjusted(1.5, 1.5, -1.5, -1.5), max(0, radius - 1), max(0, radius - 1))
-        painter.setPen(QPen(QColor(colors["BORDER"]), 1))
-        painter.drawPath(path)
-
-        painter.save()
-        painter.setClipPath(path)
-        rim = QLinearGradient(0, 0, self.width(), 0)
-        rim.setColorAt(0, _alpha(colors["BORDER_LIT"], 235 if self._accent else 150))
-        rim.setColorAt(0.6, _alpha("#ffffff", 170 if light else 130))
-        rim.setColorAt(1, _alpha(colors["BORDER_LIT"], 75))
-        painter.setPen(QPen(rim, 1))
-        painter.drawLine(bounds.topLeft(), bounds.topRight())
-        if self._accent and self.width() > 70:
-            # An interrupted etched trace replaces decorative glow/shadows.
-            trace = QPainterPath()
-            trace.moveTo(self.width() - 45, 1.5)
-            trace.lineTo(self.width() - 27, 1.5)
-            trace.lineTo(self.width() - 17, 11.5)
-            trace.lineTo(self.width() - 8, 11.5)
-            painter.setPen(QPen(_alpha(colors["CYAN"], 125), 1))
-            painter.drawPath(trace)
-        painter.restore()
+        # A card's shadow has to stay inside the card's own widget, so the sheet sits a little in.
+        inset = min(3, self.width() // 8, self.height() // 8)
+        light = QColor(self._colors["BG_DARKEST"]).lightness() > 128
+        painter.drawImage(inset - PANE_SHADOW, inset - PANE_SHADOW,
+                          pane_image(self.width() - 2 * inset, self.height() - 2 * inset, self._radius, ratio, light))
         painter.end()
         return surface
 

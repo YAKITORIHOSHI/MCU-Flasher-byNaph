@@ -200,16 +200,32 @@ class Theme:
 Theme.apply_theme("default")
 
 
-def get_palette(theme_mode: str = "default") -> dict[str, str]:
-    """Return a copy of the requested palette without importing a UI framework."""
+def _palette_key(theme_mode: str) -> str:
     mode_key = (theme_mode or "default").lower().strip()
     if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
-        mode_key = "solarized_dark"
-    elif mode_key in ("light", "clean"):
-        mode_key = "light"
-    elif mode_key not in Theme.PALETTES:
-        mode_key = "default"
-    return dict(Theme.PALETTES[mode_key])
+        return "solarized_dark"
+    if mode_key in ("light", "clean"):
+        return "light"
+    return mode_key if mode_key in Theme.PALETTES else "default"
+
+
+def get_palette(theme_mode: str = "default") -> dict[str, str]:
+    """Return a copy of the requested palette without importing a UI framework."""
+    return dict(Theme.PALETTES[_palette_key(theme_mode)])
+
+
+# The hardest place for text on each glass surface, anywhere the scene can land: the brightest
+# point in a dark theme and the darkest in the light one. Inks are chosen against these, and
+# direct/verify_glass.py recomputes them from the real images and tints.
+_GLASS_WORST = {
+    "default": {"sheet": "#49627a", "reading": "#233345", "well": "#27384b"},
+    "light": {"sheet": "#c4d6e5", "reading": "#edf2f7", "well": "#f0f5f8"},
+    "solarized_dark": {"sheet": "#35666d", "reading": "#12343b", "well": "#163a41"},
+}
+
+
+def glass_worst(theme_mode: str = "default") -> dict[str, str]:
+    return dict(_GLASS_WORST[_palette_key(theme_mode)])
 
 
 def get_theme_mode() -> str:

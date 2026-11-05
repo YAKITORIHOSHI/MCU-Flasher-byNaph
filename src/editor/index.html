@@ -23,6 +23,19 @@
       document.documentElement.classList.add('theme-' + theme.replace(/_/g, '-'));
       document.documentElement.classList.toggle('resource-constrained', window.__mcuResourceConstrained);
       document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+      // Line this page's copy of the scene up with its window's. A web view cannot show
+      // the window behind it, so the same images are painted here at the same position.
+      window.setGlassBackdrop = (backdrop) => {
+        const style = document.documentElement.style;
+        for (const name of ['width', 'height', 'x', 'y', 'radius']) {
+          if (Number.isFinite(backdrop[name])) style.setProperty('--scene-' + name, backdrop[name] + 'px');
+        }
+      };
+      const backdrop = (parameters.get('backdrop') || '').split(',').map(Number);
+      if (backdrop.length === 5) {
+        const [width, height, x, y, radius] = backdrop;
+        window.setGlassBackdrop({width, height, x, y, radius});
+      }
     })();
   </script>
   <style>
@@ -63,6 +76,17 @@
     }
 
     :root, :root.theme-default, body.theme-default {
+      --scene: url('../assets/glass/default.png');
+      --frost: url('../assets/glass/default-frosted.png');
+      --sheet: linear-gradient(rgba(255, 255, 255, 0.063), rgba(255, 255, 255, 0.039));
+      --sheet-rim: rgba(255, 255, 255, 0.2);
+      --sheet-light: rgba(255, 255, 255, 0.22);
+      --sheet-bevel: rgba(255, 255, 255, 0.08);
+      --reading: rgba(16, 27, 42, 0.667);
+      --reading-rim: rgba(255, 255, 255, 0.133);
+      --handle: rgba(246, 251, 255, 0.29);
+      --chip: #f6fbff;
+      --chip-ink: #101b2a;
       --bg-darkest: #101b2a;
       --bg-dark: #18283b;
       --bg-tab-hover: #2a415a;
@@ -75,6 +99,8 @@
       --tab-rim: rgba(227, 237, 246, 0.2);
       --tab-selected: #29475a;
       --tab-sheen: rgba(227, 237, 246, 0.055);
+      --tab-fill: linear-gradient(rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
+      --tab-fill-hover: linear-gradient(rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.06));
       --hover-bg: #20344b;
       --hover-code-bg: #18283b;
       --hover-border: #425e79;
@@ -97,6 +123,17 @@
     }
 
     :root.theme-light, body.theme-light {
+      --scene: url('../assets/glass/light.png');
+      --frost: url('../assets/glass/light-frosted.png');
+      --sheet: linear-gradient(rgba(255, 255, 255, 0.518), rgba(255, 255, 255, 0.361));
+      --sheet-rim: rgba(255, 255, 255, 0.72);
+      --sheet-light: rgba(255, 255, 255, 0.78);
+      --sheet-bevel: rgba(255, 255, 255, 0.3);
+      --reading: rgba(255, 255, 255, 0.69);
+      --reading-rim: rgba(255, 255, 255, 0.824);
+      --handle: rgba(31, 35, 40, 0.345);
+      --chip: #0969da;
+      --chip-ink: #ffffff;
       --bg-darkest: #f1f7fc;
       --bg-dark: #e8f0f7;
       --bg-tab-hover: #dce9f3;
@@ -109,6 +146,8 @@
       --tab-rim: #c2cdd8;
       --tab-selected: #e2efff;
       --tab-sheen: rgba(255, 255, 255, 0.6);
+      --tab-fill: linear-gradient(rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0.54));
+      --tab-fill-hover: linear-gradient(rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.74));
       --hover-bg: #f8fcff;
       --hover-code-bg: #e8f0f7;
       --hover-border: #a6becf;
@@ -131,6 +170,17 @@
     }
 
     :root.theme-solarized-dark, body.theme-solarized-dark {
+      --scene: url('../assets/glass/solarized_dark.png');
+      --frost: url('../assets/glass/solarized_dark-frosted.png');
+      --sheet: linear-gradient(rgba(255, 255, 255, 0.063), rgba(255, 255, 255, 0.039));
+      --sheet-rim: rgba(255, 255, 255, 0.2);
+      --sheet-light: rgba(255, 255, 255, 0.22);
+      --sheet-bevel: rgba(255, 255, 255, 0.08);
+      --reading: rgba(0, 27, 34, 0.667);
+      --reading-rim: rgba(255, 255, 255, 0.133);
+      --handle: rgba(255, 255, 255, 0.29);
+      --chip: #ffffff;
+      --chip-ink: #001b22;
       --bg-darkest: #001b22;
       --bg-dark: #002b36;
       --bg-tab-hover: #0d4a59;
@@ -143,6 +193,8 @@
       --tab-rim: #285361;
       --tab-selected: #0d414b;
       --tab-sheen: rgba(255, 255, 255, 0.04);
+      --tab-fill: linear-gradient(rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
+      --tab-fill-hover: linear-gradient(rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.06));
       --hover-bg: #002b36;
       --hover-code-bg: #001b22;
       --hover-border: #166b80;
@@ -164,16 +216,28 @@
       --diff-modify-text: #7ec8f4;
     }
 
+    :root {
+      --scene-width: 100vw;
+      --scene-height: 62.5vw;
+      --scene-x: 0px;
+      --scene-y: 0px;
+      --scene-radius: 16px;
+    }
+
     html,
     body {
       width: 100%;
       height: 100%;
       margin: 0;
       padding: 0;
-      background: var(--bg-darkest);
       font-family: 'Montserrat', 'Segoe UI', sans-serif;
       color: var(--text);
       overflow: hidden;
+    }
+
+    /* What the window itself shows here: only the sheet's rounded corners leave it visible. */
+    body {
+      background: var(--scene) var(--scene-x) var(--scene-y) / var(--scene-width) var(--scene-height) no-repeat var(--bg-darkest);
     }
 
     #app-container {
@@ -183,6 +247,13 @@
       inset: 0;
       min-width: 0;
       min-height: 0;
+      /* The same sheet of glass the window paints under its own panes. */
+      background:
+        var(--sheet),
+        var(--frost) var(--scene-x) var(--scene-y) / var(--scene-width) var(--scene-height) no-repeat;
+      border-radius: var(--scene-radius);
+      box-shadow: inset 0 1px 0 var(--sheet-light), inset 0 0 0 1px var(--sheet-rim), inset 0 2px 0 var(--sheet-bevel);
+      overflow: hidden;
     }
 
     #editor-tab-row {
@@ -190,8 +261,7 @@
       flex: 0 0 auto;
       align-items: center;
       min-width: 0;
-      background: linear-gradient(var(--tab-sheen), transparent), var(--bg-dark);
-      border-bottom: 1px solid var(--border);
+      background: transparent;
     }
 
     #ai-banner-toggle {
@@ -224,6 +294,10 @@
     }
 
     /* A short editor spends its height on code, not on the file tabs above it. */
+    @media (max-height: 460px) {
+      #tab-bar { min-height: 38px; padding: 4px 8px; }
+      #tab-bar .tab { min-height: 28px; }
+    }
     @media (max-height: 200px) {
       #tab-bar { min-height: 30px; padding: 2px 8px; }
       #tab-bar .tab { min-height: 24px; }
@@ -236,8 +310,7 @@
       min-height: 40px;
       padding: 5px 8px;
       box-sizing: border-box;
-      background: var(--bg-dark);
-      border-bottom: 1px solid var(--border);
+      background: transparent;
       overflow-x: auto;
     }
 
@@ -293,11 +366,11 @@
     }
 
     #tab-bar::-webkit-scrollbar-track {
-      background: var(--bg-darkest);
+      background: transparent;
     }
 
     #tab-bar::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: var(--handle);
       border-radius: 3px;
     }
 
@@ -312,22 +385,23 @@
     }
 
     ::-webkit-scrollbar-track {
-      background: var(--bg-darkest);
-      border-left: 1px solid var(--border-tab);
+      background: transparent;
     }
 
     ::-webkit-scrollbar-thumb {
-      background: var(--border);
+      background: var(--handle);
       border-radius: 6px;
-      border: 2px solid var(--bg-darkest);
+      border: 3px solid transparent;
+      background-clip: padding-box;
     }
 
     ::-webkit-scrollbar-thumb:hover {
       background: var(--accent);
+      background-clip: padding-box;
     }
 
     .monaco-editor .scrollbar .slider {
-      background: var(--border) !important;
+      background: var(--handle) !important;
       border-radius: 5px !important;
     }
 
@@ -347,14 +421,14 @@
       padding: 0 11px;
       min-height: 30px;
       max-width: 260px;
-      background: linear-gradient(var(--tab-sheen), transparent), var(--bg-dark);
+      background: var(--tab-fill);
       border: 1px solid var(--tab-rim);
-      border-radius: 8px;
+      border-radius: 11px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 500;
       user-select: none;
-      color: var(--text-dim);
+      color: var(--text);
       box-sizing: border-box;
       position: relative;
     }
@@ -375,20 +449,19 @@
     }
 
     .tab:hover {
-      background: var(--bg-tab-hover);
+      background: var(--tab-fill-hover);
       color: var(--text);
     }
 
     .tab.active {
-      background: linear-gradient(var(--tab-sheen), transparent), var(--tab-selected);
-      color: var(--text);
-      border-color: var(--accent);
-      box-shadow: inset 0 -2px 0 var(--accent);
+      background: var(--chip);
+      color: var(--chip-ink);
+      border-color: var(--chip);
       /* A heavier font would widen this tab and push every tab after it sideways. */
       -webkit-text-stroke: .25px currentColor;
     }
 
-    .tab.active::before { background: var(--accent); opacity: 1; }
+    .tab.active::before { background: var(--chip-ink); opacity: 1; }
 
     .tab .dirty-dot {
       width: 6px;
@@ -403,23 +476,31 @@
       flex: 1 1 0%;
       min-height: 0 !important;
       min-width: 0 !important;
-      width: 100% !important;
       position: relative;
-      background: var(--bg-darkest);
+      margin: 0 7px 7px;
+      background: var(--reading);
+      border: 1px solid var(--reading-rim);
+      border-radius: max(4px, calc(var(--scene-radius) - 6px));
       overflow: hidden;
     }
 
+    /* A little room inside the well, so code never runs against its rim, even mid-scroll. */
     #monaco-anchor {
       position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      width: 100% !important;
-      height: 100% !important;
+      inset: 6px;
       min-height: 0 !important;
       min-width: 0 !important;
       overflow: hidden;
+    }
+
+    /* After the rules they tighten: a short or narrow editor spends its room on code. */
+    @media (max-height: 460px) {
+      #editor-container { margin: 0 4px 4px; }
+      #monaco-anchor { inset: 3px; }
+    }
+    @media (max-height: 200px), (max-width: 340px) {
+      #editor-container { margin: 0 2px 2px; }
+      #monaco-anchor { inset: 1px; }
     }
 
     #editor-loading {
@@ -430,7 +511,7 @@
       align-items: flex-start;
       padding: 24px;
       box-sizing: border-box;
-      background: var(--bg-darkest);
+      background: transparent;
       color: var(--text-dim);
       font-size: 12px;
       line-height: 1.6;
@@ -443,6 +524,9 @@
     .monaco-editor .decorationsOverviewRuler {
       display: none !important;
     }
+
+    /* Monaco frames its root in its focus color, a bright line around the whole well. */
+    .monaco-editor { outline: none !important; }
 
     .monaco-definition-link {
       color: var(--accent) !important;
@@ -1759,6 +1843,7 @@
       }
 
       const editorContainerElem = document.getElementById('editor-container');
+      const editorAnchorElem = document.getElementById('monaco-anchor');
       // ── Stable Monaco layout scheduling ───────────────────────────────────
       // A QWebEngine resize can raise several geometry notifications in one
       // frame.  Calling Monaco.layout for each notification repaints its canvas
@@ -1780,8 +1865,9 @@
           const mustLayout = editorLayoutForced;
           editorLayoutForced = false;
           const editor = window.editorInstance;
-          const width = editorContainerElem ? editorContainerElem.clientWidth : 0;
-          const height = editorContainerElem ? editorContainerElem.clientHeight : 0;
+          // The anchor's box comes from the well around it, never from Monaco inside it.
+          const width = editorAnchorElem ? editorAnchorElem.clientWidth : 0;
+          const height = editorAnchorElem ? editorAnchorElem.clientHeight : 0;
           const ratio = window.devicePixelRatio || 1;
           if (!editor || typeof editor.layout !== 'function' || width < 1 || height < 1) return;
           if (!mustLayout && width === lastEditorLayoutWidth && height === lastEditorLayoutHeight
@@ -4796,12 +4882,12 @@
       // Adapted from Arduino IDE's pinned Light/Dark palettes; see
       // ARDUINO_PALETTE.md for provenance and small-text contrast adjustments.
       const arduinoDark = {
-        foreground:'dae3e3', identifier:'dae3e3', comment:'839091', type:'0ca1a6',
-        function:'f39c12', literal:'7fcbcd', control:'c586c0', directive:'569cd6'
+        foreground:'dae3e3', identifier:'dae3e3', comment:'959fa0', type:'22b0b5',
+        function:'f39c12', literal:'7fcbcd', control:'c688c1', directive:'65a2d8'
       };
       const arduinoLight = {
-        foreground:'4e5b61', identifier:'434f54', comment:'657375', type:'007a7f',
-        function:'bf4b00', literal:'005c5f', control:'607700', directive:'826c59'
+        foreground:'4e5b61', identifier:'434f54', comment:'606d6f', type:'00767b',
+        function:'b74700', literal:'005c5f', control:'5d7300', directive:'7b6654'
       };
       function arduinoRules(palette, background) {
         const rules = [
@@ -4848,17 +4934,17 @@
             rules: arduinoRules(arduinoDark, '001b22'),
             colors: {
               ...arduinoBracketColors(arduinoDark),
-              'editor.background': '#001b22',
+              'editor.background': '#00000000',
               'editor.foreground': '#dae3e3',
-              'editorLineNumber.foreground': '#586e75',
-              'editorLineNumber.activeForeground': '#2aa198',
-              'editor.lineHighlightBackground': '#073642',
+              'editorLineNumber.foreground': '#919c9f',
+              'editorLineNumber.activeForeground': '#4ea8a0',
+              'editor.lineHighlightBackground': '#0d4a5966',
               'editorCursor.foreground': '#2aa198',
               'editorWhitespace.foreground': '#073642',
               'editorIndentGuide.background': '#073642',
               'editorIndentGuide.activeBackground': '#586e75',
-              'editor.selectionBackground': '#073642',
-              'editorGutter.background': '#001b22'
+              'editor.selectionBackground': '#0d4a59cc',
+              'editorGutter.background': '#00000000'
             }
           });
 
@@ -4868,17 +4954,17 @@
             rules: arduinoRules(arduinoLight, 'f1f7fc'),
             colors: {
               ...arduinoBracketColors(arduinoLight),
-              'editor.background': '#f1f7fc',
+              'editor.background': '#00000000',
               'editor.foreground': '#4e5b61',
-              'editorLineNumber.foreground': '#8c959f',
-              'editorLineNumber.activeForeground': '#0969da',
+              'editorLineNumber.foreground': '#656b73',
+              'editorLineNumber.activeForeground': '#0967d5',
               'editor.lineHighlightBackground': '#434f5410',
               'editorCursor.foreground': '#4e5b61',
               'editorWhitespace.foreground': '#d0d7de',
               'editorIndentGuide.background': '#d0d7de',
               'editorIndentGuide.activeBackground': '#afb8c1',
               'editor.selectionBackground': '#7fcbcdb3',
-              'editorGutter.background': '#f1f7fc'
+              'editorGutter.background': '#00000000'
             }
           });
 
@@ -4888,14 +4974,14 @@
             rules: arduinoRules(arduinoDark, '101b2a'),
             colors: {
               ...arduinoBracketColors(arduinoDark),
-              'editor.background': '#101b2a',
+              'editor.background': '#00000000',
               'editor.foreground': '#dae3e3',
-              'editorLineNumber.foreground': '#6b7d94',
+              'editorLineNumber.foreground': '#939ead',
               'editorLineNumber.activeForeground': '#80d9ce',
               'editor.lineHighlightBackground': '#434f5410',
               'editorCursor.foreground': '#dae3e3',
               'editor.selectionBackground': '#00818480',
-              'editorGutter.background': '#101b2a'
+              'editorGutter.background': '#00000000'
             }
           });
         } catch (e) {

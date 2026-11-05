@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import platform
 import stat
 import sys
 import tempfile
@@ -23,6 +24,10 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 from main import web_bridge
+
+# Windows asks `ver` the first time this runs, through the subprocess.run the compile
+# fixture replaces. Asking now keeps that out of the fixture, which expects only compilers.
+platform.uname()
 from main.core import compiled_cache
 
 API = web_bridge.MCUWebBackendAPI

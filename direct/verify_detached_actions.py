@@ -271,10 +271,11 @@ class DetachedActionChecks(unittest.TestCase):
             Theme.apply_theme(mode)
             APP.setStyleSheet(build_stylesheet(mode))
             toolbar.apply_theme(mode)
-            for height, short in ((320, True), (680, False)):
+            for height in (320, 680):
                 detached.resize(800, height)
                 pump()
-                self.assertEqual(bool(toolbar.property("shortScreen")), short)
+                # At a high scale a real monitor may not have 680 logical pixels to give.
+                self.assertEqual(bool(toolbar.property("shortScreen")), detached.height() < 350)
                 bottom = toolbar.btn_compile.mapTo(toolbar, toolbar.btn_compile.rect().bottomLeft()).y()
                 self.assertGreaterEqual(toolbar.height() - 1 - bottom, 1)
 

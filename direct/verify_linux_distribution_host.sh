@@ -45,3 +45,8 @@ echo '--- The package browser in the runtime that first launch created'
 cd "$fixture/app"
 as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_package_browser.py
 as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_browser_loading.py
+as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_glass.py
+as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_interface_size.py
+as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_taskbar_identity.py
+as_builder env QT_QPA_PLATFORM=offscreen QTWEBENGINE_CHROMIUM_FLAGS=--disable-gpu "$PWD/.venv-linux/bin/python" -B direct/verify_renderer_color_depth.py
+as_builder "$PWD/.venv-linux/bin/python" -B direct/verify_monitor_matrix.py

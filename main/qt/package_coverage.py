@@ -7,11 +7,12 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal, Slot, QTimer
-from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                               QComboBox, QTableView, QHeaderView, QPlainTextEdit,
                               QPushButton, QSizePolicy)
+from main.qt.glass import GlassDialog
 from main.qt.responsive import ScreenWatcher, fit_dialog
-from main.qt.theme import get_palette
+from main.qt.theme import get_palette, glass_tokens
 
 JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 MAX_REPORT_BYTES = 16 * 1024 * 1024
@@ -98,7 +99,7 @@ class CoverageModel(QAbstractTableModel):
         return super().headerData(section, orientation, role)
 
 
-class PackageCoverageDialog(QDialog):
+class PackageCoverageDialog(GlassDialog):
     _loaded = Signal(dict)
     _filtered = Signal(dict)
 
@@ -192,18 +193,18 @@ class PackageCoverageDialog(QDialog):
     @Slot(str)
     def apply_theme(self, theme_name):
         palette = get_palette(theme_name)
+        glass = glass_tokens(theme_name)
         self.setStyleSheet(
-            f"QDialog#package-coverage-dialog {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            f"stop:0 {palette['BG_LIGHT']}, stop:0.35 {palette['BG_DARK']}, stop:1 {palette['BG_DARKEST']}); color:{palette['TEXT']}; }}"
+            f"QDialog#package-coverage-dialog {{ color:{palette['TEXT']}; }}"
             f"QLabel {{ color:{palette['TEXT']}; background:transparent; }}"
             f"QLabel#coverage-summary {{ color:{palette['TEXT_BRIGHT']}; font-weight:600; }}"
-            f"QTableView, QPlainTextEdit, QLineEdit, QComboBox {{ background:{palette['BG_DARKEST']}; color:{palette['TEXT']}; "
-            f"border:1px solid {palette['BORDER']}; border-radius:4px; padding:4px; "
-            f"selection-background-color:{palette['BG_HOVER']}; selection-color:{palette['TEXT_BRIGHT']}; }}"
-            f"QTableView {{ gridline-color:{palette['BORDER']}; }}"
-            f"QHeaderView::section {{ background:{palette['BG_DARK']}; color:{palette['TEXT']}; border:none; padding:6px; }}"
-            f"QPushButton {{ background:{palette['BG_MID']}; color:{palette['TEXT']}; border:1px solid {palette['BORDER']}; border-radius:4px; padding:5px 14px; }}"
-            f"QPushButton:hover {{ background:{palette['BG_HOVER']}; color:{palette['TEXT_BRIGHT']}; }}"
+            f"QLineEdit, QComboBox {{ background:{glass['well']}; border:1px solid {glass['rim']}; border-radius:10px; }}"
+            f"QTableView, QPlainTextEdit {{ background:{glass['reading']}; border:1px solid {glass['reading_rim']}; border-radius:10px; }}"
+            f"QTableView, QPlainTextEdit, QLineEdit, QComboBox {{ color:{palette['TEXT']}; padding:4px; "
+            f"selection-background-color:{glass['selection']}; selection-color:{palette['TEXT_BRIGHT']}; }}"
+            f"QTableView {{ gridline-color:{glass['rim']}; }}"
+            f"QHeaderView::section {{ background:transparent; color:{palette['TEXT']}; border:none; padding:6px; }}"
+            f"QPushButton {{ padding:5px 14px; }}"
         )
 
     def showEvent(self, event):

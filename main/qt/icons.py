@@ -33,6 +33,23 @@ def _render_icon(name, color, size):
     return result
 
 
+def tab_icon(name: str, size: int = 20) -> QIcon:
+    """A selected tab is a solid chip, so its icon needs that chip's ink instead of the text color."""
+    from main.qt.theme import glass_tokens
+    return _tab_icon(name, Theme.TEXT, glass_tokens(Theme.active_theme)["chip_ink"], size)
+
+
+@lru_cache(maxsize=48)
+def _tab_icon(name, ink, selected_ink, size):
+    result = QIcon()
+    extent = QSize(size, size)
+    for state, color in ((QIcon.State.Off, ink), (QIcon.State.On, selected_ink)):
+        rendered = icon(name, color, size=size)
+        for ratio in (1, 2):
+            result.addPixmap(rendered.pixmap(extent, ratio), QIcon.Mode.Normal, state)
+    return result
+
+
 @lru_cache(maxsize=96)
 def _button_icon(name, active, disabled, size):
     """One shared multi-state icon per name, ink pair and size."""
@@ -51,9 +68,10 @@ def _button_icon(name, active, disabled, size):
 def _ink(widget, role, background, group=QPalette.ColorGroup.Active):
     palette = widget.palette()
     color = palette.color(group, role).name()
-    surface = palette.color(group, background)
-    # A transparent surface says nothing about the pixels behind it.
-    if surface.alpha() == 0:
+    brush = palette.brush(group, background)
+    surface = brush.color()
+    # Glass says nothing about the pixels behind it, and a gradient brush has no color at all.
+    if brush.style() != Qt.BrushStyle.SolidPattern or surface.alpha() < 255:
         return color
     surface = surface.name()
     return color if contrast_ratio(color, surface) >= 3 else readable_foreground(surface)

@@ -11,6 +11,49 @@
 
 ---
 
+## November 5 Update: Real Glass, No Stray Lines, Every Screen
+
+**Stripes and the wrong editor color.** On PCs that use Chromium's low-end mode, fine stripes ran
+across the top of the editor and its background turned teal. That mode tells Chromium the PC has
+512 MB of RAM, so it drew pages at 4 bits per color and dithered gradients into lines. The editor
+now keeps the same memory settings at full color depth.
+
+**Other stray lines.** The bright rule under Build Output was a plain frame line in the text color.
+The white line across the project selector's tabs was a tab bar base line that a mode switch had
+turned back on. The partial underlines in the board picker came from a border that leaked into
+each label. All are gone, and a check now fails if a bright stray line appears on any monitor.
+Settings also shows "Appearance & Theme" correctly, and its notes are no longer in capitals.
+
+**Taskbar icon.** Windows 11 could show its generic icon while the title bar was correct. Each
+window now names the application's icon to the taskbar directly and asks it to read the icon again
+once the button exists. Pinning the button also creates a working shortcut through the normal
+launcher. This was tested against the real Windows property store, not on a person's taskbar; if a
+generic icon remains from before, restarting Windows Explorer clears the old one.
+
+**Real glass.** Glass needs something to look through, and the old panels had nothing behind them.
+Every window now sits on a real scene: an out-of-focus macro of a circuit board, lit in the theme's
+own colors, with its LEDs landing as soft discs. Every surface is a translucent sheet over it. Bars,
+tabs and panes show a frosted copy of the scene under a thin lit rim, and code, logs and terminals
+are smoked glass with the scene glowing through. Selected tabs are solid pills. Text keeps 4.5:1 at
+the brightest point the scene can reach in all three themes, so a few syntax and log colors moved
+slightly to hold that. On Windows the embedded terminal and assistant are separate native windows,
+which cannot be see-through, so they keep the theme's solid surface inside the glass pane.
+
+**Nothing out of bounds.** Buttons, fields and logs now stay inside their rounded panes at every
+size; Resources used to run 2 pixels past its bar and square corners stuck out of the panes. Code
+also keeps a small margin from the edge of its area, even while scrolling. A new check holds this
+on every emulated monitor. Monaco's bright blue frame around the editor is gone.
+
+**Every screen.** Laptops under 800 pixels high give more height to code: Controls fits on one row,
+the action bar and file tabs tighten, and at 1366x768 the editor gains 36 pixels. The editor now
+takes all spare height, so tools stop filling half of a large monitor. Icon-only tool tabs are
+centered and narrower. **Settings > Appearance > Interface size** defaults to Automatic: it enlarges
+the interface on small high-resolution and large low-scale screens, and tightens it on small
+high-scale screens, applying the next time a window opens.
+
+**Same result on every system.** All systems now use the same base style under the stylesheet, so
+Windows, Linux and macOS draw controls alike.
+
 ## November 5 Update: Assistant Loading Screen, Steady Tabs, Every Monitor
 
 **Assistant startup.** The assistant showed its terminal as soon as any output went

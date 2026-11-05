@@ -26,7 +26,9 @@ from PySide6.QtWidgets import (
     QComboBox, QLineEdit, QGridLayout, QSizePolicy
 )
 from main.qt.icons import ActionButton as QPushButton, icon
-from main.qt.log_colors import contrast_ratio, themed_log_colors
+from main.core.log_colors import glass_inks
+from main.core.theme import glass_worst
+from main.qt.log_colors import themed_log_colors
 
 from src import syntax_checker
 from main.core.file_utils import get_project_root_source_files
@@ -304,50 +306,39 @@ class SyntaxPanel(QWidget):
 
     def apply_theme(self, theme_name: str) -> None:
         """Update syntax diagnostic panel colors to match active theme."""
-        from main.qt.theme import get_palette
+        from main.qt.theme import get_palette, glass_tokens
         pal = get_palette(theme_name)
-        cyan = pal.get("CYAN", "#00d2ff")
-        bg_darkest = pal.get("BG_DARKEST", "#0a0e14")
-        bg_dark = pal.get("BG_DARK", "#10151c")
-        bg_mid = pal.get("BG_MID", "#161d27")
-        bg_hover = pal.get("BG_HOVER", "#243040")
-        border = pal.get("BORDER", "#2a3545")
+        glass = glass_tokens(theme_name)
         text = pal.get("TEXT", "#e0e6ed")
         text_bright = pal.get("TEXT_BRIGHT", "#ffffff")
-        # Diagnostics also occupy alternate rows and header/status surfaces.
-        reading_background = min((bg_darkest, bg_dark, bg_mid),
-                                 key=lambda background: contrast_ratio(text, background))
-        self._semantic_colors = themed_log_colors(theme_name, background=reading_background)
-        cyan = self._semantic_colors["system"]
-        dim = self._semantic_colors["dim"]
-        self._lbl_filter.setStyleSheet(f"color: {dim}; font-size: 11px; margin-left: 4px;")
+        # Diagnostics sit in the smoked well; the header above it straight on the sheet.
+        self._semantic_colors = themed_log_colors(theme_name)
+        self._header_colors = glass_inks(theme_name)
+        cyan = self._header_colors["system"]
+        self._lbl_filter.setStyleSheet(f"color: {self._header_colors['normal']}; font-size: 11px; margin-left: 4px;")
         self._refresh_status_color()
         for badge, kind in ((self._badge_errors, "error"), (self._badge_warnings, "warning")):
-            color = self._semantic_colors[kind]
+            color = themed_log_colors(theme_name, background=glass_worst(theme_name)["well"])[kind]
             badge.setStyleSheet(
-                f"background: {bg_dark}; color: {color}; border: 1px solid {color}; "
+                f"background: {glass['well']}; color: {color}; border: 1px solid {color}; "
                 "border-radius: 9px; padding: 1px 7px; font-size: 10px; font-weight: 700;"
             )
         for button in (self._btn_run, self._btn_clear):
-            button.setStyleSheet(
-                f"QPushButton {{ background: {bg_dark}; color: {text}; border: 1px solid {border}; "
-                "border-radius: 3px; font-size: 11px; padding: 1px 8px; }"
-                f"QPushButton:hover {{ background: {bg_hover}; color: {text_bright}; }}"
-            )
+            button.setStyleSheet("QPushButton { font-size: 11px; padding: 1px 8px; }")
 
         if hasattr(self, "_title_lbl") and self._title_lbl:
             self._title_lbl.setStyleSheet(f"color: {cyan}; font-weight: 700; font-size: 11px;")
         if hasattr(self, "_search_input") and self._search_input:
             self._search_input.setStyleSheet(
-                f"QLineEdit {{ background: {bg_dark}; color: {text}; border: 1px solid {border}; border-radius: 3px; padding: 1px 6px; font-size: 11px; }}"
+                f"QLineEdit {{ background: {glass['well']}; color: {text}; border: 1px solid {glass['rim']}; border-radius: 9px; padding: 1px 6px; font-size: 11px; }}"
                 f"QLineEdit:focus {{ border: 1px solid {cyan}; }}"
             )
         if hasattr(self, "_table") and self._table:
             self._table_base_style = (
-                f"QTableWidget {{ background: {bg_darkest}; alternate-background-color: {bg_dark}; color: {text}; border: none; }}"
+                f"QTableWidget {{ background: {glass['reading']}; alternate-background-color: {glass['reading_alt']}; color: {text}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}"
                 f"QTableWidget::item {{ padding: 4px 8px; }}"
-                f"QTableWidget::item:selected {{ background: {bg_hover}; color: {text_bright}; }}"
-                f"QHeaderView::section {{ background: {bg_mid}; color: {cyan}; font-weight: 600; font-size: 11px; padding: 4px 8px; border: none; border-bottom: 1px solid {border}; }}"
+                f"QTableWidget::item:selected {{ background: {glass['selection']}; color: {text_bright}; }}"
+                f"QHeaderView::section {{ background: transparent; color: {cyan}; font-weight: 600; font-size: 11px; padding: 4px 8px; border: none; border-bottom: 1px solid {glass['reading_rim']}; }}"
             )
             self._table.setStyleSheet(self._table_base_style + f"QTableWidget {{ font-size: {getattr(self, '_content_font_size', 12)}pt; }}")
             # Update only the existing brushes so selection and row order survive.
@@ -363,8 +354,8 @@ class SyntaxPanel(QWidget):
         return "error" if "err" in severity else "warning" if "warn" in severity else "info"
 
     def _refresh_status_color(self) -> None:
-        colors = getattr(self, "_semantic_colors", {})
-        color = colors.get(self._status_kind, colors.get("dim", "#57606a"))
+        colors = getattr(self, "_header_colors", {})
+        color = colors.get(self._status_kind, colors.get("normal", "#57606a"))
         self._lbl_status.setStyleSheet(f"color: {color}; font-size: 11px; font-family: monospace;")
 
     @Slot(list)
