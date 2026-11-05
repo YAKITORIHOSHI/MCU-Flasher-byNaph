@@ -51,7 +51,7 @@ def available_application_update(arguments: list[str]):
         config = application_update_config()
         if not app_update.automatic_updates_enabled(config):
             return None
-        checked = app_update.check_for_update(ROOT, config=config, timeout=1.5)
+        checked = app_update.check_for_update(ROOT, config=config, timeout=app_update.STARTUP_CHECK_TIMEOUT_SECONDS)
         return checked.candidate if checked.status == "available" else None
     except Exception:
         # A source check is never allowed to block an otherwise usable native

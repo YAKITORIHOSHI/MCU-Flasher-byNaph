@@ -9674,10 +9674,11 @@ def _available_application_update():
         # The request timeout does not cover name resolution, which can block for
         # many seconds on poor Wi-Fi while no window is visible yet.
         checker = threading.Thread(
-            target=lambda: outcome.append(app_update.check_for_update(SCRIPT_DIR, config=config, timeout=1.5)),
+            target=lambda: outcome.append(app_update.check_for_update(
+                SCRIPT_DIR, config=config, timeout=app_update.STARTUP_CHECK_TIMEOUT_SECONDS)),
             name="MCUApplicationUpdateCheck", daemon=True)
         checker.start()
-        checker.join(2.0)
+        checker.join(app_update.STARTUP_CHECK_BUDGET_SECONDS)
         if not outcome:
             _record_bootstrap_log("UPDATE", "Application update check exceeded its startup budget; continuing.")
             return None
@@ -9764,7 +9765,13 @@ def _install_application_update(candidate) -> bool:
 
 
 def _restart_after_application_update() -> None:
-    """Exec the newly written Bootstrap source without a second launcher race."""
+    """Hand over to the newly written Bootstrap source.
+
+    Windows' exec family joins arguments without quoting them, so a folder with a
+    space in its name would start Python on a truncated path after this process
+    had already gone. A child process quotes correctly and leaves this one able
+    to continue if the new Bootstrap fails immediately.
+    """
     retained = [str(arg) for arg in sys.argv[1:] if arg != "--resume-application-update"]
     try:
         # A source update can alter dependencies outside the inexpensive
@@ -9776,12 +9783,20 @@ def _restart_after_application_update() -> None:
                "--resume-application-update", *retained]
     _record_bootstrap_log("UPDATE", "Restarting Bootstrap after a verified application update.")
     try:
-        os.execv(command[0], command)
+        restarted = subprocess.Popen(command)
     except OSError as exc:
         # The verified files remain installed. Fall through to the normal
         # launcher instead of abandoning a working application because the
-        # current interpreter could not re-exec itself.
+        # current interpreter could not start the new Bootstrap.
         _record_bootstrap_log("UPDATE", f"Could not restart Bootstrap after the source update: {exc}")
+        return
+    try:
+        exit_code = restarted.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        sys.exit(0)
+    if exit_code == 0:
+        sys.exit(0)
+    _record_bootstrap_log("UPDATE", f"Restarted Bootstrap exited early ({exit_code}); continuing from this process.")
 
 
 def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
