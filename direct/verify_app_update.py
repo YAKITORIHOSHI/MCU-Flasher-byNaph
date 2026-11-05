@@ -227,25 +227,31 @@ class SourceUpdateChecks(unittest.TestCase):
         self.assertEqual(result.status, "current")
         writer.assert_not_called()
 
-    def bundled_check(self, *, bundled="1" * 40, remote="2" * 40, comparison="behind", state=None):
-        """Check a release ZIP's first launch with GitHub's two responses fabricated."""
-        import json as json_module
+    def bundled_check(self, *, bundled="1" * 40, remote="2" * 40, comparison="behind", state=None,
+                      remote_date="", installed_date=""):
+        """Check a copy's launch with GitHub's responses fabricated. ``comparison`` may be per-base."""
         revision = self.install / app_update.BUNDLED_REVISION_FILE
         revision.parent.mkdir(parents=True, exist_ok=True)
-        revision.write_text(json_module.dumps({"commit": bundled}), encoding="utf-8")
+        revision.unlink(missing_ok=True)
+        if bundled is not None:
+            revision.write_text(json.dumps({"commit": bundled}), encoding="utf-8")
         if state is not None:
             path = app_update.update_state_path(self.install, state_base=self.state)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json_module.dumps(state), encoding="utf-8")
+            path.write_text(json.dumps(state), encoding="utf-8")
         requested = []
 
         def opener(request, **_kwargs):
             requested.append(request.full_url)
             if "/commits/" in request.full_url:
-                return _Response(json_module.dumps({"sha": remote}).encode(), "https://api.github.com/commits")
-            if isinstance(comparison, Exception):
-                raise comparison
-            return _Response(json_module.dumps({"status": comparison}).encode(), "https://api.github.com/compare")
+                body = {"sha": remote, "commit": {"committer": {"date": remote_date}}}
+                return _Response(json.dumps(body).encode(), "https://api.github.com/commits")
+            base = request.full_url.split("/compare/", 1)[1].split("...", 1)[0]
+            answer = comparison[base] if isinstance(comparison, dict) else comparison
+            if isinstance(answer, Exception):
+                raise answer
+            body = {"status": answer, "base_commit": {"commit": {"committer": {"date": installed_date}}}}
+            return _Response(json.dumps(body).encode(), "https://api.github.com/compare")
         return app_update.check_for_update(self.install, state_base=self.state, opener=opener), requested
 
     def test_release_zip_is_never_replaced_by_an_older_update_branch(self):
@@ -258,31 +264,101 @@ class SourceUpdateChecks(unittest.TestCase):
         self.assertEqual(checked.status, "current")
         self.assertEqual(len(requested), 1)
 
-    def test_release_zip_follows_a_branch_that_is_newer_or_was_rewritten(self):
-        for comparison in ("ahead", "diverged"):
-            with self.subTest(comparison=comparison):
-                checked, _ = self.bundled_check(comparison=comparison)
-                self.assertEqual(checked.status, "available")
-                self.assertEqual(checked.candidate.commit, "2" * 40)
+    def test_a_copy_follows_a_branch_that_is_newer(self):
+        checked, _ = self.bundled_check(comparison="ahead")
+        self.assertEqual(checked.status, "available")
+        self.assertEqual(checked.candidate.commit, "2" * 40)
 
-    def test_release_zip_is_left_alone_when_the_comparison_cannot_be_trusted(self):
+    def test_a_rewritten_branch_is_followed_only_when_it_is_the_later_work(self):
+        later, earlier = "2026-11-06T00:00:00Z", "2026-10-23T00:00:00Z"
+        for remote_date, installed_date, expected in ((later, earlier, "available"), (earlier, later, "current"),
+                                                      ("", later, "current"), (later, "", "current")):
+            with self.subTest(remote=remote_date, installed=installed_date):
+                checked, _ = self.bundled_check(comparison="diverged", remote_date=remote_date,
+                                                installed_date=installed_date)
+                self.assertEqual(checked.status, expected)
+
+    def test_a_copy_is_left_alone_when_the_comparison_cannot_be_trusted(self):
         for comparison in (OSError("offline"), "unknown-status"):
             with self.subTest(comparison=comparison):
                 checked, _ = self.bundled_check(comparison=comparison)
                 self.assertEqual(checked.status, "unavailable")
 
-    def test_applied_update_record_outranks_the_bundled_commit(self):
-        # After an update, the installed source is the applied commit, not the original ZIP's.
-        applied = {"schema": app_update.STATE_SCHEMA, "repository": app_update.REPOSITORY,
-                   "branch": app_update.DEFAULT_BRANCH, "applied_commit": "3" * 40}
-        checked, requested = self.bundled_check(comparison=AssertionError("Not asked"), state=applied)
-        self.assertEqual(checked.status, "available")
+    def test_a_copy_with_no_record_is_never_replaced(self):
+        # What happened: a ZIP packaged without its record went back to a two-week-old main on
+        # every install, because a copy that could not say what it held was assumed to be older.
+        checked, requested = self.bundled_check(bundled=None, comparison=AssertionError("Not asked"))
+        self.assertEqual(checked.status, "unidentified")
         self.assertEqual(len(requested), 1)
+        for malformed in ("not-a-commit", "A" * 40, "1" * 39):
+            with self.subTest(record=malformed):
+                checked, _ = self.bundled_check(bundled=malformed, comparison=AssertionError("Not asked"))
+                self.assertEqual(checked.status, "unidentified")
 
-    def test_malformed_bundled_revision_keeps_the_previous_behavior(self):
-        checked, requested = self.bundled_check(bundled="not-a-commit", comparison=AssertionError("Not asked"))
+    def test_a_newer_release_extracted_over_an_updated_folder_is_kept(self):
+        # The per-user state outlives the folder's contents, and used to outrank the new release.
+        old_state = {"schema": app_update.STATE_SCHEMA, "repository": app_update.REPOSITORY,
+                     "branch": app_update.DEFAULT_BRANCH, "applied_commit": "3" * 40}
+        checked, _ = self.bundled_check(bundled="1" * 40, remote="2" * 40, state=old_state,
+                                        comparison={"1" * 40: "behind", "3" * 40: "ahead"})
+        self.assertEqual(checked.status, "current")
+
+    def test_an_update_applied_by_an_older_version_still_counts(self):
+        # The release's own record is older than what that update installed.
+        old_state = {"schema": app_update.STATE_SCHEMA, "repository": app_update.REPOSITORY,
+                     "branch": app_update.DEFAULT_BRANCH, "applied_commit": "3" * 40}
+        checked, _ = self.bundled_check(bundled="1" * 40, remote="2" * 40, state=old_state,
+                                        comparison={"1" * 40: "ahead", "3" * 40: "behind"})
+        self.assertEqual(checked.status, "current")
+        checked, _ = self.bundled_check(bundled="1" * 40, remote="3" * 40, state=old_state,
+                                        comparison=AssertionError("Not asked"))
+        self.assertEqual(checked.status, "current")
+
+    def test_state_alone_still_identifies_a_copy_an_older_version_updated(self):
+        old_state = {"schema": 1, "repository": app_update.REPOSITORY, "branch": "main", "applied_commit": "3" * 40}
+        checked, _ = self.bundled_check(bundled=None, remote="2" * 40, state=old_state, comparison="ahead")
         self.assertEqual(checked.status, "available")
-        self.assertEqual(len(requested), 1)
+        checked, _ = self.bundled_check(bundled=None, remote="2" * 40, state=old_state, comparison="behind")
+        self.assertEqual(checked.status, "current")
+
+    def test_every_applied_update_records_itself_in_the_copy(self):
+        record = self.install / app_update.BUNDLED_REVISION_FILE
+        record.write_text(json.dumps({"commit": "1" * 40}), encoding="utf-8")
+        app_update.install_staged_source(self.install, self.source, self._source_names(), self.candidate,
+                                         strategy="fixture", state_base=self.state)
+        self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["commit"], self.candidate.commit)
+        # So the next launch knows without asking, even from a moved folder with no state.
+        moved_state = self.fixture / "another-user"
+        response = _Response(json.dumps({"sha": self.candidate.commit}).encode("utf-8"),
+                             "https://api.github.com/repos/YAKITORIHOSHI/MCU-Flasher-byNaph/commits/main")
+        checked = app_update.check_for_update(self.install, state_base=moved_state,
+                                              opener=lambda *_args, **_kwargs: response)
+        self.assertEqual(checked.status, "current")
+
+    def test_a_failed_update_leaves_the_record_as_it_was(self):
+        record = self.install / app_update.BUNDLED_REVISION_FILE
+        record.write_text(json.dumps({"commit": "1" * 40}), encoding="utf-8")
+        real_write = app_update._write_json_atomically
+
+        def refuse_state(path, value):
+            if path.name == "update-state.json":
+                raise app_update.ApplicationUpdateError("no state")
+            real_write(path, value)
+
+        with patch.object(app_update, "_write_json_atomically", side_effect=refuse_state), \
+                self.assertRaisesRegex(app_update.ApplicationUpdateError, "no state"):
+            app_update.install_staged_source(self.install, self.source, self._source_names(), self.candidate,
+                                             strategy="fixture", state_base=self.state)
+        self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["commit"], "1" * 40)
+        self._assert_required_marker(self.install, "installed")
+
+    def test_a_checkout_cannot_overwrite_this_copys_record(self):
+        self._file(self.source, app_update.BUNDLED_REVISION_FILE, b'{"commit": "placeholder"}')
+        app_update.install_staged_source(
+            self.install, self.source, self._source_names(extra=(app_update.BUNDLED_REVISION_FILE,)), self.candidate,
+            strategy="fixture", state_base=self.state)
+        record = json.loads((self.install / app_update.BUNDLED_REVISION_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(record["commit"], self.candidate.commit)
 
     def test_metadata_deadline_rejects_a_trickled_response(self):
         clock = [0.0]

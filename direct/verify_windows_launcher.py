@@ -24,17 +24,18 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 RESULT_VARIABLE = "MCU_LAUNCHER_PROBE_RESULT"
 RECORDER = r'''Option Explicit
-Dim fs, ws, destination, partial, stream, index
+Dim fs, ws, destination, partial, stream, index, received
 Set fs = CreateObject("Scripting.FileSystemObject")
 Set ws = CreateObject("WScript.Shell")
 destination = ws.Environment("PROCESS")("MCU_LAUNCHER_PROBE_RESULT")
 If Len(destination) = 0 Then WScript.Quit 71
 partial = destination & ".partial"
 Set stream = fs.CreateTextFile(partial, True, True)
+received = ReadLauncherArguments(WScript.Arguments, ws.Environment("PROCESS"))
 stream.Write "{""arguments"": ["
-For index = 0 To WScript.Arguments.Count - 1
+For index = 0 To UBound(received)
     If index > 0 Then stream.Write ","
-    stream.Write JsonString(WScript.Arguments(index))
+    stream.Write JsonString(received(index))
 Next
 stream.Write "],""cwd"":" & JsonString(ws.CurrentDirectory)
 stream.Write ",""script"":" & JsonString(WScript.ScriptFullName) & "}"
@@ -241,9 +242,14 @@ def verify(report_dir: Path) -> dict:
         executable = application / "LAUNCHER/WINDOWS.exe"
         shutil.copyfile(source, executable)
         script = application / "direct/windows/run.vbs"
+        # The EXE passes arguments through the environment, so the recorder reads them with the
+        # production helpers. That also proves this EXE and the shipped run.vbs agree.
+        production = (ROOT / "direct/windows/run.vbs").read_text(encoding="utf-8-sig")
+        recorder = RECORDER + "\n" + "\n\n".join((vbs_procedure(production, "ReadLauncherArguments"),
+                                                 vbs_procedure(production, "ClearLauncherArgumentPayload", "Sub"))) + "\n"
         # WSH does not reliably recognize UTF-8 script source; use its native
         # UTF-16 BOM format. Recorder output uses the same explicit encoding.
-        script.write_text(RECORDER.replace("\n", "\r\n"), encoding="utf-16", newline="")
+        script.write_text(recorder.replace("\r\n", "\n").replace("\n", "\r\n"), encoding="utf-16", newline="")
         cases = [
             ("relocated_no_arguments", "ordinary", []),
             ("project_path_with_spaces", "ordinary",

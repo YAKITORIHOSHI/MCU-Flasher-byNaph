@@ -1,11 +1,17 @@
 """Repository-backed application updates for MCU Flasher Bootstrap.
 
 Bootstrap checks the canonical GitHub repository before the GUI starts.  When
-the configured branch moves, it stages a fresh, shallow Git clone and only
-then refreshes the application-owned source files in place. If Git is not
-available, it uses GitHub's immutable archive for the same verified commit, so
-a normal Windows or native Ubuntu installation does not depend on a separately
-installed Git client.
+the configured branch moves ahead of this copy, it stages a fresh, shallow Git
+clone and only then refreshes the application-owned source files in place. If
+Git is not available, it uses GitHub's immutable archive for the same verified
+commit, so a normal Windows or native Ubuntu installation does not depend on a
+separately installed Git client.
+
+An update never moves a copy backwards. A copy records the commit it holds in
+``src/dbs/source_revision.json``, written by the release build and by every
+update. GitHub must say the branch is newer than that before anything changes,
+and a copy that cannot say what it holds is left exactly as it is: replacing it
+could destroy newer work, and a missed update costs nothing.
 
 The updater intentionally does not turn an installation into a working copy.
 Its checkout, update record and rollback material live under per-user state.
@@ -55,8 +61,9 @@ MIN_FREE_SPACE_BYTES = 256 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 CLONE_TIMEOUT_SECONDS = 15 * 60
 ARCHIVE_TIMEOUT_SECONDS = 15 * 60
-# Each startup request gets this long. A launch makes at most two, and a window
+# Each startup request gets this long. A launch normally makes two, and a window
 # appears only afterwards, so the launcher's whole check is bounded by the budget.
+# Running out of it only postpones an update to a later launch.
 STARTUP_CHECK_TIMEOUT_SECONDS = 3.0
 STARTUP_CHECK_BUDGET_SECONDS = 6.0
 # ``urlopen`` applies its timeout to individual socket operations. These bound
@@ -104,6 +111,8 @@ _PROTECTED_DYNAMIC_FILES = frozenset((
     ".owner_config.json",
     ".owner_tickets.json",
     "agents.md",
+    # This copy's own record. An update writes it directly and never takes it from a checkout.
+    "src/dbs/source_revision.json",
     # The active Windows launcher may still have a process handle while its
     # Bootstrap child runs. Its source update is deferred to a packaged update.
     "launcher/windows.exe",
@@ -129,6 +138,8 @@ class SourceCandidate:
     commit: str
     branch: str
     repository: str = REPOSITORY
+    # When GitHub says this commit was made. Only needed to judge a rewritten branch.
+    committed_at: str = ""
 
     def __post_init__(self) -> None:
         if self.repository != REPOSITORY or not _COMMIT.fullmatch(self.commit):
@@ -326,13 +337,22 @@ def _read_limited_response(response: Any, *, maximum: int, deadline: float, oper
     return bytes(received)
 
 
+def _commit_date(payload: object) -> str:
+    """The committer date from GitHub commit metadata, or nothing if it is not usable."""
+    try:
+        value = payload["commit"]["committer"]["date"]  # type: ignore[index]
+    except (KeyError, TypeError):
+        return ""
+    return value if isinstance(value, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", value) else ""
+
+
 def parse_remote_commit(payload: object, branch: str) -> SourceCandidate:
     """Validate GitHub commit metadata before it controls a checkout."""
     branch = _validate_branch(branch)
     if not isinstance(payload, dict):
         raise ApplicationUpdateError("GitHub returned invalid source update metadata.")
     commit = str(payload.get("sha", "")).strip().casefold()
-    return SourceCandidate(commit=commit, branch=branch)
+    return SourceCandidate(commit=commit, branch=branch, committed_at=_commit_date(payload))
 
 
 def _read_remote_commit(*, branch: str, timeout: float,
@@ -366,45 +386,60 @@ def _read_remote_commit(*, branch: str, timeout: float,
     return parse_remote_commit(payload, branch)
 
 
-def _bundled_commit(install_root: Path) -> str | None:
-    """Return the commit a release ZIP was built from, if this copy records one."""
+def _recorded_commit(install_root: Path) -> str | None:
+    """The commit this copy's own record names, written by a release build or an update."""
     commit = _read_json(install_root / BUNDLED_REVISION_FILE, limit=4096).get("commit")
     return commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) else None
 
 
-def _branch_offers_newer_source(bundled: str, candidate: SourceCandidate, *, timeout: float,
+def _known_commits(install_root: Path, state: dict[str, Any]) -> list[str]:
+    """Every commit this copy is known to hold.
+
+    Both can be true at once and either can be the newer: a release extracted over an
+    updated folder has a newer record than the per-user state left from before, and an
+    update applied by an older version has newer state than the release's own record.
+    """
+    known = []
+    recorded = _recorded_commit(install_root)
+    if recorded:
+        known.append(recorded)
+    applied = state.get("applied_commit")
+    if (isinstance(applied, str) and _COMMIT.fullmatch(applied) and applied not in known
+            and state.get("repository") in (None, REPOSITORY)):
+        known.append(applied)
+    return known
+
+
+def _branch_offers_newer_source(installed: str, candidate: SourceCandidate, *, timeout: float,
                                 opener: Callable[..., Any] = urlopen) -> bool:
-    """Ask GitHub how the branch relates to this copy's commit.
+    """Ask GitHub how the branch relates to a commit this copy holds.
 
     A fresh release may be newer than the update branch, so "different" alone must
-    never replace it. A rewritten branch has diverged and is still followed.
+    never replace it. A rewritten branch has diverged, so neither contains the other:
+    it is followed only when it really is the later work.
     """
     operation = "GitHub source comparison"
     deadline = _network_deadline(timeout, operation)
-    request = Request(COMPARE_API_URL.format(base=bundled, head=candidate.commit),
+    request = Request(COMPARE_API_URL.format(base=installed, head=candidate.commit),
                       headers={"Accept": "application/vnd.github+json", "User-Agent": "MCU-Flasher-Bootstrap/11"})
     try:
         with opener(request, timeout=_remaining_network_timeout(deadline, operation)) as response:
             if not _api_response_is_allowed(response.geturl()):
                 raise ApplicationUpdateError("GitHub source comparison redirected to an unsafe location.")
             raw = _read_limited_response(response, maximum=MAX_METADATA_BYTES, deadline=deadline, operation=operation)
-        status = json.loads(raw.decode("utf-8")).get("status")
+        comparison = json.loads(raw.decode("utf-8"))
+        status = comparison.get("status")
     except ApplicationUpdateError:
         raise
     except (HTTPError, URLError, OSError, TimeoutError, UnicodeError, ValueError, AttributeError) as exc:
         raise ApplicationUpdateError(f"GitHub source comparison is unavailable: {exc}") from exc
     if status not in ("ahead", "behind", "identical", "diverged"):
         raise ApplicationUpdateError("GitHub returned an unrecognized source comparison.")
-    return status in ("ahead", "diverged")
-
-
-def _matching_applied_commit(state: dict[str, Any], candidate: SourceCandidate) -> bool:
-    return (
-        state.get("schema") == STATE_SCHEMA
-        and state.get("repository") == candidate.repository
-        and state.get("branch") == candidate.branch
-        and state.get("applied_commit") == candidate.commit
-    )
+    if status != "diverged":
+        return status == "ahead"
+    installed_at = _commit_date(comparison.get("base_commit"))
+    # These dates are fixed-width UTC, so they compare as text. Without both, nothing says this is newer.
+    return bool(installed_at and candidate.committed_at and candidate.committed_at > installed_at)
 
 
 def check_for_update(root: Path | str, *, config: object | None = None, timeout: float = 3.0,
@@ -423,15 +458,20 @@ def check_for_update(root: Path | str, *, config: object | None = None, timeout:
     install_root = _installation_root(root)
     state_file = update_state_path(install_root, state_base=state_base)
     state = _read_json(state_file)
-    current = _matching_applied_commit(state, candidate)
-    bundled = _bundled_commit(install_root) if not state.get("applied_commit") else None
-    if bundled and not current:
-        # No update has replaced this release yet, so its own commit is what is installed.
-        try:
-            current = bundled == candidate.commit or not _branch_offers_newer_source(
-                bundled, candidate, timeout=timeout, opener=opener)
-        except ApplicationUpdateError as exc:
-            return UpdateCheck("unavailable", detail=str(exc))
+    known = _known_commits(install_root, state)
+    if not known:
+        return UpdateCheck(
+            "unidentified", candidate,
+            "this copy does not record which version it is, so it is left as it is")
+    # Replacing needs the branch to be newer than everything this copy might hold.
+    current = candidate.commit in known
+    try:
+        for installed in known:
+            if current:
+                break
+            current = not _branch_offers_newer_source(installed, candidate, timeout=timeout, opener=opener)
+    except ApplicationUpdateError as exc:
+        return UpdateCheck("unavailable", detail=str(exc))
     cached = {
         "schema": STATE_SCHEMA,
         "repository": candidate.repository,
@@ -736,6 +776,16 @@ def install_staged_source(root: Path | str, source_root: Path | str, source_name
             destination = _safe_file_below(install_root, relative)
             if _digest(source) != _digest(destination):
                 raise ApplicationUpdateError("A critical application source file did not verify after installation.")
+
+        # The record lives in the copy, so it stays true if the folder moves to another
+        # path or computer, where the per-user state below does not follow.
+        record = PurePosixPath(BUNDLED_REVISION_FILE)
+        destination = _safe_destination(install_root, record)
+        existed = destination.exists() or destination.is_symlink()
+        if existed:
+            _backup_file(destination, backup_root, record)
+        _write_json_atomically(destination, {"repository": candidate.repository, "commit": candidate.commit})
+        operations.append(_Operation(record, existed))
 
         next_state = {
             "schema": STATE_SCHEMA,

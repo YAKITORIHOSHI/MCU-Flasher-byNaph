@@ -6,7 +6,7 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 5, 2026<br>
+> **Notes Updated:** November 6, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
@@ -164,6 +164,17 @@ unverified; see [what is verified where](audit/PLATFORM_VERIFICATION.md).
 **Source updates.** A release ZIP now records the commit it was built from, and
 Bootstrap replaces source only when GitHub reports the update branch is really newer.
 Previously a fresh ZIP replaced itself with whatever `main` held, even older code.
+
+**Updates never go backwards.** A copy that did not record its version, such as a ZIP packaged
+by hand or a copied folder, was assumed to be older than `main` and was replaced by it, and a
+new release extracted over an already updated folder could be too. Both took Windows back to a
+two-week-old Bootstrap. Now every update writes its version into the folder, GitHub must confirm
+the update is newer than everything the copy holds, and a copy that cannot say what it holds is
+left as it is. `main` has also moved to the current code. The October code has no updater of its
+own, so a copy that already went back cannot recover by itself: extract this release over it once,
+and settings, sketches and projects are kept. To turn automatic source updates off, set
+`app_update_policy` to `off` in `src/dbs/bootstrap_config.json`; `skip_updates` only covers
+component and package updates.
 
 ---
 

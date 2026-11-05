@@ -1154,7 +1154,10 @@ class ProjectChecks(unittest.TestCase):
                             APP.processEvents()
                             rounding = 1 if sys.platform.startswith("linux") and scale % 1 else 0
                             self.assertLessEqual(abs(dialog.width() - width), rounding)
-                            self.assertLessEqual(abs(dialog.height() - height), rounding)
+                            self.assertLessEqual(abs(dialog.height() - height), rounding,
+                                                 f"{size_name} {pages[page]}: wanted {height} at scale {scale}, "
+                                                 f"got {dialog.height()}, minimum {dialog.minimumHeight()}, "
+                                                 f"hint {dialog.minimumSizeHint().height()}, screen {screen_area.getRect()}")
                             for button in buttons:
                                 self.assertTrue(button.isVisible())
                                 rect = QRect(button.mapTo(dialog, QPoint()), button.size())

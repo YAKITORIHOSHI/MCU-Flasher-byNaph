@@ -158,6 +158,9 @@ class ColorDepthChecks(unittest.TestCase):
                                 errors="replace", timeout=PROBE_SECONDS)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         switches = json.loads(result.stdout.strip().splitlines()[-1])
+        if "renderer" not in switches and "zygote" in switches:
+            # A container's sandbox puts it in a namespace, leaving only the zygote visible.
+            self.skipTest(f"this host hides its renderer from its parent: {switches}")
         self.assertIn("renderer", switches, f"no renderer found: {switches}")
         self.assertEqual(switches["renderer"], sorted((LOW_END_MODE, FULL_COLOR)))
 

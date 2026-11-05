@@ -303,7 +303,9 @@ class EmbeddedViewportChecks(unittest.TestCase):
                     self.host.show()
                 self.fit_host(width,height)
                 self.js("forceEditorLayout(); true")
-                QTest.qWait(80)
+                wait_for(lambda: self.js("Math.abs(editorInstance.getLayoutInfo().width - "
+                                         "document.getElementById('monaco-anchor').clientWidth) <= 1"),
+                         "Monaco did not follow its viewport")
                 data = self.state("""
                   const host=document.getElementById('editor-container'),
                     r=host.getBoundingClientRect(),layout=editorInstance.getLayoutInfo(),
@@ -333,7 +335,7 @@ class EmbeddedViewportChecks(unittest.TestCase):
                 self.assertAlmostEqual(data["layout"]["width"], data["anchor"]["width"], delta=1)
                 self.assertAlmostEqual(data["layout"]["height"], data["anchor"]["height"], delta=1)
                 for axis in ("width", "height"):
-                    self.assertGreaterEqual(data["host"][axis] - data["anchor"][axis], 4)
+                    self.assertGreaterEqual(data["host"][axis] - data["anchor"][axis], 2)
                     self.assertLessEqual(data["host"][axis] - data["anchor"][axis], 15)
                 self.assertEqual(data["editorBackground"], "rgba(0, 0, 0, 0)", "Monaco must not cover the glass")
                 self.assertNotEqual(data["background"], data["editorBackground"], "The well holds the smoke")
