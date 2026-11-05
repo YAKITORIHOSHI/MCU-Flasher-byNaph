@@ -43,7 +43,8 @@ const window = {
 const document = {
   hidden: false,
   getElementById(id) {
-    return id === 'editor-container' ? editorContainer : actionBar;
+    // The anchor fills the well less a fixed inset, so the fixture's one size stands for both.
+    return id === 'editor-container' || id === 'monaco-anchor' ? editorContainer : actionBar;
   },
   addEventListener(name, callback) { documentListeners.set(name, callback); },
 };

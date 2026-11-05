@@ -21,6 +21,7 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QMainWindow, QMenuBar, QPlainTextEdit, QPushButton,
                                QStatusBar, QTabWidget, QToolBar, QVBoxLayout, QWidget)
 
@@ -35,6 +36,12 @@ install_no_focus_lines(APP)
 MODES = ("default", "light", "solarized_dark")
 # Short and normal windows put the bars at different heights over the scene.
 SIZES = ((1350, 694), (667, 326), (2560, 1440))
+
+
+def at(image: QImage, x: float, y: float) -> QColor:
+    """The pixel at logical coordinates, in a capture whose pixels are device pixels."""
+    ratio = image.devicePixelRatio()
+    return QColor(image.pixel(min(image.width() - 1, round(x * ratio)), min(image.height() - 1, round(y * ratio))))
 
 
 def luminance(color: QColor) -> float:
@@ -127,7 +134,7 @@ class Surfaces(unittest.TestCase):
         return host, host.grab().toImage()
 
     def composite_at(self, host, x, y):
-        return QColor(host._glass_scene._composite.toImage().pixel(x, y))
+        return at(host._glass_scene._composite.toImage(), x, y)
 
     def worst(self, host, image, widget, ink, inset=8):
         """Lowest contrast between this ink and any part of the widget's surface."""
@@ -143,7 +150,7 @@ class Surfaces(unittest.TestCase):
         for y in range(rect.top(), rect.bottom() + 1, max(1, rect.height() // 6)):
             for x in range(rect.left(), rect.right() + 1, max(1, rect.width() // 24)):
                 if not any(child.contains(x, y) for child in children):
-                    lowest = min(lowest, contrast(target, luminance(QColor(image.pixel(x, y)))))
+                    lowest = min(lowest, contrast(target, luminance(at(image, x, y))))
         return lowest
 
     def test_text_stays_readable_on_every_surface_at_its_worst_point(self):
@@ -167,7 +174,7 @@ class Surfaces(unittest.TestCase):
                     rect = bar.tabRect(index)
                     probe = QRect(bar.mapTo(host, rect.topLeft()), rect.size()).adjusted(8, 8, -8, -8)
                     target = luminance(QColor(ink))
-                    lowest = min(contrast(target, luminance(QColor(image.pixel(x, y))))
+                    lowest = min(contrast(target, luminance(at(image, x, y)))
                                  for y in range(probe.top(), probe.bottom(), 3) for x in range(probe.left(), probe.right(), 3))
                     with self.subTest(mode=mode, size=size, surface=f"tab {index}", ink=ink):
                         self.assertGreaterEqual(lowest, 4.5)
@@ -205,7 +212,7 @@ class Surfaces(unittest.TestCase):
             host, image = self.rendered(mode, SIZES[0])
             top = host.controls.geometry().top() + 1  # Where this bar's sheet begins.
             x = host.width() // 2
-            column = [QColor(image.pixel(x, y)).lightness() for y in range(top - 6, top + 10)]
+            column = [at(image, x, y).lightness() for y in range(top - 6, top + 10)]
             with self.subTest(mode=mode):
                 self.assertGreaterEqual(max(column) - min(column), 6, "A pane must read as its own sheet")
             host.close()
@@ -217,7 +224,7 @@ class Surfaces(unittest.TestCase):
             host, image = self.rendered(mode, SIZES[2])
             viewport = host.reading.viewport()
             origin = viewport.mapTo(host, QPoint())
-            levels = [QColor(image.pixel(origin.x() + x, origin.y() + viewport.height() // 2)).lightness()
+            levels = [at(image, origin.x() + x, origin.y() + viewport.height() // 2).lightness()
                       for x in range(8, viewport.width() - 8, 16)]
             with self.subTest(mode=mode):
                 self.assertGreaterEqual(max(levels) - min(levels), 6, "the scene must be visible through the well")
@@ -234,7 +241,7 @@ class Surfaces(unittest.TestCase):
             alpha /= 255
             for dx, dy in ((30, 20), (viewport.width() // 2, viewport.height() // 2)):
                 x, y = origin.x() + dx, origin.y() + dy
-                under, seen = self.composite_at(host, x, y), QColor(image.pixel(x, y))
+                under, seen = self.composite_at(host, x, y), at(image, x, y)
                 with self.subTest(mode=mode, point=(dx, dy)):
                     self.assertAlmostEqual(seen.red(), under.red() * (1 - alpha) + red * alpha, delta=3)
                     self.assertAlmostEqual(seen.green(), under.green() * (1 - alpha) + green * alpha, delta=3)
@@ -369,6 +376,12 @@ class Scene(unittest.TestCase):
         self.assertEqual(backdrop["radius"], glass.pane_radius(700))
 
     def test_a_page_hears_when_anything_above_it_moves(self):
+        def settle():
+            # A native window may report one geometry change in more than one step.
+            for _ in range(6):
+                APP.processEvents()
+                QTest.qWait(10)
+
         window = QWidget()
         self.addCleanup(window.deleteLater)
         window.resize(1000, 700)
@@ -379,22 +392,24 @@ class Scene(unittest.TestCase):
         view = QWidget(holder)
         view.setGeometry(10, 10, 300, 200)
         view.show()
-        APP.processEvents()
+        settle()
         sent = []
         backdrop = glass.PageBackdrop(view, sent.append)
-        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent, [glass.page_backdrop_for(view)])
         holder.move(0, 50)
-        APP.processEvents()
+        settle()
         self.assertEqual(len(sent), 2)
-        self.assertEqual(sent[-1]["y"], glass.page_backdrop_for(view)["y"])
+        self.assertEqual(sent[-1], glass.page_backdrop_for(view))
         window.resize(1200, 800)
-        APP.processEvents()
-        self.assertEqual(len(sent), 3)
-        holder.move(0, 50)  # Nothing changed: no needless page call.
-        APP.processEvents()
-        self.assertEqual(len(sent), 3)
+        settle()
+        self.assertGreater(len(sent), 2)
+        self.assertEqual(sent[-1], glass.page_backdrop_for(view))
+        told = len(sent)
+        holder.move(holder.pos())  # Nothing changed: no needless page call.
+        settle()
+        self.assertEqual(len(sent), told)
         backdrop.forget()  # A new page has been told nothing.
-        self.assertEqual(len(sent), 4)
+        self.assertEqual(len(sent), told + 1)
 
     def test_the_editor_page_is_the_same_glass(self):
         html = (ROOT / "src/editor/index.html").read_text(encoding="utf-8")

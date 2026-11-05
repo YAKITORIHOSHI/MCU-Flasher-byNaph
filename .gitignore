@@ -54,6 +54,7 @@ backups/
 Thumbs.db
 desktop.ini
 *.zip
+MCU-Flasher-*.zip.sha256
 *.zip.part*
 *.parts/
 *.part

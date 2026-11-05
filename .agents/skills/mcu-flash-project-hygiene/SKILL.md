@@ -294,11 +294,16 @@ verified tracked application source files. Preserve `src/dbs` settings, user
 instructions, project/build caches, private runtimes, installers, catalog data
 and active launchers. A source checkout is managed by Git and must be skipped.
 Defer source replacement while any workspace is live. `build_release.py` writes the
-release's commit to `src/dbs/source_revision.json`. With no update record yet, the
-updater compares that commit with the branch through GitHub and replaces source only
-when the branch is ahead or diverged, since a fresh ZIP may be newer than `main`; a
-failed comparison means no update. Pushing `main` reaches every installation
-automatically on its next launch, so treat that as a rollout decision of its own.
+release's commit to `src/dbs/source_revision.json`, and every applied update rewrites it,
+so the record travels with the folder. An update never moves a copy backwards: the updater
+asks GitHub how the branch relates to that record and to any per-user applied commit, and
+replaces source only when the branch is newer than all of them (a rewritten branch only if
+its commit is the later one). A failed comparison means no update, and a copy with no record
+is left alone. So publish a public ZIP only through `build_release.py`, which refuses one
+without its record: older copies still treat a missing record as older than `main`, and
+went back to two-week-old code that way. `main` is what every installation follows, so keep it
+moving with releases, and remember that pushing it reaches every installation on its next
+launch, which makes it a rollout decision of its own.
 Do not treat a source refresh as a packaged release: it cannot replace the verified Windows runtime
 or establish release qualification. Keep Git LFS installer objects unhydrated
 and use `direct/verify_app_update.py` and `direct/verify_ubuntu_launcher.py`

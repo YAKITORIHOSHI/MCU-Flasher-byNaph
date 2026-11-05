@@ -9694,6 +9694,8 @@ def _available_application_update():
                 "UPDATE",
                 f"GitHub source is current at {checked.candidate.branch}@{checked.candidate.commit[:12]}.",
             )
+        if checked.status == "unidentified":
+            _record_bootstrap_log("UPDATE", f"Application update check left this copy alone: {checked.detail}")
         if checked.status == "unavailable":
             _record_bootstrap_log("UPDATE", f"Application update check unavailable: {checked.detail}")
         elif checked.status == "skipped":

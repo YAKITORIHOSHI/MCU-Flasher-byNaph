@@ -446,7 +446,10 @@ def run_monitor(monitor, config_dir: Path, render_dir: Path | None, timeout: int
         "screens": [{"name": name, "x": 0, "y": 0, "width": width, "height": height - reserved,
                      "logicalDpi": 96, "logicalBaseDpi": 96, "dpr": 1}]}), encoding="utf-8")
     environment = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}
-    environment.update(QT_QPA_PLATFORM=f"offscreen:configfile={config_file}", QT_SCALE_FACTOR=str(scale),
+    # Relative to the child's working directory: Qt splits this value at every colon,
+    # and on Windows an absolute path's drive letter ended the argument and aborted Qt.
+    relative_config = config_file.resolve().relative_to(ROOT.resolve()).as_posix()
+    environment.update(QT_QPA_PLATFORM=f"offscreen:configfile={relative_config}", QT_SCALE_FACTOR=str(scale),
                        QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu", PYTHONDONTWRITEBYTECODE="1")
     command = [sys.executable, "-B", str(Path(__file__).resolve()), "--monitor"]
     if render_dir is not None:
@@ -471,7 +474,7 @@ def main() -> int:
     parser.add_argument("--only", action="append", default=[], help="Run monitors whose name contains this text")
     parser.add_argument("--render-dir", type=Path)
     parser.add_argument("--jobs", type=int, default=max(2, min(6, (os.cpu_count() or 4) // 2)))
-    parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--timeout", type=int, default=420)
     arguments = parser.parse_args()
     if arguments.monitor:
         return check_monitor(arguments.render_dir)

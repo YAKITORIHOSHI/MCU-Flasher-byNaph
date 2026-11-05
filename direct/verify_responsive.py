@@ -161,10 +161,19 @@ class QtResponsiveChecks(ControlChecks):
         from main.qt.glass import WorkspaceTabBar
         from main.qt.icons import icon
 
-        def ink_rows(image, rect, ratio):
+        def ink_rows(image, rect, ratio, behind):
             """First and last row holding text ink inside a tab's label area."""
+            # A tab is translucent, so over nothing its fill keeps its color at low alpha and
+            # reads as bright as its text. Judge it over a surface, as it always is on screen.
+            flat = QImage(image.size(), QImage.Format.Format_RGB32)
+            flat.fill(QColor(behind))
+            painter = QPainter(flat)
+            painter.drawImage(0, 0, image)
+            painter.end()
+            image = flat
             left, right = round((rect.left() + 34) * ratio), round((rect.right() - 8) * ratio)
-            top, bottom = round((rect.top() + 4) * ratio), round((rect.bottom() - 5) * ratio)
+            # Inside the chip: its margins and rim would read as ink against what is around it.
+            top, bottom = round((rect.top() + 8) * ratio), round((rect.bottom() - 7) * ratio)
             rows = []
             for y in range(top, bottom):
                 surface = image.pixelColor(left, y)
@@ -198,10 +207,11 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertEqual(bar.tabRect(1), rect, 'Selecting a tab must not change its box')
             tabs.setCurrentIndex(0)
             pump()
-            resting = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio)
+            behind = get_palette(mode)['BG_DARK']
+            resting = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio, behind)
             tabs.setCurrentIndex(1)
             pump()
-            selected = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio)
+            selected = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio, behind)
             # Selected text is brighter, so one antialiased edge row may cross the
             # threshold. A real jump moves the top and bottom rows together.
             self.assertTrue(selected[0] == resting[0] or selected[1] == resting[1],

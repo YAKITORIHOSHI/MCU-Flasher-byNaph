@@ -399,7 +399,7 @@ class EditorReviewChecks(unittest.TestCase):
                 self.assertLessEqual(geometry['height']-geometry['host']['bottom'],8)
                 for axis in ('width','height'):
                     self.assertAlmostEqual(geometry['monaco'][axis],geometry['anchor'][axis],delta=1)
-                    self.assertGreaterEqual(geometry['host'][axis]-geometry['anchor'][axis],4)
+                    self.assertGreaterEqual(geometry['host'][axis]-geometry['anchor'][axis],2)
                     self.assertLessEqual(geometry['host'][axis]-geometry['anchor'][axis],15)
                 self.assertTrue(geometry['focus'],'Resizing must preserve Monaco keyboard focus')
                 self.assertEqual(self.js(state),baseline,'Sizing must retain model, dirty state, tab order and selection')

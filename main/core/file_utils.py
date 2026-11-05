@@ -1282,7 +1282,7 @@ def application_agent_guidance(project_dir) -> str:
         "- Package file work runs concurrently through `src/modules/bootstrap_file_pool.py` with the same native `copy2` and both hash passes, and reports `Package files:` progress so quiet phases never look frozen. "
         "The seed fetches only its pinned package tail unless a complete archive is cached; keep `direct/verify_bootstrap_file_pool.py` passing.\n"
         "- Bootstrap application source updates use finite elapsed-time GitHub checks before "
-        "standalone Windows, native Linux or macOS launches. A release records its commit in `src/dbs/source_revision.json`; replace it only when GitHub reports the branch is ahead or diverged, because a fresh ZIP can be newer than `main`. Stage a verified shallow clone in per-user "
+        "standalone Windows, native Linux or macOS launches. A release and every applied update record the commit in `src/dbs/source_revision.json`. An update never moves a copy backwards: replace source only when GitHub says the branch is newer than everything the copy records, and leave a copy that records nothing alone, because a ZIP or plain folder can be newer than `main`. Stage a verified shallow clone in per-user "
         "state and atomically replace only application-owned source; preserve user settings, "
         "protected caches, private runtimes and installers. Defer automatic updates while any "
         "workspace is active, retain the current source after failures, and verify with "
