@@ -16,12 +16,13 @@
   <script src="../assets/xterm/xterm.js"></script>
   <script src="../assets/xterm/xterm-addon-fit.js"></script>
   <script src="qwebchannel.js"></script>
+  <script src="assistant_readiness.js"></script>
 </head>
 <body>
   <div id="assistant" aria-label="Dedicated OpenCode AI Assistant"></div>
   <script>
     (() => {
-      if (!window.Terminal || !window.FitAddon || !window.QWebChannel) {
+      if (!window.Terminal || !window.FitAddon || !window.QWebChannel || !window.AssistantReadiness) {
         document.body.innerHTML = '<p id="error">OpenCode assets are missing. Restore the application assets and retry.</p>';
         return;
       }
@@ -32,6 +33,9 @@
       term.loadAddon(fit);
       term.open(document.getElementById('assistant'));
       let bridge = null, generation = 0, lastSize = '', fitPending = false;
+      const readiness = AssistantReadiness.create(term, reason => {
+        if (bridge) bridge.report_interface_ready(generation, reason);
+      });
       window.focusOpenCode = () => term.focus();
       window.fitOpenCode = () => {
         const host = document.getElementById('assistant');
@@ -48,10 +52,15 @@
       };
       new QWebChannel(qt.webChannelTransport, channel => {
         bridge = channel.objects.assistantBridge;
-        bridge.reset_view.connect(epoch => { generation = epoch; term.reset(); lastSize = ''; window.fitOpenCode(); });
+        bridge.reset_view.connect(epoch => {
+          generation = epoch; term.reset(); lastSize = ''; readiness.reset(); window.fitOpenCode();
+        });
         bridge.output.connect((epoch, data) => {
           if (epoch !== generation) return;
-          term.write(data, () => bridge.consumed(epoch, data.length));
+          term.write(data, () => {
+            bridge.consumed(epoch, data.length);
+            if (epoch === generation) readiness.observe();
+          });
         });
         term.onData(data => bridge.write(generation, data));
         window.fitOpenCode();

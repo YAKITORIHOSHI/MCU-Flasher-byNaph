@@ -11,6 +11,65 @@
 
 ---
 
+## November 5 Update: Assistant Loading Screen, Steady Tabs, Every Monitor
+
+**Assistant startup.** The assistant showed its terminal as soon as any output went
+quiet. OpenCode's graphics probe counted as text, so the terminal opened blank about
+1.5 seconds before the interface, and on Windows `cmd.exe` could show its banner and
+supervisor command. A loading screen now covers the terminal until xterm's parsed
+screen shows the interface painted. It names each real step and nothing on it moves.
+Text printed before the interface stays hidden. Plain text followed by 8 seconds of
+silence is shown, because it may be a question, and after 15 seconds **Show startup
+output** is offered. With the real OpenCode 1.18 CLI the cover lifted at 3.3 seconds,
+just after the interface painted at 3.0; the terminal used to open at 1.6. Windows
+shares this logic and `cmd.exe` no longer echoes its supervisor line. That page ran in
+real Chromium with the Windows parts mocked, not yet on native Windows.
+
+**Steady tabs.** Changing tool tabs moved the whole workspace: two pieces of code
+disagreed about the action toolbar's margins, so every switch pushed everything down
+8 pixels and back. On short windows the divider also jumped on each switch, because
+its minimum followed the active tool. The selected tab's label moved a pixel, and
+selecting a source tab in the editor widened it by about 11 pixels, pushing every tab
+after it. Switching tabs now moves nothing outside the tool pane, and opening the
+assistant keeps the divider where you put it.
+
+**Source updates.** Automatic updates from GitHub could not complete on many Windows
+installations. Without Git, every update failed, because GitHub's archive lists its
+wrapper folder first and the updater took that for an invalid layout. With Git, the
+files installed but the restart afterwards could fail in any folder whose path has a
+space, because Windows does not quote the arguments of Python's `os.execv`. Slow links
+looked offline, since one network operation had a single second and the whole check
+two; these are now two seconds and six, with 30 seconds for an archive download
+stall. A file held briefly by an antivirus scan no longer abandons the update. A copy
+still updates only when the `main` branch is ahead of it. The archive and restart
+fixes ran against real GitHub and a real child process on Linux, not yet on native
+Windows.
+
+**Every monitor.**
+
+- The default window fills small and high-scale laptop screens, stays 1440×920 on
+  ordinary desktops, and grows on large, ultrawide and portrait monitors up to
+  2560×1440.
+- The minimum width is still half the monitor, now capped at 960 logical pixels. It
+  was 3,836 on an 8K monitor. Half-monitor snapping still fits, and very wide monitors
+  can also tile in thirds. The minimum height is now 300 for top and bottom tiling.
+- Under 500 logical pixels of height, Controls collapses to one row without captions,
+  which gives the editor about 30 more pixels. Short editors also compact their file
+  tabs.
+- Board and port fields grow on wide monitors, so names fit instead of scrolling.
+- Tool tabs use full names, then short names, then icons with their full names in
+  tooltips, chosen by measuring rather than by fixed widths. They no longer have to
+  scroll. Build and Terminal now have different icons.
+- The assistant stacks under the workspace in portrait and narrow windows.
+- Toolbar actions no longer disappear after narrowing a very wide window.
+
+`direct/verify_monitor_matrix.py` checks the real workspace in every window state and
+its main dialogs on 45 monitors, from 800×600 to 7680×4320 and including portrait, each
+in a fresh process with a real Qt screen. It passes here, and reports 140 problems
+across just three monitors on the previous code. This is offscreen Qt geometry on
+Linux; native window managers and Windows still need their own runs. See the
+[responsive record](audit/RESPONSIVE_CONTROLS.md).
+
 ## November 5 Update: Faster Windows Setup and Builds, PySide6 Browser, More Systems
 
 **Windows Bootstrap.** Package extraction ran one file at a time, and on Windows

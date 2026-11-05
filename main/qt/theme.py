@@ -715,7 +715,7 @@ QTabBar::tab {{
     background-color: {bg_mid};
     color: {text_dim};
     border: 1px solid {border};
-    border-bottom: 1px solid {border};
+    border-bottom: 2px solid {border};
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
     padding: 5px 12px;
@@ -735,6 +735,7 @@ QTabBar::tab:hover:!selected {{
     background-color: {bg_hover};
     color: {text};
     border: 1px solid {border};
+    border-bottom: 2px solid {border};
 }}
 
 QTabBar::close-button {{
@@ -1029,16 +1030,18 @@ QTabWidget#workspace-tabs QTabBar {{
 }}
 QTabWidget#workspace-tabs QTabBar::tab {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
-    color: {text_dim}; border: 1px solid {rim}; border-radius: 9px;
+    color: {text_dim}; border: 1px solid {rim}; border-bottom: 2px solid {rim}; border-radius: 9px;
     padding: 4px 9px; margin-right: 3px; margin-bottom: 2px;
     font-size: 12px; font-weight: 600;
 }}
+QTabWidget#workspace-tabs QTabBar[iconOnly="true"]::tab {{ padding: 4px 3px; }}
 QTabWidget#workspace-tabs QTabBar::tab:selected {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {selected}, stop:1 {glass_highlight});
     color: {text_bright}; border: 1px solid {cyan}; border-bottom: 2px solid {cyan};
 }}
 QTabWidget#workspace-tabs QTabBar::tab:hover:!selected {{
     background: {glass_highlight}; color: {text}; border: 1px solid {border_lit};
+    border-bottom: 2px solid {border_lit};
 }}
 QTabWidget#workspace-tabs QTabBar QToolButton {{
     background: {bg_dark}; border: 1px solid {rim}; border-radius: 7px;

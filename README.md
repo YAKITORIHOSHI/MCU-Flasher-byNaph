@@ -45,6 +45,11 @@ while Qt is running. See the [responsive verification](audit/RESPONSIVE_CONTROLS
 and [window alignment evidence](audit/WINDOW_ALIGNMENT.md) for exact host results
 and remaining desktop checks.
 
+The assistant now starts behind a loading screen, so its startup text never shows.
+Switching tool or source tabs no longer moves the rest of the workspace, and windows
+adapt from small high-scale laptops to 8K and portrait monitors. See the
+[release notes](RELEASE_NOTES.md) for what changed and how it was checked.
+
 Fresh distribution folders use committed first-run defaults and retain the
 complete private Windows runtime. Personal settings, accounts, histories,
 development environments and project caches stay outside that distribution.
@@ -276,7 +281,10 @@ buttons, including in short windows and after resize or theme changes. Tool tabs
 follow their own pane when the AI sidebar opens or a splitter moves.
 `direct/verify_toolbar_sizing.py` exercises real native toolbar containers through
 resize, project-label and theme changes; `direct/verify_responsive.py` checks pane
-budgets. The native UI workflow's `responsive` group captures all five display scales.
+budgets. `direct/verify_monitor_matrix.py` runs the real workspace and main dialogs on
+real Qt screens from 800×600 to 7680×4320, including portrait, and fails if switching
+tabs moves anything outside the tool pane. The native UI workflow's `responsive` group
+captures all five display scales.
 
 Ubuntu amd64/ARM64 setup prepares both `libsecret-tools` and `gnome-keyring`.
 Cloud credentials require an unlocked keyring in the current desktop session.
@@ -374,10 +382,13 @@ too. Metadata updates preserve hidden attributes and replace files atomically;
 user sources, documents and user-authored instructions/settings remain visible
 and are not overwritten by instruction generation.
 Each main window permits a complete framed width of half the current monitor's
-available width. The client minimum subtracts measured native borders, so desktop
+available width, capped at 960 logical pixels so very wide monitors can also tile in
+thirds. The client minimum subtracts measured native borders, so desktop
 half-screen snapping can fit the complete window. It can resize wider and
 maximize normally; saved maximized state is restored. Minimum sizing follows the
-current monitor in Qt logical pixels, including native Wayland decorations.
+current monitor in Qt logical pixels, including native Wayland decorations. A new
+window fills small laptop screens, stays 1440×920 on ordinary desktops and grows on
+larger monitors up to 2560×1440; a saved size always wins.
 Tabs map to exact root filenames rather than loading order, and Ubuntu paths
 retain case. Startup project loading is coalesced to avoid duplicate models.
 The project selector uses the same cached static glass header and cards in all
@@ -1370,6 +1381,7 @@ MCU Flasher by Naph/
 │   │   ├── terminal_panel.py        # Embedded multi-session terminal panel (PowerShell & CMD tabs)
 │   │   ├── posix_terminal_panel.py  # Native Linux multi-session Bash terminal
 │   │   ├── posix_ai_panel.py        # Native Linux protected OpenCode assistant session
+│   │   ├── assistant_loader.py      # Loading screen covering the assistant until it has painted
 │   │   ├── glass.py                 # Static workspace surface and focused tool-tab navigation
 │   │   ├── icons.py                 # Theme-aware vector action icons
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel with session management
@@ -1908,6 +1920,7 @@ verification; board compilation/upload still requires separate target checks.
 ### 9. OpenCode AI Assistant & Pulsating Diff Glow
 - Click the **`🤖 AI Assistant`** button on the toolbar to open the embedded AI side panel.
 - Chat with OpenCode, generate code, or request refactoring.
+- A loading screen covers the assistant until OpenCode's interface has painted, so its startup output never shows. If OpenCode prints plain text and then waits for 8 seconds, that text appears in case it is a question. After 15 seconds, **Show startup output** lets you look behind the cover. In portrait and narrow windows the assistant stacks under the workspace.
 - **Ubuntu** uses a dedicated OpenCode TUI with one protected session. **Hide** and reveal retain the same running session; closing the assistant container independently is ignored. The separate **Terminal** tab still starts empty and creates Bash sessions only through **New Bash**.
 - On Ubuntu, `/exit` starts a fresh OpenCode PTY without replaying input. Unexpected exits allow at most two automatic restarts in one minute, then show **Retry OpenCode**. Closing the owning workspace ends the assistant.
 - Ubuntu discovers its certified `.ubuntu-tools/opencode` binary first, then installed native `opencode` commands through the desktop account's PATH or standard user installation directories (`~/.opencode/bin`, `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`). Runtime discovery does not download or install the CLI; unavailable installations show a retry message.

@@ -350,6 +350,21 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             margin: 0; padding: 0;
             box-sizing: border-box;
         }
+        /* Covers OpenCode's startup, including what cmd.exe prints, until its interface paints. */
+        #startup-cover {
+            position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 10; box-sizing: border-box;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 8px; padding: 16px; text-align: center; overflow: auto;
+            background: __THEME_BG__; color: __THEME_FG__;
+            font-family: 'Montserrat', 'Segoe UI', sans-serif;
+        }
+        #startup-cover[hidden], #startup-reveal[hidden], #startup-hint[hidden] { display: none; }
+        #startup-title { font-size: 15px; font-weight: 700; }
+        #startup-status, #startup-hint { font-size: 12px; opacity: .75; max-width: 460px; }
+        #startup-reveal {
+            margin-top: 4px; padding: 5px 12px; border-radius: 5px; cursor: pointer; font: inherit; font-size: 12px;
+            color: __THEME_FG__; background: transparent; border: 1px solid __THEME_FG__;
+        }
         #fallback-container {
             display: none; width: 100% !important; height: 100% !important; box-sizing: border-box;
             padding: 12px; flex-direction: column; background: __THEME_BG__; color: #00ff66;
@@ -388,8 +403,15 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
     <link rel="stylesheet" href="/xterm/xterm.css" />
     <script src="/xterm/xterm.js" onerror="window.xtermErr=true"></script>
     <script src="/xterm/xterm-addon-fit.js" onerror="window.xtermErr=true"></script>
+    <script src="/assistant_readiness.js"></script>
 </head>
 <body>
+    <div id="startup-cover" role="status">
+        <div id="startup-title">Starting OpenCode</div>
+        <div id="startup-status">Loading your workspace…</div>
+        <div id="startup-hint" hidden>OpenCode is taking longer than usual. Its first run in a project can take a minute.</div>
+        <button id="startup-reveal" type="button" hidden>Show startup output</button>
+    </div>
     <div id="terminal-container"></div>
     <div id="fallback-container">
         <div id="fallback-output">MCU Flash GUI — OpenCode AI Terminal\n---------------------------------------\nConnecting to PTY Session...\n</div>
@@ -457,6 +479,48 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             }
         }
 
+        const startupCover = document.getElementById('startup-cover');
+        const startupStatus = document.getElementById('startup-status');
+        const startupHint = document.getElementById('startup-hint');
+        const startupReveal = document.getElementById('startup-reveal');
+        const START_SLOW_MS = 15000;
+        let startupTimer = null;
+        let readiness = null;
+
+        function coverStartup(status) {
+            startupStatus.textContent = status;
+            startupHint.hidden = startupReveal.hidden = true;
+            startupCover.hidden = false;
+            clearTimeout(startupTimer);
+            startupTimer = setTimeout(() => { startupHint.hidden = startupReveal.hidden = false; }, START_SLOW_MS);
+        }
+
+        function liftStartupCover(reason) {
+            clearTimeout(startupTimer);
+            startupCover.hidden = true;
+            if (term) term.focus();
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'interface_ready', reason: reason }));
+            }
+        }
+
+        if (term && window.AssistantReadiness) {
+            readiness = AssistantReadiness.create(term, liftStartupCover);
+            coverStartup(startupStatus.textContent);
+            startupReveal.addEventListener('click', () => liftStartupCover('user'));
+            // The host announces /exit here: the next session needs the same cover,
+            // and what is on screen now belongs to the session that is ending.
+            term.parser.registerOscHandler(7337, () => {
+                term.reset();
+                readiness.reset();
+                coverStartup('Starting a fresh OpenCode session…');
+                return true;
+            });
+        } else {
+            // Without a parsed screen nothing can tell when the interface has painted.
+            startupCover.hidden = true;
+        }
+
         const wsPort = parseInt(window.location.port || "80") + 1;
         const wsUrl = `ws://${window.location.hostname}:${wsPort}/ws`;
         const socket = new WebSocket(wsUrl);
@@ -471,7 +535,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             // OpenCode's output timing, which may finish before the old watcher
             // arms on fast machines.
             try {
-                socket.send(JSON.stringify({ type: 'client_ready' }));
+                socket.send(JSON.stringify({ type: 'client_ready', readiness: Boolean(readiness) }));
             } catch (e) {}
         };
 
@@ -481,7 +545,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 
         socket.onmessage = (event) => {
             if (term) {
-                term.write(event.data);
+                term.write(event.data, () => { if (readiness) readiness.observe(); });
             } else {
                 appendFallbackOutput(event.data);
             }
@@ -558,6 +622,10 @@ def get_ai_html() -> str:
     )
 
 
+# Private OSC telling the assistant page a session is ending; xterm never displays it.
+_RESTART_SEQUENCE = "\x1b]7337;restart\x07"
+
+
 class TerminalServer:
     def __init__(self, port=8765, target_dir=None, command=None):
         self.port = port
@@ -584,7 +652,8 @@ class TerminalServer:
         return (
             f'cd /d "{target_dir}" && '
             f'set PATH=%APPDATA%\\npm;%PATH% && cls && '
-            f'for /L %i in (0,0,1) do ( {invocation} "{target_dir}" & '
+            # The @ stops cmd.exe echoing this supervisor line before each session.
+            f'for /L %i in (0,0,1) do @( {invocation} "{target_dir}" & '
             f'timeout /t 1 /nobreak >nul )\r\n'
         )
 
@@ -606,6 +675,7 @@ class TerminalServer:
         output_bytes = [0]
         output_chunks = [0]
         webview_connected = [False]
+        page_reports_ready = [False]
         input_line = [""]
         input_escape = [False]
         from src.modules.ai_prompt_context import PromptInputTracker
@@ -640,7 +710,7 @@ class TerminalServer:
             return requested
 
         def notify_container_restart():
-            notice = (
+            notice = _RESTART_SEQUENCE if page_reports_ready[0] else (
                 "\r\n[MCU Flasher] /exit detected. Restarting OpenCode "
                 "inside the protected AI container…\r\n"
             )
@@ -717,8 +787,13 @@ class TerminalServer:
             connected client, meaningful PTY output, a minimum startup interval,
             and a quiet period. There is no timeout-based ready state: a cold
             first run remains loading until this actual readiness condition is met.
+
+            A page with assistant_readiness.js reads xterm's parsed screen instead,
+            so this byte timing applies only to the fallback renderer.
             """
             while self.is_running and not ready_marker_written[0]:
+                if page_reports_ready[0]:
+                    return
                 now = time.time()
                 elapsed = now - spawn_ts[0]
                 quiet_for = now - last_data_ts[0]
@@ -748,9 +823,12 @@ class TerminalServer:
                 msg = json.loads(message)
                 if msg.get('type') == 'client_ready':
                     # The browser surface is alive, but OpenCode may still be
-                    # loading. The readiness monitor will publish the marker only
-                    # after PTY output settles.
+                    # loading. The page or the readiness monitor publishes the
+                    # marker once the interface has really painted.
+                    page_reports_ready[0] = bool(msg.get('readiness'))
                     webview_connected[0] = True
+                elif msg.get('type') == 'interface_ready':
+                    write_ready_marker("interface-" + str(msg.get('reason', 'ready'))[:16])
                 elif self.pty and msg.get('type') == 'input':
                     input_data = msg.get('data', '')
                     try:
@@ -786,8 +864,10 @@ class TerminalServer:
                     self.send_header('Content-type', 'text/html')
                     self.end_headers()
                     self.wfile.write(get_ai_html().encode('utf-8'))
-                elif self.path in ('/xterm/xterm.css', '/xterm/xterm.js', '/xterm/xterm-addon-fit.js'):
-                    asset = SCRIPT_DIR / 'src/assets/xterm' / self.path.rsplit('/', 1)[1]
+                elif self.path in ('/xterm/xterm.css', '/xterm/xterm.js', '/xterm/xterm-addon-fit.js',
+                                   '/assistant_readiness.js'):
+                    folder = 'src/editor' if self.path == '/assistant_readiness.js' else 'src/assets/xterm'
+                    asset = SCRIPT_DIR / folder / self.path.rsplit('/', 1)[1]
                     try:
                         data = asset.read_bytes()
                     except OSError:
@@ -1030,7 +1110,7 @@ def run_standalone_ai(target_directory=None):
             # as a separate window on the desktop.
             hidden=True,
             focus=False,
-            background_color="#0c0d10"
+            background_color=_resolve_ai_theme()["bg"]
         )
         try:
             webview.start()

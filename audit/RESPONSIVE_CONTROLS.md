@@ -157,3 +157,39 @@ SHA-256: `ff714df244e6e12d7fed08fbcaad36f16e3221c3326357279254714bdb476b9d`.
 Independent ZIP CRC, changed-source/commit equality, fresh defaults and complete
 17,496-file Windows runtime checks passed. Original user archive preservation and
 owned intermediate removal receipts remain under `temp/audit/responsive-fix/`.
+
+## Tab stability and the monitor matrix — November 5, 2026
+
+The report was that the whole app shook when changing tabs. Recording every Move and
+Resize on a real `MCUMainWindow` during tab switches found, on `89df65a`:
+
+- `PrimaryToolbar` went from 38 to 46 pixels and back on every switch, moving the
+  Controls row and the whole central workspace 8 pixels. `_settle_embedded_layout`
+  restored stale margins, then `set_responsive_width` corrected them.
+- Short windows moved the divider up to about 50 pixels per switch, because the pane
+  minimum followed the active tool.
+- The selected tab's label moved one pixel, from a thicker bottom border.
+- Selecting a source tab widened it from 157.6 to 168.4 pixels through a heavier font,
+  moving every later tab.
+
+Tab revisits now produce no geometry events at all, and first visits touch only their
+own page.
+
+`direct/verify_monitor_matrix.py` runs 45 monitors, 800×600 to 7680×4320 at 100–200%
+including portrait, each in a fresh process on Qt's offscreen platform with a real
+`QScreen`. For each it checks the default, half-width, half-height, full-screen and
+smallest windows, full and half with the assistant, theme changes, the detached editor,
+Settings, the board picker, Modify, Find All, the project selector and Bootstrap.
+
+| Run | Monitors | Problems |
+| --- | --- | --- |
+| `89df65a`, before the fix | 3 | 140 |
+| Working tree after the fix | 45 | 0 |
+
+The sweep also found that narrowing a very wide window could leave toolbar actions
+hidden: spacers fixed for the wide window pushed the row into native overflow, and Qt
+ignores size changes on hidden widgets.
+
+This is offscreen geometry on Linux. It does not establish native window-manager
+behaviour, Windows or macOS rendering, or how motion feels on a real desktop.
+

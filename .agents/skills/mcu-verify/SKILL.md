@@ -28,7 +28,8 @@ failure pre-existing. Name fragments select verifiers by file name.
   `verify_incremental_builds.py` drives the real compile worker and PlatformIO.
   Mocked-compiler fixtures cannot see PlatformIO deleting objects.
 - Bootstrap or package changes: `bootstrap offline package`.
-- GUI changes: `runtime responsive controls performance shutdown package_browser`.
+- GUI changes: `runtime responsive controls performance shutdown package_browser monitor_matrix`.
+- Assistant changes: `assistant_startup ubuntu_ai_panel embedded_viewports`.
 - Host admission or setup: `ubuntu_release linux_distributions macos_adapter launcher_folder`.
   `direct/verify_ubuntu_first_run.py --execute` is the real cold-start proof on any POSIX
   host, and `other-platforms.yml` runs it on real Fedora, Mint and macOS.

@@ -12,7 +12,8 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout, QSizePolicy
 
-from main.core.theme import get_palette
+from main.core.theme import Theme, get_palette
+from main.qt.assistant_loader import AssistantLoader
 from main.qt.log_colors import themed_terminal_colors
 from main.qt.icons import icon
 from main.qt.posix_terminal_panel import PtySession
@@ -23,11 +24,13 @@ from src.modules.runtime_resources import performance_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSISTANT_ASSETS = (
-    "src/editor/opencode.html", "src/editor/qwebchannel.js",
+    "src/editor/opencode.html", "src/editor/qwebchannel.js", "src/editor/assistant_readiness.js",
     "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css",
     "src/assets/xterm/xterm-addon-fit.js",
 )
-_ANSI_OUTPUT = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+# String sequences come first: a graphics probe's APC payload is control data, not text.
+_ANSI_OUTPUT = re.compile(r"\x1b[P_^X].*?(?:\x1b\\|\x07|\Z)|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|\Z)"
+                          r"|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]", re.DOTALL)
 
 
 class OpenCodeSession(QObject):
@@ -35,7 +38,8 @@ class OpenCodeSession(QObject):
     output = Signal(int, str)
     reset_view = Signal(int)
     status = Signal(str, str)
-    rendered = Signal(int, int)
+    workspace_loading = Signal(int)
+    interface_ready = Signal(int, str)
 
     def __init__(self, cwd, executable, parent=None):
         super().__init__(parent)
@@ -47,6 +51,7 @@ class OpenCodeSession(QObject):
         self._starting = False
         self._start_error = ""
         self._diagnostic_tail = ""
+        self._output_seen = False
         self._dimensions = (24, 80)
         self._policy = OpenCodeRestartPolicy()
         self._intentional_exit = False
@@ -75,6 +80,7 @@ class OpenCodeSession(QObject):
         self._line_pasted = False
         self._exit_observer = PromptInputTracker(self.cwd, source="assistant")
         self._diagnostic_tail = ""
+        self._output_seen = False
         child = PtySession(self.cwd, opencode_argv(self.executable, self.cwd), self)
         child.assistant_active = True
         child.prompt_source = "assistant"
@@ -83,7 +89,7 @@ class OpenCodeSession(QObject):
         child.output.connect(lambda data: self._forward_output(child, generation, data))
         child.ended.connect(lambda message: self._ended(child, generation, message))
         self.reset_view.emit(generation)
-        self.status.emit("loading", "Starting OpenCode…")
+        self.status.emit("loading", "Starting a session…")
         self._starting, self._start_error = True, ""
         try:
             started = child.start()
@@ -102,6 +108,9 @@ class OpenCodeSession(QObject):
         if not self._closed and child is self._child and generation == self._generation:
             text = _ANSI_OUTPUT.sub("", data)
             self._diagnostic_tail = (self._diagnostic_tail + "".join(c for c in text if c.isprintable() or c in "\r\n"))[-2000:]
+            if not self._output_seen:
+                self._output_seen = True
+                self.workspace_loading.emit(generation)
             self.output.emit(generation, data)
 
     def _ended(self, child, generation, message):
@@ -156,7 +165,12 @@ class OpenCodeSession(QObject):
     def consumed(self, generation, chars):
         if not self._closed and generation == self._generation and self._child:
             self._child.consumed(chars)
-            self.rendered.emit(generation, chars)
+
+    @Slot(int, str)
+    def report_interface_ready(self, generation, reason):
+        """The page saw OpenCode's interface painted; assistant_readiness.js decides."""
+        if not self._closed and generation == self._generation and self._child:
+            self.interface_ready.emit(generation, reason)
 
     def retry(self):
         if not self._closed and not self._child and not self._restart_timer.isActive():
@@ -182,7 +196,7 @@ class PosixAIPanel(QWidget):
         super().__init__(parent)
         from main.core.config import get_monitor_font_size
         self._backend = backend
-        self._theme = "default"
+        self._theme = Theme.active_theme
         self._font_size = get_monitor_font_size()
         self._requested = False
         self._closing = False
@@ -190,13 +204,6 @@ class PosixAIPanel(QWidget):
         self._launch_generation = 0
         self._session = self._view = self._channel = None
         self._state = "idle"
-        self._output_bytes = 0
-        self._visible_output = self._rendered_chars = 0
-        self._last_output = 0.0
-        self._spawn_time = 0.0
-        self._ready_timer = QTimer(self)
-        self._ready_timer.setInterval(150)
-        self._ready_timer.timeout.connect(self._check_ready)
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
         self._fit_timer.setInterval(60)
@@ -240,23 +247,12 @@ class PosixAIPanel(QWidget):
         self._stack = QStackedLayout(self._body)
         self._stack.setContentsMargins(0, 0, 0, 0)
         self._stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        self._loader = QFrame(self._body)
-        loader_layout = QVBoxLayout(self._loader)
-        loader_layout.setContentsMargins(16, 16, 16, 16)
-        loader_layout.addStretch()
-        self._load_title = QLabel("OpenCode AI Assistant", self._loader)
-        self._load_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._load_title.setWordWrap(True)
-        loader_layout.addWidget(self._load_title)
-        self._load_sub = QLabel("Open the assistant to start OpenCode in this project.", self._loader)
-        self._load_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._load_sub.setWordWrap(True)
-        loader_layout.addWidget(self._load_sub)
-        self._retry_button = QPushButton("Retry OpenCode", self._loader)
-        self._retry_button.clicked.connect(self._retry)
-        self._retry_button.hide()
-        loader_layout.addWidget(self._retry_button, alignment=Qt.AlignmentFlag.AlignCenter)
-        loader_layout.addStretch()
+        self._loader = AssistantLoader(self._body)
+        self._load_title, self._load_sub = self._loader.title, self._loader.status
+        self._retry_button = self._loader.retry_button
+        self._loader.show_idle("Open the assistant to start OpenCode in this project.")
+        self._loader.retry_requested.connect(self._retry)
+        self._loader.reveal_requested.connect(self._show_interface)
         self._stack.addWidget(self._loader)
         layout.addWidget(self._body, 1)
 
@@ -270,7 +266,7 @@ class PosixAIPanel(QWidget):
         self._launch_generation += 1
         generation, project = self._launch_generation, self._cwd()
         self._project_dir = project  # Pin pending discovery before the backend can change projects.
-        self._set_state("loading", "Locating OpenCode for this project…")
+        self._set_state("loading", "Finding OpenCode for this project…")
 
         def discover():
             try:
@@ -309,8 +305,8 @@ class PosixAIPanel(QWidget):
         view.page().setWebChannel(channel)
         self._view, self._session, self._channel = view, session, channel
         session.status.connect(lambda state, text: self._session_status(session, state, text))
-        session.output.connect(lambda epoch, data: self._observed_output(session, data))
-        session.rendered.connect(lambda epoch, chars: self._observed_render(session, chars))
+        session.workspace_loading.connect(lambda epoch: self._workspace_loading(session))
+        session.interface_ready.connect(lambda epoch, reason: self._interface_ready(session))
         view.loadFinished.connect(lambda ok: self._loaded(view, ok))
         if hasattr(view, "renderProcessTerminated"):
             view.renderProcessTerminated.connect(lambda *_: self._renderer_terminated(view))
@@ -331,12 +327,23 @@ class PosixAIPanel(QWidget):
     def _session_status(self, session, state, text):
         if session is not self._session or self._closing:
             return
-        if state == "loading":
-            self._output_bytes = 0
-            self._visible_output = self._rendered_chars = 0
-            self._spawn_time = self._last_output = time.monotonic()
-            self._ready_timer.start()
-        self._set_state(state, text)
+        self._set_state(state, text, phase=1)
+
+    def _workspace_loading(self, session):
+        if session is self._session and self._state == "loading" and not self._closing:
+            self._loader.show_progress("Loading your workspace…", 2)
+
+    def _interface_ready(self, session):
+        if session is self._session and self._state == "loading" and not self._closing:
+            self._show_interface()
+
+    def _show_interface(self):
+        """Lift the cover: the interface painted, or the user asked to see the output."""
+        if self._closing or not self._view:
+            return
+        self._set_state("active", "OpenCode is ready.")
+        self._resize_embedded_ai()
+        self._focus_view()
 
     def _renderer_terminated(self, view):
         if view is not self._view or self._closing:
@@ -352,40 +359,17 @@ class PosixAIPanel(QWidget):
         widget = QApplication.focusWidget()
         return bool(widget and self.isVisible() and (widget is self or self.isAncestorOf(widget)))
 
-    def _observed_output(self, session, data):
-        if session is self._session and not self._closing:
-            self._output_bytes = min(65536, self._output_bytes + len(data.encode("utf-8")))
-            text = _ANSI_OUTPUT.sub("", data)
-            self._visible_output = min(65536, self._visible_output + sum(c.isprintable() and not c.isspace() for c in text))
-            self._last_output = time.monotonic()
-
-    def _observed_render(self, session, chars):
-        if session is self._session and not self._closing:
-            self._rendered_chars = min(65536, self._rendered_chars + max(0, chars))
-
-    def _check_ready(self):
-        now = time.monotonic()
-        if self._state != "loading" or not self._session or not self._session._child:
-            self._ready_timer.stop()
-            return
-        # Short startup questions must remain accessible too. Reveal only
-        # settled visible output acknowledged by the renderer, never a timeout.
-        elapsed = now - self._spawn_time
-        if (self._visible_output and self._rendered_chars and elapsed >= 1.0
-                and (now - self._last_output >= 0.5 or elapsed >= 6.5)):
-            self._ready_timer.stop()
-            self._set_state("active", "OpenCode is ready.")
-            self._resize_embedded_ai()
-            self._focus_view()
-
-    def _set_state(self, state, text):
+    def _set_state(self, state, text, phase=0):
         self._state = state
         self._refresh_header(self.width())
-        self._load_title.setText("OpenCode AI Assistant" if state != "error" else "OpenCode unavailable")
-        self._load_sub.setText(text)
-        self._retry_button.setVisible(state == "error")
-        if state != "loading":
-            self._ready_timer.stop()
+        if state == "loading":
+            self._loader.show_progress(text, phase)
+        elif state == "error":
+            self._loader.show_error("OpenCode unavailable", text)
+        elif state == "active":
+            self._loader.finish()
+        else:
+            self._loader.show_idle(text)
         self._stack.setCurrentWidget(self._view if state == "active" and self._view else self._loader)
         self._apply_surfaces()
 
@@ -461,12 +445,10 @@ class PosixAIPanel(QWidget):
         self._hide_button.setIcon(icon("close", palette['TEXT_DIM'], size=12))
         ink = palette['GREEN' if self._state == "active" else 'RED' if self._state == "error" else 'TEXT_DIM']
         self._status_badge.setStyleSheet(f"color: {ink}; font-size: 10px; font-weight: 600;")
-        self._loader.setStyleSheet(f"QFrame {{ background: {palette['BG_DARKEST']}; border: none; }}")
-        self._load_title.setStyleSheet(f"color: {palette['TEXT']}; font-size: 14px; font-weight: 700;")
-        self._load_sub.setStyleSheet(f"color: {palette['TEXT_DIM']}; font-size: 11px;")
 
     def apply_theme(self, mode):
         self._theme = mode
+        self._loader.apply_theme(mode)
         self._apply_surfaces()
         self._configure_view()
 
@@ -478,7 +460,6 @@ class PosixAIPanel(QWidget):
     def _discard_view(self):
         self._launch_generation += 1
         self._fit_timer.stop()
-        self._ready_timer.stop()
         if self._session:
             self._session.close()
         self._session = self._channel = None

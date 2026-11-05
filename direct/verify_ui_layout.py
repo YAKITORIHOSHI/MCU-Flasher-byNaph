@@ -72,6 +72,10 @@ def checks(group, scale, output):
         yield render("verify_projects", "projects")
     if group == "responsive" and scale == "1" and sys.platform == "win32":
         yield "verify_terminal", []
+    if group in ("all", "responsive", "workspace") and scale == "1":
+        # Each emulates its own monitors and scales in fresh processes.
+        yield "verify_monitor_matrix", []
+        yield "verify_assistant_startup", []
     if group == "all" and scale == "1":
         if sys.platform == "win32":
             yield "verify_terminal", []

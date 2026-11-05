@@ -261,19 +261,20 @@ class DedicatedAssistantChecks(unittest.TestCase):
         self.assertEqual(panel._session.cwd, str(destination))
         self.assertNotEqual(panel._session.cwd, original)
 
-    def test_readiness_requires_real_output_and_theme_font_preserve_session(self):
+    def test_only_the_page_can_lift_the_cover_and_theme_font_preserve_session(self):
+        # Real xterm parsing is checked with real startup output in verify_assistant_startup.py.
         panel = self.started_panel()
         session, view = panel._session, panel._view
-        panel._spawn_time -= 10
-        panel._last_output -= 10
-        panel._check_ready()
-        self.assertEqual(panel._state, "loading")
         session._child.output.emit("OpenCode interface " * 50)
-        panel._last_output -= 1
-        panel._check_ready()
-        self.assertEqual(panel._state, "loading", "Output must be rendered before reveal")
         session.consumed(session._generation, 500)
-        panel._check_ready()
+        for _ in range(5):
+            APP.processEvents()
+        self.assertEqual(panel._state, "loading", "Output bytes alone must not reveal the terminal")
+        self.assertIs(panel._stack.currentWidget(), panel._loader)
+        self.assertEqual(panel._load_sub.text(), "Loading your workspace…")
+        session.report_interface_ready(session._generation - 1, "interface")
+        self.assertEqual(panel._state, "loading", "A report from an ended session must be ignored")
+        session.report_interface_ready(session._generation, "interface")
         self.assertEqual(panel._state, "active")
         self.assertIs(panel._stack.currentWidget(), view)
         for theme in ("light", "solarized_dark", "default"):
@@ -286,25 +287,38 @@ class DedicatedAssistantChecks(unittest.TestCase):
     def test_short_rendered_prompt_is_accessible_but_hidden_panel_cannot_take_focus(self):
         panel = self.started_panel()
         panel.hide()
-        panel._spawn_time -= 10
         session = panel._session
         session._child.output.emit("Sign in? ")
-        session.consumed(session._generation, 9)
-        panel._last_output -= 1
         with patch.object(panel._view, "setFocus") as focus:
-            panel._check_ready()
+            session.report_interface_ready(session._generation, "text")
             self.assertEqual(panel._state, "active")
             focus.assert_not_called()
 
-    def test_capability_requests_alone_cannot_claim_a_ready_interface(self):
+    def test_user_can_ask_for_startup_output_and_a_late_report_changes_nothing(self):
         panel = self.started_panel()
-        panel._spawn_time -= 10
+        session, view = panel._session, panel._view
+        panel._loader.reveal_requested.emit()
+        self.assertEqual(panel._state, "active")
+        self.assertIs(panel._stack.currentWidget(), view)
+        session._child.output.emit("late output")
+        session.report_interface_ready(session._generation, "interface")
+        self.assertEqual(panel._state, "active")
+        self.assertIs(panel._stack.currentWidget(), view)
+
+    def test_fresh_session_returns_to_the_cover(self):
+        panel = self.started_panel()
         session = panel._session
-        session._child.output.emit("\x1b[6n\x1b[c" * 100)
-        session.consumed(session._generation, 900)
-        panel._last_output -= 1
-        panel._check_ready()
+        session.report_interface_ready(session._generation, "interface")
+        self.assertEqual(panel._state, "active")
+        session.write(session._generation, "/exit\r")
+        session._child.ended.emit("exited")
         self.assertEqual(panel._state, "loading")
+        self.assertIs(panel._stack.currentWidget(), panel._loader)
+        session._restart_timer.stop()
+        session._spawn()
+        self.assertEqual(panel._state, "loading")
+        session._child.output.emit("\x1b[?1049h")
+        self.assertEqual(panel._load_sub.text(), "Loading your workspace…")
 
     def test_exit_restarts_a_fresh_pty_with_no_input_replay_and_stale_acks_ignored(self):
         session = self.session()

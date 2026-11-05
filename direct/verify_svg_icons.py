@@ -135,7 +135,7 @@ class QtSvgChecks(unittest.TestCase):
         self.assertTrue(terminal._btn_add_tab.accessibleName())
         assistant=self.own(AIPanel(backend=backend))
         self.assertFalse(assistant._btn_close.icon().isNull())
-        self.assertEqual(assistant._spin_lbl._icon_name,'ai')
+        self.assertFalse(assistant._loader_card._mark.pixmap().isNull())
 
     def test_status_icons_do_not_enter_clipboard_or_change_unicode_input(self):
         from main.qt.console_panel import ConsolePanel

@@ -150,6 +150,57 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertGreaterEqual(bar.tabRect(index).height(), bar.fontMetrics().height())
             host.hide()
 
+    def test_selecting_a_tool_tab_keeps_its_box_and_label_still(self):
+        from main.qt.glass import WorkspaceTabBar
+        from main.qt.icons import icon
+
+        def ink_rows(image, rect, ratio):
+            """First and last row holding text ink inside a tab's label area."""
+            left, right = round((rect.left() + 34) * ratio), round((rect.right() - 8) * ratio)
+            top, bottom = round((rect.top() + 4) * ratio), round((rect.bottom() - 5) * ratio)
+            rows = []
+            for y in range(top, bottom):
+                surface = image.pixelColor(left, y)
+                if any(abs(image.pixelColor(x, y).lightness() - surface.lightness()) > 60
+                       for x in range(left, right)):
+                    rows.append(y)
+            self.assertTrue(rows, 'The fixture tab must paint a label')
+            return rows[0], rows[-1]
+
+        for mode in ('default', 'light', 'solarized_dark'):
+            APP.setStyleSheet(build_stylesheet(mode))
+            host = self.own(QWidget())
+            layout = QVBoxLayout(host)
+            layout.setContentsMargins(0, 0, 0, 0)
+            tabs = QTabWidget(host)
+            tabs.setObjectName('workspace-tabs')
+            tabs.setTabBar(WorkspaceTabBar(tabs))
+            for name, glyph in (('Build Console', 'compile'), ('Serial Monitor', 'serial'), ('Compatible Devices', 'devices')):
+                tabs.addTab(QWidget(), icon(glyph), name)
+            layout.addWidget(tabs)
+            host.resize(640, 200)
+            host.show()
+            pump()
+            bar = tabs.tabBar()
+            ratio = bar.devicePixelRatioF()
+            rect = bar.tabRect(1)
+            for current in (0, 1, 2, 1, 0):
+                with self.subTest(theme=mode, current=current):
+                    tabs.setCurrentIndex(0 if current != 1 else 1)
+                    pump()
+                    self.assertEqual(bar.tabRect(1), rect, 'Selecting a tab must not change its box')
+            tabs.setCurrentIndex(0)
+            pump()
+            resting = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio)
+            tabs.setCurrentIndex(1)
+            pump()
+            selected = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio)
+            # Selected text is brighter, so one antialiased edge row may cross the
+            # threshold. A real jump moves the top and bottom rows together.
+            self.assertTrue(selected[0] == resting[0] or selected[1] == resting[1],
+                            f'The selected label jumped in {mode}: {resting} to {selected}')
+            host.hide()
+
     def test_native_embeds_fill_actual_client_bounds_at_every_scale(self):
         from main.qt import terminal_panel, ai_panel
         constants = SimpleNamespace(**{name: 1 << index for index, name in enumerate((
