@@ -123,7 +123,8 @@ and continuous animation on four/six-core devices. Preserve source-tab dirty
 indicators, drag order and buffer identity. Capture compact/wide and dark/light
 layouts, check native widget ownership, and verify only explicitly requested
 dialogs, explicit Project actions or Detach Editor actions open additional windows.
-Set main window minimum width to half the current monitor's work-area width;
+Set main window minimum width to half the current monitor's work-area width,
+capped at 960 logical pixels so very wide monitors can also tile in thirds;
 allow wider resizing and maximization. Project selection asks whether to use
 the current window or a separate sketch window; show full paths for running
 projects. Keep the current project's buffers, focus and terminal sessions when
@@ -171,7 +172,10 @@ scaling with `direct/verify_responsive.py`; couple physical resolution with the
 scale and work-area reservation. Check rendered content fonts and text clipping,
 including 175% and portrait screens; scroll short dialogs and details. Compact
 setup chrome and package rows before spending the last two reading lines.
-Reserve short-screen height for tool navigation and the active panel's controls;
+Reserve short-screen height for tool navigation and the tallest tool's controls,
+so switching tools moves nothing. A selected or hover state never changes a tab's box,
+weight or label position. On-screen motion can make people feel sick: keep loading
+screens still, and name real steps rather than animating;
 let scrollable output shrink before headers. Review every tool tab, not only
 Build and Serial.
 

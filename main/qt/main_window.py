@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import Qt, QTimer, Slot, QRect, QEvent
+from PySide6.QtCore import Qt, QTimer, Slot, QRect, QEvent, QMargins
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import (
     QKeySequence, QShortcut, QCloseEvent,
@@ -61,6 +61,47 @@ _project_root = _this_file.parent.parent.parent
 
 from main.qt.icons import IconLabel as QLabel
 
+# Full title, compact title and icon for each workspace tool, in tab order.
+_TOOL_TABS = (
+    ("Build Console", "Build", "compile"),
+    ("Serial Monitor", "Serial", "serial"),
+    ("Compatible Devices", "Devices", "devices"),
+    ("Notifications", "Alerts", "alerts"),
+    ("Syntax Check", "Syntax", "search"),
+    ("Terminal", "Terminal", "terminal"),
+    ("AI Changes", "AI Changes", "edit"),
+)
+
+
+# A stacked assistant keeps its header and a few terminal rows on any window.
+_STACKED_ASSISTANT_MINIMUM = 85
+
+# Workspace tabs use 9px side padding, icon-only tabs 3px (see main/qt/theme.py).
+_ICON_TAB_PADDING_SAVING = 12
+
+
+def _tab_strip_width(bar, titles, icon_only=False) -> int:
+    """Predict the tab strip's width for these titles from its real tab chrome."""
+    font = QFont(bar.font())
+    font.setPixelSize(12)  # QTabBar::tab in the workspace stylesheet.
+    font.setWeight(QFont.Weight.DemiBold)
+    metrics = QFontMetrics(font)
+    # Icon-only tabs have narrower padding, so correct for the state being left.
+    padding = _ICON_TAB_PADDING_SAVING * (int(bool(bar.property("iconOnly"))) - int(icon_only))
+    # One spare pixel per tab absorbs fractional advances at scaled displays.
+    return sum(bar.tabSizeHint(index).width() - metrics.horizontalAdvance(bar.tabText(index))
+               + metrics.horizontalAdvance(title) + padding + 1 for index, title in enumerate(titles))
+
+
+def _reading_line_height(output) -> int:
+    """Height of one complete line in a log view, including frame and padding."""
+    metrics = QFontMetrics(output.document().defaultFont())
+    margin = int(output.document().documentMargin())
+    scrollbar = output.horizontalScrollBar().sizeHint().height() if (
+        output.lineWrapMode().value == 0  # NoWrap, in both Qt text edit classes.
+        and output.horizontalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff) else 0
+    return max(24, metrics.lineSpacing() + margin + 2 * output.frameWidth() + scrollbar + 1)
+
 
 class MCUMainWindow(QMainWindow):
     """
@@ -83,6 +124,7 @@ class MCUMainWindow(QMainWindow):
         self._editor_detached = False
         self._is_attaching_editor = False
         self._editor_pane_visible_before_detach = True
+        self._divided_panes = (True, True)
         self._detached_window = None
         self._active_operation: str | None = None
         self._operation_generation = 0
@@ -125,9 +167,8 @@ class MCUMainWindow(QMainWindow):
         avail_w = avail.width()
         avail_h = avail.height()
 
-        from src.modules.ui_metrics import WorkArea, preferred_size
-        target_w, target_h = preferred_size(
-            WorkArea(avail.x(), avail.y(), avail_w, avail_h), 1440, 920, ratio=.90)
+        from src.modules.ui_metrics import WorkArea, workspace_size
+        target_w, target_h = workspace_size(WorkArea(avail.x(), avail.y(), avail_w, avail_h))
         target_w = max(target_w, self._minimum_width_for_display(avail_w, avail_h))
 
         # Center within the available work area (respecting taskbar location)
@@ -140,9 +181,8 @@ class MCUMainWindow(QMainWindow):
         screen_width: int, screen_height: int, display_scale: float = 1.0
     ) -> int:
         """Return the half-monitor frame budget; Qt already applies display scale."""
-        screen_width = max(1, int(screen_width))
-        screen_height = max(1, int(screen_height))
-        return max(1, screen_width // 2)
+        from src.modules.ui_metrics import workspace_minimum_width
+        return workspace_minimum_width(screen_width)
 
     def _update_minimum_window_size(self, screen: QScreen | None = None) -> None:
         """Fit the complete normal-window minimum to the logical work area."""
@@ -162,7 +202,7 @@ class MCUMainWindow(QMainWindow):
             margins = handle.frameMargins()
             frame_width = max(frame_width, margins.left() + margins.right())
         new_min_w = max(1, self._minimum_width_for_display(sw, sh) - frame_width)
-        new_min_h = min(380, max(1, sh - 48))
+        new_min_h = min(300, max(1, sh - 48))
         self.setMaximumWidth(16777215)
         self.setMinimumSize(new_min_w, new_min_h)
 
@@ -225,33 +265,52 @@ class MCUMainWindow(QMainWindow):
                     toolbar.style().polish(toolbar)
                     toolbar.setContentsMargins(margins.left(), 0 if tight else margins.top(),
                                                margins.right(), 0 if tight else margins.bottom())
-                    toolbar_layout = toolbar.layout()
-                    if toolbar_layout is not None:
-                        if not hasattr(toolbar, "_full_height_layout_margins"):
-                            toolbar._full_height_layout_margins = toolbar_layout.contentsMargins()
-                        margins = toolbar._full_height_layout_margins
-                        toolbar_layout.setContentsMargins(margins.left(), 0 if tight else margins.top(),
-                                                          margins.right(), 0 if tight else margins.bottom())
                     toolbar.updateGeometry()
+        self._fit_controls_toolbar()
         self._apply_responsive_layout(event.size().width())
         self._layout_timer.start()
 
+    def _fit_controls_toolbar(self) -> None:
+        """Apply the height budget to the Controls row's native toolbar layout.
+
+        PrimaryToolbar.set_responsive_width alone owns that bar's insets. A second
+        owner here restored stale margins on every settle, and the pair moved the
+        whole workspace 8 pixels down and back on each tab change. Stylesheet
+        polish can reset QToolBarLayout margins later, so write only real changes.
+        """
+        toolbar = getattr(self, "_controls_toolbar", None)
+        layout = toolbar.layout() if toolbar is not None else None
+        if layout is None or toolbar.window() is not self:
+            return
+        toolbar.ensurePolished()
+        # QToolBarLayout positions horizontal rows from its left inset, so the
+        # insets stay equal. Short windows spend these pixels on the editor.
+        inset = 0 if self.height() < 500 else 4
+        desired = QMargins(inset, inset, inset, inset)
+        if layout.contentsMargins() != desired:
+            layout.setContentsMargins(desired)
+
+    def _size_hidden_tool_pages(self) -> None:
+        """Keep hidden tools at the pane's size, as QStackedWidget sizes only the current one.
+
+        A page still at its construction size reflows for the wrong height and
+        reports a stale minimum, which then moves the pane on first reveal.
+        """
+        if not hasattr(self, "_bottom_tabs"):
+            return
+        current = self._bottom_tabs.currentWidget()
+        if current is None:
+            return
+        for index in range(self._bottom_tabs.count()):
+            page = self._bottom_tabs.widget(index)
+            if page is not current and page.size() != current.size():
+                page.resize(current.size())
+
     def _settle_embedded_layout(self) -> None:
         """Fit embedded views once after a burst of resize/state events."""
-        # Initial/deferred stylesheet polish can reset QToolBarLayout margins
-        # after the resize handler. Apply the height budget to polished bars.
-        for name in ("primary-toolbar", "controls-toolbar"):
-            toolbar = self.findChild(QWidget, name)
-            if (toolbar is not None and toolbar.window() is self
-                    and hasattr(toolbar, "_full_height_layout_margins")):
-                toolbar.ensurePolished()
-                margins = toolbar._full_height_layout_margins
-                if self._short_screen:
-                    toolbar.layout().setContentsMargins(0, 0, 0, 0)
-                else:
-                    toolbar.layout().setContentsMargins(margins)
-                toolbar.layout().invalidate()
-                toolbar.layout().activate()
+        self._fit_controls_toolbar()
+        self._arrange_ai_panel()
+        self._size_hidden_tool_pages()
         self._apply_responsive_layout(self.width())
         self._fit_panes_for_height()
         if hasattr(self, "_editor_panel") and self._editor_panel and self._editor_panel.isVisible():
@@ -265,23 +324,30 @@ class MCUMainWindow(QMainWindow):
     def _fit_panes_for_height(self) -> None:
         if not hasattr(self, "_bottom_tabs") or self._editor_detached:
             return
-        if not self._editor_pane_visible or not self._monitors_pane_visible:
-            return
-        available = self._v_splitter.height()
+        # Measure from the central area: the splitter's own height follows the
+        # minimums set below, and a short window would never recover from that.
+        available = self.centralWidget().height()
+        if self._ai_visible and self._h_splitter.orientation() == Qt.Orientation.Vertical:
+            available -= _STACKED_ASSISTANT_MINIMUM + self._h_splitter.handleWidth()
         if available <= 0:
             return
-        panel = self._bottom_tabs.currentWidget()
-        output = (getattr(self, "_console_panel", None) if panel is getattr(self, "_console_container", None) else
-                  getattr(getattr(self, "_serial_panel", None), "_output", None)
-                  if panel is getattr(self, "_serial_panel", None) else None)
-        if output is not None:
-            metrics = QFontMetrics(output.document().defaultFont())
-            chrome = max(0, output.height() - output.viewport().height())
-            reading_pad = int(output.document().documentMargin())
-            output.setMinimumHeight(max(24, metrics.lineSpacing() + reading_pad + chrome + 1))
-        # Reserve tab navigation, fixed header/send rows, and one output line.
-        required = self._bottom_tabs.tabBar().sizeHint().height()
-        required += max(24, panel.minimumSizeHint().height() if panel else 24)
+        if not self._editor_pane_visible or not self._monitors_pane_visible:
+            editor_min = min(150, available)
+            if self._editor_area.minimumHeight() != editor_min:
+                self._editor_area.setMinimumHeight(editor_min)
+            return
+        for output in (getattr(self, "_console_panel", None),
+                       getattr(getattr(self, "_serial_panel", None), "_output", None)):
+            if output is not None:
+                minimum = _reading_line_height(output)
+                if output.minimumHeight() != minimum:
+                    output.setMinimumHeight(minimum)
+        # Reserve tab navigation, fixed header/send rows, and one output line for
+        # the tallest tool, not the active one. A budget that followed the active
+        # tab moved the divider on every switch, away from where the user put it.
+        tallest = max((self._bottom_tabs.widget(index).minimumSizeHint().height()
+                       for index in range(self._bottom_tabs.count())), default=0)
+        required = self._bottom_tabs.tabBar().sizeHint().height() + max(24, tallest)
         gap = self._v_splitter.handleWidth()
         # Keep the active tool's fixed controls and first reading line intact
         # on a scaled, short monitor. The editor receives the remaining height
@@ -300,50 +366,32 @@ class MCUMainWindow(QMainWindow):
             self._layout_timer.start()
 
     def _update_tab_titles_responsive(self, width: int) -> None:
-        """Adapt bottom tab titles to avoid squeezing and truncation."""
+        """Choose the longest titles that fit, so the strip never has to scroll."""
         if not hasattr(self, "_bottom_tabs"):
             return
-        if width >= 1150:
-            titles = [
-                "Build Console",
-                "Serial Monitor",
-                "Compatible Devices",
-                "Notifications",
-                "Syntax Check",
-                "Terminal",
-                "AI Changes",
-            ]
-        elif width >= 850:
-            titles = [
-                "Build",
-                "Serial",
-                "Devices",
-                "Alerts",
-                "Syntax",
-                "Terminal",
-                "AI Changes",
-            ]
-        else:
-            titles = [
-                "Build",
-                "Serial",
-                "Devices",
-                "Alerts",
-                "Syntax",
-                "Terminal",
-                "AI Changes",
-            ]
+        tabs = self._bottom_tabs
+        bar = tabs.tabBar()
         if not getattr(self, "_tab_icons_initialized", False):
             from main.qt.icons import icon
-            names = ("console", "serial", "devices", "alerts", "search", "console", "edit")
-            for i, name in enumerate(names):
-                if i < self._bottom_tabs.count():
-                    self._bottom_tabs.setTabIcon(i, icon(name))
+            for index, (name, _short, glyph) in enumerate(_TOOL_TABS[:tabs.count()]):
+                tabs.setTabIcon(index, icon(glyph))
+                bar.setAccessibleTabName(index, name)
             self._tab_icons_initialized = True
-        for i, title in enumerate(titles):
-            if i < self._bottom_tabs.count():
-                if self._bottom_tabs.tabText(i) != title:
-                    self._bottom_tabs.setTabText(i, title)
+        count = min(tabs.count(), len(_TOOL_TABS))
+        full = [_TOOL_TABS[index][0] for index in range(count)]
+        short = [_TOOL_TABS[index][1] for index in range(count)]
+        # Icon-only tabs keep their full names in tooltips and accessible names.
+        icons_only = [""] * count
+        for titles in (full, short, icons_only):
+            if _tab_strip_width(bar, titles, titles is icons_only) <= width:
+                break
+        if bool(bar.property("iconOnly")) != (titles is icons_only):
+            bar.setProperty("iconOnly", titles is icons_only)
+            bar.style().unpolish(bar)
+            bar.style().polish(bar)
+        for index, title in enumerate(titles):
+            if tabs.tabText(index) != title:
+                tabs.setTabText(index, title)
 
     def _apply_responsive_layout(self, w: int) -> None:
         """Propagate responsive width changes to all window components and child panels."""
@@ -585,6 +633,7 @@ class MCUMainWindow(QMainWindow):
             from main.qt.ai_panel import AIPanel
         self._ai_panel = AIPanel(self._backend, self)
         self._ai_panel.setMinimumWidth(240)
+        self._ai_panel.setMinimumHeight(_STACKED_ASSISTANT_MINIMUM)
         # No setMaximumWidth — user can freely resize via splitter handle
         self._ai_panel.setVisible(False)
         self._h_splitter.addWidget(self._ai_panel)
@@ -634,10 +683,10 @@ class MCUMainWindow(QMainWindow):
                 self._terminal_panel._on_tab_revealed()
             else:
                 self._terminal_panel._on_tab_hidden()
-        self._fit_panes_for_height()
+        # Switching tools moves nothing outside the tool pane: no pane budget,
+        # toolbar or editor layout depends on which tab is showing.
         if widget is getattr(self, "_ai_changes_panel", None):
             self._ai_changes_panel.refresh()
-        self._layout_timer.start()
 
     def _on_theme_changed(self, theme_name: str) -> None:
         focused = QApplication.focusWidget()
@@ -1344,6 +1393,35 @@ class MCUMainWindow(QMainWindow):
     # AI panel toggle
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _ai_panel_stacks(self) -> bool:
+        """Stack the assistant under the workspace when side by side would crush both."""
+        central = self.centralWidget()
+        width, height = central.width(), central.height()
+        if width < 560:
+            return True
+        return height >= 420 and (width < 900 or height > width * 1.15)
+
+    def _arrange_ai_panel(self) -> None:
+        """Follow the window across the stacked/side-by-side boundary."""
+        if not getattr(self, "_ai_visible", False) or self._editor_detached:
+            return
+        wanted = Qt.Orientation.Vertical if self._ai_panel_stacks() else Qt.Orientation.Horizontal
+        if self._h_splitter.orientation() != wanted:
+            self._place_ai_panel(wanted)
+
+    def _place_ai_panel(self, orientation) -> None:
+        self._h_splitter.setOrientation(orientation)
+        self._h_splitter.setStretchFactor(0, 3)
+        self._h_splitter.setStretchFactor(1, 2 if orientation == Qt.Orientation.Vertical else 1)
+        central = self.centralWidget()
+        if orientation == Qt.Orientation.Vertical:
+            total = max(300, central.height())
+            self._h_splitter.setSizes([int(total * .60), int(total * .40)])
+        else:
+            total = max(800, central.width())
+            self._h_splitter.setSizes([int(total * .70), int(total * .30)])
+        QTimer.singleShot(80, self._ai_panel._resize_embedded_ai)
+
     def _on_h_splitter_moved(self, pos: int, index: int) -> None:
         if hasattr(self, "_ai_panel") and getattr(self, "_ai_visible", False):
             self._ai_panel._resize_embedded_ai()
@@ -1375,6 +1453,7 @@ class MCUMainWindow(QMainWindow):
         if detached:
             # 1. Editor is detached to separate window:
             # Hide editor area in main window so it consumes zero space
+            self._divided_panes = None
             self._editor_area.setMinimumHeight(0)
             self._editor_area.setVisible(False)
 
@@ -1422,8 +1501,8 @@ class MCUMainWindow(QMainWindow):
 
         else:
             # Editor is ATTACHED (docked):
-            self._editor_area.setMinimumHeight(150)
-            self._h_splitter.setOrientation(Qt.Orientation.Horizontal)
+            if not ai_visible:
+                self._h_splitter.setOrientation(Qt.Orientation.Horizontal)
             self._h_splitter.insertWidget(0, self._v_splitter)
             self._h_splitter.insertWidget(1, self._ai_panel)
 
@@ -1439,22 +1518,23 @@ class MCUMainWindow(QMainWindow):
                 if hasattr(self._editor_panel, "force_layout"):
                     self._editor_panel.force_layout()
 
-            v_total = max(500, self.centralWidget().height())
-            if editor_visible and monitors_visible:
-                self._v_splitter.setSizes([int(v_total * 0.58), int(v_total * 0.42)])
-            elif editor_visible:
-                self._v_splitter.setSizes([v_total, 0])
-            else:
-                self._v_splitter.setSizes([0, v_total])
+            # The divider belongs to the user until a pane actually appears or
+            # disappears; opening the assistant must not move it.
+            panes = (editor_visible, monitors_visible)
+            if panes != getattr(self, "_divided_panes", None):
+                self._divided_panes = panes
+                v_total = max(500, self.centralWidget().height())
+                if editor_visible and monitors_visible:
+                    self._v_splitter.setSizes([int(v_total * 0.58), int(v_total * 0.42)])
+                elif editor_visible:
+                    self._v_splitter.setSizes([v_total, 0])
+                else:
+                    self._v_splitter.setSizes([0, v_total])
 
             if ai_visible:
                 self._ai_panel.setVisible(True)
-                self._h_splitter.setStretchFactor(0, 3)
-                self._h_splitter.setStretchFactor(1, 1)
-                w_total = max(800, self.centralWidget().width())
-                self._h_splitter.setSizes([int(w_total * 0.70), int(w_total * 0.30)])
-                if hasattr(self, "_ai_panel"):
-                    QTimer.singleShot(80, self._ai_panel._resize_embedded_ai)
+                self._place_ai_panel(Qt.Orientation.Vertical if self._ai_panel_stacks()
+                                     else Qt.Orientation.Horizontal)
             else:
                 self._ai_panel.setVisible(False)
                 self._h_splitter.setStretchFactor(0, 1)
@@ -1468,6 +1548,9 @@ class MCUMainWindow(QMainWindow):
                 self._controls_bar.set_editor_visible(editor_visible)
                 self._controls_bar.set_monitors_visible(monitors_visible)
                 self._controls_bar.set_ai_panel_visible(ai_visible)
+
+        self._fit_panes_for_height()
+        self._layout_timer.start()
 
         # Ensure terminal embedded child is notified if visible
         if hasattr(self, "_terminal_panel") and self._terminal_panel and self._terminal_panel.isVisible():

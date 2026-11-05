@@ -4,7 +4,7 @@
 main.qt.ai_panel — OpenCode AI Assistant Panel for MCU Flasher by Naph.
 
 Faithfully aligned with the original stable release:
-  • No offline cover or launch button — automatically loads directly into AI when opened
+  • Automatically starts when opened, behind a loading screen until OpenCode has painted
   • Persistent background process: once started, toggling only hides or shows the panel
   • Automatic project realignment: session only resets when the active sketch project changes
   • Real interactive OpenCode xterm.js + ConPTY terminal hosting via Win32 HWND embedding (SetParent)
@@ -34,10 +34,14 @@ except ImportError:
     win32con = None
 
 from main.core.config import _load_raw_config, _save_raw_config
+from main.core.theme import Theme, get_palette
+from main.qt.assistant_loader import AssistantLoader
 
 _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
-_SPIN_CHARS = ["", "", "", "", "", "", "", "", "", ""]
+# After this long Qt shows the embedded page, whose own cover stays up until OpenCode paints.
+_READY_POLLS_BEFORE_PAGE = 120
+_READY_POLLS_AFTER_PAGE = 300
 
 
 from main.qt.icons import IconLabel as QLabel
@@ -51,7 +55,6 @@ class _AIEmbedContainer(QWidget):
         super().__init__(parent)
         self._panel = panel
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-        self.setStyleSheet("background: #0c0d10;")
         self.setMinimumWidth(200)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         from main.qt.responsive import EmbeddedGeometryWatcher
@@ -72,11 +75,7 @@ class AIPanel(QWidget):
         self._is_embedded = False
         self._is_ready = False
         self._ai_hwnd: Optional[int] = None
-
-        self._spin_timer = QTimer(self)
-        self._spin_timer.setInterval(90)
-        self._spin_timer.timeout.connect(self._tick_spinner)
-        self._spin_idx = 0
+        self._badge = ("time", "Starting…", "TEXT_DIM")
 
         self._embed_poll_timer = QTimer(self)
         self._embed_poll_timer.setInterval(60)
@@ -89,6 +88,7 @@ class AIPanel(QWidget):
         self._ready_poll_attempts = 0
 
         self._build_ui()
+        self.apply_theme(Theme.active_theme)
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
@@ -97,43 +97,18 @@ class AIPanel(QWidget):
 
         # ── Header Bar ────────────────────────────────────────────────────────
         header = QFrame()
+        header.setObjectName("opencode-header")
         header.setFixedHeight(38)
-        header.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1a2336, stop:1 #121824);
-                border-bottom: 1px solid rgba(0, 210, 255, 0.22);
-            }
-        """)
+        self._header = header
         hl = QHBoxLayout(header)
         hl.setContentsMargins(12, 4, 12, 4)
         hl.setSpacing(8)
 
         lbl = QLabel("OPENCODE AI ASSISTANT", icon_name="ai")
         self._title_lbl = lbl
-        lbl.setStyleSheet("""
-            QLabel {
-                color: #00d2ff;
-                font-weight: 800;
-                font-size: 11px;
-                letter-spacing: 0.8px;
-                font-family: 'Montserrat', 'Segoe UI', sans-serif;
-            }
-        """)
         hl.addWidget(lbl)
 
-        self._status_badge = QLabel("Initializing…", icon_name="time")
-        self._status_badge.setStyleSheet("""
-            QLabel {
-                color: #f1c40f;
-                background: rgba(241, 196, 15, 0.14);
-                border: 1px solid rgba(241, 196, 15, 0.35);
-                border-radius: 9px;
-                padding: 1px 7px;
-                font-size: 10px;
-                font-weight: 700;
-                font-family: 'Montserrat', 'Segoe UI', sans-serif;
-            }
-        """)
+        self._status_badge = QLabel("Starting…", icon_name="time")
         hl.addWidget(self._status_badge)
 
         hl.addStretch()
@@ -142,21 +117,6 @@ class AIPanel(QWidget):
         self._btn_close.setToolTip("Hide AI Assistant")
         self._btn_close.setFixedSize(24, 24)
         self._btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_close.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: #8fa1b3;
-                font-size: 12px;
-                font-weight: 700;
-                border-radius: 5px;
-                border: 1px solid transparent;
-            }
-            QPushButton:hover {
-                background: rgba(231, 76, 60, 0.18);
-                color: #ff7b72;
-                border-color: rgba(231, 76, 60, 0.35);
-            }
-        """)
         self._btn_close.clicked.connect(self._on_close_clicked)
         hl.addWidget(self._btn_close)
 
@@ -166,30 +126,11 @@ class AIPanel(QWidget):
         self._stack = QStackedWidget(self)
 
         # 1. Loading View (Active while launching, attaching, or realigning)
-        self._loader_card = QFrame()
-        self._loader_card.setStyleSheet("QFrame { background: #0c0d10; border: none; }")
-        lv = QVBoxLayout(self._loader_card)
-        lv.setContentsMargins(20, 40, 20, 40)
-        lv.setSpacing(14)
-        lv.addStretch()
-
-        self._spin_lbl = QLabel("", icon_name="ai")
-        self._spin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._spin_lbl.setStyleSheet("font-size: 32px; color: #00e5ff;")
-        lv.addWidget(self._spin_lbl)
-
-        self._load_title = QLabel("Initializing OpenCode AI Assistant…")
-        self._load_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._load_title.setStyleSheet("color: #00e5ff; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
-        lv.addWidget(self._load_title)
-
-        self._load_sub = QLabel("Preparing ConPTY terminal & project environment…")
-        self._load_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._load_sub.setStyleSheet("color: #94a3b8; font-size: 11px; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
-        self._load_sub.setWordWrap(True)
-        lv.addWidget(self._load_sub)
-        lv.addStretch()
-
+        # The page owns "Show startup output": before it appears there is nothing to show.
+        self._loader_card = AssistantLoader(can_reveal=False)
+        self._load_title, self._load_sub = self._loader_card.title, self._loader_card.status
+        self._loader_card.show_progress("Preparing the terminal…", 0)
+        self._loader_card.retry_requested.connect(self._retry)
         self._stack.addWidget(self._loader_card)
 
         # 2. Native Embedding Container View
@@ -198,6 +139,28 @@ class AIPanel(QWidget):
 
         self._stack.setCurrentWidget(self._loader_card)
         main_layout.addWidget(self._stack, stretch=1)
+
+    def apply_theme(self, mode: str) -> None:
+        self._theme = mode
+        palette = get_palette(mode)
+        self._header.setStyleSheet(
+            f"QFrame#opencode-header {{ background: {palette['BG_DARK']}; border-bottom: 1px solid {palette['BORDER']}; }}")
+        self._title_lbl.setStyleSheet(f"color: {palette['CYAN']}; font-size: 11px; font-weight: 700;")
+        self._btn_close.setStyleSheet(
+            f"QPushButton {{ background: transparent; border-radius: 5px; border: 1px solid transparent; padding: 0px; }}"
+            f"QPushButton:hover {{ background: {palette['BG_DARKEST']}; border-color: {palette['BORDER']}; }}")
+        self._btn_close.refresh_icon()
+        self._embed_container.setStyleSheet(f"background: {palette['BG_DARKEST']};")
+        self._loader_card.apply_theme(mode)
+        self._set_badge(*self._badge)
+
+    def _set_badge(self, icon_name: str, text: str, ink: str) -> None:
+        """Show the header status in a palette ink that follows theme changes."""
+        self._badge = (icon_name, text, ink)
+        self._status_badge.set_icon(icon_name)
+        self._status_badge.setText(text)
+        self._status_badge.setStyleSheet(
+            f"color: {get_palette(self._theme)[ink]}; font-size: 11px; font-weight: 600;")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -216,9 +179,10 @@ class AIPanel(QWidget):
                 self._title_lbl.set_icon("ai")
                 self._title_lbl.setText("AI")
 
-    def _tick_spinner(self) -> None:
-        self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)
-        self._spin_lbl.setText(_SPIN_CHARS[self._spin_idx])
+    def _retry(self) -> None:
+        """Start a fresh session after a failure; nothing typed earlier is replayed."""
+        self._stop_ai()
+        self.ensure_started()
 
     def _on_close_clicked(self) -> None:
         """Handle the panel button to hide the AI Assistant side panel."""
@@ -353,12 +317,10 @@ class AIPanel(QWidget):
         self._is_ready = False
         self._ready_poll_timer.stop()
         self._ready_poll_attempts = 0
+        self._ready_poll_timer.setInterval(100)
         self._stack.setCurrentWidget(self._loader_card)
-        self._status_badge.set_icon("time")
-        self._status_badge.setText("Initializing…")
-        self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
-        self._load_title.setText("Initializing OpenCode AI Assistant…")
-        self._load_sub.setText("Preparing ConPTY terminal & project environment…")
+        self._set_badge("time", "Starting…", "TEXT_DIM")
+        self._loader_card.show_progress("Preparing the terminal…", 0)
 
         cmd = [str(py_exe), str(script_path), "--launch-ai", target_dir]
 
@@ -370,14 +332,11 @@ class AIPanel(QWidget):
             )
             self._is_active = True
             self._poll_attempts = 0
+            self._loader_card.show_progress("Starting a session…", 1)
             self._embed_poll_timer.start()
         except Exception as e:
-            self._spin_timer.stop()
-            self._status_badge.set_icon("disconnected")
-            self._status_badge.setText("Offline")
-            self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
-            self._load_title.setText("AI Assistant Error")
-            self._load_sub.setText(f"Failed to start AI Assistant: {e}")
+            self._set_badge("disconnected", "Offline", "RED")
+            self._loader_card.show_error("OpenCode could not start", f"The assistant process failed to start: {e}")
             QMessageBox.critical(self, "AI Assistant Error", f"Failed to start AI Assistant:\n\n{e}")
 
     def _poll_for_ai_window(self) -> None:
@@ -385,19 +344,15 @@ class AIPanel(QWidget):
         self._poll_attempts += 1
         if win32gui is None or win32con is None:
             self._embed_poll_timer.stop()
-            self._spin_timer.stop()
             return
 
         hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - OpenCode AI Assistant")
         if not hwnd or hwnd == 0:
             if self._poll_attempts > 240:  # ~15 seconds timeout
                 self._embed_poll_timer.stop()
-                self._spin_timer.stop()
-                self._status_badge.set_icon("warning")
-                self._status_badge.setText("Timeout")
-                self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
-                self._load_title.setText("Connection Timed Out")
-                self._load_sub.setText("Could not attach to the OpenCode AI terminal window.")
+                self._set_badge("warning", "Timeout", "RED")
+                self._loader_card.show_error("OpenCode did not open",
+                                             "The assistant's window did not appear in time. Retry to start a fresh session.")
             return
 
         # Check if window is responsive
@@ -409,10 +364,10 @@ class AIPanel(QWidget):
         # Embed the window into the container in the background, but keep it hidden
         self._embed_ai_hwnd(hwnd)
 
-        # Keep loading spinner active until OpenCode TUI actually settles
-        self._load_title.setText("Starting OpenCode AI Assistant…")
-        self._load_sub.setText("Loading AI environment, models, and workspace…")
+        # Keep the loading screen until OpenCode's interface has actually painted.
+        self._loader_card.show_progress("Loading your workspace…", 2)
         self._ready_poll_attempts = 0
+        self._ready_poll_timer.setInterval(100)
         self._ready_poll_timer.start()
 
     def _embed_ai_hwnd(self, hwnd: int) -> None:
@@ -450,58 +405,59 @@ class AIPanel(QWidget):
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
                 self._resize_embedded_ai(show=True)
                 self._stack.setCurrentWidget(self._embed_container)
-                self._status_badge.set_icon("connected")
-                self._status_badge.setText("Active")
-                self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
+                self._loader_card.finish()
+                self._set_badge("connected", "Active", "GREEN")
         except Exception as e:
             print(f"[MCU Flasher] Error embedding AI window: {e}")
 
     def _poll_for_ai_readiness(self) -> None:
-        """Poll until OpenCode TUI has settled before revealing the terminal view."""
+        """Reveal the embedded view once OpenCode's interface has painted."""
         self._ready_poll_attempts += 1
 
         # If the background process died, stop and show error
         if self._proc and self._proc.poll() is not None:
             self._ready_poll_timer.stop()
-            self._spin_timer.stop()
-            self._status_badge.set_icon("stop")
-            self._status_badge.setText("Stopped")
-            self._status_badge.setStyleSheet("color: #e74c3c; font-size: 11px; font-weight: 600;")
-            self._load_title.setText("AI Assistant Exited")
-            self._load_sub.setText("The OpenCode process terminated unexpectedly.")
+            self._is_ready = False
+            self._stack.setCurrentWidget(self._loader_card)
+            self._set_badge("stop", "Stopped", "RED")
+            self._loader_card.show_error("OpenCode stopped",
+                                         "The assistant process ended unexpectedly. Retry to start a fresh session.")
             return
 
         target_dir = Path(self._get_sketch_dir()).resolve()
         cache_sig = target_dir / ".mcu_flasher_build_cache" / ".ai_ready_signal"
         root_sig = target_dir / ".ai_ready_signal"
 
-        # Ready if .ai_ready_signal exists, or after safety fallback timeout (~12s = 120 attempts @ 100ms)
-        is_ready = cache_sig.exists() or root_sig.exists() or (self._ready_poll_attempts >= 120)
-
-        if is_ready:
+        if cache_sig.exists() or root_sig.exists():
             # Immediately unlink the ready signal so it never lingers or appears in Explorer
             try:
                 cache_sig.unlink(missing_ok=True)
                 root_sig.unlink(missing_ok=True)
             except Exception:
                 pass
-
             self._ready_poll_timer.stop()
-            self._spin_timer.stop()
-            self._is_ready = True
+            self._set_badge("connected", "Active", "GREEN")
+            self._reveal_embedded_view()
+        elif not self._is_ready and self._ready_poll_attempts >= _READY_POLLS_BEFORE_PAGE:
+            # A slow start: the page's own cover keeps its startup output out of
+            # sight and offers it on request. Keep listening for the signal.
+            self._reveal_embedded_view()
+            self._ready_poll_attempts = 0
+            self._ready_poll_timer.setInterval(1000)
+        elif self._is_ready and self._ready_poll_attempts >= _READY_POLLS_AFTER_PAGE:
+            self._ready_poll_timer.stop()
 
-            if self._ai_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._ai_hwnd)):
-                win32gui.ShowWindow(int(self._ai_hwnd), win32con.SW_SHOW)
-                self._resize_embedded_ai(show=True)
+    def _reveal_embedded_view(self) -> None:
+        self._is_ready = True
+        self._loader_card.finish()
+        if self._ai_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._ai_hwnd)):
+            win32gui.ShowWindow(int(self._ai_hwnd), win32con.SW_SHOW)
+            self._resize_embedded_ai(show=True)
+        self._stack.setCurrentWidget(self._embed_container)
 
-            self._stack.setCurrentWidget(self._embed_container)
-            self._status_badge.set_icon("connected")
-            self._status_badge.setText("Active")
-            self._status_badge.setStyleSheet("color: #4ec994; font-size: 11px; font-weight: 600;")
-
-            # Deferred resize passes for smooth layout sync
-            QTimer.singleShot(60, lambda: self._resize_embedded_ai(show=True))
-            QTimer.singleShot(200, lambda: self._resize_embedded_ai(show=True))
+        # Deferred resize passes for smooth layout sync
+        QTimer.singleShot(60, lambda: self._resize_embedded_ai(show=True))
+        QTimer.singleShot(200, lambda: self._resize_embedded_ai(show=True))
 
     def _resize_embedded_ai(self, show: Optional[bool] = None) -> None:
         """Resize the embedded Win32 window to match the Qt container."""
@@ -551,7 +507,6 @@ class AIPanel(QWidget):
 
         self._embed_poll_timer.stop()
         self._ready_poll_timer.stop()
-        self._spin_timer.stop()
         self._is_ready = False
 
         if self._proc:
@@ -583,12 +538,9 @@ class AIPanel(QWidget):
 
         # Show loader while the new session spins up
         self._stack.setCurrentWidget(self._loader_card)
-        self._status_badge.set_icon("reload")
-        self._status_badge.setText("Realigning…")
-        self._status_badge.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: 600;")
+        self._set_badge("reload", "Switching…", "TEXT_DIM")
         proj_name = Path(new_project_dir).name if new_project_dir else "Project"
-        self._load_title.setText("Realigning AI to New Project…")
-        self._load_sub.setText(f"Switching AI workspace to {proj_name}…")
+        self._loader_card.show_progress(f"Switching to {proj_name}…", 0, title="Opening OpenCode")
 
         # Sync hardware state for new project folder
         self._sync_project_hardware_state(custom_dir=new_project_dir)
@@ -626,7 +578,6 @@ class AIPanel(QWidget):
         """Terminate the AI subprocess on application exit."""
         self._embed_poll_timer.stop()
         self._ready_poll_timer.stop()
-        self._spin_timer.stop()
         self._is_ready = False
         if self._proc:
             try:

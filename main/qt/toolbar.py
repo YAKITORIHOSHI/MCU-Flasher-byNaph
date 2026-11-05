@@ -298,6 +298,9 @@ class PrimaryToolbar(QToolBar):
         self._reflow_timer.stop()
         visible = not self.isHidden()
         previous = self.window()
+        # Spacers fixed for this window must not overflow the next one's first layout.
+        for spacer in (self.sp_left, self.sp_right):
+            spacer.setFixedWidth(8)
         if previous is not host:
             previous.removeToolBar(self)
             if before is not None:
@@ -488,9 +491,16 @@ class PrimaryToolbar(QToolBar):
                     - 4 * spacing - left_w - center_w - right_w)
         desired = round((tb_w - center_w) / 2 - margins.left() - left_w - 2 * spacing)
         left = max(8, min(spare - 8, desired))
+        changed = False
         for widget, width in ((self.sp_left, left), (self.sp_right, spare - left)):
             if widget.minimumWidth() != width or widget.maximumWidth() != width:
                 widget.setFixedWidth(width)
+                changed = True
+        if changed:
+            # A spacer fixed for a wider window can push the row into native overflow,
+            # and Qt ignores size changes on the hidden items. Without this the
+            # actions stay hidden after narrowing a window on a very wide monitor.
+            self.layout().invalidate()
 
     def _add_separator(self) -> None:
         sep = QFrame()
@@ -1617,7 +1627,7 @@ class ControlsBar(QWidget):
         self.board_selector = MarqueeBoardSelector(self)
         adaptive_w = self.board_selector._get_adaptive_width()
         self.board_selector.setMinimumWidth(max(180, int(adaptive_w * 0.95)))
-        self.board_selector.setMaximumWidth(max(400, int(adaptive_w * 1.6)))
+        self.board_selector.setMaximumWidth(420)
         self.board_selector.clicked.connect(self._open_board_search_dialog)
 
         self.btn_search_board = QPushButton("", icon_name="search")
@@ -1767,6 +1777,7 @@ class ControlsBar(QWidget):
         self._group_labels = (lbl_board, lbl_port, self.lbl_spd, lbl_opt)
         self._short_window = False
         self._tiny_window = False
+        self._cramped_window = False
         self._row_mode = None
 
     def _populate_initial(self) -> None:
@@ -2288,8 +2299,10 @@ class ControlsBar(QWidget):
     def _reflow(self, width: int) -> None:
         # Use actual content hints so translated labels and system fonts fit too.
         groups = self._groups
-        tiny = self._tiny_window and width < 900
-        short = tiny or self._short_window and width < 520
+        tiny = self._is_tiny(width)
+        # Under 500 logical pixels of height, captions yield to the editor: their
+        # fields explain themselves and keep their tooltips.
+        short = tiny or self._short_window
         for index, group in enumerate(groups):
             group.setDirection(QBoxLayout.Direction.LeftToRight if short else QBoxLayout.Direction.TopToBottom)
             self._group_labels[index].setVisible(not short or (index == 2 and not tiny))
@@ -2309,7 +2322,12 @@ class ControlsBar(QWidget):
         self.btn_opt_dropdown.setMinimumWidth(30 if short else 0)
         self.btn_opt_dropdown.setMaximumWidth(30 if short else 16777215)
         required = sum(group.minimumSize().width() for group in groups) + 38
-        mode = 5 if tiny else 4 if short else 1 if width >= required else (2 if width >= 520 else 3)
+        if tiny or (short and width >= required):
+            mode = 5
+        elif short:
+            mode = 4
+        else:
+            mode = 1 if width >= required else (2 if width >= 520 else 3)
         if mode != self._row_mode:
             for group in groups:
                 self._grid.removeItem(group)
@@ -2337,14 +2355,20 @@ class ControlsBar(QWidget):
                 self._grid.addLayout(groups[2], 1, 1)
                 self._grid.setColumnStretch(0, 1)
             self._row_mode = mode
-        self.setFixedHeight(max(30 if tiny else 54, self._grid.sizeHint().height()))
+        self.setFixedHeight(max(30 if short else 54, self._grid.sizeHint().height()))
+
+    def _is_tiny(self, width: int) -> bool:
+        """One row of essentials: very short windows, or short ones too narrow to share a row."""
+        return width < 900 and (self._tiny_window or (self._cramped_window and width < 520))
 
     def set_responsive_height(self, height: int) -> None:
         short = height < 500
         tiny = height < 350
-        if (short, tiny) != (self._short_window, self._tiny_window):
+        cramped = height < 420
+        if (short, tiny, cramped) != (self._short_window, self._tiny_window, self._cramped_window):
             self._short_window = short
             self._tiny_window = tiny
+            self._cramped_window = cramped
             self.set_responsive_width(self.width())
 
     def is_compact(self) -> bool:
@@ -2362,8 +2386,8 @@ class ControlsBar(QWidget):
                            self.cb_timestamp, self.cb_skip_compile):
                 widget.ensurePolished()
             board_width = max(140, self.board_selector._get_adaptive_width())
-            port_width = max(140, self.port_combo.fontMetrics().horizontalAdvance("Select serial port") + 42)
-            tiny = self._tiny_window and width < 900
+            port_width = max(140, self.port_combo.fontMetrics().horizontalAdvance("Select serial port") + 56)
+            tiny = self._is_tiny(width)
             if tiny:
                 board_width, port_width = 70, 100
             speed_width = self._get_adaptive_upload_speed_width()
@@ -2383,8 +2407,15 @@ class ControlsBar(QWidget):
             compact_workspace = checkboxes + PrimaryToolbar._button_width(
                 self.btn_opt_dropdown, "Options", plain_icon=True) + 6
             abbreviate = compact and width < fields + compact_workspace + 38
+            if not tiny:
+                # Long board and port names read better than empty space on wide
+                # monitors, and need no scrolling marquee once they fit.
+                spare = max(0, width - (fields + (compact_workspace if compact else workspace) + 38))
+                board_width += min(spare // 2, max(0, 420 - board_width))
+                port_width += min(spare // 4, max(0, 320 - port_width))
             signature = (width, board_width, port_width, speed_width, fields, workspace,
-                         compact, abbreviate, self._short_window, self._tiny_window, self.font().toString())
+                         compact, abbreviate, self._short_window, self._tiny_window, self._cramped_window,
+                         self.font().toString())
             if signature == getattr(self, "_controls_signature", None):
                 return
             self._controls_signature = signature

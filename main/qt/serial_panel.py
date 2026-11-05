@@ -733,6 +733,8 @@ class SerialPanel(QWidget):
 
         self._lbl_baud = QLabel("Baud rate")
         self._lbl_baud.setStyleSheet("font-size: 11px; font-weight: 600; background: transparent;")
+        # The container can stretch; the caption stays beside its field.
+        self._lbl_baud.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         b_layout.addWidget(self._lbl_baud)
 
         self.baud_combo = QComboBox()

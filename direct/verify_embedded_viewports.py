@@ -51,6 +51,7 @@ window.QWebChannel = class {
       resize: (rows, cols) => window.fixtureResizes.push([rows, cols]),
       consumed: (...args) => { window.fixtureConsumed += args.at(-1); },
       write: (...args) => window.fixtureInput.push(args.at(-1)),
+      report_interface_ready: () => {},
       reset_view: {connect: callback => { window.fixtureReset = callback; }},
       output: {connect: callback => { window.fixtureOutput = callback; }}
     };
@@ -233,6 +234,33 @@ class EmbeddedViewportChecks(unittest.TestCase):
 
     def test_windows_terminal_page_retains_geometry_history_and_theme(self):
         self.terminal_checks("windows-terminal", "terminal-root", "applyTheme", "fitAll")
+
+    def test_switching_the_active_source_tab_moves_no_tab(self):
+        self.load("index.html")
+        wait_for(lambda: self.js("!!window.editorInstance && !!window.monaco"), "Monaco did not initialize")
+        data = self.state("""
+          const bar = document.getElementById('tab-bar');
+          const tabs = ['weather_station.ino', 'sensors.cpp', 'sensors.h'].map(name => {
+            const tab = document.createElement('div');
+            tab.className = 'tab';
+            tab.innerHTML = `<span>${name}</span>`;
+            bar.append(tab);
+            return tab;
+          });
+          const rects = () => tabs.map(tab => {
+            const rect = tab.getBoundingClientRect();
+            const label = tab.firstChild.getBoundingClientRect();
+            return [rect.x, rect.y, rect.width, rect.height, label.x, label.y];
+          });
+          const before = rects();
+          const seen = tabs.map(active => {
+            tabs.forEach(tab => tab.classList.toggle('active', tab === active));
+            return rects();
+          });
+          return {before, seen};
+        """)
+        for rects in data["seen"]:
+            self.assertEqual(rects, data["before"], "Selecting a source tab must not move any tab or label")
 
     def test_monaco_fills_native_viewport_and_preserves_model_undo(self):
         self.load("index.html")
