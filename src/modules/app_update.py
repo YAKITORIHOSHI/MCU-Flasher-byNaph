@@ -55,10 +55,21 @@ MIN_FREE_SPACE_BYTES = 256 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 CLONE_TIMEOUT_SECONDS = 15 * 60
 ARCHIVE_TIMEOUT_SECONDS = 15 * 60
-# ``urlopen`` applies its timeout to individual socket operations. Keep those
-# operations short as well, so a peer that sends a few bytes at a time cannot
-# extend Bootstrap's declared elapsed-time budget forever.
-NETWORK_IO_SLICE_SECONDS = 1.0
+# Each startup request gets this long. A launch makes at most two, and a window
+# appears only afterwards, so the launcher's whole check is bounded by the budget.
+STARTUP_CHECK_TIMEOUT_SECONDS = 3.0
+STARTUP_CHECK_BUDGET_SECONDS = 6.0
+# ``urlopen`` applies its timeout to individual socket operations. These bound
+# how far one blocked operation can overrun a deadline, and a stall this long is
+# treated as failure, so an ordinary pause must fit: one second made slow links
+# look offline and ended archive downloads at their first brief stall.
+METADATA_IO_SLICE_SECONDS = 2.0
+ARCHIVE_IO_SLICE_SECONDS = 30.0
+# A scanner can briefly hold a file just written. Only these Windows sharing
+# errors retry, with the same elapsed-time discipline as the release seed.
+_WINDOWS_SHARING_ERRORS = frozenset((5, 32, 33))
+REPLACE_ATTEMPTS = 8
+REPLACE_RETRY_SECONDS = 0.25
 
 REQUIRED_SOURCE_FILES = frozenset((
     "mcu_flash_gui.py",
@@ -286,12 +297,13 @@ def _network_deadline(timeout: float, operation: str) -> float:
     return time.monotonic() + seconds
 
 
-def _remaining_network_timeout(deadline: float, operation: str) -> float:
+def _remaining_network_timeout(deadline: float, operation: str,
+                               io_slice: float = METADATA_IO_SLICE_SECONDS) -> float:
     """Bound each socket operation and reject an elapsed overall budget."""
     remaining = deadline - time.monotonic()
     if remaining <= 0.0:
         raise ApplicationUpdateError(f"{operation} timed out before it could finish.")
-    return max(0.001, min(remaining, NETWORK_IO_SLICE_SECONDS))
+    return max(0.001, min(remaining, io_slice))
 
 
 def _ensure_network_time(deadline: float, operation: str) -> None:
@@ -580,6 +592,19 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _replace_file(temporary: Path, destination: Path) -> None:
+    """Publish one finished file, waiting out a brief Windows sharing violation."""
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(temporary, destination)
+            return
+        except OSError as exc:
+            if (getattr(exc, "winerror", None) not in _WINDOWS_SHARING_ERRORS
+                    or attempt + 1 == REPLACE_ATTEMPTS):
+                raise
+            time.sleep(REPLACE_RETRY_SECONDS)
+
+
 def _copy_file_atomically(source: Path, destination: Path, mode: int | None = None) -> None:
     temporary = destination.parent / f".{destination.name}.mcu-update-{uuid.uuid4().hex}.tmp"
     try:
@@ -592,7 +617,7 @@ def _copy_file_atomically(source: Path, destination: Path, mode: int | None = No
                 os.chmod(temporary, mode)
             except OSError:
                 pass
-        os.replace(temporary, destination)
+        _replace_file(temporary, destination)
     except OSError as exc:
         raise ApplicationUpdateError(f"An application source file could not be installed: {exc}") from exc
     finally:
@@ -815,7 +840,7 @@ def _download_source_archive(candidate: SourceCandidate, archive: Path, *, repor
     )
     received = 0
     try:
-        with opener(request, timeout=_remaining_network_timeout(deadline, operation)) as response:
+        with opener(request, timeout=_remaining_network_timeout(deadline, operation, ARCHIVE_IO_SLICE_SECONDS)) as response:
             _ensure_network_time(deadline, operation)
             status = int(getattr(response, "status", None) or response.getcode())
             if status != 200 or not _archive_response_is_allowed(response.geturl()):
@@ -860,7 +885,8 @@ def _extract_source_archive(archive: Path, destination: Path) -> tuple[Path, lis
                 if not name:
                     continue
                 full = _safe_relative(name)
-                if len(full.parts) < 2:
+                # GitHub lists the wrapper folder itself first; only a file there is invalid.
+                if len(full.parts) < 2 and not info.is_dir():
                     raise ApplicationUpdateError("The GitHub source archive has an invalid layout.")
                 if wrapper is None:
                     wrapper = full.parts[0]

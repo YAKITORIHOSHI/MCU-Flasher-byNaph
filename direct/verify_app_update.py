@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -190,6 +191,9 @@ class SourceUpdateChecks(unittest.TestCase):
     def test_missing_git_uses_an_immutable_archive_for_the_verified_commit(self):
         def make_archive(_candidate, archive, **_kwargs):
             with zipfile.ZipFile(archive, "w") as bundle:
+                # GitHub's real archives list the wrapper folder first, then each directory.
+                bundle.writestr("MCU-Flasher-fixture/", b"")
+                bundle.writestr("MCU-Flasher-fixture/src/", b"")
                 for relative in self._source_names():
                     bundle.writestr("MCU-Flasher-fixture/" + relative,
                                     (self.source / relative).read_bytes())
@@ -324,6 +328,110 @@ class SourceUpdateChecks(unittest.TestCase):
         with self.assertRaisesRegex(app_update.ApplicationUpdateError, "unsupported path"):
             app_update._safe_relative("src/CON.py")
 
+    def test_archive_still_rejects_a_file_beside_the_wrapper_and_a_second_root(self):
+        loose = self.fixture / "loose.zip"
+        with zipfile.ZipFile(loose, "w") as bundle:
+            bundle.writestr("MCU-Flasher-fixture/", b"")
+            bundle.writestr("loose.py", b"unsafe")
+        with self.assertRaisesRegex(app_update.ApplicationUpdateError, "invalid layout"):
+            app_update._extract_source_archive(loose, self.fixture / "extract-loose")
+        second = self.fixture / "second.zip"
+        with zipfile.ZipFile(second, "w") as bundle:
+            bundle.writestr("MCU-Flasher-fixture/", b"")
+            bundle.writestr("another-root/", b"")
+        with self.assertRaisesRegex(app_update.ApplicationUpdateError, "multiple roots"):
+            app_update._extract_source_archive(second, self.fixture / "extract-second")
+
+    def test_startup_budget_covers_both_requests_and_archive_survives_a_brief_stall(self):
+        self.assertGreaterEqual(app_update.STARTUP_CHECK_BUDGET_SECONDS, 2 * app_update.STARTUP_CHECK_TIMEOUT_SECONDS)
+        self.assertGreater(app_update.METADATA_IO_SLICE_SECONDS, 1.0)
+        deadline = app_update.time.monotonic() + 600
+        self.assertEqual(app_update._remaining_network_timeout(deadline, "download", app_update.ARCHIVE_IO_SLICE_SECONDS),
+                         app_update.ARCHIVE_IO_SLICE_SECONDS)
+
+    def _sharing_violation(self, winerror):
+        failure = PermissionError(13, "in use")
+        failure.winerror = winerror
+        return failure
+
+    def test_brief_windows_sharing_violation_is_waited_out(self):
+        source, destination = self.fixture / "new.txt", self.fixture / "target.txt"
+        source.write_text("new", encoding="utf-8")
+        real_replace = os.replace
+        attempts = []
+
+        def busy_once(first, second):
+            attempts.append(first)
+            if len(attempts) == 1:
+                raise self._sharing_violation(32)
+            real_replace(first, second)
+
+        with patch.object(app_update.os, "replace", busy_once), patch.object(app_update.time, "sleep"):
+            app_update._copy_file_atomically(source, destination)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(destination.read_text(encoding="utf-8"), "new")
+
+    def test_other_and_persistent_replace_failures_stop(self):
+        source, destination = self.fixture / "new.txt", self.fixture / "target.txt"
+        source.write_text("new", encoding="utf-8")
+        for failure, expected in ((PermissionError(13, "denied"), 1),
+                                  (self._sharing_violation(32), app_update.REPLACE_ATTEMPTS)):
+            replace = Mock(side_effect=failure)
+            with patch.object(app_update.os, "replace", replace), patch.object(app_update.time, "sleep"), \
+                    self.assertRaisesRegex(app_update.ApplicationUpdateError, "could not be installed"):
+                app_update._copy_file_atomically(source, destination)
+            self.assertEqual(replace.call_count, expected)
+        self.assertFalse(destination.exists())
+
+
+class BootstrapRestartChecks(unittest.TestCase):
+    """Run the real restart function against a real child in a folder with spaces."""
+
+    def setUp(self):
+        temp_root = ROOT / "temp" / "audit" / "app-update"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        self.fixture = Path(tempfile.mkdtemp(prefix="restart ", dir=temp_root))
+        self.addCleanup(shutil.rmtree, self.fixture, True)
+        self.root = self.fixture / "Install Folder With Spaces"
+        (self.root / "src" / "modules").mkdir(parents=True)
+        self.health = self.fixture / "health.json"
+        self.health.write_text("{}", encoding="utf-8")
+        self.received = self.fixture / "received.json"
+        self.log = []
+
+    def _restart(self, child_source, argv):
+        (self.root / "src" / "modules" / "bootstrap.py").write_text(child_source, encoding="utf-8")
+        source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
+        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+                        and node.name == "_restart_after_application_update")
+        namespace = {"STARTUP_HEALTH_FILE": self.health, "SCRIPT_DIR": self.root, "sys": SimpleNamespace(
+            argv=argv, executable=sys.executable, exit=sys.exit), "subprocess": subprocess, "os": os,
+            "_record_bootstrap_log": lambda level, message: self.log.append(message)}
+        exec(compile(ast.get_source_segment(source, function), "bootstrap.py", "exec"), namespace)
+        return namespace["_restart_after_application_update"]
+
+    def test_restart_keeps_spaced_paths_whole_and_leaves_once_the_child_runs(self):
+        child = ("import json, sys\n"
+                 f"json.dump(sys.argv, open({str(self.received)!r}, 'w'))\n")
+        restart = self._restart(child, ["launcher.py", "--hidden", "--project", "C:\\My Sketch"])
+        with self.assertRaises(SystemExit) as finished:
+            restart()
+        self.assertEqual(finished.exception.code, 0)
+        arguments = json.loads(self.received.read_text(encoding="utf-8"))
+        self.assertEqual(Path(arguments[0]), self.root / "src" / "modules" / "bootstrap.py")
+        self.assertEqual(arguments[1:], ["--resume-application-update", "--hidden", "--project", "C:\\My Sketch"])
+        self.assertFalse(self.health.exists(), "the restarted Bootstrap must recheck readiness")
+
+    def test_failed_child_returns_so_the_installed_application_still_opens(self):
+        self._restart("raise SystemExit(3)\n", ["launcher.py"])()
+        self.assertIn("exited early (3)", self.log[-1])
+
+    def test_unstartable_child_returns_with_a_recorded_reason(self):
+        restart = self._restart("", ["launcher.py"])
+        with patch.object(subprocess, "Popen", side_effect=OSError("no interpreter")):
+            restart()
+        self.assertIn("no interpreter", self.log[-1])
+
 
 class BootstrapSourceUpdateWiringChecks(unittest.TestCase):
     def test_bootstrap_checks_before_fast_launch_and_invalidates_warm_health_after_refresh(self):
@@ -337,6 +445,8 @@ class BootstrapSourceUpdateWiringChecks(unittest.TestCase):
         restart_source = ast.get_source_segment(source, restart) or ""
         self.assertIn("STARTUP_HEALTH_FILE.unlink", restart_source)
         self.assertIn("except OSError", restart_source)
+        # The Windows exec family does not quote, so it breaks on folders with spaces.
+        self.assertNotIn("os.exec", restart_source)
         install = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                        and node.name == "_install_application_update")
         install_source = ast.get_source_segment(source, install) or ""
