@@ -156,7 +156,7 @@ class CoverageChecks(unittest.TestCase):
         for mode in ("default", "light", "solarized_dark"):
             dialog.apply_theme(mode)
             QTest.qWait(30)
-            self.assertIn(coverage.get_palette(mode)["BG_DARKEST"], dialog.styleSheet())
+            self.assertIn(coverage.glass_tokens(mode)["reading"], dialog.styleSheet())
             self.assertEqual(dialog.search.text(), "NodeMCU")
             self.assertEqual(dialog.model.rowCount(), 2)
             self.assertEqual(dialog.table.currentIndex().row(), 1)

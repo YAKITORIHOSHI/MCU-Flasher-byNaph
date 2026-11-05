@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QScroll
                                QWidget)
 
 from main.core.theme import get_palette
+from main.qt.glass import paint_cover
 from main.qt.icons import icon
+from main.qt.theme import glass_tokens
 
 SHOW_ELAPSED_AFTER_SECONDS = 5
 SLOW_AFTER_SECONDS = 15
@@ -216,10 +218,20 @@ class AssistantLoader(QFrame):
 
     # ── Theme ────────────────────────────────────────────────────────────────
 
+    def paintEvent(self, event) -> None:
+        # This covers a web view, so the window's glass cannot show through by itself.
+        painter = QPainter(self)
+        if not paint_cover(self, painter):
+            painter.fillRect(self.rect(), QColor(self._cover_surface))
+        painter.end()
+        super().paintEvent(event)
+
     def apply_theme(self, mode: str) -> None:
         palette = get_palette(mode)
+        glass = glass_tokens(mode)
+        self._cover_surface = palette["BG_DARKEST"]
         self.setStyleSheet(
-            f"QFrame#assistant-loader {{ background: {palette['BG_DARKEST']}; border: none; }}"
+            f"QFrame#assistant-loader {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}"
             "QScrollArea#assistant-loader-scroll, QWidget#assistant-loader-page,"
             "QWidget#assistant-loader-column { background: transparent; }")
         self._scroll.viewport().setStyleSheet("background: transparent;")

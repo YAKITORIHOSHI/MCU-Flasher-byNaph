@@ -200,9 +200,10 @@ def main():
             expected_theme = {"default": "mcu-default-dark", "light": "mcu-light",
                               "solarized_dark": "mcu-solarized-dark"}[args.theme]
             assert report["initialOptions"]["theme"] == expected_theme, report
-            assert report["initialBackground"] == report["background"], report
+            # Monaco is see-through from its first paint, over the well's smoke.
+            assert report["initialBackground"] == report["editorBackground"] == "rgba(0, 0, 0, 0)", report
             assert report["loadingStarted"], report
-            assert report["background"] == report["editorBackground"], report
+            assert report["background"] != report["editorBackground"], report
             assert report["loadingHidden"], report
             assert not report["automaticLayout"], report
         if args.capture:

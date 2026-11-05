@@ -34,8 +34,10 @@ except ImportError:
     win32con = None
 
 from main.core.config import _load_raw_config, _save_raw_config
+from main.core.log_colors import glass_inks
 from main.core.theme import Theme, get_palette
 from main.qt.assistant_loader import AssistantLoader
+from main.qt.theme import glass_tokens
 
 _this_file = Path(__file__).resolve()
 _project_root = _this_file.parent.parent.parent
@@ -143,12 +145,11 @@ class AIPanel(QWidget):
     def apply_theme(self, mode: str) -> None:
         self._theme = mode
         palette = get_palette(mode)
-        self._header.setStyleSheet(
-            f"QFrame#opencode-header {{ background: {palette['BG_DARK']}; border-bottom: 1px solid {palette['BORDER']}; }}")
-        self._title_lbl.setStyleSheet(f"color: {palette['CYAN']}; font-size: 11px; font-weight: 700;")
+        self._header.setStyleSheet("QFrame#opencode-header { background: transparent; border: none; }")
+        self._title_lbl.setStyleSheet(f"color: {glass_inks(mode)['system']}; font-size: 11px; font-weight: 700;")
         self._btn_close.setStyleSheet(
             f"QPushButton {{ background: transparent; border-radius: 5px; border: 1px solid transparent; padding: 0px; }}"
-            f"QPushButton:hover {{ background: {palette['BG_DARKEST']}; border-color: {palette['BORDER']}; }}")
+            f"QPushButton:hover {{ background: {glass_tokens(mode)['hover']}; border-color: {palette['BORDER']}; }}")
         self._btn_close.refresh_icon()
         self._embed_container.setStyleSheet(f"background: {palette['BG_DARKEST']};")
         self._loader_card.apply_theme(mode)
@@ -159,8 +160,9 @@ class AIPanel(QWidget):
         self._badge = (icon_name, text, ink)
         self._status_badge.set_icon(icon_name)
         self._status_badge.setText(text)
+        semantic = {"GREEN": "success", "RED": "error", "YELLOW": "warning", "CYAN": "system"}.get(ink, "normal")
         self._status_badge.setStyleSheet(
-            f"color: {get_palette(self._theme)[ink]}; font-size: 11px; font-weight: 600;")
+            f"color: {glass_inks(self._theme)[semantic]}; font-size: 11px; font-weight: 600;")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

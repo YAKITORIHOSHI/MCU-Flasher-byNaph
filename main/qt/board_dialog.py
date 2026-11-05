@@ -31,7 +31,6 @@ from PySide6.QtGui import (
 )
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
-    QDialog,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -50,7 +49,9 @@ from main.qt.icons import ActionButton as QPushButton
 
 from main.core.board_catalog import SUPPORTED_BOARDS
 from main.core.config import load_recent_boards, add_recent_board, get_theme_mode
-from main.qt.theme import get_palette
+from main.core.theme import Theme
+from main.qt.glass import GlassDialog
+from main.qt.theme import get_palette, glass_tokens
 
 # ── String & Token Helpers ───────────────────────────────────────────────────
 
@@ -745,19 +746,21 @@ class BoardListItemDelegate(QStyledItemDelegate):
 
     def _init_cached_colors(self) -> None:
         self._c_bg_darkest = QColor(self.pal.get("BG_DARKEST", "#0d1117"))
-        self._c_bg_mid = QColor(self.pal.get("BG_MID", "#1c2333"))
-        self._c_bg_hover = QColor(self.pal.get("BG_HOVER", "#2a3a55"))
+        # Rows are translucent over the list's smoked glass, like everything under them.
+        self._c_selected = QColor(self.pal.get("CYAN", "#00d2ff"))
+        self._c_selected.setAlpha(76)
+        self._c_hover = QColor(self.pal.get("TEXT_BRIGHT", "#ffffff"))
+        self._c_hover.setAlpha(22)
         border_col = QColor(self.pal.get("BORDER", "#2d3748"))
         self._c_border_line = QColor(border_col.red(), border_col.green(), border_col.blue(), 50)
         self._c_cyan = QColor(self.pal.get("CYAN", "#00d2ff"))
         self._c_text_bright = QColor(self.pal.get("TEXT_BRIGHT", "#ffffff"))
         self._c_text_dim = QColor(self.pal.get("TEXT_DIM", "#8fa1b3"))
-        from main.core.theme import Theme
         from main.core.log_colors import themed_log_colors
         mode = next((name for name, colors in Theme.PALETTES.items()
                      if colors["BG_DARKEST"] == self._c_bg_darkest.name()), "default")
-        self._recent_inks = {False: themed_log_colors(mode, background=self._c_bg_darkest.name())["warning"],
-                             True: themed_log_colors(mode, background=self._c_bg_hover.name())["warning"]}
+        ink = themed_log_colors(mode)["warning"]
+        self._recent_inks = {False: ink, True: ink}
         self._badge_cache.clear()
 
     def _get_badge_styling(self, family: str, is_selected: bool) -> tuple[QBrush, QPen, QColor]:
@@ -803,13 +806,11 @@ class BoardListItemDelegate(QStyledItemDelegate):
 
         # Row Background
         if is_selected:
-            painter.fillRect(rect, self._c_bg_hover)
+            painter.fillRect(rect, self._c_selected)
             # Left accent stripe
             painter.fillRect(QRect(rect.left(), rect.top() + 2, 3, rect.height() - 4), self._c_cyan)
         elif is_hover:
-            painter.fillRect(rect, self._c_bg_mid)
-        else:
-            painter.fillRect(rect, self._c_bg_darkest)
+            painter.fillRect(rect, self._c_hover)
 
         # Subtle bottom separator line
         painter.setPen(self._c_border_line)
@@ -904,7 +905,7 @@ class _SearchLineEdit(QLineEdit):
 
 # ── Main BoardSearchDialog ───────────────────────────────────────────────────
 
-class BoardSearchDialog(QDialog):
+class BoardSearchDialog(GlassDialog):
     """
     Modal dialog to search & select from all supported MCU boards.
     Features instant intelligent multi-token ranking, architecture chips,
@@ -1012,6 +1013,7 @@ class BoardSearchDialog(QDialog):
             theme_mode = get_theme_mode()
         pal = get_palette(theme_mode)
         self._pal = pal
+        self._theme_mode = theme_mode
 
         bg_darkest = pal.get("BG_DARKEST", "#0d1117")
         bg_dark = pal.get("BG_DARK", "#151922")
@@ -1030,21 +1032,24 @@ class BoardSearchDialog(QDialog):
         btn_stop_h = pal.get("BTN_STOP_H", "#882828")
 
         self.setStyleSheet(f"""
-            QDialog {{ background-color: {bg_dark}; color: {text}; }}
+            QDialog {{ color: {text}; }}
             QLabel {{ color: {text}; font-family: 'Montserrat', 'Segoe UI', sans-serif; }}
         """)
-        self.hdr_frame.setStyleSheet(f"background-color: {bg_darkest}; padding: 10px 14px; border-bottom: 1px solid {border};")
+        # A bare declaration would also apply to every child, and each QLabel would then draw
+        # its own partial border. These rules are scoped to the frame they style.
+        glass = glass_tokens(theme_mode)
+        self.hdr_frame.setStyleSheet(f"QFrame#board-header {{ background: {glass['glass_highlight']}; border: none; border-bottom: 1px solid {glass['rim']}; }}")
         self.lbl_hdr.setStyleSheet(f"color: {cyan}; font-size: 13px; font-weight: bold; background: transparent;")
         self.lbl_hdr_sub.setStyleSheet(f"color: {text_dim}; font-size: 11px; background: transparent;")
 
-        self.search_frame.setStyleSheet(f"background-color: {bg_dark}; padding: 8px 14px 4px 14px;")
+        self.search_frame.setStyleSheet("QFrame#board-search { background: transparent; border: none; }")
         self.lbl_search.setStyleSheet(f"color: {text_dim}; font-size: 11px; font-weight: bold;")
         self.search_ent.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {bg_darkest};
+                background-color: {glass['well']};
                 color: {text_bright};
-                border: 1px solid {border};
-                border-radius: 5px;
+                border: 1px solid {glass['rim']};
+                border-radius: 10px;
                 padding: 6px 10px;
                 font-family: Consolas, monospace;
                 font-size: 12px;
@@ -1059,9 +1064,9 @@ class BoardSearchDialog(QDialog):
 
         self.listbox.setStyleSheet(f"""
             QListView {{
-                background-color: {bg_darkest};
-                border: 1px solid {border};
-                border-radius: 5px;
+                background-color: {glass['reading']};
+                border: 1px solid {glass['reading_rim']};
+                border-radius: 10px;
                 color: {text};
                 outline: none;
                 padding: 2px;
@@ -1070,7 +1075,7 @@ class BoardSearchDialog(QDialog):
         self._delegate.set_palette(pal)
         self.listbox.viewport().update()
 
-        self.btn_frame.setStyleSheet(f"background-color: {bg_dark}; border-top: 1px solid {border};")
+        self.btn_frame.setStyleSheet(f"QFrame#board-footer {{ background: {glass['glass']}; border: none; border-top: 1px solid {glass['rim']}; }}")
         self.lbl_count.setStyleSheet(f"color: {text_dim}; font-size: 11px;")
 
         self.btn_cancel.setStyleSheet(f"""
@@ -1109,6 +1114,7 @@ class BoardSearchDialog(QDialog):
 
         # ── Header Banner ─────────────────────────────────────────────────────
         self.hdr_frame = QFrame()
+        self.hdr_frame.setObjectName("board-header")
         hdr_layout = QHBoxLayout(self.hdr_frame)
         hdr_layout.setContentsMargins(14, 8, 14, 8)
 
@@ -1124,6 +1130,7 @@ class BoardSearchDialog(QDialog):
 
         # ── Search Input Row ──────────────────────────────────────────────────
         self.search_frame = QFrame()
+        self.search_frame.setObjectName("board-search")
         search_layout = QHBoxLayout(self.search_frame)
         search_layout.setContentsMargins(14, 10, 14, 4)
         search_layout.setSpacing(8)
@@ -1200,6 +1207,7 @@ class BoardSearchDialog(QDialog):
 
         # ── Action Buttons Footer ─────────────────────────────────────────────
         self.btn_frame = QFrame()
+        self.btn_frame.setObjectName("board-footer")
         btn_layout = QGridLayout(self.btn_frame)
         self._footer_grid = btn_layout
         btn_layout.setContentsMargins(14, 10, 14, 12)
@@ -1429,33 +1437,31 @@ class BoardSearchDialog(QDialog):
 
     def _update_chip_styles(self) -> None:
         pal = getattr(self, "_pal", {})
-        bg_mid = pal.get("BG_MID", "#1c2333")
-        bg_hover = pal.get("BG_HOVER", "#2a3a55")
-        text_dim = pal.get("TEXT_DIM", "#8fa1b3")
+        text = pal.get("TEXT", "#e0e6ed")
+        text_bright = pal.get("TEXT_BRIGHT", "#ffffff")
         cyan = pal.get("CYAN", "#00d2ff")
-        border = pal.get("BORDER", "#2d3748")
+        glass = glass_tokens(getattr(self, "_theme_mode", None) or Theme.active_theme)
 
         for cat_id, btn in self._chip_buttons.items():
             btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {bg_mid};
-                    color: {text_dim};
-                    border: 1px solid {border};
+                    background: {glass['button']};
+                    color: {text};
+                    border: 1px solid {glass['rim']};
                     border-radius: 11px;
                     padding: 0 10px;
                     font-size: 11px;
                     font-family: 'Segoe UI', sans-serif;
                 }}
                 QPushButton:hover {{
-                    background-color: {bg_hover};
-                    color: {cyan};
+                    background: {glass['button_hover']};
+                    color: {text_bright};
                     border-color: {cyan};
                 }}
                 QPushButton:checked {{
-                    background-color: {bg_hover};
-                    color: {cyan};
-                    border: 1px solid {cyan};
-                    font-weight: bold;
+                    background: {glass['chip']};
+                    color: {glass['chip_ink']};
+                    border: 1px solid {glass['chip']};
                 }}
             """)
 

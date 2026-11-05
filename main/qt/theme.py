@@ -11,7 +11,6 @@ and "light" (Glass Frosted Light), with static glass tab surfaces.
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 
 from main.core.theme import get_palette
 
@@ -47,9 +46,10 @@ def install_no_focus_lines(app=None) -> bool:
                 target.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             return super().polish(target)
 
-    # The native macOS style measures controls differently from what the glass stylesheet
-    # draws, which clips checkbox labels. Fusion lays them out as on every other host.
-    app.setStyle(NoFocusLineStyle("Fusion" if sys.platform == "darwin" else app.style()))
+    # The stylesheet draws nearly every control, and each native style measures and fills
+    # in the rest differently: macOS clipped checkbox labels, and Windows 11 drew plain frame
+    # lines in the text color across two rows. One base style means one result on every host.
+    app.setStyle(NoFocusLineStyle("Fusion"))
     app.setProperty("mcuNoFocusLinesInstalled", True)
     return True
 
@@ -81,6 +81,56 @@ def register_fonts() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Stylesheet builder
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _translucent(color: str, alpha: int) -> str:
+    value = color.lstrip("#")
+    return f"rgba({int(value[:2], 16)}, {int(value[2:4], 16)}, {int(value[4:6], 16)}, {alpha})"
+
+
+def _lit(top: str, bottom: str) -> str:
+    return f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:1 {bottom})"
+
+
+def css_color(value: str) -> str:
+    """A Qt stylesheet color for a web page: Qt's alpha runs to 255, CSS's to 1."""
+    if not value.startswith("rgba("):
+        return value
+    red, green, blue, alpha = (part.strip() for part in value[5:-1].split(","))
+    return f"rgba({red}, {green}, {blue}, {int(alpha) / 255:.3f})"
+
+
+def glass_tokens(theme_mode: str = "default") -> dict[str, str]:
+    """Fills for surfaces over the window's scene. Everything here is translucent but the chip."""
+    pal = get_palette(theme_mode)
+    bright, cyan = pal.get("TEXT_BRIGHT", "#ffffff"), pal.get("CYAN", "#00d2ff")
+    deepest = pal.get("BG_DARKEST", "#0d1117")
+    values = {"selected": _translucent(cyan, 44), "rim": _translucent(bright, 46),
+              "selection": _translucent(cyan, 76), "hover": _translucent(bright, 22)}
+    if theme_mode == "light":
+        values.update(glass="rgba(255, 255, 255, 96)", glass_highlight="rgba(255, 255, 255, 170)",
+                      reading="rgba(255, 255, 255, 176)", reading_alt="rgba(255, 255, 255, 70)",
+                      reading_rim="rgba(255, 255, 255, 210)", well="rgba(255, 255, 255, 190)",
+                      chip=cyan, chip_ink="#ffffff", handle=_translucent(bright, 88),
+                      button=_lit("rgba(255, 255, 255, 214)", "rgba(255, 255, 255, 138)"),
+                      button_hover=_lit("rgba(255, 255, 255, 250)", "rgba(255, 255, 255, 190)"),
+                      button_pressed="rgba(255, 255, 255, 96)", button_disabled="rgba(255, 255, 255, 72)",
+                      button_rim=_translucent(bright, 58), disabled_ink="#5f6b76",
+                      accent_top=_translucent(cyan, 66), accent_bottom=_translucent(cyan, 30),
+                      accent_hover_top=_translucent(cyan, 96), accent_hover_bottom=_translucent(cyan, 50))
+    else:
+        values.update(glass="rgba(255, 255, 255, 10)", glass_highlight="rgba(255, 255, 255, 18)",
+                      reading=_translucent(deepest, 170), reading_alt="rgba(255, 255, 255, 8)",
+                      reading_rim="rgba(255, 255, 255, 34)", well=_translucent(deepest, 150),
+                      chip=bright, chip_ink=deepest, handle=_translucent(bright, 74),
+                      button=_lit("rgba(255, 255, 255, 22)", "rgba(255, 255, 255, 8)"),
+                      button_hover=_lit("rgba(255, 255, 255, 34)", "rgba(255, 255, 255, 16)"),
+                      button_pressed="rgba(0, 0, 0, 64)", button_disabled="rgba(255, 255, 255, 8)",
+                      button_rim="rgba(255, 255, 255, 62)",
+                      disabled_ink="#a3b6c9" if theme_mode == "default" else "#a8c2c8",
+                      accent_top=_translucent(cyan, 72), accent_bottom=_translucent(cyan, 34),
+                      accent_hover_top=_translucent(cyan, 104), accent_hover_bottom=_translucent(cyan, 60))
+    return values
+
 
 def build_stylesheet(theme_mode: str = "default") -> str:
     """Return a complete QApplication stylesheet for the given theme mode."""
@@ -135,14 +185,35 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     btn_blue_h          = "#0858b8" if theme_mode == "light" else pal.get("BTN_BLUE_H", "#2563a6")
     btn_grey            = "#e2e8f0" if theme_mode == "light" else pal.get("BTN_GREY", "#283342")
 
-    def translucent(color: str, alpha: int) -> str:
-        value = color.lstrip("#")
-        return f"rgba({int(value[:2], 16)}, {int(value[2:4], 16)}, {int(value[4:6], 16)}, {alpha})"
+    translucent = _translucent
+    glass_values = glass_tokens(theme_mode)
+    lit = _lit
+    selected, rim = glass_values["selected"], glass_values["rim"]
+    glass, glass_highlight = glass_values["glass"], glass_values["glass_highlight"]
+    well, disabled_ink = glass_values["well"], glass_values["disabled_ink"]
+    reading, reading_alt = glass_values["reading"], glass_values["reading_alt"]
+    reading_rim, selection = glass_values["reading_rim"], glass_values["selection"]
+    chip, chip_ink = glass_values["chip"], glass_values["chip_ink"]
+    handle, hover = glass_values["handle"], glass_values["hover"]
+    from main.core.log_colors import glass_inks, themed_log_colors
+    accent_on_sheet = glass_inks(theme_mode)["system"]
+    accent_on_reading = themed_log_colors(theme_mode)["system"]
+    button, button_hover = glass_values["button"], glass_values["button_hover"]
+    button_pressed, button_disabled = glass_values["button_pressed"], glass_values["button_disabled"]
+    button_rim = glass_values["button_rim"]
+    accent_top, accent_bottom = glass_values["accent_top"], glass_values["accent_bottom"]
+    accent_hover_top, accent_hover_bottom = glass_values["accent_hover_top"], glass_values["accent_hover_bottom"]
+    glass_button_ids = ("btn-clean", "btn-reload", "btn-project", "btn-download", "btn-detach-editor",
+                        "btn-toggle-editor", "btn-toggle-monitors", "btn-settings", "btn-ai-assistant",
+                        "btn-copy-console", "btn-clear-console", "btn-serial-send", "btn-terminal-new",
+                        "btn-terminal-restart", "btn-terminal-clear", "btn-terminal-open")
+    accent_button_ids = ("btn-compile", "btn-upload", "btn-save", "btn-save-all", "btn-modify")
 
-    glass = translucent(bg_dark, 225)
-    glass_highlight = translucent(bg_light, 220)
-    rim = translucent(text_bright, 55)
-    selected = translucent(cyan, 35)
+    def buttons(ids, state: str, *, plain: bool = False) -> str:
+        names = [f"QPushButton#{name}{state}" for name in ids]
+        if plain:
+            names += [f"QPushButton{state}", f"QDialog QPushButton{state}"]
+        return ",\n".join(names)
 
     return f"""
 /* ── Global ─────────────────────────────────────────────────────────────── */
@@ -153,7 +224,7 @@ def build_stylesheet(theme_mode: str = "default") -> str:
 }}
 
 QMainWindow {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {bg_mid}, stop:0.48 {bg_darkest}, stop:1 {bg_dark});
+    background: {bg_darkest};
     color: {text};
 }}
 
@@ -188,7 +259,7 @@ QToolBar#primary-toolbar {{
 }}
 
 QToolBar#controls-toolbar {{
-    background-color: {glass};
+    background: {glass};
     border: none;
     padding: 0px;
 }}
@@ -200,8 +271,7 @@ QToolBar#controls-toolbar[shortScreen="true"] {{
 }}
 
 QWidget#controls-bar {{
-    background-color: {glass};
-    border-bottom: 1px solid {border};
+    background: transparent;
 }}
 
 QFrame#toolbar-sep {{
@@ -928,11 +998,9 @@ QLabel {{
     color: {text};
 }}
 QLabel[role="dim"] {{
-    color: {text_dim};
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
+    color: {text};
+    font-size: 11px;
+    font-weight: 500;
     background: transparent;
 }}
 QLabel[role="title"] {{
@@ -1009,68 +1077,166 @@ QSizeGrip {{
     background: transparent;
 }}
 
-/* Portable glass surfaces. Reading panes stay opaque for stable contrast. */
+/* Portable glass surfaces. Everything sits over one scene, and reading surfaces are
+   smoked glass: dark enough to read at the scene's brightest point, and still see-through. */
 QWidget#monaco-editor-panel {{
-    background: {bg_darkest}; border: none; border-radius: 0; margin: 0; padding: 0;
+    background: transparent; border: none; border-radius: 0; margin: 0; padding: 0;
 }}
-QWidget#editor-detached-placeholder {{ background: {bg_darkest}; }}
+QWidget#editor-detached-placeholder {{ background: transparent; }}
 QLabel#detached-editor-description {{ color: {text_dim}; font-size: 12px; }}
-QWidget#console-header, QWidget#serial-header, QWidget#compat-header,
-QFrame#notif-header, QFrame#terminal-header, QFrame#syntax-header {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
-    border-bottom: 1px solid {rim};
+QWidget#console-header, QWidget#serial-header, QWidget#compat-header {{
+    background: transparent; border: none;
 }}
+QFrame#notif-header, QFrame#terminal-header, QFrame#syntax-header {{
+    background: transparent; border: none;
+}}
+QAbstractScrollArea > QWidget#qt_scrollarea_viewport {{ background: transparent; }}
+QPlainTextEdit, QTextEdit, QTextBrowser,
+QPlainTextEdit#build-console, QPlainTextEdit#serial-console, QPlainTextEdit#compat-console,
+QTextBrowser#notif-browser {{
+    background: {reading}; color: {text}; border: 1px solid {reading_rim}; border-radius: 10px;
+    selection-background-color: {selection}; selection-color: {text_bright};
+}}
+QListWidget, QListView, QTreeWidget, QTreeView, QTableWidget, QTableView,
+QTableWidget#syntax-table {{
+    background: {reading}; alternate-background-color: {reading_alt}; color: {text};
+    border: 1px solid {reading_rim}; border-radius: 10px;
+    selection-background-color: {selection}; selection-color: {text_bright};
+}}
+QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected,
+QTableWidget::item:selected, QTableWidget#syntax-table::item:selected {{
+    background: {selection}; color: {text_bright};
+}}
+QListWidget::item:hover {{ background: {hover}; }}
+QHeaderView {{ background: transparent; border: none; }}
+QHeaderView::section {{
+    background: transparent; color: {accent_on_reading}; border: none; border-bottom: 1px solid {reading_rim};
+}}
+QLabel[role="title"] {{ color: {accent_on_sheet}; }}
+QTableCornerButton::section {{ background: transparent; border: none; }}
+/* Popups are their own windows with nothing behind them, so they keep a solid theme fill. */
+QComboBox QAbstractItemView {{
+    background: {bg_mid}; color: {text}; border: 1px solid {border}; border-radius: 0;
+    alternate-background-color: {bg_mid};
+    selection-background-color: {bg_hover}; selection-color: {text_bright};
+}}
+QScrollBar:vertical {{ background: transparent; border: none; }}
+QScrollBar:horizontal {{ background: transparent; border: none; }}
+QScrollBar::handle:vertical {{ background: {handle}; border-radius: 4px; margin: 3px; }}
+QScrollBar::handle:horizontal {{ background: {handle}; border-radius: 4px; margin: 3px; }}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed,
+QScrollBar::handle:horizontal:hover, QScrollBar::handle:horizontal:pressed {{ background: {cyan}; }}
+/* Tool pane divider. Without its own border rule a QFrame HLine is drawn by the
+   native style in the palette's text color. */
+QFrame#separator {{ background: {rim}; border: none; min-height: 1px; max-height: 1px; }}
+QLabel#controls-caption {{ color: {text}; font-size: 10px; font-weight: 700; background: transparent; }}
+QFrame#separator-vertical {{ background: {rim}; border: none; min-width: 1px; max-width: 1px; margin: 5px 3px; }}
+QFrame#toolbar-sep {{ background: {rim}; border: none; min-width: 1px; max-width: 1px; margin: 5px 5px; }}
 QTabWidget#workspace-tabs {{ background: transparent; }}
 QTabWidget#workspace-tabs::pane,
 QTabWidget#workspace-tabs QTabWidget::pane {{
-    background: {bg_darkest}; border: none; border-radius: 0; margin: 0; padding: 0;
+    background: transparent; border: none; border-radius: 0; margin: 0; padding: 0;
 }}
+/* The window paints one sheet under the whole tool area, tabs included, so the tabs are
+   chips on that sheet and its contents stay clear of its rounded corners. */
+QTabWidget#workspace-tabs::tab-bar {{ left: 8px; }}
+QTabWidget#workspace-tabs::pane {{ padding: 0 7px 7px 7px; }}
+QTabWidget#workspace-tabs[compactPane="true"]::tab-bar {{ left: 4px; }}
+QTabWidget#workspace-tabs[compactPane="true"]::pane {{ padding: 0 3px 3px 3px; }}
 QTabWidget#workspace-tabs QTabBar {{
     background: transparent; border: none;
 }}
 QTabWidget#workspace-tabs QTabBar::tab {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass_highlight}, stop:1 {glass});
-    color: {text_dim}; border: 1px solid {rim}; border-bottom: 2px solid {rim}; border-radius: 9px;
-    padding: 4px 9px; margin-right: 3px; margin-bottom: 2px;
+    background: {lit(glass_highlight, glass)};
+    color: {text}; border: 1px solid {rim}; border-radius: 11px;
+    padding: 4px 10px; margin: 5px 4px 4px 0;
     font-size: 12px; font-weight: 600;
 }}
-QTabWidget#workspace-tabs QTabBar[iconOnly="true"]::tab {{ padding: 4px 3px; }}
+QTabWidget#workspace-tabs[compactPane="true"] QTabBar::tab {{ margin: 3px 3px 2px 0; padding: 2px 9px; }}
+QTabWidget#workspace-tabs QTabBar[iconOnly="true"]::tab {{ padding: 4px 7px; width: 18px; }}
 QTabWidget#workspace-tabs QTabBar::tab:selected {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {selected}, stop:1 {glass_highlight});
-    color: {text_bright}; border: 1px solid {cyan}; border-bottom: 2px solid {cyan};
+    background: {chip}; color: {chip_ink}; border: 1px solid {chip};
 }}
 QTabWidget#workspace-tabs QTabBar::tab:hover:!selected {{
-    background: {glass_highlight}; color: {text}; border: 1px solid {border_lit};
-    border-bottom: 2px solid {border_lit};
+    background: {button_hover}; color: {text_bright}; border: 1px solid {border_lit};
 }}
 QTabWidget#workspace-tabs QTabBar QToolButton {{
-    background: {bg_dark}; border: 1px solid {rim}; border-radius: 7px;
+    background: {glass_highlight}; border: 1px solid {rim}; border-radius: 9px;
 }}
 QToolButton#serial-display-options {{
-    background: {bg_dark}; color: {text_bright};
-    border: 1px solid {border_lit}; border-radius: 5px;
+    background: {button}; color: {text_bright};
+    border: 1px solid {button_rim}; border-radius: 7px;
     padding: 3px 20px 3px 8px; min-height: 20px;
 }}
 QToolButton#serial-display-options:hover {{
-    background: {bg_mid}; border-color: {cyan};
+    background: {button_hover}; border-color: {border_lit};
 }}
 QToolButton#serial-display-options::menu-indicator {{
     image: url("{_icon_arrow}"); width: 10px; height: 10px;
     subcontrol-origin: padding; subcontrol-position: right center; right: 5px;
 }}
 QSplitter::handle {{ background: transparent; }}
-QSplitter::handle:hover {{ background: {selected}; }}
+QSplitter::handle:hover {{ background: {selected}; border-radius: 3px; }}
+
+/* Bars over the scene. */
+QMenuBar {{ background: transparent; border: none; padding-left: 6px; }}
+QToolBar#primary-toolbar, QToolBar#controls-toolbar {{ background: transparent; border: none; }}
+QMenuBar::item {{ background: transparent; }}
+QMenuBar::item:selected {{ background: {glass_highlight}; }}
+QStatusBar {{ background: transparent; border: none; padding-left: 8px; padding-right: 8px; }}
+
+/* Fields are wells cut into the pane, dark enough to read through. */
+QComboBox {{ background: {well}; border: 1px solid {rim}; border-radius: 10px; }}
+QComboBox:hover {{ border-color: {border_lit}; }}
+QComboBox:focus {{ border-color: {cyan}; }}
+QComboBox:disabled {{ background: {button_disabled}; border-color: {rim}; }}
+QLineEdit {{ background: {well}; border: 1px solid {rim}; border-radius: 10px; }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:editable:focus {{ border: 2px solid {cyan}; }}
-QDialog QGroupBox {{ border: 1px solid {rim}; border-radius: 12px; }}
-QPushButton#btn-compile:enabled, QPushButton#btn-upload:enabled,
-QPushButton#btn-save:enabled, QPushButton#btn-save-all:enabled,
-QPushButton#btn-modify:enabled {{
-    background: {glass_highlight}; color: {text_bright}; border: 1px solid {border_lit};
+QCheckBox::indicator {{ background: {well}; border: 1px solid {rim}; border-radius: 5px; }}
+QCheckBox::indicator:hover {{ background: {glass_highlight}; border-color: {cyan}; }}
+QCheckBox::indicator:checked {{ background: {cyan_dim}; border: 1px solid {cyan}; }}
+QCheckBox::indicator:checked:hover {{ background: {cyan}; border-color: {border_lit}; }}
+QCheckBox::indicator:disabled {{ background: {button_disabled}; border-color: {rim}; }}
+QCheckBox::indicator:checked:disabled {{ background: {button_disabled}; border-color: {rim}; }}
+QGroupBox, QDialog QGroupBox {{ background: {glass}; border: 1px solid {rim}; border-radius: 14px; }}
+QGroupBox, QDialog QGroupBox, QGroupBox::title {{ color: {accent_on_reading}; }}
+QGroupBox::title {{ background: transparent; }}
+
+/* Actions are glass too: a lit fill and a rim, never a solid block. */
+{buttons(glass_button_ids, ":enabled", plain=True)} {{
+    background: {button}; color: {text_bright}; border: 1px solid {button_rim}; border-radius: 10px;
 }}
-QPushButton#btn-compile:enabled:hover, QPushButton#btn-upload:enabled:hover,
-QPushButton#btn-save:enabled:hover, QPushButton#btn-save-all:enabled:hover,
-QPushButton#btn-modify:enabled:hover {{ background: {selected}; color: {text_bright}; }}
-QPushButton#btn-stop:enabled {{ background: {btn_stop}; }}
+{buttons(glass_button_ids, ":enabled:hover", plain=True)} {{
+    background: {button_hover}; color: {text_bright}; border: 1px solid {border_lit};
+}}
+{buttons(glass_button_ids, ":enabled:pressed", plain=True)} {{
+    background: {button_pressed}; color: {text_bright}; border: 1px solid {cyan};
+}}
+{buttons((*glass_button_ids, *accent_button_ids, "btn-stop"), ":disabled", plain=True)} {{
+    background: {button_disabled}; color: {disabled_ink};
+    border: 1px solid {translucent(text_bright, 26)}; border-radius: 10px;
+}}
+{buttons(accent_button_ids, ":enabled")} {{
+    background: {lit(accent_top, accent_bottom)}; color: {text_bright};
+    border: 1px solid {border_lit}; border-radius: 10px;
+}}
+{buttons(accent_button_ids, ":enabled:hover")} {{
+    background: {lit(accent_hover_top, accent_hover_bottom)}; color: {text_bright}; border: 1px solid {cyan};
+}}
+{buttons(accent_button_ids, ":enabled:pressed")} {{
+    background: {accent_bottom}; color: {text_bright}; border: 1px solid {cyan};
+}}
+QPushButton#btn-stop:enabled {{
+    background: {lit(translucent(red, 110), translucent(red, 62))}; color: {text_bright};
+    border: 1px solid {red}; border-radius: 10px;
+}}
+QPushButton#btn-stop:enabled:hover {{ background: {lit(translucent(red, 150), translucent(red, 92))}; color: {text_bright}; }}
+QPushButton:checked, QDialog QPushButton:checked {{
+    background: {lit(accent_top, accent_bottom)}; border: 1px solid {cyan}; color: {text_bright};
+}}
+QPushButton:checked:hover, QDialog QPushButton:checked:hover {{
+    background: {lit(accent_hover_top, accent_hover_bottom)}; border: 1px solid {border_lit}; color: {text_bright};
+}}
 QComboBox::down-arrow {{
     image: url("{_icon_arrow}"); width: 12px; height: 12px; border: none;
 }}

@@ -77,9 +77,9 @@ class PerformanceProfile:
     terminal_interval_ms: int
     terminal_scrollback: int
     terminal_history_chars: int
-    # Chromium's low-end mode trades rendering quality and raster threads for
-    # memory. A 6-core/12-thread PC with ample RAM keeps the app's conservative
-    # budgets above, but does not need its editor rendered like a low-end device.
+    # Chromium's low-end mode trades raster threads and caches for memory. A
+    # 6-core/12-thread PC with ample RAM keeps the app's conservative budgets
+    # above, but does not need its editor rendered like a low-end device.
     low_end_renderer: bool = True
 
 
@@ -111,7 +111,11 @@ def configure_webengine_environment() -> None:
                    "--disable-renderer-backgrounding", "--disable-features=CalculateNativeWinOcclusion"]
     if profile.low_end_renderer:
         flags = [flag for flag in flags if flag not in no_throttle]
-        additions = ["--enable-low-end-device-mode", "--num-raster-threads=1"]
+        # Low-end mode reports 512 MB of RAM to Chromium, which then rasterizes with
+        # the GPU at 4 bits per channel: surfaces leave the theme's colors and the tab
+        # row's gradient dithers into stripes. Keep the memory policy, not that depth.
+        additions = ["--enable-low-end-device-mode", "--disable-rgba-4444-textures",
+                     "--num-raster-threads=1"]
     else:
         additions = no_throttle
     for flag in additions:

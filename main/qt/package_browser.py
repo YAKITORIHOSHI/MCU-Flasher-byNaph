@@ -32,10 +32,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDial
                                QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from main.core.theme import Theme
-from main.qt.glass import GlassWorkspace
+from main.qt.glass import GlassDialog, GlassWorkspace
 from main.qt.icons import ActionButton, IconLabel, icon
 from main.qt.responsive import ScreenWatcher, fit_dialog
-from main.qt.theme import build_stylesheet, install_no_focus_lines, register_fonts
+from main.qt.taskbar import window_hidden, window_shown
+from main.qt.theme import build_stylesheet, glass_tokens, install_no_focus_lines, register_fonts
 from main.core.config import get_monitor_font_size
 from src.modules import arduino_lib_req as engine
 from src.modules import ubuntu_download_manager as manager
@@ -43,7 +44,8 @@ from src.modules.browser_loading import LatestScan, scan_package_details, search
 from src.modules.ui_palette import readable_foreground
 
 SEARCH_DELAY_MS = 120
-THIRD_PARTY_INDEXES = "https://github.com/arduino/Arduino/wiki/Unofficial-list-of-3rd-party-boards-support-urls"
+BROWSER_USER_MODEL_ID = "Naph.MCUFlasher.GUI.V6"
+THIRD_PARTY_INDEXES ="https://github.com/arduino/Arduino/wiki/Unofficial-list-of-3rd-party-boards-support-urls"
 _DRAIN_BUDGET_SECONDS = 0.006
 
 
@@ -824,7 +826,7 @@ class InstalledTab(QWidget):
         self.update_btn.setEnabled(bool(item and item.get("update_available")))
 
 
-class DownloadOptionsDialog(QDialog):
+class DownloadOptionsDialog(GlassDialog):
     """Choose what to keep from a download; the result is its chosen option."""
 
     def __init__(self, parent, archive_name, already_available=False):
@@ -865,7 +867,7 @@ class DownloadOptionsDialog(QDialog):
         self.accept()
 
 
-class BoardPlatformDialog(QDialog):
+class BoardPlatformDialog(GlassDialog):
     """Associate a board package with a vendor's PlatformIO platform."""
 
     def __init__(self, app, item, configuration, key):
@@ -959,7 +961,7 @@ class BoardPlatformDialog(QDialog):
                       "Settings could not be saved. Check that settings storage is writable.")
 
 
-class ArduinoCliBoardDialog(QDialog):
+class ArduinoCliBoardDialog(GlassDialog):
     """Explicit Arduino CLI permissions; every disk read and write stays on workers."""
 
     def __init__(self, app, tab, metadata, folder):
@@ -1132,9 +1134,9 @@ class ArduinoCliBoardDialog(QDialog):
 
 
 _EXTRA_STYLE = """
-QFrame#package-card {{ background: {bg_mid}; border: 1px solid {border}; border-radius: 10px; }}
+QFrame#package-card {{ background: {glass}; border: 1px solid {rim}; border-radius: 14px; }}
 QWidget#package-detail, QScrollArea#package-detail-scroll {{ background: transparent; }}
-QFrame#package-rule {{ color: {border}; }}
+QFrame#package-rule {{ background: {border}; border: none; min-height: 1px; max-height: 1px; }}
 QLabel[packageTone="title"] {{ color: {text_bright}; font-size: 15px; font-weight: 700; }}
 QLabel[packageTone="bright"] {{ color: {text_bright}; }}
 QLabel[packageTone="dim"] {{ color: {text_dim}; }}
@@ -1142,11 +1144,11 @@ QLabel[packageTone="ok"] {{ color: {green}; }}
 QLabel[packageTone="warn"] {{ color: {yellow}; }}
 QLabel[packageTone="error"] {{ color: {red}; }}
 QLabel#package-brand {{ color: {text_bright}; font-size: 17px; font-weight: 700; }}
-QListView#package-list {{ background: {bg_darkest}; color: {text}; border: 1px solid {border};
-                          border-radius: 6px; outline: 0; }}
+QListView#package-list {{ background: {reading}; color: {text}; border: 1px solid {reading_rim};
+                          border-radius: 10px; outline: 0; }}
 QListView#package-list::item {{ padding: 4px 6px; border-radius: 4px; }}
-QListView#package-list::item:selected {{ background: {cyan_dim}; color: {selected_text}; }}
-QListView#package-list::item:hover:!selected {{ background: {bg_hover}; }}
+QListView#package-list::item:selected {{ background: {selection}; color: {text_bright}; }}
+QListView#package-list::item:hover:!selected {{ background: {hover}; }}
 QPushButton#package-link {{ background: transparent; border: none; color: {cyan}; padding: 2px 4px;
                             text-align: left; }}
 QPushButton#package-link:hover {{ color: {text_bright}; }}
@@ -1247,6 +1249,7 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
 
         self.notebook = QTabWidget()
         self.notebook.setDocumentMode(True)
+        self.notebook.tabBar().setDrawBase(False)
         self.notebook.tabBar().setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.lib_tab = BrowseTab(self, is_board=False)
         self.board_tab = BrowseTab(self, is_board=True)
@@ -1285,7 +1288,7 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
             return
         palette = Theme.PALETTES[Theme.active_theme]
         tokens = {name.lower(): value for name, value in palette.items()}
-        tokens["selected_text"] = readable_foreground(tokens["cyan_dim"])
+        tokens.update(glass_tokens(Theme.active_theme))
         QApplication.instance().setStyleSheet(build_stylesheet(Theme.active_theme) + _EXTRA_STYLE.format(**tokens))
         if hasattr(self, "notebook"):
             self._central.invalidate_cache()
@@ -1295,6 +1298,15 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._brand.setVisible(self.width() >= 560)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # No relaunch command: the browser has its own taskbar group but no launcher.
+        window_shown(self, app_id=BROWSER_USER_MODEL_ID, relaunch=False)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        window_hidden(self, event)
 
     def closeEvent(self, event):
         """Retain the loaded window; only workspace shutdown ends this process."""
@@ -1870,11 +1882,14 @@ def main() -> int:
     if sys.platform == "win32":
         try:
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Naph.MCUFlasher.GUI.V6")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(BROWSER_USER_MODEL_ID)
         except (AttributeError, OSError):
             pass
     try:
+        from main.qt.interface_size import prepare_interface_size, settle_interface_size
+        interface_factor = prepare_interface_size()
         app = QApplication.instance() or QApplication(sys.argv)
+        settle_interface_size(app, interface_factor)
         app.setApplicationName("MCU Flasher Library & Board Browser")
         app.setQuitOnLastWindowClosed(False)
         register_fonts()

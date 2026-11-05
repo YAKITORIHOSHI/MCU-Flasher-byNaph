@@ -40,6 +40,8 @@ from PySide6.QtWebChannel import QWebChannel
 # pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QApplication
 
+from main.qt.glass import PageBackdrop, page_backdrop_for
+
 # ─────────────────────────────────────────────────────────────────────────────
 # QWebChannel JS bootstrap
 # Injected after the page loads to connect QWebChannel as a fallback. The page
@@ -836,6 +838,10 @@ class MonacoEditorPanel(QWidget):
 
         # Load the editor
         self._load_editor()
+        self._backdrop = PageBackdrop(self._view, self._send_backdrop)
+
+    def _send_backdrop(self, backdrop: dict[str, float]) -> None:
+        self._view.page().runJavaScript(f"window.setGlassBackdrop?.({json.dumps(backdrop)})")
 
     def _load_editor(self) -> None:
         self._project_files_generation = 0
@@ -850,6 +856,8 @@ class MonacoEditorPanel(QWidget):
             query.addQueryItem("theme", get_theme_mode())
             query.addQueryItem("font", str(get_editor_font_size()))
             query.addQueryItem("constrained", "1" if self._performance.constrained else "0")
+            backdrop = page_backdrop_for(self._view)
+            query.addQueryItem("backdrop", ",".join(str(backdrop[name]) for name in ("width", "height", "x", "y", "radius")))
             url.setQuery(query)
             self._view.load(url)
         else:
@@ -867,6 +875,7 @@ class MonacoEditorPanel(QWidget):
             self._recover_editor("The offline editor could not load.")
             return
         self._recovery_notice.hide()
+        self._backdrop.forget()  # Whatever it was told while loading went with the old page.
         if not getattr(self, "_startup_timing_written", False):
             self._startup_timing_written = True
             from src.modules import startup_timing

@@ -35,7 +35,6 @@ class CodePreview(QPlainTextEdit):
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self._number_background = QColor("#151922")
         self._number_foreground = QColor("#adc0d3")
         self._number_border = QColor("#425e79")
         self._number_area = _LineNumberArea(self)
@@ -84,7 +83,6 @@ class CodePreview(QPlainTextEdit):
 
     def paint_line_numbers(self, event):
         painter = QPainter(self._number_area)
-        painter.fillRect(event.rect(), self._number_background)
         painter.setPen(self._number_border)
         painter.drawLine(self._number_area.width() - 1, event.rect().top(),
                          self._number_area.width() - 1, event.rect().bottom())
@@ -96,9 +94,10 @@ class CodePreview(QPlainTextEdit):
                              Qt.AlignmentFlag.AlignRight, str(number))
 
     def apply_theme(self, palette):
-        self._number_background = QColor(palette["BG_DARK"])
         self._number_foreground = QColor(palette["TEXT_DIM"])
-        self._number_border = QColor(palette["BORDER"])
+        rim = QColor(palette["TEXT"])
+        rim.setAlpha(46)
+        self._number_border = rim
         self._number_area.update()
 
 
@@ -315,7 +314,7 @@ class AIChangesPanel(QWidget):
         from main.core.theme import Theme
         from main.qt.theme import get_palette
         pal = get_palette(mode or Theme.active_theme)
-        self.setStyleSheet(f"#ai-changes-panel {{ background: {pal['BG_DARK']}; color: {pal['TEXT']}; }}")
+        self.setStyleSheet(f"#ai-changes-panel {{ background: transparent; color: {pal['TEXT']}; }}")
         for preview in (self._before, self._after):
             preview.apply_theme(pal)
         self._added = pal.get("GREEN", "#2e9d61")

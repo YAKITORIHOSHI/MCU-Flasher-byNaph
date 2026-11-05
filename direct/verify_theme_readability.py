@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication
 from main.core import config
 from main.core.theme import Theme
 from main.qt.console_panel import ConsolePanel
+from main.core.log_colors import glass_inks
 from main.qt.log_colors import contrast_ratio, themed_ansi_colors, themed_log_colors, themed_terminal_colors
 from main.qt.main_window import MCUMainWindow
 from main.qt.serial_panel import SerialOutputView, SerialPanel
@@ -118,7 +119,7 @@ class ThemeReadabilityChecks(unittest.TestCase):
     def test_serial_connection_states_follow_active_palette(self):
         panel = self.make_widget(SerialPanel(PreviewBackend()))
         for mode in ("default", "light", "solarized_dark"):
-            colors = themed_log_colors(mode)
+            colors = glass_inks(mode)  # This label sits straight on the sheet.
             panel.update_status({"connected": True})
             panel.apply_theme(mode)
             self.assertIn(colors["success"], panel.lbl_status.styleSheet())
@@ -130,7 +131,7 @@ class ThemeReadabilityChecks(unittest.TestCase):
         label = window._status_label
         for mode in ("default", "light", "solarized_dark"):
             Theme.apply_theme(mode)
-            colors = themed_log_colors(mode, background=get_palette(mode)["BG_DARK"])
+            colors = themed_log_colors(mode)
             window._on_notification({"type": "success", "message": "Preferences updated"})
             self.assertIn(colors["success"], label.styleSheet())
             window._apply_notification_color(window._notification_type)

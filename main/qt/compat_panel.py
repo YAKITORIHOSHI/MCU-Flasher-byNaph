@@ -9,7 +9,7 @@ plus a search/filter bar matching the original Tkinter layout.
 from __future__ import annotations
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 # pyrefly: ignore [missing-import]
@@ -45,6 +45,7 @@ class CompatPanel(QWidget):
         # ── Header ───────────────────────────────────────────────────────────
         header = QWidget()
         header.setObjectName("compat-header")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         header.setFixedHeight(34)
         h = QHBoxLayout(header)
         h.setContentsMargins(10, 4, 10, 4)
@@ -86,8 +87,8 @@ class CompatPanel(QWidget):
 
         # ── Separator ─────────────────────────────────────────────────────────
         sep = QFrame()
-        self._sep = sep
         sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setObjectName("separator")
 
         # ── Output View ───────────────────────────────────────────────────────
         self._output = QPlainTextEdit()
@@ -217,22 +218,18 @@ class CompatPanel(QWidget):
 
     def apply_theme(self, theme_name: str) -> None:
         """Apply active theme palette to compatible devices panel."""
-        from main.qt.theme import get_palette
+        from main.qt.theme import get_palette, glass_tokens
         pal = get_palette(theme_name)
+        glass = glass_tokens(theme_name)
         self._tag_colors = themed_log_colors(theme_name)
-        bg = pal.get("BG_DARKEST", "#0a0e14")
         fg = pal.get("TEXT", "#e0e6ed")
-        border = pal.get("BORDER", "#2d3748")
         palette = self._output.palette()
-        palette.setColor(palette.ColorRole.Base, QColor(bg))
         palette.setColor(palette.ColorRole.Text, QColor(fg))
         self._output.setPalette(palette)
         self._output.setStyleSheet(
             "QPlainTextEdit#compat-console { "
-            f"background-color: {bg}; color: {fg}; "
-            f"selection-background-color: {pal['BG_HOVER']}; selection-color: {pal['TEXT_BRIGHT']}; "
-            "border: none; }"
+            f"background: {glass['reading']}; color: {fg}; "
+            f"selection-background-color: {glass['selection']}; selection-color: {pal['TEXT_BRIGHT']}; "
+            f"border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}"
         )
-        if hasattr(self, "_sep") and self._sep:
-            self._sep.setStyleSheet(f"color: {border};")
         self._recolor_content()

@@ -48,3 +48,23 @@ def workspace_size(area: WorkArea):
     target_width = min(max(1440, round(width * .75)), 2560)
     target_height = min(max(920, round(height * .85)), 1440)
     return preferred_size(area, target_width, target_height, ratio=.90)
+
+
+# The logical pixel density toolkits assume. Above it a logical pixel is physically small.
+_NOMINAL_PIXELS_PER_INCH = 96
+
+
+def interface_scale(width, height, pixels_per_inch, device_ratio=1.0):
+    """Extra scale this monitor calls for, from logical units with no scale of ours applied.
+
+    A display scale chosen for another screen, or left at 100%, can leave a lot of room in
+    pixels too small to read: a small 1080p laptop, or 4K on a desk. Its opposite is a small
+    desktop at a high scale, where the chrome crowds out the code and can afford to shrink
+    because it still has plenty of device pixels. Everything else is left alone.
+    """
+    density = pixels_per_inch / _NOMINAL_PIXELS_PER_INCH if 40 <= pixels_per_inch <= 600 else 1.0
+    if width >= 1700 and height >= 950:
+        return 1.25 if density >= 1.6 else 1.125 if density >= 1.3 else 1.0
+    if device_ratio >= 1.5 and (width < 1000 or height < 560):
+        return .875
+    return 1.0

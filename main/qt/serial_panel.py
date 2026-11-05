@@ -200,25 +200,23 @@ class SerialOutputView(QPlainTextEdit):
 
     def apply_theme(self, theme_name: str) -> None:
         """Apply active theme palette to serial output view base colors."""
-        from main.qt.theme import get_palette
+        from main.qt.theme import get_palette, glass_tokens
         from main.qt.log_colors import themed_log_colors
         pal = get_palette(theme_name)
-        bg = pal.get("BG_DARKEST", "#0a0e14")
+        glass = glass_tokens(theme_name)
         fg = pal.get("TEXT", "#e0e6ed")
         self._tag_colors = themed_log_colors(theme_name)
         self._serial_formats = {}
         self._theme_name = theme_name
-        hover = pal.get("BG_HOVER", bg)
         bright = pal.get("TEXT_BRIGHT", fg)
         self.setStyleSheet(
             "QPlainTextEdit#serial-console { "
-            f"background-color: {bg}; color: {fg}; "
-            f"selection-background-color: {hover}; selection-color: {bright}; "
+            f"background: {glass['reading']}; color: {fg}; "
+            f"selection-background-color: {glass['selection']}; selection-color: {bright}; "
             f"font-family: Consolas; font-size: {self._font_size}pt; "
-            "border: none; }"
+            f"border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}"
         )
         palette = self.palette()
-        palette.setColor(palette.ColorRole.Base, QColor(bg))
         palette.setColor(palette.ColorRole.Text, QColor(fg))
         self.setPalette(palette)
         if hasattr(self, "_entries"):
@@ -648,6 +646,7 @@ class SerialPanel(QWidget):
         self._header = header
         header.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         header.setObjectName("serial-header")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         h = QGridLayout(header)
         h.setContentsMargins(10, 4, 10, 4)
         h.setSpacing(8)
@@ -704,7 +703,7 @@ class SerialPanel(QWidget):
         div = QFrame()
         self._div_sep = div
         div.setFrameShape(QFrame.Shape.VLine)
-        div.setStyleSheet("color: #2a5f58;")
+        div.setObjectName("separator-vertical")
         h.addWidget(div, 0, 6)
 
         # Connection status label
@@ -720,7 +719,7 @@ class SerialPanel(QWidget):
         div2 = QFrame()
         self._div2_sep = div2
         div2.setFrameShape(QFrame.Shape.VLine)
-        div2.setStyleSheet("color: #2a5f58;")
+        div2.setObjectName("separator-vertical")
         h.addWidget(div2, 0, 8)
 
         # Baud rate container (label + combo)
@@ -799,7 +798,7 @@ class SerialPanel(QWidget):
         # ── Separator ────────────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("color: #2a5f58;")
+        sep.setObjectName("separator")
 
         # ── Output View ───────────────────────────────────────────────────────
         self._output = SerialOutputView()
@@ -873,7 +872,8 @@ class SerialPanel(QWidget):
         except Exception:
             text_w = 48
 
-        return max(86, text_w + 44)
+        # A very narrow pane keeps exactly what its padding and arrow need around the longest rate.
+        return text_w + 40 if width is not None and width < 420 else max(86, text_w + 44)
 
     def update_adaptive_sizing(self) -> None:
         """Refresh adaptive sizing when screen resolution or DPI scaling changes."""
@@ -980,6 +980,7 @@ class SerialPanel(QWidget):
         if self.height() < 140:
             mode = "short"
             h.setContentsMargins(4, 2, 4, 2)
+            h.setSpacing(3)
         compact_options = mode in ("micro", "short")
         self.lbl_status.setText("" if compact_options else self._connection_text)
         self.lbl_status.setToolTip(self._connection_text)
@@ -1292,18 +1293,13 @@ class SerialPanel(QWidget):
         """Update serial monitor child widgets to match active theme."""
         self._output.apply_theme(theme_name)
         self._theme_name = theme_name
-        from main.qt.theme import get_palette
-        pal = get_palette(theme_name)
-        cyan = pal.get("CYAN", "#00d2ff")
-        border = pal.get("BORDER", "#2d3748")
+        from main.core.log_colors import glass_inks
         if hasattr(self, "_title_lbl") and self._title_lbl:
-            self._title_lbl.setStyleSheet(f"color: {cyan}; font-weight: bold; font-size: 12px;")
+            self._title_lbl.setStyleSheet(f"color: {glass_inks(theme_name)['system']}; font-weight: bold; font-size: 12px;")
         self._apply_connection_color()
-        if hasattr(self, "_div_sep") and self._div_sep:
-            self._div_sep.setStyleSheet(f"color: {border};")
 
     def _apply_connection_color(self) -> None:
-        from main.qt.log_colors import themed_log_colors
-        colors = themed_log_colors(getattr(self, "_theme_name", "default"))
+        from main.core.log_colors import glass_inks
+        colors = glass_inks(getattr(self, "_theme_name", "default"))
         color = colors.get(getattr(self, "_connection_color_tag", "error"), colors["normal"])
         self.lbl_status.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600;")

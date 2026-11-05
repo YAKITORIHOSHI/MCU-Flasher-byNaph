@@ -50,6 +50,22 @@ UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if 
 
 
 from main.qt.icons import IconLabel as QLabel
+from main.core.log_colors import glass_inks
+
+# Space between a toolbar's contents and the edge of its sheet of glass.
+_BAR_SHEET_PADDING = 12
+_TINY_BAR_SHEET_PADDING = 6
+# The Controls row's margins and spacing around what it measures.
+_CONTROLS_CHROME = 50
+
+
+def _css_color(value: str) -> QColor:
+    """A color from a glass token, whose alpha QColor's own parser would not read."""
+    if value.startswith("rgba("):
+        red, green, blue, alpha = (int(part) for part in value[5:-1].split(","))
+        return QColor(red, green, blue, alpha)
+    return QColor(value)
+
 
 class _DeveloperLogoLabel(QLabel):
     """Logo label that reports one activation for each completed left click."""
@@ -324,6 +340,7 @@ class PrimaryToolbar(QToolBar):
         self.logo.setStyleSheet(
             "color: #56cfbf; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
         )
+        self.logo.setContentsMargins(_BAR_SHEET_PADDING, 0, 0, 0)
         self.logo.setCursor(Qt.CursorShape.ArrowCursor)
         self.logo.clicked.connect(self._on_logo_click)
         self.addWidget(self.logo)
@@ -368,9 +385,8 @@ class PrimaryToolbar(QToolBar):
 
         # Separator between build actions and file actions
         sep = QFrame()
+        sep.setObjectName("toolbar-sep")
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setFrameShadow(QFrame.Shadow.Plain)
-        sep.setStyleSheet("border: none; border-left: 1px solid #2d3748; margin: 4px 5px;")
         ac_layout.addWidget(sep)
         self._action_sep = sep
 
@@ -423,7 +439,9 @@ class PrimaryToolbar(QToolBar):
         self.right_container = QWidget(self)
         self.right_container.setStyleSheet("background: transparent;")
         rc_layout = QHBoxLayout(self.right_container)
-        rc_layout.setContentsMargins(0, 0, 0, 0)
+        # QToolBarLayout's own margins must stay equal, so the clearance from the rounded
+        # sheet is here and on the logo. Without it the last button runs past the sheet.
+        rc_layout.setContentsMargins(0, 0, _BAR_SHEET_PADDING, 0)
         rc_layout.setSpacing(4)
 
         # Sketch path label
@@ -504,9 +522,8 @@ class PrimaryToolbar(QToolBar):
 
     def _add_separator(self) -> None:
         sep = QFrame()
+        sep.setObjectName("toolbar-sep")
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setFrameShadow(QFrame.Shadow.Plain)
-        sep.setStyleSheet("border: none; border-left: 1px solid #2d3748; margin: 4px 5px;")
         self.addWidget(sep)
 
     # ── Slots ─────────────────────────────────────────────────────────────────
@@ -937,7 +954,7 @@ class PrimaryToolbar(QToolBar):
         from main.core.theme import Theme
         if hasattr(self, "logo"):
             self.logo.setStyleSheet(
-                f"color: {Theme.CYAN}; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
+                f"color: {glass_inks(Theme.active_theme)['system']}; font-size: 14px; font-weight: 700; font-family: 'Montserrat', 'Segoe UI', sans-serif; background: transparent;"
             )
         if hasattr(self, "lbl_sketch_icon"):
             self.lbl_sketch_icon.setPixmap(icon("cloud" if isinstance(getattr(self._backend, "_cloud_project_link", None), dict) else "project").pixmap(16, 16))
@@ -946,7 +963,7 @@ class PrimaryToolbar(QToolBar):
             )
         if hasattr(self, "lbl_sketch"):
             self.lbl_sketch.setStyleSheet(
-                f"color: {Theme.TEXT_DIM}; font-size: 12px; font-family: Consolas; background: transparent;"
+                f"color: {Theme.TEXT}; font-size: 12px; font-family: Consolas; background: transparent;"
             )
         if self._owner_dialog is not None:
             self._owner_dialog.apply_theme(theme_name)
@@ -984,7 +1001,8 @@ class PrimaryToolbar(QToolBar):
             # Native QToolBarLayout uses the left inset to position horizontal
             # rows vertically. Equal margins keep the buttons above the bottom
             # rim; even short screens need one logical pixel of clearance.
-            inset = 1 if self.property("shortScreen") else 4
+            height = self.window().height()
+            inset = 1 if height < 350 else 2 if height < 500 else 4 if height < 800 else 7
             desired_margins = (inset, inset, inset, inset)
             margins = self.layout().contentsMargins()
             if (margins.left(), margins.top(), margins.right(), margins.bottom()) != desired_margins:
@@ -1001,7 +1019,10 @@ class PrimaryToolbar(QToolBar):
                 labels[button] = button.text() or labels.get(button, fallback)
             self._responsive_labels = labels
             spacing = max(0, self.layout().spacing())
-            chrome = desired_margins[0] + desired_margins[2] + 4 * spacing + 16
+            margin_left = self.logo.contentsMargins().left()
+            logo_frame = (self.logo.sizeHint().width() - margin_left
+                          - self.logo.fontMetrics().horizontalAdvance(self.logo.text()))
+            chrome = desired_margins[0] + desired_margins[2] + 4 * spacing + 16 + logo_frame
             action_spacing = self.actions_container.layout().spacing()
             right_spacing = self.right_container.layout().spacing()
 
@@ -1018,9 +1039,11 @@ class PrimaryToolbar(QToolBar):
                 right.append(self._button_width(self.btn_download, "Resources") if resource_text else 28)
                 if sketch:
                     right[:0] = [self.lbl_sketch_icon.sizeHint().width(), self.lbl_sketch.sizeHint().width()]
+                # Both ends clear the rounded sheet the window paints under this bar.
+                sheet = 2 * (_TINY_BAR_SHEET_PADDING if tiny else _BAR_SHEET_PADDING)
                 return (self.logo.fontMetrics().horizontalAdvance(logo) + sum(actions)
                         + action_spacing * (len(actions) - 1) + sum(right)
-                        + right_spacing * (len(right) - 1) + chrome)
+                        + right_spacing * (len(right) - 1) + chrome + sheet)
 
             # The optional project caption yields before application actions.
             # Each candidate is measured afresh, never from a collapsed layout.
@@ -1051,6 +1074,10 @@ class PrimaryToolbar(QToolBar):
                 self._actions_popup.close()
                 self._actions_popup = None
             self.logo.setText(logo)
+            sheet_padding = _TINY_BAR_SHEET_PADDING if tiny else _BAR_SHEET_PADDING
+            if self.logo.contentsMargins().left() != sheet_padding:
+                self.logo.setContentsMargins(sheet_padding, 0, 0, 0)
+                self.right_container.layout().setContentsMargins(0, 0, sheet_padding, 0)
             self.lbl_sketch.setVisible(sketch)
             self.lbl_sketch_icon.setVisible(sketch)
             for button in named:
@@ -1560,11 +1587,14 @@ class MarqueeBoardSelector(_MarqueeBehavior, QWidget):
 
         # Background & Border
         from main.core.theme import Theme
-        bg = QColor(Theme.BG_DARKEST)
-        border = QColor(Theme.CYAN if self._is_hovered and self.isEnabled() else Theme.BORDER)
+        from main.qt.theme import glass_tokens
+        from PySide6.QtCore import QRectF
+        glass = glass_tokens(Theme.active_theme)
+        bg = _css_color(glass["well"])
+        border = QColor(Theme.CYAN) if self._is_hovered and self.isEnabled() else _css_color(glass["rim"])
         p.setBrush(bg)
         p.setPen(QPen(border, 1))
-        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4)
+        p.drawRoundedRect(QRectF(r).adjusted(.5, .5, -.5, -.5), 10, 10)
 
         inner = r.adjusted(8, 2, -8, -2)
         p.setClipRect(inner)
@@ -1618,8 +1648,7 @@ class ControlsBar(QWidget):
         board_group = QVBoxLayout()
         board_group.setSpacing(1)
         lbl_board = QLabel("Board")
-        lbl_board.setProperty("role", "dim")
-        lbl_board.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
+        lbl_board.setObjectName("controls-caption")
 
         board_row = QHBoxLayout()
         board_row.setSpacing(4)
@@ -1651,7 +1680,7 @@ class ControlsBar(QWidget):
         port_group = QVBoxLayout()
         port_group.setSpacing(1)
         lbl_port = QLabel("Serial port")
-        lbl_port.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
+        lbl_port.setObjectName("controls-caption")
         port_row = QHBoxLayout()
         port_row.setSpacing(4)
         self.port_combo = MarqueeComboBox(self)
@@ -1670,7 +1699,7 @@ class ControlsBar(QWidget):
         spd_group = QVBoxLayout()
         spd_group.setSpacing(1)
         self.lbl_spd = QLabel("Upload speed")
-        self.lbl_spd.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
+        self.lbl_spd.setObjectName("controls-caption")
         self.upload_speed_combo = QComboBox()
         self.upload_speed_combo.addItems([str(s) for s in UPLOAD_SPEEDS])
         self.upload_speed_combo.setCurrentText(str(DEFAULT_UPLOAD_SPEED))
@@ -1685,7 +1714,7 @@ class ControlsBar(QWidget):
         opt_group = QVBoxLayout()
         opt_group.setSpacing(2)
         lbl_opt = QLabel("Workspace")
-        lbl_opt.setStyleSheet("color: #8fa1b3; font-size: 10px; font-weight: 700; background: transparent; letter-spacing: 0.8px;")
+        lbl_opt.setObjectName("controls-caption")
         checkbox_row = QHBoxLayout()
         checkbox_row.setSpacing(3)
         opt_row = QHBoxLayout()
@@ -2300,19 +2329,19 @@ class ControlsBar(QWidget):
         # Use actual content hints so translated labels and system fonts fit too.
         groups = self._groups
         tiny = self._is_tiny(width)
-        # Under 500 logical pixels of height, captions yield to the editor: their
-        # fields explain themselves and keep their tooltips.
+        # On a short window captions yield to the editor: their fields explain
+        # themselves and keep their tooltips.
         short = tiny or self._short_window
         for index, group in enumerate(groups):
             group.setDirection(QBoxLayout.Direction.LeftToRight if short else QBoxLayout.Direction.TopToBottom)
-            self._group_labels[index].setVisible(not short or (index == 2 and not tiny))
+            self._group_labels[index].setVisible(not short or (index == 2 and getattr(self, "_speed_caption_inline", False)))
         self.btn_search_board.setVisible(not tiny)
         self.cb_timestamp.setVisible(not tiny)
         self.cb_skip_compile.setVisible(not tiny)
         if tiny:
             self.board_selector.setMinimumWidth(70)
             self.port_combo.setMinimumWidth(100)
-        self._grid.setContentsMargins(*(8, 2, 8, 2) if short else (10, 4, 10, 4))
+        self._grid.setContentsMargins(*(8, 2, 8, 2) if self._cramped_window else (14, 4, 14, 4) if short else (14, 6, 14, 6))
         self._grid.setSpacing(3 if short else 6)
         if getattr(self, "_options_short", None) != short:
             self.btn_opt_dropdown.setText("" if short else "Options ")
@@ -2321,7 +2350,8 @@ class ControlsBar(QWidget):
         self.btn_opt_dropdown.setAccessibleName("Workspace options")
         self.btn_opt_dropdown.setMinimumWidth(30 if short else 0)
         self.btn_opt_dropdown.setMaximumWidth(30 if short else 16777215)
-        required = sum(group.minimumSize().width() for group in groups) + 38
+        # The action buttons' minimums would squeeze their labels, so they count at full width.
+        required = sum(group.minimumSize().width() for group in groups[:3]) + groups[3].sizeHint().width() + _CONTROLS_CHROME
         if tiny or (short and width >= required):
             mode = 5
         elif short:
@@ -2336,7 +2366,12 @@ class ControlsBar(QWidget):
             if mode in (1, 5):
                 for col, group in enumerate(groups):
                     self._grid.addLayout(group, 0, col)
-                self._grid.setColumnStretch(0 if mode == 5 else 3, 1)
+                if mode == 5:
+                    # A long serial port name is as much worth reading as a long board name.
+                    self._grid.setColumnStretch(0, 3)
+                    self._grid.setColumnStretch(1, 2)
+                else:
+                    self._grid.setColumnStretch(3, 1)
             elif mode == 2:
                 for col, group in enumerate(groups[:3]):
                     self._grid.addLayout(group, 0, col)
@@ -2362,7 +2397,7 @@ class ControlsBar(QWidget):
         return width < 900 and (self._tiny_window or (self._cramped_window and width < 520))
 
     def set_responsive_height(self, height: int) -> None:
-        short = height < 500
+        short = height < 800
         tiny = height < 350
         cramped = height < 420
         if (short, tiny, cramped) != (self._short_window, self._tiny_window, self._cramped_window):
@@ -2401,21 +2436,28 @@ class ControlsBar(QWidget):
             checkboxes = (checkbox_width(self.cb_timestamp, "Timestamps")
                           + checkbox_width(self.cb_skip_compile, "Skip Compile") + 3)
             workspace = checkboxes + sum(button.sizeHint().width() for button in actions) + 18
-            fields = board_width + (0 if tiny else self.btn_search_board.width() + 4) + port_width + max(
-                speed_width, self.lbl_spd.fontMetrics().horizontalAdvance("Upload speed"))
-            compact = tiny or width < fields + workspace + 38
+            caption = self.lbl_spd.fontMetrics().horizontalAdvance("Upload speed")
+            # Stacked above its field the caption shares the field's width. On one row it
+            # needs its own, so it is the first thing to yield there.
+            one_row = tiny or self._short_window
+            fields = board_width + (0 if tiny else self.btn_search_board.width() + 4) + port_width + (
+                speed_width if one_row else max(speed_width, caption))
+            compact = tiny or width < fields + workspace + _CONTROLS_CHROME
             compact_workspace = checkboxes + PrimaryToolbar._button_width(
                 self.btn_opt_dropdown, "Options", plain_icon=True) + 6
-            abbreviate = compact and width < fields + compact_workspace + 38
+            abbreviate = compact and width < fields + compact_workspace + _CONTROLS_CHROME
+            spare = max(0, width - (fields + (compact_workspace if compact else workspace) + _CONTROLS_CHROME))
+            self._speed_caption_inline = one_row and not tiny and spare >= caption + 6
+            if self._speed_caption_inline:
+                spare -= caption + 6
             if not tiny:
                 # Long board and port names read better than empty space on wide
                 # monitors, and need no scrolling marquee once they fit.
-                spare = max(0, width - (fields + (compact_workspace if compact else workspace) + 38))
                 board_width += min(spare // 2, max(0, 420 - board_width))
                 port_width += min(spare // 4, max(0, 320 - port_width))
             signature = (width, board_width, port_width, speed_width, fields, workspace,
                          compact, abbreviate, self._short_window, self._tiny_window, self._cramped_window,
-                         self.font().toString())
+                         self._speed_caption_inline, self.font().toString())
             if signature == getattr(self, "_controls_signature", None):
                 return
             self._controls_signature = signature

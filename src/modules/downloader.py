@@ -266,7 +266,7 @@ def create_window(*, theme_mode=None):
     from main.qt.glass import GlassWorkspace
     from main.qt.icons import ActionButton
     from main.qt.responsive import ScreenWatcher, fit_dialog
-    from main.qt.theme import build_stylesheet, install_no_focus_lines, register_fonts
+    from main.qt.theme import build_stylesheet, glass_tokens, install_no_focus_lines, register_fonts
 
     class Reports(QObject):
         """Queued delivery from the transfer worker to the GUI thread."""
@@ -403,8 +403,9 @@ def create_window(*, theme_mode=None):
     mode = mode if mode in Theme.PALETTES else "default"
     Theme.apply_theme(mode)
     palette = Theme.PALETTES[Theme.active_theme]
+    glass = glass_tokens(Theme.active_theme)
     app.setStyleSheet(build_stylesheet(Theme.active_theme) + f"""
-        QFrame#download-card {{ background: {palette["BG_MID"]}; border: 1px solid {palette["BORDER"]}; border-radius: 10px; }}
+        QFrame#download-card {{ background: {glass["glass"]}; border: 1px solid {glass["rim"]}; border-radius: 14px; }}
         QLabel#download-title {{ color: {palette["TEXT_BRIGHT"]}; font-size: 17px; font-weight: 700; }}
         QLabel#download-subtitle, QLabel#download-status {{ color: {palette["TEXT_DIM"]}; }}
     """)

@@ -1250,7 +1250,8 @@ class ProjectChecks(unittest.TestCase):
                 def cancel_prompt(name):
                     prompt = next(widget for widget in APP.topLevelWidgets()
                                   if isinstance(widget, QMessageBox) and widget.isVisible())
-                    self.assertEqual(prompt._glass._colors['BG_DARKEST'], dialog._dialog_palette['BG_DARKEST'])
+                    from main.qt.theme import get_palette
+                    self.assertIn(get_palette(theme)['BG_MID'], prompt.styleSheet())
                     if RENDER_DIR:
                         self.assertTrue(prompt.grab().save(str(RENDER_DIR / f'project-{theme}-{name}.png')))
                     prompt.button(QMessageBox.StandardButton.Cancel).click()

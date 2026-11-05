@@ -1,21 +1,17 @@
 """Paint SVG status marks outside copyable log text; no timers or extra blocks."""
 from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QPainter, QPalette
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QWidget
 from main.qt.icons import icon
 
 
 class SvgLogGutter(QWidget):
-    def __init__(self, editor, name_for, *, transparent=False):
+    def __init__(self, editor, name_for):
         super().__init__(editor)
         self.editor, self.name_for = editor, name_for
-        # Setup logs expose their owning glass card; an opaque palette Base
-        # (black on native Windows) must not cover that material. Ordinary
-        # console gutters retain their solid reading surface by default.
-        self._transparent = bool(transparent)
-        if self._transparent:
-            self.setAutoFillBackground(False)
-            self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
+        # Part of the same glass as the log beside it. Any fill here would be a block.
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, False)
         editor.setViewportMargins(22, 0, 0, 0)
         editor.updateRequest.connect(self._update_request)
         editor.installEventFilter(self)
@@ -57,8 +53,6 @@ class SvgLogGutter(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        if not self._transparent:
-            painter.fillRect(self.rect(), self.editor.palette().color(QPalette.ColorRole.Base))
         for _, rect, name, color in self.visible_marks():
             icon(name, color, size=16).paint(painter, rect)
         painter.end()

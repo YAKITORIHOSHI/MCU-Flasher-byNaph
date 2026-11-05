@@ -424,7 +424,7 @@ class AIChangesChecks(unittest.TestCase):
                 from main.qt.theme import get_palette
                 pal = get_palette(mode)
                 self.assertEqual(preview._number_foreground.name(), pal["TEXT_DIM"].lower())
-                self.assertEqual(preview._number_background.name(), pal["BG_DARK"].lower())
+                self.assertFalse(hasattr(preview, "_number_background"), "The gutter is part of the same glass")
                 self.assertGreater(preview.viewport().x(), 0)
                 self.assertTrue(preview._number_area.isVisible())
                 self.assertEqual([row[0] for row in preview._number_rows()], [1, 2, 3])

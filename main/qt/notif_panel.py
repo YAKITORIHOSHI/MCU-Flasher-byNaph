@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (
 from main.qt.icons import ActionButton as QPushButton, icon
 from main.qt.log_follow import LogFollow, preserve_log_view
 from main.qt.log_buffer import LogBuffer, display_text
-from main.qt.log_colors import contrast_ratio, themed_log_colors
+from main.core.log_colors import glass_inks
+from main.qt.log_colors import themed_log_colors
 
 from src.dbs import dbs_read, dbs_delete
 
@@ -184,32 +185,26 @@ class NotifPanel(QWidget):
 
     def apply_theme(self, theme_name: str) -> None:
         """Apply active theme palette to notifications panel."""
-        from main.qt.theme import get_palette
+        from main.qt.theme import get_palette, glass_tokens
         pal = get_palette(theme_name)
-        cyan = pal.get("CYAN", "#00d2ff")
-        bg = pal.get("BG_DARKEST", "#0a0e14")
+        glass = glass_tokens(theme_name)
         fg = pal.get("TEXT", "#e0e6ed")
         self._palette = pal
         for index, name in enumerate(("filter", "package", "usb", "error")):
             self._filter_combo.setItemIcon(index, icon(name, pal["TEXT"]))
-        reading_background = min((bg, pal["BG_DARK"], pal["BG_MID"]),
-                                 key=lambda background: contrast_ratio(fg, background))
-        self._card_colors = themed_log_colors(theme_name, background=reading_background)
-        cyan = self._card_colors["system"]
-        self._lbl_filter.setStyleSheet(f"color: {self._card_colors['dim']}; font-size: 11px;")
+        self._card_colors = themed_log_colors(theme_name)
+        # The header sits straight on the sheet, the cards in the smoked well below it.
+        header = glass_inks(theme_name)
+        cyan = header["system"]
+        self._lbl_filter.setStyleSheet(f"color: {header['normal']}; font-size: 11px;")
         for button in (self._btn_clear, self._btn_copy):
-            button.setStyleSheet(
-                f"QPushButton {{ background: {pal['BG_DARK']}; color: {fg}; "
-                f"border: 1px solid {pal['BORDER']}; "
-                "font-size: 11px; padding: 1px 8px; border-radius: 3px; }"
-                f"QPushButton:hover {{ background: {pal['BG_HOVER']}; color: {pal['TEXT_BRIGHT']}; }}"
-            )
+            button.setStyleSheet("QPushButton { font-size: 11px; padding: 1px 8px; }")
         if hasattr(self, "_title_lbl") and self._title_lbl:
             self._title_lbl.setStyleSheet(f"color: {cyan}; font-weight: 600; font-size: 11px;")
         if hasattr(self, "_browser") and self._browser:
             self._browser.setStyleSheet(
-                f"QTextBrowser {{ background: {bg}; color: {fg}; border: none; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; padding: 8px; }}"
-                f"QTextBrowser {{ selection-background-color: {pal['BG_HOVER']}; selection-color: {pal['TEXT_BRIGHT']}; }}"
+                f"QTextBrowser {{ background: {glass['reading']}; color: {fg}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; padding: 8px; }}"
+                f"QTextBrowser {{ selection-background-color: {glass['selection']}; selection-color: {pal['TEXT_BRIGHT']}; }}"
             )
             self._render_records()
 

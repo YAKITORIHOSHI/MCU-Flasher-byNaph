@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import unittest
@@ -15,15 +16,19 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QPalette
+from PySide6.QtCore import QPoint
+from PySide6.QtWidgets import QApplication, QFrame, QWidget
+from PySide6.QtGui import QColor, QImage, QPainter, QPalette, QRegion
+from main.core.theme import glass_worst
 from main.qt.compat_panel import CompatPanel
+from main.qt.console_panel import ConsolePanelContainer
 from main.qt.log_colors import contrast_ratio
 from main.qt.notif_panel import NotifPanel
 from main.qt.posix_terminal_panel import PosixTerminalPanel
+from main.qt.serial_panel import SerialPanel
 from main.qt.syntax_panel import SyntaxPanel
 from main.qt.terminal_panel import TerminalPanel
-from main.qt.theme import get_palette
+from main.qt.theme import build_stylesheet, get_palette, glass_tokens
 
 APP = QApplication.instance() or QApplication([])
 MODES = ("default", "light", "solarized_dark")
@@ -144,15 +149,16 @@ class PanelReadabilityChecks(unittest.TestCase):
             pal = get_palette(mode)
             panel.apply_theme(mode)
             for row in range(3):
-                self.assert_readable(panel._table.item(row, 2).foreground().color().name(), pal["BG_DARKEST"], pal["BG_DARK"])
+                self.assert_readable(panel._table.item(row, 2).foreground().color().name(), glass_worst(mode)["reading"])
             self.assertEqual(panel._table.currentRow(), 1)
             self.assertEqual({item.row() for item in panel._table.selectedItems()}, {1})
             self.assertEqual(panel._table.font().pointSize(), 14)
             self.assertEqual(panel._lbl_status.text(), "1 err, 1 warn")
-            self.assertIn(panel._semantic_colors["error"], panel._lbl_status.styleSheet())
+            # The status sits straight on the sheet, the table in the smoked well below it.
+            self.assertIn(panel._header_colors["error"], panel._lbl_status.styleSheet())
             panel.set_diagnostics([])
-            self.assertIn(panel._semantic_colors["success"], panel._lbl_status.styleSheet())
-            self.assert_readable(panel._semantic_colors["success"], pal["BG_DARK"], pal["BG_MID"])
+            self.assertIn(panel._header_colors["success"], panel._lbl_status.styleSheet())
+            self.assert_readable(panel._header_colors["success"], glass_worst(mode)["sheet"])
             panel.set_diagnostics([{"file": "demo.ino", "line": 1, "severity": severity, "message": "Readable fixture"}
                                    for severity in ("error", "warning", "note")])
             panel._table.selectRow(1)
@@ -168,12 +174,12 @@ class PanelReadabilityChecks(unittest.TestCase):
                 panel.apply_theme(mode)
                 for record in records:
                     for text in (record["title"], record["message"], record["time"]):
-                        self.assert_readable(rendered_color(panel._browser, text), pal["BG_DARK"], pal["BG_DARKEST"])
+                        self.assert_readable(rendered_color(panel._browser, text), glass_worst(mode)["reading"])
                 self.assertEqual(panel._browser.textCursor().selectedText(), "success retained message")
             self.assertEqual(load.call_count, 1)
             panel._append_notification_card({"type": "info", "message": "live retained message"})
             panel.apply_theme("light")
-            self.assert_readable(rendered_color(panel._browser, "live retained message"), get_palette("light")["BG_DARK"])
+            self.assert_readable(rendered_color(panel._browser, "live retained message"), glass_worst("light")["reading"])
 
     def test_notification_display_retention_stays_bounded_after_recolor(self):
         with patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=[]):
@@ -414,11 +420,19 @@ class PanelReadabilityChecks(unittest.TestCase):
             PosixTerminalPanel._configure(probe, view)
             source = captured.pop()
             payload, _ = json.JSONDecoder().raw_decode(source.split("window.configureTerminal?.(", 1)[1])
-            self.assertEqual(payload, TerminalPanel._build_terminal_theme_payload(None, mode))
+            # A native window has to paint its own surface. This page's xterm paints none, so
+            # its text is judged over the glass under it. Every ink is otherwise shared.
+            native = TerminalPanel._build_terminal_theme_payload(None, mode)
+            surface = glass_worst(mode)["reading"]
+            for key in ("background", "cursorAccent"):
+                native.pop(key)
+            self.assertTrue(payload.pop("background").endswith(", 0)"), "xterm must not cover the glass")
+            self.assertEqual(payload.pop("cursorAccent"), surface)
+            self.assertEqual(payload, native)
             for name in ("black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"):
-                self.assert_readable(payload[name], payload["background"])
-                self.assert_readable(payload["bright" + name.title()], payload["background"])
-            self.assert_readable(payload["foreground"], payload["background"])
+                self.assert_readable(payload[name], surface)
+                self.assert_readable(payload["bright" + name.title()], surface)
+            self.assert_readable(payload["foreground"], surface)
             self.assert_readable(payload["selectionForeground"], payload["selectionBackground"])
             self.assertIn(", 18,", source)
 
@@ -436,6 +450,37 @@ class PanelReadabilityChecks(unittest.TestCase):
             cls.connect_signals(probe, bus)
             self.assertEqual(len(bus.theme_changed.connected), 1)
 
+    def test_tool_pane_dividers_are_one_themed_row_on_every_panel(self):
+        # Without its own border rule a QFrame HLine is drawn by the native style in the
+        # text color, which was a bright two-row line on Windows 11. Painting onto a known
+        # backdrop gives exact pixels that do not depend on this host's native style.
+        self.addCleanup(APP.setStyleSheet, APP.styleSheet())
+        for mode in MODES:
+            APP.setStyleSheet(build_stylesheet(mode))
+            red, green, blue, alpha = (int(value) for value in re.findall(r"\d+", glass_tokens(mode)["rim"]))
+            expected = [(channel * alpha + 128 * (255 - alpha)) / 255 for channel in (red, green, blue)]
+            with patch("main.core.config.load_gui_config", return_value={}):
+                panels = (ConsolePanelContainer(), SerialPanel(None), CompatPanel())
+            for panel in panels:
+                self.widget(panel)
+                self.addCleanup(panel.hide)
+                panel.resize(800, 300)
+                panel.show()
+                APP.processEvents()
+                divider = panel.findChild(QFrame, "separator")
+                self.assertIsNotNone(divider, f"{type(panel).__name__} in {mode}")
+                self.assertEqual(divider.height(), 1, f"{type(panel).__name__} in {mode}")
+                canvas = QImage(divider.size(), QImage.Format.Format_RGB32)
+                canvas.fill(QColor(128, 128, 128))
+                painter = QPainter(canvas)
+                divider.render(painter, QPoint(), QRegion(), QWidget.RenderFlag(0))
+                painter.end()
+                for x in (0, divider.width() // 2, divider.width() - 1):
+                    pixel = QColor(canvas.pixel(x, 0))
+                    for actual, wanted in zip((pixel.red(), pixel.green(), pixel.blue()), expected):
+                        self.assertAlmostEqual(actual, wanted, delta=2, msg=f"{type(panel).__name__} in {mode} at x={x}")
+                panel.hide()
+
     def test_plain_and_rich_log_selection_remains_readable_when_unfocused(self):
         compat = self.widget(CompatPanel())
         with patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=[]):
@@ -446,7 +491,13 @@ class PanelReadabilityChecks(unittest.TestCase):
                 view.ensurePolished()
                 for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
                     foreground = view.palette().color(group, QPalette.ColorRole.HighlightedText).name()
-                    background = view.palette().color(group, QPalette.ColorRole.Highlight).name()
+                    # The selection is translucent too, so what the text sits on is the mix.
+                    tint = view.palette().color(group, QPalette.ColorRole.Highlight)
+                    under = QColor(glass_worst(mode)["reading"])
+                    share = tint.alphaF()
+                    background = QColor(round(tint.red() * share + under.red() * (1 - share)),
+                                        round(tint.green() * share + under.green() * (1 - share)),
+                                        round(tint.blue() * share + under.blue() * (1 - share))).name()
                     self.assert_readable(foreground, background)
 
 

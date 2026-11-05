@@ -1033,8 +1033,9 @@ class TerminalPanel(QWidget):
         return themed_terminal_colors(theme_mode)
 
     def _apply_panel_theme(self, theme_mode: str) -> None:
-        from main.qt.theme import get_palette
+        from main.qt.theme import get_palette, glass_tokens
         pal = get_palette(theme_mode)
+        glass = glass_tokens(theme_mode)
         bg_mid = pal.get("BG_MID", "#111620")
         bg_dark = pal.get("BG_DARK", "#0e131b")
         bg_darkest = pal.get("BG_DARKEST", "#0a0e14")
@@ -1047,21 +1048,21 @@ class TerminalPanel(QWidget):
         text_bright = pal.get("TEXT_BRIGHT", "#ffffff")
 
         if hasattr(self, "_header") and self._header:
-            self._header.setStyleSheet(f"QFrame#terminal-header {{ background: {bg_dark}; border-bottom: 1px solid {border}; }}")
+            self._header.setStyleSheet("QFrame#terminal-header { background: transparent; border: none; }")
 
         if hasattr(self, "_tab_bar") and self._tab_bar:
             self._tab_bar.setStyleSheet(f"""
                 QTabBar {{ background: transparent; border: none; }}
                 QTabBar::tab {{
-                    background: {bg_dark}; color: {text_dim}; border: 1px solid {border};
-                    border-radius: 3px; padding: 2px 7px; font-family: Consolas, 'Segoe UI', monospace;
+                    background: {glass['button']}; color: {text}; border: 1px solid {glass['rim']};
+                    border-radius: 9px; padding: 2px 7px; font-family: Consolas, 'Segoe UI', monospace;
                     font-size: 11px; font-weight: 600; margin: 0 4px 0 0; min-height: 18px;
                 }}
                 QTabBar::tab:selected {{
-                    background: {bg_hover}; color: {cyan}; border: 1px solid {cyan}; border-bottom: 1px solid {cyan};
+                    background: {glass['chip']}; color: {glass['chip_ink']}; border: 1px solid {glass['chip']};
                 }}
                 QTabBar::tab:hover:!selected {{
-                    background: {bg_hover}; color: {text_bright};
+                    background: {glass['button_hover']}; color: {text_bright};
                 }}
                 QTabBar::close-button {{
                     subcontrol-position: right; margin-left: 5px;
@@ -1070,11 +1071,11 @@ class TerminalPanel(QWidget):
                     background: #e74c3c; border-radius: 2px;
                 }}
                 QTabBar QToolButton {{
-                    background: {bg_dark}; color: {text};
-                    border: 1px solid {border}; border-radius: 3px; padding: 0;
+                    background: {glass['button']}; color: {text};
+                    border: 1px solid {glass['rim']}; border-radius: 7px; padding: 0;
                 }}
                 QTabBar QToolButton:hover {{
-                    background: {bg_hover}; color: {text_bright};
+                    background: {glass['button_hover']}; color: {text_bright};
                     border-color: {border_lit};
                 }}
                 QTabBar QToolButton:disabled {{ color: {text_dim}; }}
@@ -1084,11 +1085,11 @@ class TerminalPanel(QWidget):
         if hasattr(self, "_btn_add_tab") and self._btn_add_tab:
             self._btn_add_tab.setStyleSheet(f"""
                 QToolButton#btn-terminal-add {{
-                    background: {bg_dark}; color: {text_dim}; border: 1px solid {border};
-                    border-radius: 3px; font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 600; padding: 0;
+                    background: {glass['button']}; color: {text}; border: 1px solid {glass['rim']};
+                    border-radius: 9px; font-family: 'Segoe UI', sans-serif; font-size: 16px; font-weight: 600; padding: 0;
                 }}
                 QToolButton#btn-terminal-add:hover {{
-                    background: {bg_hover}; color: {cyan}; border-color: {cyan};
+                    background: {glass['button_hover']}; color: {text_bright}; border-color: {cyan};
                 }}
                 QToolButton#btn-terminal-add::menu-indicator {{ image: none; width: 0; height: 0; }}
             """)
@@ -1105,39 +1106,39 @@ class TerminalPanel(QWidget):
 
         btn_act_style = f"""
             QPushButton:enabled {{
-                background: {bg_dark}; color: {text}; font-size: 11px; font-weight: 600;
-                border: 1px solid {border}; border-radius: 3px; padding: 2px 8px;
+                background: {glass['button']}; color: {text_bright}; font-size: 11px; font-weight: 600;
+                border: 1px solid {glass['button_rim']}; border-radius: 9px; padding: 2px 8px;
             }}
-            QPushButton:enabled:hover {{ background: {bg_hover}; color: {text_bright}; border-color: {border_lit}; }}
+            QPushButton:enabled:hover {{ background: {glass['button_hover']}; color: {text_bright}; border-color: {border_lit}; }}
             QPushButton:disabled {{
-                background: {bg_darkest}; color: {text_dim}; font-size: 11px;
-                border: 1px solid {border}; border-radius: 3px; padding: 2px 8px;
+                background: {glass['button_disabled']}; color: {glass['disabled_ink']}; font-size: 11px;
+                border: 1px solid {glass['rim']}; border-radius: 9px; padding: 2px 8px;
             }}
         """
         if hasattr(self, "_btn_clear") and self._btn_clear:
             self._btn_clear.setStyleSheet(btn_act_style)
 
         if hasattr(self, "_loader_card") and self._loader_card:
-            self._loader_card.setStyleSheet(f"QFrame {{ background: {bg_darkest}; border: none; }}")
+            self._loader_card.setStyleSheet(f"QFrame {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
         if hasattr(self, "_empty_card") and self._empty_card:
-            self._empty_card.setStyleSheet(f"QFrame {{ background: {bg_darkest}; border: none; }}")
+            self._empty_card.setStyleSheet(f"QFrame {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
         if hasattr(self, "_embed_container") and self._embed_container:
             self._embed_container.setStyleSheet(f"background: {bg_darkest};")
         if hasattr(self, "_btn_open_pwsh") and self._btn_open_pwsh:
             self._btn_open_pwsh.setStyleSheet(f"""
                 QPushButton#btn-open-pwsh {{
-                    background: {bg_dark}; color: {cyan}; font-size: 11px; font-weight: 600;
-                    border: 1px solid {border}; border-radius: 4px; padding: 4px 14px;
+                    background: {glass['button']}; color: {text_bright}; font-size: 11px; font-weight: 600;
+                    border: 1px solid {glass['button_rim']}; border-radius: 10px; padding: 4px 14px;
                 }}
-                QPushButton#btn-open-pwsh:hover {{ background: {bg_hover}; color: {text_bright}; border-color: {cyan}; }}
+                QPushButton#btn-open-pwsh:hover {{ background: {glass['button_hover']}; color: {text_bright}; border-color: {cyan}; }}
             """)
         if hasattr(self, "_btn_open_cmd") and self._btn_open_cmd:
             self._btn_open_cmd.setStyleSheet(f"""
                 QPushButton#btn-open-cmd {{
-                    background: {bg_dark}; color: {text}; font-size: 11px; font-weight: 600;
-                    border: 1px solid {border}; border-radius: 4px; padding: 4px 14px;
+                    background: {glass['button']}; color: {text_bright}; font-size: 11px; font-weight: 600;
+                    border: 1px solid {glass['button_rim']}; border-radius: 10px; padding: 4px 14px;
                 }}
-                QPushButton#btn-open-cmd:hover {{ background: {bg_hover}; color: {text_bright}; border-color: {border_lit}; }}
+                QPushButton#btn-open-cmd:hover {{ background: {glass['button_hover']}; color: {text_bright}; border-color: {border_lit}; }}
             """)
 
     def apply_theme(self, theme_name: str) -> None:

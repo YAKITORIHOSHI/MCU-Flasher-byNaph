@@ -25,7 +25,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
-from main.core.log_colors import themed_terminal_colors
+from main.core.log_colors import glass_terminal_colors, themed_terminal_colors
+from main.qt.glass import page_surface
 from main.qt.garbage_collection import install_gui_garbage_collector
 
 APP = QApplication.instance() or QApplication([])
@@ -176,7 +177,8 @@ class EmbeddedViewportChecks(unittest.TestCase):
         baseline = self.state("return {starts:fixtureStarts, first:fixtureTerminal.buffer.active.getLine(0).translateToString(true), selection:fixtureTerminal.getSelection()};")
         self.assertTrue(baseline["selection"])
         for mode in ("default", "light", "solarized_dark", "default"):
-            theme = themed_terminal_colors(mode)
+            native = name == "windows-terminal"
+            theme = themed_terminal_colors(mode) if native else glass_terminal_colors(mode)
             for width, height, hidden in ((960, 540, False), (420, 260, False), (760, 420, True)):
                 with self.subTest(page=name, mode=mode, size=(width, height), hidden=hidden):
                     if hidden:
@@ -185,6 +187,7 @@ class EmbeddedViewportChecks(unittest.TestCase):
                     if name == "windows-terminal":
                         self.js(f"applyTheme({json.dumps(theme)}); true")
                     else:
+                        self.js(f"setGlassSurface({json.dumps(page_surface(mode))}); true")
                         self.js(f"{configure}({json.dumps(theme)},14,2000); true")
                     if hidden:
                         self.host.show()
@@ -201,6 +204,8 @@ class EmbeddedViewportChecks(unittest.TestCase):
                         host:rect(host),screen:rect(screen), rows:term.rows,cols:term.cols,
                         scrollbar:viewport.offsetWidth-viewport.clientWidth,
                         backgrounds:[document.documentElement,document.body,host].map(n=>getComputedStyle(n).backgroundColor),
+                        wellBackground:getComputedStyle(host).backgroundColor,
+                        viewportBackground:getComputedStyle(viewport).backgroundColor,
                         expected:(()=>{const n=document.createElement('i');n.style.color=%s;
                           document.body.append(n);const color=getComputedStyle(n).color;n.remove();return color;})(),
                         same:term===originalTerminal,starts:fixtureStarts,input:fixtureInput.length,
@@ -214,8 +219,15 @@ class EmbeddedViewportChecks(unittest.TestCase):
                     self.assertEqual(data["first"], baseline["first"], "Retained output history must survive display changes")
                     self.assertEqual(data["selection"], baseline["selection"], "The selected output must survive display changes")
                     self.assertAlmostEqual(data["dpr"], self.view.devicePixelRatioF(), delta=.01)
-                    for background in data["backgrounds"]:
-                        self.assertEqual(background, data["expected"], "All terminal surfaces must follow the active theme")
+                    if native:
+                        # A native child window has nothing behind it to show.
+                        for background in data["backgrounds"]:
+                            self.assertEqual(background, data["expected"], "All terminal surfaces must follow the active theme")
+                    else:
+                        surface = page_surface(mode)
+                        self.assertEqual(data["wellBackground"].rpartition(",")[0], surface["reading"].rpartition(",")[0],
+                                         "The well follows the active theme")
+                        self.assertTrue(data["viewportBackground"].endswith(", 0)"), "xterm must not cover the glass")
                     host, screen = data["host"], data["screen"]
                     self.assertAlmostEqual(host["width"], data["viewport"]["width"], delta=1)
                     self.assertAlmostEqual(host["height"], data["viewport"]["height"], delta=1)
@@ -294,9 +306,11 @@ class EmbeddedViewportChecks(unittest.TestCase):
                 QTest.qWait(80)
                 data = self.state("""
                   const host=document.getElementById('editor-container'),
-                    r=host.getBoundingClientRect(),layout=editorInstance.getLayoutInfo();
+                    r=host.getBoundingClientRect(),layout=editorInstance.getLayoutInfo(),
+                    anchor=document.getElementById('monaco-anchor').getBoundingClientRect();
                   return {dpr:devicePixelRatio,viewport:{width:innerWidth,height:innerHeight},
                     host:{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom},
+                    anchor:{width:anchor.width,height:anchor.height},
                     layout:{width:layout.width,height:layout.height},
                     same:editorInstance.getModel()===fixtureModel,content:fixtureModel.getValue(),
                     version:fixtureModel.getAlternativeVersionId(),tab:fixtureTab.isConnected,
@@ -311,11 +325,18 @@ class EmbeddedViewportChecks(unittest.TestCase):
                 self.assertEqual(data["version"], self.js("fixtureVersion"))
                 self.assertTrue(data["tab"] and data["dirty"])
                 self.assertEqual(data["selection"], "untouch")
-                self.assertAlmostEqual(data["host"]["right"], data["viewport"]["width"], delta=1)
-                self.assertAlmostEqual(data["host"]["bottom"], data["viewport"]["height"], delta=1)
-                self.assertAlmostEqual(data["layout"]["width"], data["host"]["width"], delta=1)
-                self.assertAlmostEqual(data["layout"]["height"], data["host"]["height"], delta=1)
-                self.assertEqual(data["background"], data["editorBackground"])
+                # The well sits on the page's sheet, with the code a little way inside the well.
+                self.assertLess(data["host"]["right"], data["viewport"]["width"])
+                self.assertLessEqual(data["viewport"]["width"] - data["host"]["right"], 8)
+                self.assertLess(data["host"]["bottom"], data["viewport"]["height"])
+                self.assertLessEqual(data["viewport"]["height"] - data["host"]["bottom"], 8)
+                self.assertAlmostEqual(data["layout"]["width"], data["anchor"]["width"], delta=1)
+                self.assertAlmostEqual(data["layout"]["height"], data["anchor"]["height"], delta=1)
+                for axis in ("width", "height"):
+                    self.assertGreaterEqual(data["host"][axis] - data["anchor"][axis], 4)
+                    self.assertLessEqual(data["host"][axis] - data["anchor"][axis], 15)
+                self.assertEqual(data["editorBackground"], "rgba(0, 0, 0, 0)", "Monaco must not cover the glass")
+                self.assertNotEqual(data["background"], data["editorBackground"], "The well holds the smoke")
                 MEASUREMENTS.append({"page":"index.html", "mode":mode, **data})
                 if width == 420:
                     self.capture(f"editor-{mode}.png")

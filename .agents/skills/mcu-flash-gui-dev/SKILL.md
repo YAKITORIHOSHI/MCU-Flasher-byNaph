@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, the PySide6 Library and Board Browser, theme-matched cold editor loading, the assistant loading screen, steady tabs, action readiness, incremental builds and dedicated reset reuse, responsive layouts, Ghost Sketch saves, safe shutdown, Bootstrap performance, Linux Mint, Fedora and macOS host adapters, native Rust preview, embedded terminals and launchers. Use for app changes and platform verification; firmware work follows sketch skills."
+description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, the PySide6 Library and Board Browser, theme-matched cold editor loading, the assistant loading screen, steady tabs, real glass surfaces, Windows taskbar identity, interface size, action readiness, incremental builds and dedicated reset reuse, responsive layouts, Ghost Sketch saves, safe shutdown, Bootstrap performance, Linux Mint, Fedora and macOS host adapters, native Rust preview, embedded terminals and launchers. Use for app changes and platform verification; firmware work follows sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -74,10 +74,10 @@ launcher entry and executable mode.
 
 Editor syntax adapts the pinned official Arduino Light/Dark colors documented
 in `src/editor/ARDUINO_PALETTE.md`, including explicit small-text contrast changes.
-Page/host/Monaco reading surfaces use the native theme's BG_DARKEST token;
+Monaco paints nothing over the page's smoked well, and inks hold 4.5:1 at its hardest point;
 Solarized retains compatible Dark syntax. Preserve
 chosen font family/size, dirty models, undo, tab order, focus and selection;
-native page fallback, HTML host and Monaco must agree on the reading background.
+the native page fallback stays the theme's BG_DARKEST until the glass paints.
 Pass initial theme, font and resource options before bundle execution. Share one
 initial project manifest and one project-load promise across model loading,
 path mapping and font setup. Save before Compile/Upload must await model load
@@ -810,7 +810,7 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   to the list rather than stretching its header. Check the real project selector
   Cloud tab as well as the standalone dialog with long names and compact sizes.
   Keep the Cloud host/scroll viewport/content transparent over the owner's glass;
-  retain opaque card/field/list reading surfaces and sync the standalone backdrop
+  keep card/field/list reading surfaces on glass tokens and sync the standalone backdrop
   palette with the panel when themes change.
   Push/Pull are explicit, with ETag/revision conflict handling,
   account/provider link validation, root UTF-8 source boundaries and bounded
@@ -1190,6 +1190,77 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
 
 ---
 
+## Glass, lines and interface size
+
+Glass needs something to look through. Each theme has an out-of-focus circuit board in
+`src/assets/glass/`: `<theme>.png` for what shows between panes and `<theme>-frosted.png` for what
+shows through them. `direct/render_glass_scenes.py` paints a sharp board and defocuses it in linear
+light, so highlights bloom and LEDs land as discs, which is what stops it reading as a gradient. Its
+hues come from that theme's palette; light varies, not color. The application only loads the images.
+
+`GlassScene` composes one cached pixmap per window: the scene, every pane's shadow, then for each
+pane the frosted copy clipped to its rounded shape and its tint, reflection and rim. A repaint is one
+blit. A live resize stretches what it has until the burst settles; moving only panes recomposes, and
+a theme or monitor change redraws at once. `paint_scene(window, panes)` paints it from `paintEvent`.
+`veiled=True` (`GlassDialog`, `GlassWorkspace`) makes a window one smoked sheet for content without
+panes. `bar_pane`, `pane_for`, `pane_radius` and `pane_gutters` describe the panes.
+
+Everything is translucent except what has nothing behind it. Reading surfaces use `glass_tokens`'
+`reading`, with `QAbstractScrollArea > #qt_scrollarea_viewport` kept transparent or the frame and its
+viewport each apply the smoke and leave a square block inside the rounded frame. A QWebEngineView
+cannot show the window: a translucent page shows the clear color. So `index.html`, `terminal.html`
+and `opencode.html` paint the same two images, and `PageBackdrop` sends the numbers that line them up
+whenever the view or anything above it moves. Keep their CSS values equal to `glass_tokens`. Monaco's
+`editor.background` and `editorGutter.background` are `#00000000` and xterm uses `allowTransparency`
+with an alpha-zero `background`. A cover over a page calls `paint_cover`. Native child windows
+(Windows terminal and assistant), popups and selected chips stay solid.
+
+The scene can land under any surface, so inks are chosen against each surface's hardest point:
+`glass_worst` in `main/core/theme.py`. `themed_log_colors(mode)` is for reading surfaces and
+`glass_inks(mode)` for text straight on a sheet; both move a color clear of its surface when the
+theme's own does not read there, keeping its hue. Dim ink is for wells only. If the scene or a tint
+changes, `direct/verify_glass.py` recomputes the hardest points from the real images and fails until
+`_GLASS_WORST` agrees. It also measures rendered pixels on each surface. Hold the frosted copy's light
+with `frost_knee`/`frost_limit` rather than dimming a text color. Icon ink must not trust a gradient
+or translucent brush: `_ink` returns the text color for those. A selected tab's icon comes from
+`tab_icon`, which gives the chip its own ink through `QIcon.State.On`.
+
+Nothing may leave its rounded sheet. A QToolBar ignores its stylesheet padding and its layout margins
+must stay equal, so the clearance lives on the logo and right container and is counted once in the
+toolbar's budget. `direct/verify_monitor_matrix.py` checks visible corners of every control against
+the rounded shape on every emulated monitor. A stylesheet rule selecting from an ancestor property,
+such as `compactPane`, needs the child polished as well, or it reports stale measurements.
+
+All hosts use the Fusion base style with the stylesheet over it. Native styles measure controls
+differently and fill in whatever a stylesheet leaves out, which is where stray lines come from:
+Windows 11 drew a plain QFrame line in the text color, antialiased across two rows. Style every
+QFrame line with its own `background` and `border: none` rule. Scope a widget-level stylesheet
+with a selector whenever it has a one-sided border, or each child QLabel draws its own partial
+line. Call `tabBar().setDrawBase(False)` after `setDocumentMode(True)`, which turns it back on.
+
+Chromium's `--enable-low-end-device-mode` makes `SysInfo::AmountOfTotalPhysicalMemory` report
+512 MB, which passes the check in `layer_tree_settings.cc` that selects RGBA4444 tiles. Software
+raster ignores that, so no `--disable-gpu` fixture can see it. On a PC with a GPU, `#18283b`
+became `(17,34,51)`, navy `#101b2a` became teal `(17,34,34)` and the tab row's gradient dithered
+into stripes with steps of exactly 17. Always pair the mode with `--disable-rgba-4444-textures`.
+
+A process-wide AppUserModelID only groups windows. With no shortcut carrying that ID, Windows 11
+can show its generic icon while the title bar is right. `main/qt/taskbar.py` stores
+`RelaunchIconResource` and the relaunch pair on the window with the window's own ID last, because
+setting that ID is what tells the taskbar to read them again, and repeats this 500 and 2000 ms
+later for first launches. Windows documents that the properties must be removed before the window
+closes, so `hideEvent` clears them. Use `showEvent`/`hideEvent` overrides, not an event filter:
+a dying wrapper skips its override, while a separate filter object stays callable in `~QWidget`.
+Keep the literals in `launcher.py` and `mcu_flash_gui.py` equal to `APP_USER_MODEL_ID`.
+
+`ui_metrics.interface_scale` picks 1.25 or 1.125 where a large logical desktop has physically small
+pixels, .875 for a small logical desktop at 150% or more, and 1.0 otherwise, including when a
+monitor reports nonsense. Qt reads `QT_SCALE_FACTOR` once while the application is created and a
+monitor can only be measured afterwards, so Automatic applies at the next launch. The variable is
+removed right after creation so children decide for themselves, and an existing value always wins:
+verifiers emulate monitors with it. The result never takes an interface below one device pixel per
+logical pixel, because Chromium underpaints there.
+
 ## Core Architecture Overview
 
 Zephyr compatibility uses `src/modules/zephyr_compat.py` and its app-owned CMake
@@ -1224,7 +1295,9 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `terminal_panel.py`: Multi-session integrated terminal panel supporting PowerShell (`pwsh`) and CMD tabs.
      - `posix_terminal_panel.py`: Native Linux multi-session Bash PTYs.
      - `posix_ai_panel.py`: Native Linux dedicated OpenCode TUI and protected assistant PTY.
-     - `glass.py`: Static workspace backdrop and keyboard focus for tool tabs; no board banner.
+     - `taskbar.py`: Per-window shell properties that name the taskbar icon on Windows.
+     - `interface_size.py`: Whole-window scale through Qt's own factor.
+     - `glass.py`: The cached scene and frosted sheets behind translucent surfaces, page alignment, and keyboard focus for tool tabs; no board banner.
      - `icons.py`: Original theme-aware circuit-chip and action vectors without emoji font dependencies.
      - `setup_components.py`: Cached glass cards, vector glyphs, status chips and compact determinate progress rows.
      - `ai_panel.py`: Collapsible OpenCode AI assistant side panel.
@@ -1293,7 +1366,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    **Project selection and cancellation contract**
    - Backend startup has no bound sketch until explicit project selection or a supplied project path. Never create or default to `Documents/example`, or bind a remembered folder before the picker. Keep AI review/watchers unbound, initial project paths empty and caches untouched until selection. The picker defaults to `QStandardPaths.DocumentsLocation` with `Path.home()/Documents` as its empty-location fallback; explicit initial/workspace selections remain valid. Verify absent and existing examples, remembered paths and redirected Documents with isolated `direct/verify_projects.py` fixtures on both hosts.
    - Windows foreground retries belong to the selector, stop on hide and skip a different active modal widget. Never re-show a dismissed native handle or focus over a project/dirty-buffer prompt; verify cancellation and nested prompts in `direct/verify_projects.py`.
-   - Project selection uses cached static glass cards/header in every palette, four compact tabs, opaque reading surfaces, pinned actions and scrolling/reflow on short screens. Destination and dirty-buffer prompts retain native semantics over the same glass. Verify physical monitor-frame fit and padded text-line heights at 100–200%; preserve selection/input/focus through theme and sizing changes. No idle blur/animation loop.
+   - Project selection uses cached static glass cards/header in every palette, four compact tabs, smoked reading surfaces, pinned actions and scrolling/reflow on short screens. Destination and dirty-buffer prompts retain native semantics over the same glass. Verify physical monitor-frame fit and padded text-line heights at 100–200%; preserve selection/input/focus through theme and sizing changes. No idle blur/animation loop.
    - Existing project Browse starts at `QStandardPaths.DocumentsLocation` on every click, with `Path.home()/Documents` only as an empty-location fallback. Do not reuse the active sketch, edited path or last native-dialog folder as its start. Preserve chosen-path previews and cancellation; the New Project location picker keeps its own behavior. Verify startup/workspace, redirected Documents and repeated clicks with isolated `direct/verify_projects.py` fixtures.
    - Existing-project previews list the shallow root files and highlight the `.ino` that owns `setup()` and `loop()`; show split ownership by filename. Use a thin, theme-colored rail to link markers for the MAIN sketch, entry-point contributors and supporting files only when multiple files are listed. Keep empty and single-file previews compact at the top, directly beneath the path field, with spare height below. Let multi-file lists fill the available preview space, serve as the normal project summary, and reserve supplemental text for errors and scan warnings. Keep directory enumeration and source reads on a bounded worker, discard stale results after path changes, and preserve the selected file as the initial editor tab. Verify empty, single-file and multi-file states, markers, list sizing and warning visibility with `direct/verify_projects.py`; capture only under `temp/`.
    - Existing-project opening accepts only a selected sketch root with a non-empty top-level `.ino`, `.cpp`, or `.c` source. Reject the Documents root and folders without such a source before window-choice or dirty-buffer prompts, ownership claims, history, metadata, cache, or child-window launch. Never scaffold an existing folder; only New Project creates starter sources. Keep the probe shallow and bounded for network/removable storage, and verify current-window and new-window rejection with `direct/verify_projects.py`.
@@ -1411,7 +1484,9 @@ MCU Flasher by Naph/
 │   │   ├── posix_terminal_panel.py  # Native Linux multi-session Bash PTYs
 │   │   ├── posix_ai_panel.py        # Native Linux protected OpenCode assistant PTY
 │   │   ├── assistant_loader.py      # Loading screen covering the assistant until it has painted
-│   │   ├── glass.py                 # Static workspace and focused tool-tab navigation
+│   │   ├── glass.py                 # The scene behind glass surfaces, frosted sheets, and focused tool tabs
+│   │   ├── taskbar.py               # Windows taskbar icon and identity for top-level windows
+│   │   ├── interface_size.py        # Per-monitor interface scale, chosen or automatic
 │   │   ├── icons.py                 # Theme-aware vector icons
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel
 │   │   ├── compat_panel.py          # Compatible boards viewer
@@ -1652,7 +1727,7 @@ MCU Flasher by Naph/
   renderer assertion followed by `os._exit` does not establish normal shutdown.
 - Switching tool or source tabs moves nothing outside that tool. `_on_bottom_tab_changed` must not run the settle pass. `PrimaryToolbar.set_responsive_width` alone owns that bar's insets: a second owner in `main_window.py` once moved the whole workspace 8 pixels on every switch. A state must never change a tab's box, font weight or label position: unselected tabs reserve the selected tab's 2px bottom border, and the active source tab uses a text stroke instead of a heavier font, which widened it by 11 pixels. `_balance_spacers` must invalidate the toolbar layout, because Qt ignores size changes on widgets hidden by native overflow and the actions would stay hidden after narrowing a very wide window. Verify with `direct/verify_monitor_matrix.py`; a final geometry check cannot see these bumps, so it counts Move and Resize events.
 - `direct/verify_monitor_matrix.py` runs each monitor in a fresh process through `QT_QPA_PLATFORM=offscreen:configfile=...` and `QT_SCALE_FACTOR`, so `QScreen` geometry is real rather than a patched `work_area`. Run `--all` for all 45 monitors and `--render-dir temp/...` to look at them. It is not native window-manager evidence.
-- `ui_metrics.workspace_size` and `workspace_minimum_width` hold the sizing policy: fill screens under 1280×800, keep 1440×920 on ordinary desktops, grow to at most 2560×1440, and cap the half-monitor minimum at 960. Under 500 logical pixels high, Controls drops its captions to one row. The assistant stacks under the workspace when `_ai_panel_stacks` says side by side would crush both.
+- `ui_metrics.workspace_size` and `workspace_minimum_width` hold the sizing policy: fill screens under 1280×800, keep 1440×920 on ordinary desktops, grow to at most 2560×1440, and cap the half-monitor minimum at 960. Under 800 logical pixels high, Controls drops its captions to one row, the inline Upload speed caption yields first, and the action buttons move to Options before the row would ever wrap. The editor takes all spare height; tools start at about 30% of the window, between 170 and 420 pixels. The assistant stacks under the workspace when `_ai_panel_stacks` says side by side would crush both.
 - Main windows permit a complete frame of half the current monitor's available width in Qt logical pixels, capped at 960 on wider monitors so they can also tile in thirds. Subtract measured horizontal native borders from the client minimum, using native QWindow frame margins when QWidget frame geometry has not settled. Recalculate after show, monitor and window-state changes without polling or multiplying DPI again. Allow wider resizing and normal maximization, including saved maximized state. Verify decorated windows with `direct/verify_window_alignment.py` at five scales, including native Wayland and xcb separately; client-only or frameless fixtures cannot qualify desktop snapping. Wayland global positioning is compositor-owned, so do not claim exact left/right placement from ignored move calls. Detached editor and explicit dialog sizing keep their own contracts.
 - Verify screen changes and 100/125/150/175/200% scale in fresh processes with `direct/verify_responsive.py`. Couple physical screen dimensions with each scale and taskbar/work-area reservation; convert once to Qt logical pixels. Include half-monitor and full-width windows, portrait and short laptop areas, and chosen content fonts. Assert effective rendered fonts, complete button visibility through ancestors and a complete padded text line. Keep the same hardware-free persistence mocks as the controls verifier. Check full baud digits beside combo padding/arrows and footer visibility. Narrow, short Controls use fewer rows; very short windows retain Timestamps/Skip Compile in Options. Serial Options retains collapsed display/Copy/Clear actions, and all layouts restore when space returns. Reserve Build/Serial output using the document's chosen font, reading margin and scrollbar/frame chrome, and refit after font changes.
 - Short-screen pane budgets use the tallest tool's minimum size hint, never the active tool's, so switching tools cannot move the divider. Hidden pages stay at the pane's size through `_size_hidden_tool_pages`, because `QStackedWidget` sizes only the current one and a stale page reports a stale minimum. Keep log views shrinkable while preserving headers and serial send controls. Check every tool tab in the runtime preview. Mock terminal session creation for layout probes; real PTY checks belong in `direct/verify_terminal.py`.

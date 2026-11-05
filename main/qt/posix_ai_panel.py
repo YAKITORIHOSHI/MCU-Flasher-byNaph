@@ -8,13 +8,15 @@ import threading
 import time
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, QSize, Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout, QSizePolicy
 
 from main.core.theme import Theme, get_palette
 from main.qt.assistant_loader import AssistantLoader
-from main.qt.log_colors import themed_terminal_colors
+from main.core.log_colors import glass_inks, glass_terminal_colors
+from main.qt.glass import PageBackdrop, page_surface
 from main.qt.icons import icon
 from main.qt.posix_terminal_panel import PtySession
 from main.platforms.ubuntu_opencode import find_opencode_cli, opencode_argv, OpenCodeRestartPolicy
@@ -24,7 +26,7 @@ from src.modules.runtime_resources import performance_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSISTANT_ASSETS = (
-    "src/editor/opencode.html", "src/editor/qwebchannel.js", "src/editor/assistant_readiness.js",
+    "src/editor/opencode.html", "src/editor/qwebchannel.js", "src/editor/assistant_readiness.js", "src/editor/glass_page.js",
     "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css",
     "src/assets/xterm/xterm-addon-fit.js",
 )
@@ -298,6 +300,9 @@ class PosixAIPanel(QWidget):
             return
         self._project_dir = cwd
         view = QWebEngineView(self._body)
+        view.page().setBackgroundColor(QColor(get_palette(self._theme)["BG_DARKEST"]))
+        self._backdrop = PageBackdrop(
+            view, lambda values: view.page().runJavaScript(f"window.setGlassBackdrop?.({json.dumps(values)})"))
         view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         session = OpenCodeSession(cwd, executable, view)
         channel = QWebChannel(view.page())
@@ -434,16 +439,19 @@ class PosixAIPanel(QWidget):
 
     def _configure_view(self):
         if self._view:
+            self._view.page().runJavaScript(f"window.setGlassSurface?.({json.dumps(page_surface(self._theme))})")
+            self._backdrop.forget()
             self._view.page().runJavaScript(
-                f"window.configureOpenCode?.({json.dumps(themed_terminal_colors(self._theme))}, "
+                f"window.configureOpenCode?.({json.dumps(glass_terminal_colors(self._theme))}, "
                 f"{self._font_size}, {performance_profile().terminal_scrollback})")
 
     def _apply_surfaces(self):
         palette = get_palette(self._theme)
-        self._header.setStyleSheet(f"QFrame#opencode-header {{ background: {palette['BG_DARK']}; border-bottom: 1px solid {palette['BORDER']}; }}")
-        self._title.setStyleSheet(f"color: {palette['CYAN']}; font-size: 11px; font-weight: 700;")
-        self._hide_button.setIcon(icon("close", palette['TEXT_DIM'], size=12))
-        ink = palette['GREEN' if self._state == "active" else 'RED' if self._state == "error" else 'TEXT_DIM']
+        self._header.setStyleSheet("QFrame#opencode-header { background: transparent; border: none; }")
+        inks = glass_inks(self._theme)
+        self._title.setStyleSheet(f"color: {inks['system']}; font-size: 11px; font-weight: 700;")
+        self._hide_button.setIcon(icon("close", palette['TEXT'], size=12))
+        ink = inks['success' if self._state == "active" else 'error' if self._state == "error" else 'normal']
         self._status_badge.setStyleSheet(f"color: {ink}; font-size: 10px; font-weight: 600;")
 
     def apply_theme(self, mode):

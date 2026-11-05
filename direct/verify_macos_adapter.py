@@ -335,7 +335,7 @@ class TerminalContainment(unittest.TestCase):
 class ControlStyle(unittest.TestCase):
     def test_macos_uses_fusion_so_the_glass_stylesheet_measures_correctly(self):
         source = (ROOT / "main/qt/theme.py").read_text(encoding="utf-8")
-        self.assertIn('"Fusion" if sys.platform == "darwin" else app.style()', source)
+        self.assertIn('NoFocusLineStyle("Fusion")', source)
 
 
 @unittest.skipIf(os.name == "nt", "Native Bash fixtures")

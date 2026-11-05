@@ -346,6 +346,14 @@ The shared interface now uses translucent surfaces, subtle gradients, rounded
 panels, portable vector icons, and responsive action menus. Board and serial
 selection stay in the Controls row, with no target-board banner. Source and
 tool tabs use individual glass surfaces with clear selection and keyboard focus.
+
+Every window sits on an out-of-focus macro of a circuit board in the theme's own colors. Bars,
+tabs and panes are frosted sheets over it, and code, logs and terminals are smoked glass with the
+scene showing through, dark enough that text keeps its contrast at the scene's brightest point. On
+Windows the embedded terminal and assistant are native windows, so they stay solid. **Settings >
+Appearance > Interface size** defaults to Automatic: it enlarges the interface on small
+high-resolution screens and large screens at a low display scale, and tightens it on small
+screens at a high display scale. It applies the next time a window opens.
 The editor and every tool pane extend to the central workspace edges, while
 controls and text retain their inner reading padding and splitters remain usable.
 Source tabs retain dirty indicators and drag ordering; arrow keys, Home and End
@@ -1382,7 +1390,9 @@ MCU Flasher by Naph/
 │   │   ├── posix_terminal_panel.py  # Native Linux multi-session Bash terminal
 │   │   ├── posix_ai_panel.py        # Native Linux protected OpenCode assistant session
 │   │   ├── assistant_loader.py      # Loading screen covering the assistant until it has painted
-│   │   ├── glass.py                 # Static workspace surface and focused tool-tab navigation
+│   │   ├── glass.py                 # The scene behind glass surfaces, frosted sheets, and focused tool tabs
+│   │   ├── taskbar.py               # Windows taskbar icon and identity for top-level windows
+│   │   ├── interface_size.py        # Per-monitor interface scale, chosen or automatic
 │   │   ├── icons.py                 # Theme-aware vector action icons
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel with session management
 │   │   ├── compat_panel.py          # Compatible boards and MCU pinout compatibility viewer
@@ -1973,7 +1983,9 @@ verification; board compilation/upload still requires separate target checks.
   - **`terminal_panel.py`**: Multi-session integrated terminal panel supporting PowerShell and CMD tabs.
   - **`posix_terminal_panel.py`**: Native Linux multi-session Bash PTYs using Qt WebEngine/xterm.js.
   - **`posix_ai_panel.py`**: Native Linux dedicated OpenCode TUI, one protected PTY, retained hide/reveal and bounded restart recovery.
-  - **`glass.py` / `icons.py`**: Static glass workspace, focused tool tabs and theme-aware vector icons.
+  - **`glass.py` / `icons.py`**: The out-of-focus scene behind every translucent surface, frosted sheets, focused tool tabs and theme-aware vector icons.
+  - **`taskbar.py`**: Names the application's icon to the Windows taskbar through per-window shell properties.
+  - **`interface_size.py`**: Scales the whole window for monitors whose display scale leaves it too small or too crowded.
   - **`detached_editor.py`**: Explicit editor window and themed attach placeholder; closing reattaches the same editor.
   - **`ai_panel.py`**: Collapsible OpenCode AI assistant side panel.
   - **`syntax_panel.py`**: Interactive AST syntax diagnostic tree with line jump navigation.

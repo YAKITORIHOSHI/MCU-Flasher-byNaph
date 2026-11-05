@@ -7,9 +7,11 @@ and
 at commit `615de517ffa5ae828b3109752316b2129363d00a`. It is an adaptation,
 not an exact reproduction or an official Arduino theme.
 
-Reading surfaces follow the native workspace's `Theme.PALETTES.BG_DARKEST`:
-Light `#f1f7fc`, Default `#101b2a` and Solarized `#001b22`. The native page,
-HTML/body, loading state, Monaco canvas and gutter use the same opaque color.
+The native page and HTML/body fall back to the workspace's `Theme.PALETTES.BG_DARKEST`:
+Light `#f1f7fc`, Default `#101b2a` and Solarized `#001b22`. Over that, the page paints its
+window's scene and a smoked well in `--reading`; Monaco's canvas and gutter are fully
+transparent. Every ink is judged at the well's hardest point, `glass_worst` in
+`main/core/theme.py`: Light `#edf2f7`, Default `#233345` and Solarized `#12343b`.
 Source tabs and scrollbars follow their corresponding native theme tokens.
 Theme and saved font size are supplied before the first editor construction;
 changing themes preserves the existing source models.
@@ -24,17 +26,16 @@ Arduino does not provide this Solarized adaptation.
 
 Small-text readability adjustments are explicit:
 
-| Role | Upstream Light | Adapted Light | Contrast on native Light |
-| --- | --- | --- | --- |
-| Comments | `#95a5a6cc` | `#657375` | 4.56:1 |
-| Types/storage | `#00979d` | `#007a7f` | 4.76:1 |
-| Functions | `#d35400` | `#bf4b00` | 4.61:1 |
-| Control keywords | `#728e00` | `#607700` | 4.70:1 |
-| Directives | `#9e846d` | `#826c59` | 4.59:1 |
+| Role | Upstream Light | Adapted Light | Upstream Dark | Adapted Dark |
+| --- | --- | --- | --- | --- |
+| Comments | `#95a5a6cc` | `#606d6f` | `#7f8c8d` | `#959fa0` |
+| Types/storage | `#00979d` | `#00767b` | `#0ca1a6` | `#22b0b5` |
+| Functions | `#d35400` | `#b74700` | `#f39c12` | `#f39c12` |
+| Control keywords | `#728e00` | `#5d7300` | `#c586c0` | `#c688c1` |
+| Directives | `#9e846d` | `#7b6654` | `#569cd6` | `#65a2d8` |
 
-Dark comments retain the adapted `#839091` rather than upstream `#7f8c8d`.
-The light type/function/control inks are slightly deeper than the earlier white-
-surface adaptation so they retain at least 4.5:1 contrast on native Light.
+These hold at least 4.5:1 at the hardest point of the smoked well in each theme, so they sit a
+little further from the surface than they would on a flat fill.
 Numeric literals use each palette's constant color, including inside
 preprocessor expressions, rather than the upstream dark numeric-preprocessor
 override. Normal punctuation replaces inherited rainbow bracket colors while
@@ -52,5 +53,5 @@ There is no whole-file scan per edit and no additional language service.
 `direct/verify_arduino_palette.py` checks actual rendered `.ino`, C and C++ spans
 in every theme, including comments/raw strings and C/C++ distinctions. Its
 in-memory fixture also checks retained dirty text, model versions, tab order,
-selection, font settings, focus and undo/redo, plus agreement between native
-page and HTML/editor backgrounds. Optional reports and captures stay in `temp/`.
+selection, font settings, focus and undo/redo, that Monaco paints nothing over the
+glass, and each ink's contrast at the well's hardest point. Optional reports and captures stay in `temp/`.

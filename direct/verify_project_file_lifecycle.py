@@ -85,8 +85,10 @@ class BackendFileChecks(unittest.TestCase):
             _bridge=SimpleNamespace(begin_renderer_load=lambda: "replacement-renderer"),
             _performance=SimpleNamespace(constrained=False),
             _view=SimpleNamespace(load=load))
+        backdrop = dict(width=1, height=1, x=0, y=0, radius=16)
         with patch("main.core.config.get_theme_mode", return_value="default"), \
-             patch("main.core.config.get_editor_font_size", return_value=14):
+             patch("main.core.config.get_editor_font_size", return_value=14), \
+             patch("main.qt.editor_panel.page_backdrop_for", return_value=backdrop):
             MonacoEditorPanel._load_editor(host)
         self.assertEqual(host._project_files_generation, 0)
         query = QUrlQuery(load.call_args.args[0])

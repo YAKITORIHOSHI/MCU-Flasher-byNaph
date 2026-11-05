@@ -394,10 +394,13 @@ class EditorReviewChecks(unittest.TestCase):
                 })()""")
                 self.assertAlmostEqual(geometry['app']['width'],geometry['width'],delta=1)
                 self.assertAlmostEqual(geometry['app']['bottom'],geometry['height'],delta=1)
-                self.assertAlmostEqual(geometry['host']['bottom'],geometry['height'],delta=1)
+                # The well sits on the sheet and the code inside the well, each with a small margin.
+                self.assertLess(geometry['host']['bottom'],geometry['height'])
+                self.assertLessEqual(geometry['height']-geometry['host']['bottom'],8)
                 for axis in ('width','height'):
-                    self.assertAlmostEqual(geometry['anchor'][axis],geometry['host'][axis],delta=1)
-                    self.assertAlmostEqual(geometry['monaco'][axis],geometry['host'][axis],delta=1)
+                    self.assertAlmostEqual(geometry['monaco'][axis],geometry['anchor'][axis],delta=1)
+                    self.assertGreaterEqual(geometry['host'][axis]-geometry['anchor'][axis],4)
+                    self.assertLessEqual(geometry['host'][axis]-geometry['anchor'][axis],15)
                 self.assertTrue(geometry['focus'],'Resizing must preserve Monaco keyboard focus')
                 self.assertEqual(self.js(state),baseline,'Sizing must retain model, dirty state, tab order and selection')
                 if CAPTURES and zoom == .75:

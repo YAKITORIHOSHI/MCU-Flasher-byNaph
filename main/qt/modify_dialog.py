@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QLineEdit, QComboBox,
     QMessageBox, QScrollArea, QFrame,
 )
+from main.qt.glass import GlassDialog
 from main.qt.icons import ActionButton as QPushButton, icon
 
 ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".hpp", ".c", ".txt"]
@@ -27,7 +28,7 @@ ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".hpp", ".c", ".txt"]
 
 from main.qt.icons import IconLabel as QLabel
 
-class ModifyFilesDialog(QDialog):
+class ModifyFilesDialog(GlassDialog):
     """
     Dialog for adding, renaming, and deleting files within the active sketch project.
     """
@@ -77,8 +78,11 @@ class ModifyFilesDialog(QDialog):
         if not theme_mode:
             from main.core.config import get_theme_mode
             theme_mode = get_theme_mode()
-        from main.qt.theme import get_palette
+        from main.core.log_colors import themed_log_colors
+        from main.qt.theme import get_palette, glass_tokens
         pal = get_palette(theme_mode)
+        glass = glass_tokens(theme_mode)
+        accent = themed_log_colors(theme_mode)["system"]
 
         bg_darkest = pal.get("BG_DARKEST", "#0d1117")
         bg_dark    = pal.get("BG_DARK", "#151922")
@@ -100,46 +104,44 @@ class ModifyFilesDialog(QDialog):
         btn_clear     = pal.get("BTN_CLEAR", "#2d3748")
         btn_clear_h   = pal.get("BTN_CLEAR_H", "#3a4a60")
 
-        self.setStyleSheet(f"QDialog {{ background-color: {bg_dark}; color: {text}; }} QLabel {{ color: {text}; }}")
-        self._header_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {cyan}; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
+        self.setStyleSheet(f"QDialog {{ color: {text}; }} QLabel {{ color: {text}; }}")
+        self._header_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {accent}; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
         self._path_lbl.setStyleSheet(f"font-size: 11px; color: {text_dim}; font-family: Consolas, monospace;")
 
         self._tabs.setStyleSheet(f"""
             QTabWidget::pane {{
-                border: 1px solid {border};
-                background: {bg_dark};
-                border-radius: 6px;
-                top: -1px;
+                border: 1px solid {glass['rim']};
+                background: {glass['glass']};
+                border-radius: 14px;
+                top: 4px;
             }}
             QTabBar::tab {{
-                background: {bg_mid};
-                color: {text_dim};
-                padding: 6px 16px;
+                background: {glass['button']};
+                color: {text};
+                padding: 5px 14px;
                 font-weight: 600;
                 font-size: 12px;
-                border: 1px solid {border};
-                border-bottom: none;
-                border-top-left-radius: 5px;
-                border-top-right-radius: 5px;
-                margin-right: 3px;
+                border: 1px solid {glass['rim']};
+                border-radius: 11px;
+                margin-right: 4px;
             }}
             QTabBar::tab:selected {{
-                background: {bg_dark};
-                color: {cyan};
-                border-bottom: 2px solid {cyan};
+                background: {glass['chip']};
+                color: {glass['chip_ink']};
+                border: 1px solid {glass['chip']};
             }}
             QTabBar::tab:hover:!selected {{
-                background: {bg_hover};
-                color: {text};
+                background: {glass['button_hover']};
+                color: {text_bright};
             }}
         """)
 
         input_style = f"""
             QLineEdit {{
-                background: {bg_darkest};
+                background: {glass['well']};
                 color: {text_bright};
-                border: 1px solid {border};
-                border-radius: 4px;
+                border: 1px solid {glass['rim']};
+                border-radius: 10px;
                 padding: 6px 10px;
                 font-family: Consolas, monospace;
                 font-size: 12px;
@@ -151,10 +153,10 @@ class ModifyFilesDialog(QDialog):
 
         combo_style = f"""
             QComboBox {{
-                background: {bg_darkest};
+                background: {glass['well']};
                 color: {text_bright};
-                border: 1px solid {border};
-                border-radius: 4px;
+                border: 1px solid {glass['rim']};
+                border-radius: 10px;
                 padding: 5px 8px;
                 font-family: Consolas, monospace;
                 font-size: 12px;
