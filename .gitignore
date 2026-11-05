@@ -63,6 +63,7 @@ src/platformio-mcu-gui-prebuilt.zip.part.parts/
 .idea/
 .claude/
 .opencode/
+.agents/teamwork/
 *.log
 *.lock
 $null
