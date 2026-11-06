@@ -60,6 +60,29 @@ def build_environment(base, core_dir, jobs) -> dict:
     return env
 
 
+def clear_object_cache(core_dir) -> tuple[int, int]:
+    """Delete every cached object for Clean and return (removed, could not remove)."""
+    removed = failed = 0
+    try:
+        folders = [entry.path for entry in os.scandir(object_cache_dir(core_dir)) if entry.is_dir(follow_symlinks=False)]
+    except OSError:
+        return 0, 0
+    for folder in folders:
+        try:
+            with os.scandir(folder) as files:
+                paths = [entry.path for entry in files if entry.is_file(follow_symlinks=False)]
+        except OSError:
+            failed += 1
+            continue
+        for path in paths:
+            try:
+                os.unlink(path)
+                removed += 1
+            except OSError:
+                failed += 1
+    return removed, failed
+
+
 def prune_object_cache(core_dir, *, limit=OBJECT_CACHE_LIMIT, target=None) -> int:
     """Evict least-recently-used objects; a miss only recompiles that one file."""
     cache = object_cache_dir(core_dir)

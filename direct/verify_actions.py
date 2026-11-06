@@ -97,6 +97,38 @@ class ActionChecks(unittest.TestCase):
         self.assertFalse(self.api.is_busy)
         self.api._stop_serial_monitor.assert_not_called()
 
+    def clean_with_object_cache(self):
+        from src.modules.package_jobs import PackageStoreBusy
+        from src.modules.platformio_build_env import clear_object_cache, object_cache_dir
+        core = self.root / "tool-store"
+        cached = object_cache_dir(core) / "ab" / "object"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b"object")
+        self.ns.update(clear_object_cache=clear_object_cache, PackageStoreBusy=PackageStoreBusy,
+                       package_core_directory=lambda: core,
+                       _refresh_platformio_core_environment=lambda _: (core, False))
+        return core, cached
+
+    def clean_result(self):
+        self.api.clean_cache()
+        self.run_worker()
+        logs = "\n".join(str(c.args[1].get("text")) for c in self.api.emit.call_args_list if c.args[0] == "console:log")
+        return [c.args[1] for c in self.api.emit.call_args_list if c.args[0] == "operation:phase"][-1]["success"], logs
+
+    def test_clean_empties_the_shared_object_cache(self):
+        _, cached = self.clean_with_object_cache()
+        success, logs = self.clean_result()
+        self.assertTrue(success, logs)
+        self.assertFalse(cached.exists())
+
+    def test_clean_keeps_the_object_cache_while_another_build_runs(self):
+        core, cached = self.clean_with_object_cache()
+        with package_store_lease(core, root=self.api._package_event_root):
+            success, logs = self.clean_result()
+        self.assertTrue(success, logs)
+        self.assertTrue(cached.exists())
+        self.assertIn("Another build is running", logs)
+
     def test_preparation_lease_rejects_reset_without_hardware_calls(self):
         with package_store_lease(self.root / "tool-store", "prepare", root=self.api._package_event_root):
             self.api.soft_reset()

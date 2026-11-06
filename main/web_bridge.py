@@ -33,9 +33,9 @@ for _p in (_project_root, _modules_path, _main_path):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from src.modules.package_jobs import guarded_package_operation, package_store_lease, package_core_directory
+from src.modules.package_jobs import PackageStoreBusy, guarded_package_operation, package_store_lease, package_core_directory
 from src.modules.platformio_build_env import (
-    RUN_OPTIONS as PLATFORMIO_RUN_OPTIONS, build_environment, prune_object_cache,
+    RUN_OPTIONS as PLATFORMIO_RUN_OPTIONS, build_environment, clear_object_cache, prune_object_cache,
 )
 from main.core.project_scaffold import create_project_scaffold
 from main.core.ghost_sketch import (
@@ -9585,6 +9585,24 @@ class MCUWebBackendAPI:
                             removed.append(label)
                         except Exception as exc:
                             failures.append(f"{label}: {exc}")
+
+                # Otherwise the next build restores every object it just lost. The cache
+                # is shared and named by hash, so it cannot be cleared per sketch. Other
+                # sketches keep their own build folders; a running build keeps its cache.
+                try:
+                    with package_store_lease(package_core_directory(), "prepare",
+                                             root=getattr(self, "_package_event_root", None)):
+                        core_dir, _ = _refresh_platformio_core_environment(SCRIPT_DIR)
+                        cleared, stuck = clear_object_cache(core_dir)
+                    if cleared:
+                        removed.append("shared compiled-file cache")
+                    if stuck:
+                        failures.append(f"shared compiled-file cache: {stuck} files are in use")
+                except PackageStoreBusy:
+                    self.emit("console:log", {
+                        "text": "  Another build is running, so the shared compiled-file cache was kept. Clean again when it finishes.",
+                        "tag": "warning", "newline": True,
+                    })
 
                 # Invalidate all in-memory caches and reset compile tracking
                 self._last_source_hash = ""
