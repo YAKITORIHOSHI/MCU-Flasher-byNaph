@@ -171,8 +171,9 @@ class QtResponsiveChecks(ControlChecks):
             painter.drawImage(0, 0, image)
             painter.end()
             image = flat
-            left, right = round((rect.left() + 34) * ratio), round((rect.right() - 8) * ratio)
-            # Inside the chip: its margins and rim would read as ink against what is around it.
+            # Inside the chip: its margins, rim and rounded corners would read as ink
+            # against what is around them.
+            left, right = round((rect.left() + 34) * ratio), round((rect.right() - 18) * ratio)
             top, bottom = round((rect.top() + 8) * ratio), round((rect.bottom() - 7) * ratio)
             rows = []
             for y in range(top, bottom):

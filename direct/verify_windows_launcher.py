@@ -266,7 +266,7 @@ def verify(report_dir: Path) -> dict:
         outcomes = []
         for index, (name, category, arguments) in enumerate(cases):
             result = capture(executable, script, arguments,
-                             fixture / f"result-{index}.json", unrelated)
+                             fixture / f"result-{index}.json", unrelated, expected_cwd=application)
             outcomes.append({"name": name, "category": category,
                              "qualificationRequired": category != "diagnostic", **result})
             print(f"{name}: {'PASS' if result['passed'] else 'FAIL'}", flush=True)

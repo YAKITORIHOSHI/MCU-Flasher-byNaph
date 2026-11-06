@@ -251,7 +251,7 @@ The first implementation milestone is the Phase 0 parity ledger plus the Phase 1
 
 Prepare effort estimates after that milestone exposes the editor-transfer, Windows testing, ARM64 toolchain, and secure-storage work. Full parity is a substantial application rewrite; a calendar promise before those findings would be unreliable.
 
-Implementation is underway on `codex/rust-tauri-migration`; production entry
+Implementation is underway on `main`; production entry
 points remain unchanged. At code checkpoint `4cf730b`, the local suite passes
 90 Rust tests, 40 frontend tests, 46 native webview checks and 23,909 differential
 cases, plus eight OS-lock, six native process and nine registration checks.
