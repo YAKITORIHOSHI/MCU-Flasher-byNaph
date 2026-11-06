@@ -172,6 +172,8 @@ class GhostWorkflowChecks(unittest.TestCase):
 
     def workspace(self, api):
         window = MCUMainWindow(api)
+        from main.core.theme import Theme
+        self.assertIn(f"color: {Theme.TEXT};", window._primary_toolbar.lbl_sketch.styleSheet())
         self.windows.append(window)
         window.resize(1300, 860)
         window.show()

@@ -189,6 +189,16 @@ class BuildLogRoutingChecks(unittest.TestCase):
         self.assertEqual(next(item["tag"] for item in records
                               if "tool-scons failed to initialize" in item["text"]), "error")
 
+    def test_object_cache_hits_are_hidden_but_failures_about_the_cache_are_not(self):
+        records = self.route(
+            "Retrieved `.pio/build/mcu_env/FrameworkArduino/Esp.cpp.o' from cache",
+            "Retrieved `.pio/build/mcu_env/firmware.bin' from cache",
+            "Error: could not read object from cache",
+        )
+        text = "\n".join(item["text"] for item in records)
+        self.assertNotIn("Retrieved", text)
+        self.assertIn("could not read object from cache", text)
+
     def test_progress_records_preserve_filename_case_across_hosts(self):
         records = self.route(
             r"Compiling .pio\build\native\src\Main.cpp.o",
