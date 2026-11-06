@@ -16,6 +16,10 @@
 **Build log.** A build that reuses compiled files no longer prints one `Retrieved ... from cache`
 line for each file. It prints one line saying how many files it reused.
 
+**Default boards on Linux and macOS.** Bootstrap now also downloads Arduino AVR and ESP32 for
+Resources, as Windows setup does. Compile and Upload never needed these folders, so a failed download
+only shows a warning. Existing installs get them with `bash direct/ubuntu/run.sh --repair`.
+
 **Readable text from the first frame.** The project name beside Project and other panel labels kept
 their dark startup colors until the theme was changed. They now use the theme's colors at startup,
 and the terminal loading labels and Modify status messages stay readable on every theme.

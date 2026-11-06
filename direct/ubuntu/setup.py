@@ -153,6 +153,8 @@ def main(argv=None) -> int:
                                  on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):
             subprocess.run(command, check=True, env=env, cwd=ROOT)
             finish_bootstrap(core)
+        from src.modules.default_board_folders import prepare_default_board_folders
+        prepare_default_board_folders(python, env=env)
         print(f"{label} runtime ready. Launch with: bash direct/ubuntu/run.sh")
         if args.launch:
             command = [str(python), str(ROOT / "mcu_flash_gui.py")]
