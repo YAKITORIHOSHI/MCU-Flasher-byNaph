@@ -78,6 +78,8 @@ def main(argv=None) -> int:
                                  on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains...")):
             subprocess.run(command, check=True, env=env, cwd=ROOT)
             finish_bootstrap(core)
+        from src.modules.default_board_folders import prepare_default_board_folders
+        prepare_default_board_folders(python, env=env)
         print("macOS runtime ready. Launch with: bash direct/macos/run.sh")
         return 0
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as exc:

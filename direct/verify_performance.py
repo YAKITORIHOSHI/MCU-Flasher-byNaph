@@ -50,6 +50,10 @@ def wait_until(predicate, timeout=3.0):
 class PerformanceChecks(unittest.TestCase):
     def setUp(self):
         self.config_patch = patch.object(config, "_load_raw_config", return_value={"shared": {}, "instances": {}})
+        # A plain dict saves as a whole file, so a fixture must never reach the user's settings.
+        write_patch = patch.object(config, "_write_raw_config", return_value=True)
+        write_patch.start()
+        self.addCleanup(write_patch.stop)
         self.config_patch.start()
         self.addCleanup(self.config_patch.stop)
 
