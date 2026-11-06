@@ -990,7 +990,8 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   and compare the pre-build signature before certification. Do not deserialize
   SCons databases as dependency receipts. Check staged/root sources and
   invalidate the selected receipt before rebuilding without removing other
-  boards' objects. Keep a separate pre-build input signature across failed
+  boards' objects. Explicit Clean also empties the shared object cache unless
+  another build holds the package store. Keep a separate pre-build input signature across failed
   source builds; changed configuration/library bytes retire only the selected
   objects so coarse timestamps cannot leave stale library code. Exclude only
   upload port/speed and monitor speed from build

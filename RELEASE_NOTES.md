@@ -16,6 +16,10 @@
 **Build log.** A build that reuses compiled files no longer prints one `Retrieved ... from cache`
 line for each file. It prints one line saying how many files it reused.
 
+**Clean clears the shared cache.** Clean left the shared compiled-file cache in place, so the next
+build restored everything from it. Clean now empties it, and the next build really recompiles. Other
+sketches keep their own build folders. If another window is building, Clean keeps the cache and says so.
+
 **Default boards on Linux and macOS.** Bootstrap now also downloads Arduino AVR and ESP32 for
 Resources, as Windows setup does. Compile and Upload never needed these folders, so a failed download
 only shows a warning. Existing installs get them with `bash direct/ubuntu/run.sh --repair`.
