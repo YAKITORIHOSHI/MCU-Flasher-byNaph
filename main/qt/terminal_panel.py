@@ -354,17 +354,17 @@ class TerminalPanel(QWidget):
 
         self._spin_lbl = QLabel("", icon_name="terminal")
         self._spin_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._spin_lbl.setStyleSheet("font-size: 20px; color: #56cfbf;")
+        self._spin_lbl.setStyleSheet("font-size: 20px;")
         lv.addWidget(self._spin_lbl)
 
         self._load_title = QLabel("Initializing Project Terminal…")
         self._load_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._load_title.setStyleSheet("color: #56cfbf; font-size: 13px; font-weight: 700; font-family: 'Segoe UI', Consolas, sans-serif;")
+        self._load_title.setStyleSheet("font-size: 13px; font-weight: 700; font-family: 'Segoe UI', Consolas, sans-serif;")
         lv.addWidget(self._load_title)
 
         self._load_sub = QLabel("Preparing ConPTY terminal engine & environment…")
         self._load_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._load_sub.setStyleSheet("color: #8fa1b3; font-size: 11px; font-family: 'Segoe UI', Consolas, sans-serif;")
+        self._load_sub.setStyleSheet("font-size: 11px; font-family: 'Segoe UI', Consolas, sans-serif;")
         self._load_sub.setWordWrap(True)
         lv.addWidget(self._load_sub)
         lv.addStretch()
@@ -385,7 +385,7 @@ class TerminalPanel(QWidget):
 
         self._lbl_no_term = QLabel("No active terminal sessions")
         lbl_no_term = self._lbl_no_term
-        lbl_no_term.setStyleSheet("color: #64748b; font-size: 13px; font-weight: 600;")
+        lbl_no_term.setStyleSheet("font-size: 13px; font-weight: 600;")
         lbl_no_term.setWordWrap(True)
         el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)
 

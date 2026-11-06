@@ -4483,6 +4483,8 @@ class MCUWebBackendAPI:
             _build_start: list[float | None] = [None]
             # Match complete PlatformIO records, never words in diagnostic or
             # source excerpts (for example, a function named "building").
+            _scons_cache_hit = re.compile(r"^Retrieved\s+\S.*\s+from cache\s*$", re.IGNORECASE)
+            _cache_hits = [0]
             _build_progress_pattern = re.compile(
                 r"^(?P<action>Compiling|Archiving|Linking|Building|Generating partitions|Checking size|"
                 r"Retrieving maximum program size)\s+(?P<target>.+)$",
@@ -4692,6 +4694,9 @@ class MCUWebBackendAPI:
                 is_generic_error = "error:" in low and "werror" not in low
                 is_generic_warning = "warning:" in low
                 is_scons_wrapper = bool(re.search(r'^\*\*\*\s+\[', line_clean))
+                if _scons_cache_hit.match(line_clean):
+                    _cache_hits[0] += 1
+                    continue
                 build_progress = _match_build_progress(line_clean)
                 is_scons_progress = build_progress is not None
                 is_build_mode = bool(re.fullmatch(r'Building in (?:release|debug) mode(?:\.{3})?', line_clean, re.IGNORECASE))
@@ -4906,6 +4911,8 @@ class MCUWebBackendAPI:
 
             if _ubuntu_build_info is not None:
                 _ubuntu_build_info.flush()
+            if _cache_hits[0]:
+                self.emit("console:log", {"text": f"  Reused {_cache_hits[0]} compiled files from the build cache.", "tag": "dim", "newline": True})
             self._active_process.stdout.close()
             rc = self._active_process.wait()
 

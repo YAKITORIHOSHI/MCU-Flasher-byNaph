@@ -11,6 +11,15 @@
 
 ---
 
+## November 6 Update: Quieter Builds, Readable Labels
+
+**Build log.** A build that reuses compiled files no longer prints one `Retrieved ... from cache`
+line for each file. It prints one line saying how many files it reused.
+
+**Readable text from the first frame.** The project name beside Project and other panel labels kept
+their dark startup colors until the theme was changed. They now use the theme's colors at startup,
+and the terminal loading labels and Modify status messages stay readable on every theme.
+
 ## November 5 Update: Real Glass, No Stray Lines, Every Screen
 
 **Stripes and the wrong editor color.** On PCs that use Chromium's low-end mode, fine stripes ran

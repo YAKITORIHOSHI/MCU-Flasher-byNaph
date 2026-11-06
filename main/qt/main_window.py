@@ -177,6 +177,8 @@ class MCUMainWindow(QMainWindow):
         from main.qt.ghost_sketch import GhostSketchController
         self._ghost_sketch = GhostSketchController(self)
         self._connect_signals()
+        from main.core.theme import Theme
+        self._apply_theme_to_panels(Theme.active_theme)
         from main.qt.cursor_visibility import WorkspacePointerGuard
         self._pointer_guard = WorkspacePointerGuard(self)
         self._restore_geometry()
@@ -768,6 +770,29 @@ class MCUMainWindow(QMainWindow):
         if widget is getattr(self, "_ai_changes_panel", None):
             self._ai_changes_panel.refresh()
 
+    def _apply_theme_to_panels(self, theme_name: str) -> None:
+        """Panels start with fixed inks, so they need this at startup as well as on a change."""
+        if hasattr(self, "_primary_toolbar") and self._primary_toolbar:
+            self._primary_toolbar.apply_theme(theme_name)
+        if hasattr(self, "_controls_bar") and self._controls_bar:
+            self._controls_bar.apply_theme(theme_name)
+        if hasattr(self, "_terminal_panel") and self._terminal_panel:
+            self._terminal_panel.apply_theme(theme_name)
+        if hasattr(self, "_ai_panel") and hasattr(self._ai_panel, "apply_theme"):
+            self._ai_panel.apply_theme(theme_name)
+        if hasattr(self, "_console_container") and hasattr(self._console_container, "apply_theme"):
+            self._console_container.apply_theme(theme_name)
+        if hasattr(self, "_serial_panel") and hasattr(self._serial_panel, "apply_theme"):
+            self._serial_panel.apply_theme(theme_name)
+        if hasattr(self, "_syntax_panel") and hasattr(self._syntax_panel, "apply_theme"):
+            self._syntax_panel.apply_theme(theme_name)
+        if hasattr(self, "_compat_panel") and hasattr(self._compat_panel, "apply_theme"):
+            self._compat_panel.apply_theme(theme_name)
+        if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "apply_theme"):
+            self._notif_panel.apply_theme(theme_name)
+        if hasattr(self, "_ai_changes_panel"):
+            self._ai_changes_panel.apply_theme(theme_name)
+
     def _on_theme_changed(self, theme_name: str) -> None:
         focused = QApplication.focusWidget()
         preserve_focus = bool(focused and self._pointer_guard.owns(focused))
@@ -792,26 +817,7 @@ class MCUMainWindow(QMainWindow):
             button.refresh_icon()
         if hasattr(self, "_editor_panel") and self._editor_panel:
             self._editor_panel.set_theme(theme_name)
-        if hasattr(self, "_primary_toolbar") and self._primary_toolbar:
-            self._primary_toolbar.apply_theme(theme_name)
-        if hasattr(self, "_controls_bar") and self._controls_bar:
-            self._controls_bar.apply_theme(theme_name)
-        if hasattr(self, "_terminal_panel") and self._terminal_panel:
-            self._terminal_panel.apply_theme(theme_name)
-        if hasattr(self, "_ai_panel") and hasattr(self._ai_panel, "apply_theme"):
-            self._ai_panel.apply_theme(theme_name)
-        if hasattr(self, "_console_container") and hasattr(self._console_container, "apply_theme"):
-            self._console_container.apply_theme(theme_name)
-        if hasattr(self, "_serial_panel") and hasattr(self._serial_panel, "apply_theme"):
-            self._serial_panel.apply_theme(theme_name)
-        if hasattr(self, "_syntax_panel") and hasattr(self._syntax_panel, "apply_theme"):
-            self._syntax_panel.apply_theme(theme_name)
-        if hasattr(self, "_compat_panel") and hasattr(self._compat_panel, "apply_theme"):
-            self._compat_panel.apply_theme(theme_name)
-        if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "apply_theme"):
-            self._notif_panel.apply_theme(theme_name)
-        if hasattr(self, "_ai_changes_panel"):
-            self._ai_changes_panel.apply_theme(theme_name)
+        self._apply_theme_to_panels(theme_name)
         self._apply_responsive_layout(self.width())
         self._layout_timer.start()
         if preserve_focus and focused.isVisible() and focused.isEnabled():
