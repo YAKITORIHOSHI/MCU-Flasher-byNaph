@@ -4,8 +4,107 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
-from PySide6.QtCore import QObject, Signal, Slot
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtWidgets import (QApplication, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget)
+
+from main.core.ghost_sketch import DEFAULT_SKETCH_NAME, sketch_name_problem
+from main.qt.glass import GlassDialog
+
+
+class GhostSaveDialog(GlassDialog):
+    """Name the sketch and choose where it goes; the sketch's own folder is created for it.
+
+    Like the Arduino IDE, the folder takes the sketch's name and so does the .ino holding
+    setup() and loop(). A taken name becomes ``MySketch (1)``, ``(2)``… without a prompt.
+    Only the name is checked here: storage is read by the save worker, never the GUI thread.
+    """
+
+    def __init__(self, parent=None, default_parent: str = "", name: str = DEFAULT_SKETCH_NAME):
+        super().__init__(parent)
+        self.setObjectName("ghost-save-dialog")
+        self.setWindowTitle("Save sketch")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+        title = QLabel("Save sketch", self)
+        title.setProperty("role", "title")
+        layout.addWidget(title)
+        form = QFormLayout()
+        form.setSpacing(8)
+        self.name_edit = QLineEdit(name, self)
+        self.name_edit.setAccessibleName("Sketch name")
+        self.name_edit.selectAll()
+        form.addRow("Sketch name", self.name_edit)
+        location = QWidget(self)
+        row = QHBoxLayout(location)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self.location_edit = QLineEdit(default_parent, location)
+        self.location_edit.setAccessibleName("Save in folder")
+        row.addWidget(self.location_edit, 1)
+        browse = QPushButton("Browse…", location)
+        browse.setAutoDefault(False)
+        browse.clicked.connect(self._browse)
+        row.addWidget(browse)
+        form.addRow("Save in", location)
+        layout.addLayout(form)
+        self.note = QLabel(self)
+        self.note.setWordWrap(True)
+        self.note.setObjectName("ghost-save-note")
+        layout.addWidget(self.note)
+        buttons = QDialogButtonBox(self)
+        self.save_button = buttons.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.save_button.setProperty("role", "primary")
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.name_edit.textChanged.connect(self._describe)
+        self.location_edit.textChanged.connect(self._describe)
+        from main.qt.responsive import fit_dialog
+        fit_dialog(self, (520, 250), (320, 200))
+        self._describe()
+        self.name_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def sketch_name(self) -> str:
+        return self.name_edit.text()
+
+    def save_parent(self) -> str:
+        return self.location_edit.text().strip()
+
+    def problem(self) -> str:
+        if not self.save_parent():
+            return "Choose a folder to save the sketch in."
+        return sketch_name_problem(self.sketch_name())
+
+    def _describe(self, *_args) -> None:
+        problem = self.problem()
+        name = self.sketch_name()
+        self.note.setText(problem or (f"Creates the folder '{name}' with {name}.ino as its main sketch. "
+                                      f"If that name is taken there, '{name} (1)', '{name} (2)'… is used."))
+        self.save_button.setEnabled(not problem)
+
+    def _browse(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "Save sketch in", self.save_parent())
+        if chosen:
+            self.location_edit.setText(chosen)
+
+    def _accept_if_valid(self) -> None:
+        if not self.problem():
+            self.accept()
+
+
+def ask_ghost_save_location(parent, default_parent: str) -> tuple[str, str] | None:
+    """(folder to save in, sketch name), or None when the user cancels."""
+    dialog = GhostSaveDialog(parent, default_parent)
+    try:
+        if dialog.exec() != GhostSaveDialog.DialogCode.Accepted:
+            return None
+        return dialog.save_parent(), dialog.sketch_name()
+    finally:
+        dialog.deleteLater()
 
 
 class GhostSketchController(QObject):
@@ -22,6 +121,7 @@ class GhostSketchController(QObject):
         self._editor_enabled = None
         self._promotion_recovery = None
         self._save_warning = ""
+        self._sketch_name = None
         self._saved.connect(self._finish_copy)
 
     @property
@@ -71,14 +171,12 @@ class GhostSketchController(QObject):
                 failure_callback()
             return
         parent = QApplication.activeModalWidget() or self.workspace
-        destination = QFileDialog.getExistingDirectory(
-            parent, "Save Ghost Sketch — choose an empty project folder",
-            self.workspace._backend.get_default_project_parent(),
-        )
-        if not destination:
+        chosen = ask_ghost_save_location(parent, self.workspace._backend.get_default_project_parent())
+        if not chosen:
             if failure_callback:
                 failure_callback()
             return
+        destination, sketch_name = chosen
         # Recheck after the native modal dialog has processed workspace events.
         if not self.temporary or self.workspace._is_busy():
             if failure_callback:
@@ -90,6 +188,7 @@ class GhostSketchController(QObject):
         self.workspace._ghost_save_in_progress = True
         self._source_project = str(self.workspace._backend.sketch_dir_path)
         self._destination = destination
+        self._sketch_name = sketch_name
         self._lock(True)
         try:
             self.workspace._editor_panel.trigger_save_all(
@@ -136,7 +235,7 @@ class GhostSketchController(QObject):
 
         def copy():
             try:
-                result = backend.save_ghost_project(self._destination)
+                result = backend.save_ghost_project(self._destination, sketch_name=self._sketch_name)
             except Exception as exc:
                 result = {"success": False, "error": str(exc)}
             self._saved.emit(result)
@@ -166,12 +265,14 @@ class GhostSketchController(QObject):
             self._release_project(payload["old_path"], preserve_recovery=True)
             self._promotion_recovery = None
             warning, self._save_warning = self._save_warning, ""
-            if warning:
-                try:
-                    self.workspace._backend.emit("notification", {
-                        "title": "Ghost Sketch saved", "message": warning, "type": "warning"})
-                except Exception:
-                    pass  # Reporting cannot veto already-published source files.
+            try:
+                # A taken name was numbered without asking, so say where the sketch went.
+                self.workspace._backend.emit("notification", {
+                    "title": "Ghost Sketch saved",
+                    "message": warning or f"Saved to {payload.get('path', '')}",
+                    "type": "warning" if warning else "success"})
+            except Exception:
+                pass  # Reporting cannot veto already-published source files.
             self._complete(True)
 
         def failed():

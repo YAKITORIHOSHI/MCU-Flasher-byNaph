@@ -408,16 +408,13 @@ class PrimaryToolbar(QToolBar):
         self.btn_reload.clicked.connect(self._do_reload)
         ac_layout.addWidget(self.btn_reload)
 
-        # Modify (Teal)
-        self.btn_modify = _make_action_btn("Modify", "Add, rename, or delete project files", "btn-modify",
-                                           "#1a7a70", "#219a8d")
-        self.btn_modify.clicked.connect(self._do_modify)
-        ac_layout.addWidget(self.btn_modify)
+        # Files are added with the source tabs' + chip and renamed or deleted from a
+        # tab's context menu, so the Actions row has no separate Modify button.
 
         # Secondary actions collapse only when their measured content cannot fit.
         self.btn_actions_dropdown = _make_action_btn(
             "Actions ",
-            "More actions (Stop, Clean, Save, Reload, Modify)",
+            "More actions (Stop, Clean, Save, Reload)",
             "btn-actions-dropdown",
             "#2d3748", "#3a4a60"
         )
@@ -610,24 +607,6 @@ class PrimaryToolbar(QToolBar):
         worker = getattr(self._backend, "_operation_worker", None) if self._backend else None
         return bool(worker is not None and worker.is_alive())
 
-    def _do_modify(self) -> None:
-        if self._is_busy():
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self.window(),
-                "Action in Progress",
-                "Modifying project files is not allowed while an action is in progress.\n\n"
-                "Please wait for the current action to finish or stop it first.",
-            )
-            return
-        mw = self._workspace()
-        if hasattr(mw, "_open_modify_files_dialog"):
-            mw._open_modify_files_dialog()
-        else:
-            from main.qt.modify_dialog import ModifyFilesDialog
-            dlg = ModifyFilesDialog(self._backend, parent=self.window())
-            dlg.exec()
-
     def _do_save(self) -> None:
         mw = self._workspace()
         if hasattr(mw, "_shortcut_save"):
@@ -784,8 +763,6 @@ class PrimaryToolbar(QToolBar):
             self.btn_upload.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_clean.setEnabled(False)
             self.btn_clean.setCursor(Qt.CursorShape.ArrowCursor)
-            self.btn_modify.setEnabled(False)
-            self.btn_modify.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_project.setEnabled(False)
             self.btn_project.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_project.setToolTip("Project switching is unavailable while an action is running")
@@ -859,8 +836,6 @@ class PrimaryToolbar(QToolBar):
             self.btn_stop.setCursor(Qt.CursorShape.ArrowCursor)
             self.btn_clean.setEnabled(True)
             self.btn_clean.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.btn_modify.setEnabled(True)
-            self.btn_modify.setCursor(Qt.CursorShape.PointingHandCursor)
             self.btn_project.setEnabled(True)
             self.btn_project.setCursor(Qt.CursorShape.PointingHandCursor)
             self.btn_project.setToolTip("Choose where to open a project (Ctrl+O)")
@@ -1010,7 +985,7 @@ class PrimaryToolbar(QToolBar):
             width = min(max(1, int(width)), self.width()) if self.isVisible() else max(1, int(width))
             build = (self.btn_compile, self.btn_upload)
             secondary = (self.btn_stop, self.btn_clean, self.btn_save, self.btn_save_all,
-                         self.btn_reload, self.btn_modify)
+                         self.btn_reload)
             named = (*build, self.btn_project, self.btn_cloud)
             # Busy captions come from the operation state machine. A tiny layout
             # may hide them, but restoring width must restore that same caption.
@@ -1169,14 +1144,6 @@ class PrimaryToolbar(QToolBar):
             Theme.BTN_CLEAR,
             Theme.BTN_CLEAR_H,
             enabled=self.btn_reload.isEnabled(),
-        )
-        # Modify (Teal)
-        popup.add_button(
-            "Modify",
-            self.btn_modify.click,
-            Theme.BTN_MONITOR,
-            Theme.BTN_MONITOR_H,
-            enabled=self.btn_modify.isEnabled(),
         )
 
         popup.show_below(self.btn_actions_dropdown, min_width=max(100, self.btn_actions_dropdown.width()), alignment="center")

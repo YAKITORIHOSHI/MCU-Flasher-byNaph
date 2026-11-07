@@ -33,10 +33,29 @@ def _render_icon(name, color, size):
     return result
 
 
+def tab_icon_inks(theme_mode: str | None = None) -> tuple[str, str]:
+    """(unselected, selected) glyph inks for a tab, each readable on its own surface.
+
+    An unselected tab is translucent glass in the text color; a selected tab is a solid
+    chip. In the dark themes that chip is nearly white, so a glyph left in the text
+    color vanishes into it. The selected ink always comes from the chip itself.
+    """
+    from main.qt.theme import get_palette, glass_tokens
+    mode = theme_mode or Theme.active_theme
+    tokens = glass_tokens(mode)
+    chip, chip_ink = tokens["chip"], tokens["chip_ink"]
+    if contrast_ratio(chip_ink, chip) < 4.5:
+        chip_ink = readable_foreground(chip)
+    return get_palette(mode).get("TEXT", Theme.TEXT), chip_ink
+
+
 def tab_icon(name: str, size: int = 20) -> QIcon:
-    """A selected tab is a solid chip, so its icon needs that chip's ink instead of the text color."""
-    from main.qt.theme import glass_tokens
-    return _tab_icon(name, Theme.TEXT, glass_tokens(Theme.active_theme)["chip_ink"], size)
+    """A selected tab is a solid chip, so its icon needs that chip's ink instead of the text color.
+
+    Qt paints a selected tab's icon in QIcon.State.On and the others in State.Off.
+    """
+    ink, selected_ink = tab_icon_inks()
+    return _tab_icon(name, ink, selected_ink, size)
 
 
 @lru_cache(maxsize=48)

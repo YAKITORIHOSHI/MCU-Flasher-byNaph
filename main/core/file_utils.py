@@ -1236,8 +1236,10 @@ def application_agent_guidance(project_dir) -> str:
         "above Controls. Keep board/port Controls in the main window and project callbacks/busy state "
         "bound to the original workspace.\n"
         "- Ghost Sketch uses owned temporary application storage. Compile/Upload flush temporary "
-        "inputs without a location prompt; Save/Ctrl+S/Save All chooses an empty permanent project "
-        "folder. Lock editing through acknowledged buffer flush, supported root-source copy and "
+        "inputs without a location prompt; Save/Ctrl+S/Save All asks for a sketch name (default "
+        "`MySketch`) and a location, then creates the sketch's own folder like the Arduino IDE: a "
+        "taken name becomes `MySketch (1)`, `(2)`… without a prompt, and the .ino holding setup() "
+        "and loop() takes the folder's name. Lock editing through acknowledged buffer flush, supported root-source copy and "
         "model-path remap; preserve undo/tab state. Disable autosave until permanent save and require "
         "Save/Discard/Cancel on close or switch even after a clean compile. Release only the exact "
         "marked temporary session when eligible. After acknowledged save, retain the temporary "
@@ -1507,6 +1509,8 @@ def get_sketch_files_fast(sketch_dir, supported_extensions=None, *, strict=False
         "compiled_builds", "build_artifacts", ".build_artifacts", ".clangd", ".cache", "_temp",
         ".mcu_ai_edits", PROJECT_BUILD_CACHE_DIR, "logs", "installers", "direct", "index_json",
         ".agents", ".github",
+        # Deleted files wait here to be restored by hand; they are not project sources.
+        "bak",
     }
 
     results = []

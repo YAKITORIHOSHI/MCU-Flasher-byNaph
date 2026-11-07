@@ -470,5 +470,211 @@ class OwnerTicketServiceChecks(unittest.TestCase):
         self.http.assert_called_once()
 
 
+class FakeVault:
+    """An in-memory stand-in for the OS credential vault."""
+
+    def __init__(self, available=True):
+        self.records, self.available = {}, available
+
+    @property
+    def status(self):
+        return self.available, "Fixture vault is unavailable."
+
+    def get(self, name):
+        value = self.records.get(name)
+        return dict(value) if value is not None else None
+
+    def set(self, name, value):
+        if not self.available:
+            raise owner.SecureStorageError("Fixture vault is unavailable.")
+        self.records[name] = dict(value)
+
+    def delete(self, name):
+        self.records.pop(name, None)
+
+
+class StreamResponse:
+    """A finished Firebase event stream from the fixture, never a real socket."""
+
+    def __init__(self, text, content_type="text/event-stream; charset=utf-8"):
+        self._body = io.BytesIO(text.encode("utf-8"))
+        self.headers = {"Content-Type": content_type}
+        self.closed = False
+
+    def readline(self, limit=-1):
+        return self._body.readline(limit)
+
+    def close(self):
+        self.closed = True
+
+
+class KeptSessionChecks(OwnerTicketServiceChecks):
+    """Keep me signed in, sign-out and live ticket changes; reuses the isolated fixture."""
+
+    def setUp(self):
+        super().setUp()
+        self.vault = FakeVault()
+        self.service._credential_store = self.vault
+        self.service._keeping_session = False
+
+    def fresh_service(self):
+        service = owner.OwnerTicketService.__new__(owner.OwnerTicketService)
+        for name in ("_id_token", "_refresh_token", "_uid", "_user_email", "_active_root_collection"):
+            setattr(service, name, None)
+        service._is_authenticated = False
+        service._keeping_session = False
+        service.get_config = self.service.get_config
+        service._credential_store = self.vault
+        return service
+
+    def renewal(self, **updates):
+        payload = {"id_token": "renewed-id-token", "refresh_token": "rotated-refresh-token",
+                   "user_id": "authenticated-fixture-uid"}
+        payload.update(updates)
+        return Response(payload)
+
+    def test_kept_cloud_session_lives_only_in_the_vault_and_renews_on_launch(self):
+        self.cloud_response()
+        ok, message = self.service.authenticate("developer@example.com", "firebase-fixture-password",
+                                                keep_signed_in=True)
+        self.assertTrue(ok, message)
+        self.assertIn("stay signed in", message)
+        [(name, record)] = self.vault.records.items()
+        self.assertTrue(name.startswith("developer-session:"))
+        self.assertEqual(record, {"kind": "firebase", "uid": "authenticated-fixture-uid",
+                                  "email": "developer@example.com", "refresh_token": "fixture-refresh-token"})
+        self.assertNotIn("firebase-fixture-password", json.dumps(self.vault.records))
+
+        later = self.fresh_service()
+        self.http.side_effect = None
+        self.http.return_value = self.renewal()
+        ok, message = later.restore_session()
+        self.assertTrue(ok, message)
+        self.assertTrue(later.is_cloud_authenticated)
+        self.assertEqual(later._id_token, "renewed-id-token")
+        request = self.http.call_args.args[0]
+        self.assertTrue(request.full_url.startswith("https://securetoken.googleapis.com/v1/token?key="))
+        self.assertIn(b"grant_type=refresh_token", request.data)
+        self.assertEqual(self.vault.records[name]["refresh_token"], "rotated-refresh-token")
+
+        ok, _ = later.sign_out()
+        self.assertTrue(ok)
+        self.assertEqual(self.vault.records, {})
+        self.assertFalse(later.is_authenticated)
+        self.assertEqual(self.fresh_service().restore_session(), (False, ""))
+
+    def test_signing_in_without_keep_forgets_an_older_kept_session(self):
+        self.cloud_response()
+        self.service.authenticate("developer@example.com", "firebase-fixture-password", keep_signed_in=True)
+        self.assertTrue(self.vault.records)
+        self.service.authenticate("developer@example.com", "firebase-fixture-password")
+        self.assertEqual(self.vault.records, {})
+
+    def test_expired_kept_session_is_forgotten_but_an_offline_launch_keeps_it(self):
+        self.vault.records[self.service._kept_session_name()] = {
+            "kind": "firebase", "uid": "authenticated-fixture-uid", "email": "", "refresh_token": "old"}
+        later = self.fresh_service()
+        self.http.side_effect = TimeoutError("fixture offline")
+        ok, message = later.restore_session()
+        self.assertFalse(ok)
+        self.assertTrue(message)
+        self.assertTrue(self.vault.records, "an offline launch must not forget the kept session")
+        self.assertFalse(later.is_authenticated)
+        url = "https://securetoken.googleapis.com/v1/token"
+        self.http.side_effect = self.http_error(url, 400, {"error": {"message": "TOKEN_EXPIRED"}}, "Bad Request")
+        ok, message = self.fresh_service().restore_session()
+        self.assertFalse(ok)
+        self.assertIn("expired", message)
+        self.assertEqual(self.vault.records, {})
+
+    def test_renewal_for_another_account_is_refused(self):
+        self.vault.records[self.service._kept_session_name()] = {
+            "kind": "firebase", "uid": "authenticated-fixture-uid", "email": "", "refresh_token": "old"}
+        self.http.side_effect = None
+        self.http.return_value = self.renewal(user_id="someone-else")
+        later = self.fresh_service()
+        self.assertFalse(later.restore_session()[0])
+        self.assertFalse(later.is_cloud_authenticated)
+
+    def test_kept_local_session_ends_when_the_local_key_changes(self):
+        ok, message = self.service.authenticate("", "local-fixture-key", keep_signed_in=True)
+        self.assertTrue(ok, message)
+        self.http.assert_not_called()
+        ok, _ = self.fresh_service().restore_session()
+        self.assertTrue(ok)
+        self.config["local_access"] = dict(self.config["local_access"], hash="00" * 32)
+        ok, message = self.fresh_service().restore_session()
+        self.assertFalse(ok)
+        self.assertIn("changed", message)
+        self.assertEqual(self.vault.records, {})
+
+    def test_keep_signed_in_without_a_vault_refuses_before_any_request(self):
+        self.vault.available = False
+        ok, message = self.service.authenticate("developer@example.com", "firebase-fixture-password",
+                                                keep_signed_in=True)
+        self.assertFalse(ok)
+        self.assertIn("secure credential storage", message)
+        self.http.assert_not_called()
+        self.assertFalse(self.service.is_authenticated)
+
+    def signed_in(self):
+        self.service._id_token, self.service._refresh_token = "first-id-token", "first-refresh-token"
+        self.service._uid, self.service._is_authenticated = "authenticated-fixture-uid", True
+
+    def test_watcher_reports_pushed_changes_renews_its_token_and_stops_when_refused(self):
+        self.signed_in()
+        long_line = "event: patch\ndata: " + "x" * (owner._STREAM_LINE_LIMIT * 3) + "\n\n"
+        first = StreamResponse("event: put\ndata: {\"path\":\"/\",\"data\":null}\n\n"
+                               "event: keep-alive\ndata: null\n\n" + long_line +
+                               "event: auth_revoked\ndata: credential is no longer valid\n\n")
+        second = StreamResponse("event: cancel\ndata: null\n\n")
+        responses = [first, self.renewal(user_id="authenticated-fixture-uid"), second]
+        requests = []
+
+        def opened(request, *, timeout):
+            requests.append(request)
+            return responses.pop(0)
+        self.http.side_effect = opened
+        changes, ended = [], []
+        watcher = owner.TicketChangeWatcher(self.service, __import__("threading").Lock(),
+                                            on_change=lambda: changes.append(1), on_end=ended.append)
+        watcher._run()
+        self.assertEqual(len(changes), 2, "put and patch are changes; keep-alive is not")
+        self.assertEqual(ended, ["denied"])
+        self.assertEqual(requests[0].get_header("Accept"), "text/event-stream")
+        self.assertIn("auth=first-id-token", requests[0].full_url)
+        self.assertIn("auth=renewed-id-token", requests[2].full_url)
+        self.assertTrue(first.closed and second.closed)
+
+    def test_watcher_polls_when_the_server_will_not_stream_to_this_host(self):
+        self.signed_in()
+        self.patch(owner, "_POLL_INTERVAL", new=0)
+        url = "https://mcu-flasher-c46e3-default-rtdb.asia-southeast1.firebasedatabase.app/owner/x/tickets.json"
+        changes = []
+        watcher = owner.TicketChangeWatcher(self.service, __import__("threading").Lock(),
+                                            on_change=lambda: changes.append(1))
+        snapshots = [Response({"a": {"title": "one"}}), Response({"a": {"title": "one"}}),
+                     Response({"a": {"title": "two"}})]
+
+        def opened(request, *, timeout):
+            if request.get_header("Accept") == "text/event-stream":
+                raise self.http_error(url, 307, {}, "Temporary Redirect")
+            if not snapshots:
+                watcher.stop()
+                raise TimeoutError("fixture done")
+            return snapshots.pop(0)
+        self.http.side_effect = opened
+        watcher._run()
+        self.assertEqual(changes, [1], "only a real difference between polls is a change")
+
+    def test_stopping_the_watcher_interrupts_an_open_stream(self):
+        response = StreamResponse("")
+        watcher = owner.TicketChangeWatcher(self.service, __import__("threading").Lock(), on_change=lambda: None)
+        watcher._response = response
+        watcher.stop()
+        self.assertTrue(watcher.stopped)
+        self.assertTrue(response.closed)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

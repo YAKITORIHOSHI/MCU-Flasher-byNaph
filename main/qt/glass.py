@@ -384,13 +384,21 @@ def page_surface(theme_name: str) -> dict[str, str]:
 
 
 def page_backdrop_for(view: QWidget) -> dict[str, float]:
-    """Numbers that line a web page's copy of the scene up with its window's."""
+    """Numbers that line a web page's copy of the scene up with its window's.
+
+    ``hostWidth``/``hostHeight`` are the view's own logical size. At a fractional display
+    scale Chromium rounds the page's surface up to whole device pixels, so its viewport
+    comes out a fraction to a whole CSS pixel larger than the widget showing it (125%:
+    every size; 150%: most). A sheet filling that viewport loses its right and bottom
+    rim past the widget's edge, so the page sizes its sheet to these numbers instead.
+    """
     window = view.window()
     origin = view.mapTo(window, QPoint())
     width, height, left, top = scene_fit(window.width(), window.height())
     return {"width": round(width, 2), "height": round(height, 2),
             "x": round(left - origin.x(), 2), "y": round(top - origin.y(), 2),
-            "radius": pane_radius(window.height())}
+            "radius": pane_radius(window.height()),
+            "hostWidth": view.width(), "hostHeight": view.height()}
 
 
 class PageBackdrop(QObject):

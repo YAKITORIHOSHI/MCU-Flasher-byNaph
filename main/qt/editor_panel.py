@@ -99,6 +99,9 @@ class EditorBridgeAPI(QObject):
     _syntax_finished = Signal(dict)
     editor_storage_ready = Signal(str, str, dict)
     _editor_storage_finished = Signal(str, str, str, dict)
+    # Source-tab file actions: the + chip and a tab's context menu. The workspace answers.
+    new_file_requested = Signal()
+    file_menu_requested = Signal(str)
 
     def __init__(self, backend: "MCUWebBackendAPI", parent: QObject | None = None):
         super().__init__(parent)
@@ -569,6 +572,18 @@ class EditorBridgeAPI(QObject):
                                   for path, content in self._recovery_buffers.items()}
         self._syntax_generation += 1
         self._syntax_pending = None
+
+    @Slot(result="QVariant")
+    def request_new_file(self) -> dict:
+        """The tab bar's + chip: the workspace asks for a name and an extension."""
+        self.new_file_requested.emit()
+        return {"success": True}
+
+    @Slot(str, result="QVariant")
+    def request_file_menu(self, path: str) -> dict:
+        """A source tab was right-clicked: the workspace shows Rename and Delete for it."""
+        self.file_menu_requested.emit(str(path or ""))
+        return {"success": True}
 
     @Slot(str, result="QVariant")
     def run_action(self, action_name: str) -> dict:

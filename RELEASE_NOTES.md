@@ -6,10 +6,52 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 6, 2026<br>
+> **Notes Updated:** November 7, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
+
+## November 7 Update: Files From the Tabs, Colors in the Logs, Steadier Accounts
+
+**Tab and list colors.** A selected tab is a solid chip, so its icon now takes the chip's ink in every
+theme. Tool-tab icons used to be drawn once and kept, which left a white icon on a white chip after
+some theme changes. Drop-down lists open straight below their field at its width, with rows in the
+theme's colors; before, Fusion opened them over the field and a long list could cover the screen, and
+in Settings and the Serial baud list the rows lost their fill entirely.
+
+**Settings titles.** Section titles sat across the top border of their card. They now sit above it.
+
+**The editor fits its pane.** At 125%, 150% or 175% display scale the editor page was a fraction of a
+pixel to a whole pixel larger than the pane showing it, so its right and bottom edge were cut off.
+Chromium rounds the page up to whole device pixels; the editor now sizes itself to the pane instead.
+
+**Files from the source tabs.** The **+** chip after the file tabs creates a file and still asks for its
+extension. Right-click a tab to rename or delete it. Deleted files move to a hidden `bak` folder in the
+project instead of being erased, so they can be restored. The Modify button is gone from Actions.
+
+**Ghost Sketch saves like the Arduino IDE.** Save asks for a sketch name, `MySketch` by default, and
+creates its folder for you. If that name is taken it uses `MySketch (1)`, `(2)` and so on without
+asking, and the `.ino` with `setup()` and `loop()` takes the folder's name.
+
+**Developer Access.** A **Refresh** button reloads tickets, and tickets changed on another device now
+appear on their own: the portal listens to Firebase's event stream, or checks every 30 seconds where
+the server will not stream. **Keep me signed in** keeps the session in your system's credential vault,
+and **Log out** ends it and forgets it.
+
+**Cloud.** The Cloud tab shows what it is doing while it loads your account and while you sign in.
+Push and Pull no longer disappear when the sketch list fails to load: they follow the open sketch's own
+cloud link. A sketch that is not in the cloud yet shows them disabled, with how to link it.
+
+**Colors in the logs.** The Serial Monitor and Build Console now show ANSI colors and styles: 16, 256
+and 24-bit colors for text and background, bold, dim, italic, underline, inverse and strikethrough.
+Every color is kept readable on its background, Copy still gives plain text, and a theme change
+recolors what is already shown.
+
+**Recent projects.** **Open selected** on the Recent tab did nothing. It opens the project now.
+
+**Symbol descriptions in the editor.** The floating description opens when you hold Ctrl (Cmd on macOS)
+over a symbol, or when the pointer rests on one for three seconds. Ctrl+Shift, which selects text,
+no longer opens it.
 
 ## November 6 Update: Quieter Builds, Readable Labels
 

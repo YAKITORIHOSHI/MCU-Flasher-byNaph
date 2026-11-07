@@ -560,12 +560,20 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   navigation and compact/wide palettes in `direct/verify_project_search.py`.
 - Keep C++ brace Enter rules in the lazy language configuration and respect each
   model's tab/space settings. Empty projects/new sketches use empty setup/loop;
-  Modify's new .cpp/.c are empty, headers only `#pragma once`. New Project's
+  the tab bar's new .cpp/.c are empty, headers only `#pragma once`. New Project's
   checked .h also adds its exact quoted include to the generated .ino and
   optional .cpp through `main/core/project_scaffold.py`. Without .h, its .cpp
   remains empty. Keep backend and standalone selector templates identical,
   preserve explicit Blink, and never overwrite an existing sketch folder.
-- Wrap Modify Add/Rename/Delete in `AIEditWatcher.user_file_operation` before
+- Files are added with the source tabs' + chip (`NewFileDialog`, which always asks
+  for an extension and opens the file through the `activate` add event) and renamed
+  or deleted from a tab's context menu; the Actions row has no Modify button.
+  Delete moves the file into the project's hidden `bak` folder through
+  `main/core/project_bak.py` (numbered `name (1).ext` copies, never adopting a
+  file or link named `bak`); `get_sketch_files_fast` skips `bak`, so it gets no tab
+  and is never a build input. QMenu.exec cannot be patched on the class, so
+  fixtures choose through `_exec_file_menu`.
+- Wrap tab-bar Add/Rename/Delete in `AIEditWatcher.user_file_operation` before
   mutation. Invalidate in-flight scans, baseline success/failure and deleted paths,
   and refuse changes to a file with a pending review. Never classify these manual
   actions as AI. Watch root .txt notes and source files, excluding symlinks.
@@ -1543,7 +1551,7 @@ MCU Flasher by Naph/
 │   │   ├── index.html               # Monaco Editor host page with QWebChannel bridge
 │   │   ├── terminal.html            # Native Linux xterm frontend and parsed-output ACKs
 │   │   ├── bundle.js                # Offline Monaco Editor JS bundle (no CDN)
-│   │   ├── project_files.js         # Incremental Modify updates without resetting models
+│   │   ├── project_files.js         # Incremental file add/rename/delete without resetting models
 │   │   ├── assistant_readiness.js   # Decides from xterm's screen when the assistant has painted
 │   │   ├── qwebchannel.js           # Bidirectional Qt-to-JavaScript communication bridge
 │   │   ├── editor.worker.js         # Monaco Editor web worker
@@ -1711,8 +1719,12 @@ MCU Flasher by Naph/
   Preserve hidden-toolbar keyboard access, focus, buffers and native visibility.
   Verify `direct/verify_detached_actions.py` without live hardware or persistence.
 - Ghost Sketch starts in owned temporary application storage. Compile/Upload
-  flush temporary inputs without a location prompt; Save/Ctrl+S/Save All choose
-  an empty permanent project folder. Lock editing through acknowledged buffer
+  flush temporary inputs without a location prompt; Save/Ctrl+S/Save All ask
+  for a sketch name (default `MySketch`) and a location in `GhostSaveDialog`,
+  then `plan_ghost_save` creates the sketch's own folder like the Arduino IDE:
+  a taken name becomes `MySketch (1)`, `(2)`… without a prompt, and the .ino
+  holding setup() and loop() takes the folder's name. Numbering reads storage
+  only in the save worker. Lock editing through acknowledged buffer
   flush, supported root-source copy and model-path remap, preserving undo/tab
   state. Disable autosave until permanent save; require Save/Discard/Cancel on
   close or project switch even after a clean compile. After acknowledged save,

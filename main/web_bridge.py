@@ -2384,7 +2384,7 @@ class MCUWebBackendAPI:
         self._render_compat_from_state(state, filter_text=filter_text)
 
     def _project_files_changed(self, operation: str, target: Path, old_file: Path | None = None,
-                               *, content: str | None = None) -> None:
+                               *, content: str | None = None, activate: bool = False) -> None:
         """Refresh source consumers without treating a root edit as a project switch."""
         for changed in (target, old_file):
             if changed is not None:
@@ -2398,6 +2398,8 @@ class MCUWebBackendAPI:
         }
         if content is not None:
             payload["content"] = content
+        if activate:
+            payload["activate"] = True  # The user asked for this file: open its tab.
         self.emit("project:files", payload)
         # Reuse the serialized metadata writer. A source revision makes this
         # update distinct even while the board/port selection stays the same.
@@ -2408,8 +2410,8 @@ class MCUWebBackendAPI:
         return any(dirty and os.path.normcase(os.path.abspath(path)) == wanted
                    for path, dirty in getattr(self, "modified_files", {}).items())
 
-    def add_project_file(self, filename: str) -> dict[str, Any]:
-        """Create a new source/header file in the sketch folder."""
+    def add_project_file(self, filename: str, *, activate: bool = False) -> dict[str, Any]:
+        """Create a new source/header file in the sketch folder; ``activate`` opens its tab."""
         if self.is_busy or getattr(self, "active_operation", None) is not None:
             return {"success": False, "error": "Modifying project files is not allowed while an action is in progress."}
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
@@ -2435,7 +2437,7 @@ class MCUWebBackendAPI:
             with watcher.user_file_operation(target) if watcher else nullcontext():
                 with target.open("x", encoding="utf-8") as stream:
                     stream.write(content)
-            self._project_files_changed("add", target, content=content)
+            self._project_files_changed("add", target, content=content, activate=activate)
             return {"success": True, "path": str(target)}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -2472,7 +2474,7 @@ class MCUWebBackendAPI:
             return {"success": False, "error": str(e)}
 
     def delete_project_file(self, filename: str) -> dict[str, Any]:
-        """Permanently delete a file from the sketch folder."""
+        """Move a file from the sketch folder into its hidden ``bak`` folder; nothing is erased."""
         if self.is_busy or getattr(self, "active_operation", None) is not None:
             return {"success": False, "error": "Modifying project files is not allowed while an action is in progress."}
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir() or is_application_codebase_dir(self.sketch_dir_path):
@@ -2488,14 +2490,15 @@ class MCUWebBackendAPI:
         if len(all_sources) <= 1:
             return {"success": False, "error": "Cannot delete the only source file in the project."}
         try:
+            from main.core.project_bak import move_to_bak
             watcher = getattr(self, "ai_watcher", None)
             with watcher.user_file_operation(target) if watcher else nullcontext():
-                target.unlink()
+                kept = move_to_bak(self.sketch_dir_path, target)
             getattr(self, "modified_files", {}).pop(str(target), None)
             if getattr(self, "active_file_path", "") == str(target):
                 self.active_file_path = ""
             self._project_files_changed("delete", target)
-            return {"success": True}
+            return {"success": True, "bak": str(kept)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -2521,11 +2524,6 @@ class MCUWebBackendAPI:
             sig = self._get_qt_signals()
             if sig:
                 sig.file_reload_requested.emit()
-        elif act == "modify":
-            # Open the modify-files dialog
-            sig = self._get_qt_signals()
-            if sig:
-                sig.modify_files_requested.emit()
         return {"success": True, "action": act}
 
     def on_editor_content_change(self):
@@ -2885,9 +2883,13 @@ class MCUWebBackendAPI:
                     pass
             return {"success": False, "error": str(exc)}
 
-    def save_ghost_project(self, destination: str) -> dict[str, Any]:
+    def save_ghost_project(self, destination: str, sketch_name: str | None = None) -> dict[str, Any]:
         """Publish acknowledged editor bytes and remap the active project in place.
 
+        With ``sketch_name``, ``destination`` is the folder to save in and the sketch
+        gets its own folder there, named like the Arduino IDE does: ``MySketch``, or
+        ``MySketch (1)``, ``(2)``… when taken, with the main .ino renamed to match.
+        Without it, ``destination`` is an explicit absent or empty project folder.
         The caller flushes every editor model first and blocks editing through
         the returned model-remap acknowledgement. This method never reloads
         editor buffers or changes selected hardware and serial/terminal state.
@@ -2905,13 +2907,24 @@ class MCUWebBackendAPI:
         self._ghost_project_operation = True
         old = self.sketch_dir_path
         try:
+            renames: dict[str, str] = {}
+            if sketch_name is not None:
+                from main.core.ghost_sketch import plan_ghost_save
+                parent = Path(destination).expanduser().resolve()
+                if is_application_codebase_dir(parent):
+                    return {"success": False, "error": "Choose a folder outside the MCU Flasher application."}
+                planned, renames = plan_ghost_save(old, parent, sketch_name)
+                destination = str(planned)
             target = Path(destination).expanduser().resolve()
             if is_application_codebase_dir(target):
                 return {"success": False, "error": "Choose a folder outside the MCU Flasher application."}
             if find_project_window(target):
                 return {"success": False, "error": "The selected project is already open in another window."}
-            target = promote_ghost_project(old, destination)
-            mapping = {str(old / path.name): str(path) for path in target.iterdir()
+            target = promote_ghost_project(old, destination, renames=renames)
+            saved_as = {renames.get(name, name): name for name in
+                        (path.name for path in old.iterdir()
+                         if path.suffix.lower() in {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"})}
+            mapping = {str(old / saved_as.get(path.name, path.name)): str(path) for path in target.iterdir()
                        if path.suffix.lower() in {".ino", ".cpp", ".c", ".h", ".hpp", ".txt"}}
             if not mapping:
                 return {"success": False, "saved_path": str(target), "error":

@@ -9,16 +9,16 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
-from PySide6.QtCore import Qt, QSize, QRectF, Signal, QTimer, QObject, Slot, QEvent
+from PySide6.QtCore import Qt, QSize, QRectF, Signal, QTimer, QObject, Slot, QEvent, QFileSystemWatcher
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QLabel, QLineEdit, QTextEdit, QMessageBox,
-    QSizePolicy, QMenu, QPushButton,
+    QSizePolicy, QMenu, QPushButton, QCheckBox,
 )
 
-from main.core.owner_tickets import OwnerTicketService
+from main.core.owner_tickets import OwnerTicketService, TicketChangeWatcher
 from main.qt.owner_ticket_style import (
     NeoCard, PortalDialog, ResponsiveGrid, ResponsiveRow, button, combo, field, heading, label,
     refresh_portal_children, retone, scroll_body,
@@ -528,7 +528,16 @@ class FirebaseSettingsDialog(_TaskPortal):
 
 
 
+class _LiveSignals(QObject):
+    """Carries the change watcher's thread-side notices onto the GUI thread."""
+    changed = Signal(int)
+    ended = Signal(int, str)
+
+
 class OwnerTicketDialog(_TaskPortal):
+    # A burst of remote writes (one save is often a put and a patch) costs one re-read.
+    LIVE_REFRESH_DELAY_MS = 400
+
     def __init__(self, backend=None, parent=None):
         super().__init__(parent, preferred=(590, 580))
         self._backend = backend
@@ -543,6 +552,20 @@ class OwnerTicketDialog(_TaskPortal):
         self._active_filter = "All Status"
         self._active_category_filter = "All categories"
         self._search_query = ""
+        # Live updates: the remote watcher or local folder watch, one quiet re-read at a time.
+        self._live_generation = 0
+        self._tickets_generation = 0
+        self._watcher = None
+        self._local_watch = None
+        self._live_task = None
+        self._live_pending = False
+        self._live_signals = _LiveSignals(self)
+        self._live_signals.changed.connect(self._on_live_change)
+        self._live_signals.ended.connect(self._on_live_ended)
+        self._live_timer = QTimer(self)
+        self._live_timer.setSingleShot(True)
+        self._live_timer.setInterval(self.LIVE_REFRESH_DELAY_MS)
+        self._live_timer.timeout.connect(self._start_live_refresh)
         self.setObjectName("owner-portal-dialog")
         self.setWindowTitle("Developer tickets — MCU Flasher")
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint, True)
@@ -583,7 +606,13 @@ class OwnerTicketDialog(_TaskPortal):
     def _initialize_service(self):
         def initialize():
             service = OwnerTicketService()
-            return service, service.get_config(), service.check_connection()
+            config, connection = service.get_config(), service.check_connection()
+            # A session kept with "Keep me signed in" opens straight to the tickets.
+            restored, message = service.restore_session()
+            tickets = service.get_tickets() if restored else []
+            return service, config, connection, (restored, message, service.is_cloud_authenticated, tickets)
+        self.connection_note.setText("Checking for a kept session…")
+        self.connection_note.show()
         self._run_task("initialize", initialize, self._initialized)
 
     def _initialized(self, result, error):
@@ -594,22 +623,31 @@ class OwnerTicketDialog(_TaskPortal):
             self.btn_diagnose.setText("Retry settings")
             self._update_cloud_badge()
             return
-        self.service, self._config, connection = result
+        self.service, self._config, connection, (restored, message, cloud, tickets) = result
         self._endpoint_state, self._endpoint_message = connection
         self._sync_category_options()
         if not self.txt_auth_email.isModified():
             self.txt_auth_email.setText(self._config.get("owner_email", ""))
         self._set_busy(False)
         self._update_cloud_badge()
+        if restored:
+            self.chk_keep_signed_in.setChecked(True)
+            self._authenticated((True, message, cloud, tickets), "")
+        elif message:
+            self.lbl_auth_error.setText(message)
+            self.lbl_auth_error.show()
 
     def _set_busy(self, busy):
         ready = self.service is not None and not busy
-        for control in (self.btn_unlock, self.btn_diagnose, self.btn_auth_cloud,
-                        self.btn_new, self.btn_cloud, self.btn_lock, self.btn_save_new,
+        for control in (self.btn_unlock, self.btn_diagnose, self.btn_auth_cloud, self.chk_keep_signed_in,
+                        self.btn_new, self.btn_cloud, self.btn_lock, self.btn_refresh, self.btn_save_new,
                         self.cards_container, self.new_fields):
             control.setEnabled(ready)
-        self.btn_unlock.setText("Signing in…" if busy and self._task_name == "authenticate" else "Sign in")
+        self.btn_unlock.setText("Signing in…" if busy and self._task_name in ("authenticate", "initialize")
+                                else "Sign in")
         self.btn_diagnose.setText("Checking…" if busy and self._task_name == "diagnose" else "Check connection")
+        self.btn_refresh.setText("Refreshing…" if busy and self._task_name == "tickets" else "Refresh")
+        self.btn_lock.setText("Signing out…" if busy and self._task_name == "lock" else "Log out")
 
     def _build_auth_screen(self):
         page = QWidget(self.stack)
@@ -665,6 +703,11 @@ class OwnerTicketDialog(_TaskPortal):
         password_row.addWidget(self.btn_toggle_eye)
         form.addWidget(field("Password", password, self.auth_card))
         self.txt_auth_pwd.setAccessibleName("Password or local access key")
+        self.chk_keep_signed_in = QCheckBox("Keep me signed in", self.auth_card)
+        self.chk_keep_signed_in.setToolTip("Stay signed in on this device. The session is kept in your "
+                                           "system's secure credential storage until you log out.")
+        self.chk_keep_signed_in.setCursor(Qt.CursorShape.PointingHandCursor)
+        form.addWidget(self.chk_keep_signed_in)
         self.lbl_auth_error = label("", self.auth_card, "feedback", wrap=True)
         retone(self.lbl_auth_error, "fail")
         self.lbl_auth_error.hide()
@@ -747,8 +790,10 @@ class OwnerTicketDialog(_TaskPortal):
                 self.txt_auth_pwd.setFocus()
                 return
 
+            keep = self.chk_keep_signed_in.isChecked()
+
             def authenticate():
-                ok, message = self.service.authenticate(email, pwd)
+                ok, message = self.service.authenticate(email, pwd, keep_signed_in=keep)
                 return ok, message, self.service.is_cloud_authenticated, self.service.get_tickets() if ok else []
             self._run_task("authenticate", authenticate, self._authenticated)
         except Exception as e:
@@ -774,10 +819,12 @@ class OwnerTicketDialog(_TaskPortal):
         self._update_eye_icon(True)
         self.txt_auth_pwd.setEchoMode(QLineEdit.EchoMode.Password)
         self._tickets = tickets
+        self._tickets_generation += 1
         self._update_cloud_badge()
         self.access_label.setText("Signed in to Firebase" if self._cloud_authenticated else "Local developer access")
         self._render_tickets_list()
         self.stack.setCurrentIndex(1)
+        self._start_live_updates()
         if not self._dashboard_fitted:
             fit_dialog(self, preferred=(880, 740), minimum=(360, 300))
             self._dashboard_fitted = True
@@ -825,15 +872,25 @@ class OwnerTicketDialog(_TaskPortal):
             body, compact_width=720)
         layout.addWidget(self.search_row)
         self.access_label = label("Private defect reports", body, "metadata", wrap=True)
-        account_actions = QWidget(body)
-        actions = QHBoxLayout(account_actions)
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setSpacing(10)
+        self.btn_refresh = button("Refresh", body, self._refresh_tickets_list, role="quiet", vector="reload")
+        self.btn_refresh.setToolTip("Reload the ticket list now. Changes from other devices also appear on their own.")
         self.btn_cloud = button("Connection settings", body, self._open_firebase_settings_modal, role="quiet", vector="settings")
-        self.btn_lock = button("Lock", body, self._do_lock, role="quiet", vector="lock")
-        actions.addWidget(self.btn_cloud)
-        actions.addWidget(self.btn_lock)
-        self.account_row = ResponsiveRow([(self.access_label, 1), (account_actions, 0)], body, compact_width=520)
+        self.btn_lock = button("Log out", body, self._do_lock, role="quiet", vector="lock")
+        self.btn_lock.setToolTip("Sign out and forget a kept session on this device.")
+        # Three actions reflow into fewer columns on a narrow dashboard instead of widening it.
+        account_actions = ResponsiveGrid([self.btn_refresh, self.btn_cloud, self.btn_lock], body,
+                                         columns=3, cell_width=120)
+        self.live_label = label("", body, "metadata", wrap=True)
+        self.live_label.setObjectName("developer-live-status")
+        # The account caption, then its actions at full width: a grid that wraps beside
+        # another widget does not grow its row, which clipped the wrapped action.
+        self.account_row = QWidget(body)
+        account = QVBoxLayout(self.account_row)
+        account.setContentsMargins(0, 0, 0, 0)
+        account.setSpacing(8)
+        account.addWidget(self.access_label)
+        account.addWidget(account_actions)
+        account.addWidget(self.live_label)
         layout.addWidget(self.account_row)
         self.form_card = NeoCard(body, accent=True)
         form = QVBoxLayout(self.form_card)
@@ -971,6 +1028,7 @@ class OwnerTicketDialog(_TaskPortal):
     def _created(self, result, error):
         if not error and result and result[0]:
             self._tickets = result[1]
+            self._tickets_generation += 1
             self.new_title.clear()
             self.new_desc.clear()
             self.form_card.setVisible(False)
@@ -986,6 +1044,8 @@ class OwnerTicketDialog(_TaskPortal):
             widget.findChild(QLabel, "val-label").setText(str(value))
 
     def _refresh_tickets_list(self):
+        if self.service is None:
+            return
         self._run_task("tickets", self.service.get_tickets, self._tickets_loaded)
 
     def _tickets_loaded(self, tickets, error):
@@ -993,9 +1053,15 @@ class OwnerTicketDialog(_TaskPortal):
             QMessageBox.warning(self, "Load tickets", error)
             return
         self._tickets = tickets
+        self._tickets_generation += 1
         self._render_tickets_list()
 
     def _render_tickets_list(self):
+        # A list rebuilt by a remote change must not throw the reader back to the top.
+        scrollbar = self.scroll.verticalScrollBar() if hasattr(self, "scroll") else None
+        position = scrollbar.value() if scrollbar is not None else 0
+        if scrollbar is not None:
+            QTimer.singleShot(0, self, lambda: scrollbar.setValue(min(position, scrollbar.maximum())))
         while self.cards_layout.count() > 1:
             widget = self.cards_layout.takeAt(0).widget()
             if widget:
@@ -1054,6 +1120,7 @@ class OwnerTicketDialog(_TaskPortal):
     def _ticket_mutated(self, result, error):
         if not error and result:
             self._tickets = result[1]
+            self._tickets_generation += 1
             self._render_tickets_list()
         if error or not result or not result[0]:
             QMessageBox.warning(self, "Update ticket", error or "The ticket could not be changed. Try again.")
@@ -1089,12 +1156,21 @@ class OwnerTicketDialog(_TaskPortal):
             pass
 
     def _do_lock(self):
-        self._run_task("lock", self.service.logout, self._locked)
-
-    def _locked(self, _, error):
-        if error:
-            QMessageBox.warning(self, "Lock developer access", error)
+        if self.service is None:
             return
+        self._stop_live_updates()
+        self._run_task("lock", self.service.sign_out, self._locked)
+
+    def _locked(self, result, error):
+        if error:
+            QMessageBox.warning(self, "Log out", error)
+            return
+        ok, message = result if isinstance(result, tuple) else (True, "")
+        if not ok:
+            QMessageBox.warning(self, "Log out", message)
+        self.chk_keep_signed_in.setChecked(False)
+        self._tickets = []
+        self._tickets_generation += 1
         self._cloud_authenticated = False
         self._authenticated_access = False
         self.txt_auth_pwd.clear()
@@ -1154,6 +1230,112 @@ class OwnerTicketDialog(_TaskPortal):
         self._update_cloud_badge()
         if not error:
             self._diagnose_cloud()
+
+    # ── Live updates ─────────────────────────────────────────────────────────
+
+    def _start_live_updates(self):
+        """Follow changes made by other clients while the dashboard is open."""
+        self._stop_live_updates()
+        if self.service is None or not self._authenticated_access:
+            return
+        self._live_generation += 1
+        generation = self._live_generation
+        if self._cloud_authenticated:
+            signals = self._live_signals
+            lock = _SERVICE_LOCKS.setdefault(self.service, Lock())
+            self._watcher = TicketChangeWatcher(
+                self.service, lock,
+                on_change=lambda: signals.changed.emit(generation),
+                on_end=lambda reason: signals.ended.emit(generation, reason))
+            self._watcher.start()
+            self.live_label.setText("Live updates on: changes from your other devices appear here.")
+        else:
+            # A local-only session has no remote; another window on this computer writes the
+            # same tickets file, which is replaced atomically, so watch its folder.
+            folder = str(getattr(self.service, "_storage_dir", "") or "")
+            if folder:
+                self._local_watch = QFileSystemWatcher([folder], self)
+                self._local_watch.directoryChanged.connect(lambda _path: self._on_live_change(generation))
+                self.live_label.setText("Live updates on: changes from other windows on this computer appear here.")
+        retone(self.live_label, "ok")
+
+    def _stop_live_updates(self):
+        self._live_generation += 1
+        self._live_timer.stop()
+        self._live_pending = False
+        if self._watcher is not None:
+            self._watcher.stop()
+            self._watcher = None
+        if self._local_watch is not None:
+            self._local_watch.deleteLater()
+            self._local_watch = None
+        if hasattr(self, "live_label"):
+            self.live_label.setText("")
+
+    @Slot(int)
+    def _on_live_change(self, generation):
+        if generation == self._live_generation and self._authenticated_access:
+            self._live_timer.start()
+
+    @Slot(int, str)
+    def _on_live_ended(self, generation, reason):
+        if generation != self._live_generation:
+            return
+        self._watcher = None
+        messages = {"session": "Live updates stopped because your session ended. Log out and sign in again.",
+                    "denied": "Live updates stopped: the cloud refused access to these tickets.",
+                    "signed-out": ""}
+        self.live_label.setText(messages.get(reason, "Live updates stopped. Use Refresh to reload."))
+        retone(self.live_label, "warn")
+
+    def _start_live_refresh(self):
+        """A quiet re-read that never disables the dashboard or blocks the user's own actions."""
+        if self.service is None or not self._authenticated_access or self.stack.currentIndex() != 1:
+            return
+        if self._live_task is not None:
+            self._live_pending = True
+            return
+        lock = _SERVICE_LOCKS.setdefault(self.service, Lock())
+        task = _ServiceTask("live", self.service.get_tickets, lock)
+        self._live_task = task
+        self._live_started = (self._live_generation, self._tickets_generation)
+        _SERVICE_TASKS.add(task)
+        # A bound slot, so Qt queues the result onto the GUI thread.
+        task.completed.connect(self._live_task_complete)
+        task.finished.connect(lambda: _SERVICE_TASKS.discard(task))
+        task.finished.connect(task.deleteLater)
+        task.start()
+
+    @Slot(object)
+    def _live_task_complete(self, result):
+        self._live_loaded(result, getattr(self, "_live_started", (-1, -1)))
+
+    def _live_loaded(self, result, started):
+        self._live_task = None
+        live_generation, tickets_generation = started
+        _operation, tickets, error = result
+        if live_generation != self._live_generation:
+            return
+        if self._live_pending or tickets_generation != self._tickets_generation:
+            # Something newer happened meanwhile; read again rather than show older tickets.
+            self._live_pending = False
+            self._live_timer.start()
+            return
+        if error or not isinstance(tickets, list) or tickets == self._tickets:
+            return
+        self._tickets = tickets
+        self._tickets_generation += 1
+        self._render_tickets_list()
+
+    def hideEvent(self, event):
+        # A closed portal stops listening; minimizing it (a spontaneous hide) does not.
+        if not event.spontaneous() and not self.isVisible():
+            self._stop_live_updates()
+        super().hideEvent(event)
+
+    def done(self, result):
+        self._stop_live_updates()
+        super().done(result)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):

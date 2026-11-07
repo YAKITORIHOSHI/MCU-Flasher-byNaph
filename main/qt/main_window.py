@@ -452,12 +452,16 @@ class MCUMainWindow(QMainWindow):
         bar = tabs.tabBar()
         # The pane's own width, which the window's says little about once a side panel is open.
         width = tabs.width() - 2 * _tab_strip_inset(tabs)
-        if not getattr(self, "_tab_icons_initialized", False):
-            from main.qt.icons import tab_icon
+        # Icons are rendered for the inks of one theme: the unselected text color and the
+        # selected chip's ink. Rendering them once and keeping them through a theme change
+        # left a white glyph on a white chip, so they follow the theme's inks themselves.
+        from main.qt.icons import tab_icon, tab_icon_inks
+        inks = tab_icon_inks()
+        if getattr(self, "_tab_icon_inks", None) != inks:
             for index, (name, _short, glyph) in enumerate(_TOOL_TABS[:tabs.count()]):
                 tabs.setTabIcon(index, tab_icon(glyph))
                 bar.setAccessibleTabName(index, name)
-            self._tab_icons_initialized = True
+            self._tab_icon_inks = inks
         count = min(tabs.count(), len(_TOOL_TABS))
         full = [_TOOL_TABS[index][0] for index in range(count)]
         short = [_TOOL_TABS[index][1] for index in range(count)]
@@ -624,6 +628,11 @@ class MCUMainWindow(QMainWindow):
         self._editor_panel = MonacoEditorPanel(self._backend, _project_root, self._editor_area)
         self._editor_panel.setObjectName("monaco-editor-panel")
         self._editor_area.addWidget(self._editor_panel)
+        # The source tabs' + chip and context menu. Queued, so the page's call has returned
+        # before a dialog or menu runs its own event loop.
+        bridge = self._editor_panel.bridge
+        bridge.new_file_requested.connect(self._request_new_project_file, Qt.ConnectionType.QueuedConnection)
+        bridge.file_menu_requested.connect(self._show_project_file_menu, Qt.ConnectionType.QueuedConnection)
 
         # Page 1: Detached Placeholder
         from main.qt.detached_editor import EditorDetachedPlaceholder
@@ -802,7 +811,6 @@ class MCUMainWindow(QMainWindow):
         if hasattr(self, "_package_card"):
             self._package_card.apply_theme(theme_name)
         self._refresh_window_icon()
-        self._tab_icons_initialized = False
         invalidate_scene(self)
         self._update_tab_titles_responsive()
         app = QApplication.instance()
@@ -1465,6 +1473,100 @@ class MCUMainWindow(QMainWindow):
         from main.qt.modify_dialog import ModifyFilesDialog
         dlg = ModifyFilesDialog(self._backend, parent=self)
         dlg.exec()
+
+    # ── Source-tab file actions ──────────────────────────────────────────────
+
+    def _file_action_parent(self):
+        """Dialogs open over the editor, including when it is detached."""
+        panel = getattr(self, "_editor_panel", None)
+        return panel.window() if panel is not None else self
+
+    def _refuse_file_change_while_busy(self) -> bool:
+        if not self._is_busy():
+            return False
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            self._file_action_parent(), "Action in Progress",
+            "Project files cannot be added, renamed or deleted while an action is in progress.\n\n"
+            "Please wait for the current action to finish or stop it first.")
+        return True
+
+    def _request_new_project_file(self) -> None:
+        if self._refuse_file_change_while_busy():
+            return
+        from main.qt.new_file_dialog import NewFileDialog
+        dialog = NewFileDialog(self._backend, parent=self._file_action_parent())
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _show_project_file_menu(self, path: str) -> None:
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        from main.qt.icons import icon
+        name = Path(path).name if path else ""
+        if not name:
+            return
+        menu = QMenu(self._file_action_parent())
+        menu.setObjectName("source-tab-menu")
+        rename = menu.addAction(icon("edit"), "Rename…")
+        delete = menu.addAction(icon("clear"), "Delete")
+        delete.setToolTip("Move this file to the project's hidden bak folder")
+        menu.addSeparator()
+        new_file = menu.addAction(icon("add"), "New file…")
+        busy = self._is_busy()
+        for action in (rename, delete, new_file):
+            action.setEnabled(not busy)
+        chosen = self._exec_file_menu(menu, QCursor.pos())
+        menu.deleteLater()
+        if chosen is rename:
+            self._rename_project_file(name)
+        elif chosen is delete:
+            self._delete_project_file(name)
+        elif chosen is new_file:
+            self._request_new_project_file()
+
+    def _exec_file_menu(self, menu, position):
+        return menu.exec(position)
+
+    def _rename_project_file(self, name: str) -> None:
+        if self._refuse_file_change_while_busy():
+            return
+        from PySide6.QtWidgets import QInputDialog, QLineEdit, QMessageBox
+        parent = self._file_action_parent()
+        new_name, accepted = QInputDialog.getText(parent, "Rename file", f"New name for '{name}':",
+                                                  QLineEdit.EchoMode.Normal, name)
+        new_name = (new_name or "").strip()
+        if not accepted or not new_name or new_name == name:
+            return
+        if Path(new_name).suffix == "":
+            new_name += Path(name).suffix
+        result = self._backend.rename_project_file(name, new_name)
+        if not result.get("success"):
+            QMessageBox.warning(parent, "Rename file", str(result.get("error") or "The file could not be renamed."))
+
+    def _delete_project_file(self, name: str) -> None:
+        if self._refuse_file_change_while_busy():
+            return
+        from PySide6.QtWidgets import QMessageBox
+        parent = self._file_action_parent()
+        box = QMessageBox(parent)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Delete file")
+        box.setText(f"Delete '{name}' from this sketch?")
+        box.setInformativeText("It moves to the hidden 'bak' folder inside the project, "
+                               "so you can restore it from there later.")
+        delete = box.addButton("Move to bak", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not delete:
+            return
+        result = self._backend.delete_project_file(name)
+        if not result.get("success"):
+            QMessageBox.warning(parent, "Delete file", str(result.get("error") or "The file could not be deleted."))
+            return
+        self._on_notification({"type": "info",
+                               "message": f"'{name}' moved to the project's bak folder: {result.get('bak', '')}"})
 
     def _shortcut_reload_file(self) -> None:
         """Reload the active file in the editor from disk."""

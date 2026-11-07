@@ -100,4 +100,50 @@ for (const ratio of [0.75, 1.25, 1.75, 1]) {
 assert.equal(layouts, 7, 'Each scale transition must relayout once even at unchanged CSS size');
 assert.equal(frames.length, 0, 'Scale handling must have no idle repaint loop');
 
-console.log('Monaco layout coalesces geometry/DPR changes, keeps CSS dimensions and ignores hidden frames.');
+// Monaco's own size is what must match the anchor. Something else (a bare layout()
+// while the anchor could not be measured) can leave Monaco at another size; the next
+// geometry notification at the unchanged anchor size must still correct it.
+let monacoSize = {width: 960, height: 540};
+window.editorInstance = {
+  layout(size) { layouts += 1; dimensions.push({...size}); monacoSize = {...size}; },
+  getLayoutInfo() { return {...monacoSize}; },
+};
+observers[0].callback();
+frames.shift()();
+const settled = layouts;
+assert.equal(settled, 7, 'An editor already at the anchor size needs no layout');
+monacoSize = {width: 0, height: 0};
+observers[0].callback();
+assert.equal(frames.length, 1);
+frames.shift()();
+assert.equal(layouts, settled + 1, 'A Monaco size that drifted from its anchor must be corrected');
+assert.deepEqual(dimensions.at(-1), {width: 960, height: 540});
+observers[0].callback();
+frames.shift()();
+assert.equal(layouts, settled + 1, 'A fitted editor must not repaint again');
+window.editorInstance.getLayoutInfo = () => { throw new Error('disposed'); };
+observers[0].callback();
+frames.shift()();
+assert.equal(layouts, settled + 2, 'An unreadable layout is treated as unfitted, never as fitted');
+assert.equal(frames.length, 0);
+
+// The page's sheet takes its host widget's logical size, never the rounded-up viewport.
+const backdropScript = html.slice(html.indexOf('      window.setGlassBackdrop = (backdrop) => {'),
+                                  html.indexOf('      const backdrop = (parameters.get'));
+const properties = new Map();
+vm.runInNewContext(backdropScript, {window: {}, document: {documentElement: {style: {
+  setProperty(name, value) { properties.set(name, value); }}}}});
+assert.match(html, /#app-container \{[^}]*width: min\(100%, var\(--host-width, 100%\)\);[^}]*height: min\(100%, var\(--host-height, 100%\)\);/,
+             'The editor sheet must be bounded by its host widget');
+const pageWindow = {};
+vm.runInNewContext(`${backdropScript}; target.set = window.setGlassBackdrop;`, {
+  window: pageWindow, target: pageWindow,
+  document: {documentElement: {style: {setProperty(name, value) { properties.set(name, value); }}}}});
+pageWindow.set({width: 1600, height: 1000, x: -4, y: -90, radius: 16, hostWidth: 421, hostHeight: 250});
+assert.equal(properties.get('--host-width'), '421px');
+assert.equal(properties.get('--host-height'), '250px');
+assert.equal(properties.get('--scene-radius'), '16px');
+pageWindow.set({width: 1600, height: 1000, x: -4, y: -90, radius: 16, hostWidth: 0, hostHeight: NaN});
+assert.equal(properties.get('--host-width'), '421px', 'A hidden or unmeasured host keeps the last real size');
+
+console.log('Monaco layout coalesces geometry/DPR changes, keeps CSS dimensions, corrects drifted sizes, ignores hidden frames, and the sheet follows its host.');

@@ -77,7 +77,9 @@
         });
         store.add(file);
         mapTab(store, file);
-        if (!store.active()) store.activate(file);
+        if (!store.active() || change.activate === true) store.activate(file);
+      } else if (change.activate === true) {
+        store.activate(target);
       }
     } else if (change.operation === 'rename') {
       if (original && original !== target) {

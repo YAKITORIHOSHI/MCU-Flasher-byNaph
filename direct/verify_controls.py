@@ -111,6 +111,94 @@ class ControlChecks(unittest.TestCase):
     def settings(self):
         return self.own(settings_module.SettingsDialog(self.backend))
 
+    def test_combo_lists_drop_from_their_field_with_theme_rows(self):
+        """Lists opened over their combo, and a bare container sheet cleared their fill."""
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QComboBox, QStyle, QStyleOptionComboBox
+        from main.qt.serial_panel import SerialPanel
+        from main.qt.theme import build_stylesheet, get_palette
+        from src.modules.ui_palette import contrast_ratio
+        previous = APP.styleSheet()
+        self.addCleanup(APP.setStyleSheet, previous)
+
+        def pump(seconds=.15):
+            until = time.monotonic() + seconds
+            while time.monotonic() < until:
+                APP.processEvents()
+                time.sleep(.003)
+
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            APP.setStyleSheet(build_stylesheet(mode))
+            fill = QColor(get_palette(mode)["BG_MID"])
+            dialog = self.settings()
+            serial = self.own(SerialPanel(self.backend))
+            serial.resize(900, 320)
+            for host in (dialog, serial):
+                host.show()
+                pump()
+                for combo in host.findChildren(QComboBox):
+                    if not combo.isVisible() or combo.count() < 2:
+                        continue
+                    option = QStyleOptionComboBox()
+                    combo.initStyleOption(option)
+                    self.assertFalse(combo.style().styleHint(QStyle.StyleHint.SH_ComboBox_Popup, option, combo),
+                                     f"{mode}: the list opens over its combo")
+                    combo.setCurrentIndex(combo.count() - 1)
+                    combo.showPopup()
+                    pump()
+                    popup = combo.view().window().geometry()
+                    field = combo.mapToGlobal(QPoint(0, 0))
+                    # Only the screen's own edge may push a list sideways off its field.
+                    at_edge = popup.right() >= combo.screen().availableGeometry().right()
+                    self.assertTrue(popup.x() == field.x() or at_edge,
+                                    f"{mode}: list at x={popup.x()} not aligned with its field at x={field.x()}")
+                    below, above = popup.top() - (field.y() + combo.height()), (field.y()) - popup.bottom()
+                    self.assertTrue(-2 <= below <= 1 or -2 <= above <= 1,
+                                    f"{mode}: list at {popup.getRect()} is detached from field at {field.toTuple()}")
+                    image = combo.view().window().grab().toImage()
+                    # The top visible row, inside the list's rim; the current (last) row is below it.
+                    row = image.pixelColor(5, 6)
+                    self.assertEqual(row.alpha(), 255, f"{mode}: list has no fill")
+                    self.assertLessEqual(max(abs(row.red() - fill.red()), abs(row.green() - fill.green()),
+                                             abs(row.blue() - fill.blue())), 3,
+                                         f"{mode}: unselected rows paint {row.name()} instead of the theme's {fill.name()}")
+                    self.assertGreaterEqual(contrast_ratio(get_palette(mode)["TEXT"], fill.name()), 4.5)
+                    combo.hidePopup()
+                    pump(.05)
+                host.hide()
+
+    def test_settings_section_titles_clear_their_rims(self):
+        """Titles sat in a margin shorter than themselves, so each rim ran through its title."""
+        from PySide6.QtWidgets import QGroupBox, QStyle, QStyleOptionGroupBox
+        from main.qt.theme import build_stylesheet
+        previous = APP.styleSheet()
+        self.addCleanup(APP.setStyleSheet, previous)
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            APP.setStyleSheet(build_stylesheet(mode))
+            dialog = self.settings()
+            dialog._apply_dialog_theme(mode)
+            dialog.show()
+            APP.processEvents()
+            boxes = [box for box in dialog.findChildren(QGroupBox) if box.title() and box.isVisible()]
+            self.assertTrue(boxes)
+            for box in boxes:
+                option = QStyleOptionGroupBox()
+                box.initStyleOption(option)
+                style = box.style()
+                label = style.subControlRect(QStyle.ComplexControl.CC_GroupBox, option,
+                                             QStyle.SubControl.SC_GroupBoxLabel, box)
+                frame = style.subControlRect(QStyle.ComplexControl.CC_GroupBox, option,
+                                             QStyle.SubControl.SC_GroupBoxFrame, box)
+                text_height = box.fontMetrics().height()
+                self.assertGreaterEqual(label.height(), text_height - 1, f"{mode} {box.title()!r} title is clipped")
+                self.assertLessEqual(label.top() + text_height, frame.top(),
+                                     f"{mode} {box.title()!r}: title {label.getRect()} crosses its rim at {frame.top()}")
+                contents = box.contentsRect()
+                self.assertGreater(contents.top(), frame.top(), f"{mode} {box.title()!r} contents overlap the rim")
+            dialog.hide()
+
     def test_settings_save_once_preserves_other_data_and_manual_solarized(self):
         dialog = self.settings()
         self.assertEqual(dialog._theme_map[dialog.theme_combo.currentText()], "solarized_dark")
@@ -584,9 +672,10 @@ class ControlChecks(unittest.TestCase):
             setattr(window, name, Mock())
         toolbar = PrimaryToolbar(self.backend, window)
         window.addToolBar(toolbar)
-        buttons = [toolbar.btn_stop, toolbar.btn_clean, toolbar.btn_save, toolbar.btn_save_all, toolbar.btn_reload, toolbar.btn_modify]
+        buttons = [toolbar.btn_stop, toolbar.btn_clean, toolbar.btn_save, toolbar.btn_save_all, toolbar.btn_reload]
         callbacks = [self.backend.stop_operation, self.backend.clean_cache, window._shortcut_save,
-                     window._shortcut_save_all, window._shortcut_reload_file, window._open_modify_files_dialog]
+                     window._shortcut_save_all, window._shortcut_reload_file]
+        self.assertFalse(hasattr(toolbar, "btn_modify"), "Modify left the Actions row for the source tabs")
         for index, (button, callback) in enumerate(zip(buttons, callbacks)):
             self.backend.is_busy = index == 0
             self.backend.active_operation = "compile" if index == 0 else None
