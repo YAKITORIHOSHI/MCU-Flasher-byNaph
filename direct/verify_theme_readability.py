@@ -170,6 +170,48 @@ class ThemeReadabilityChecks(unittest.TestCase):
         self.assertEqual(window._status_label.text(), "Saved all files")
         self.assertFalse(window._progress_bar.isVisible())
 
+    def test_tab_glyphs_contrast_with_their_tab_in_every_state_and_theme(self):
+        """A white glyph on a white selected chip was the reported defect."""
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QIcon
+        from main.core import file_utils
+        from main.qt.icons import tab_icon, tab_icon_inks
+        from main.qt.theme import glass_tokens
+
+        def glyph_ink(qicon, state):
+            image = qicon.pixmap(QSize(20, 20), 1.0, QIcon.Mode.Normal, state).toImage()
+            colors = {}
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    pixel = image.pixelColor(x, y)
+                    if pixel.alpha() > 200:
+                        colors[pixel.name()] = colors.get(pixel.name(), 0) + 1
+            self.assertTrue(colors, "the glyph painted nothing")
+            return max(colors, key=colors.get)
+
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            chip = glass_tokens(mode)["chip"]
+            ink, selected = tab_icon_inks(mode)
+            self.assertGreaterEqual(contrast_ratio(selected, chip), 4.5, f"{mode} selected glyph on its chip")
+            rendered = tab_icon("terminal")
+            self.assertGreaterEqual(contrast_ratio(glyph_ink(rendered, QIcon.State.On), chip), 4.5, mode)
+            self.assertEqual(glyph_ink(rendered, QIcon.State.Off), ink, mode)
+
+        # The workspace re-renders its tool-tab glyphs for whatever theme is active, even
+        # when that theme arrived without the window's own change handler.
+        Theme.apply_theme("light")
+        with patch.object(file_utils, "hide_internal_project_metadata"):
+            window = self.make_widget(MCUMainWindow(PreviewBackend()))
+        for mode in ("default", "solarized_dark", "light", "default"):
+            Theme.apply_theme(mode)
+            window._update_tab_titles_responsive()
+            chip = glass_tokens(mode)["chip"]
+            tabs = window._bottom_tabs
+            for index in range(tabs.count()):
+                self.assertGreaterEqual(contrast_ratio(glyph_ink(tabs.tabIcon(index), QIcon.State.On), chip), 4.5,
+                                        f"{mode} tool tab {index} glyph disappears when selected")
+
     def test_workspace_theme_signal_rebuilds_each_log_once(self):
         from main.core import file_utils
         from main.qt.signals import signals

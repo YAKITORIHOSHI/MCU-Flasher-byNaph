@@ -24,10 +24,11 @@ _STEPS = 3
 
 
 class _PhaseTrace(QWidget):
-    """Three pads on one routed trace; each lights when that step really starts."""
+    """Pads on one routed trace (three by default); each lights when that step really starts."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, steps: int = _STEPS):
         super().__init__(parent)
+        self._steps = max(2, int(steps))
         self._phase = 0
         self._inks = (QColor("#56cfbf"), QColor("#2a5f58"), QColor("#101b2a"))
         self.setFixedSize(132, 16)
@@ -35,8 +36,8 @@ class _PhaseTrace(QWidget):
         self.set_phase(0)
 
     def set_phase(self, phase: int) -> None:
-        self._phase = max(0, min(_STEPS - 1, int(phase)))
-        self.setAccessibleDescription(f"Step {self._phase + 1} of {_STEPS}")
+        self._phase = max(0, min(self._steps - 1, int(phase)))
+        self.setAccessibleDescription(f"Step {self._phase + 1} of {self._steps}")
         self.update()
 
     def set_inks(self, lit: str, unlit: str, surface: str) -> None:
@@ -48,8 +49,8 @@ class _PhaseTrace(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         middle = self.height() / 2
-        spacing = (self.width() - 12) / (_STEPS - 1)
-        pads = [6 + index * spacing for index in range(_STEPS)]
+        spacing = (self.width() - 12) / (self._steps - 1)
+        pads = [6 + index * spacing for index in range(self._steps)]
         for index, (start, end) in enumerate(zip(pads, pads[1:])):
             # The chamfered jog follows the routed strokes of the app's icon family.
             centre = (start + end) / 2

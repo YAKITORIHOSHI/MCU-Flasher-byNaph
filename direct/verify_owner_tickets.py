@@ -109,6 +109,19 @@ class PortalChecks(unittest.TestCase):
         self.service.test_firebase_connection.return_value = (True, "Connection verified in the fixture.")
         self.service.check_connection.return_value = (True, "Connected. Sign in to continue.")
         self.service.configure_local_access.return_value = (True, "Your local access key is saved.")
+        self.service.restore_session.return_value = (False, "")
+        self.service.sign_out.return_value = (True, "Signed out.")
+        self.service._storage_dir = ROOT / "temp" / "audit" / "developer-portal-live"
+        self.service._storage_dir.mkdir(parents=True, exist_ok=True)
+        # Live updates are exercised explicitly; no fixture opens a real event stream.
+        self.watchers = []
+        def watcher(*args, **kwargs):
+            created = Mock(name="TicketChangeWatcher", args=args, kwargs=kwargs)
+            self.watchers.append(created)
+            return created
+        watcher_patch = patch.object(portal, "TicketChangeWatcher", side_effect=watcher)
+        watcher_patch.start()
+        self.addCleanup(watcher_patch.stop)
         patcher = patch.object(portal, "OwnerTicketService", return_value=self.service)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -382,20 +395,22 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(self.dialog.txt_auth_pwd.echoMode(), QLineEdit.EchoMode.Normal)
         QTest.keyClick(self.dialog.txt_auth_pwd, Qt.Key.Key_Return)
         settle(self.dialog)
-        self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only")
+        self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only",
+                                                          keep_signed_in=False)
         self.assertEqual(self.dialog.stack.currentIndex(), 1)
         self.assertEqual(self.dialog.txt_auth_pwd.text(), "")
         self.assertEqual(self.dialog.txt_auth_pwd.echoMode(), QLineEdit.EchoMode.Password)
         self.dialog._do_lock()
         settle(self.dialog)
         self.assertEqual(self.dialog.stack.currentIndex(), 0)
-        self.service.logout.assert_called_once()
+        self.service.sign_out.assert_called_once()
         self.service.authenticate.reset_mock()
         self.dialog.txt_auth_email.setFocus()
         self.dialog.txt_auth_pwd.setText("fixture-only")
         QTest.keyClick(self.dialog.txt_auth_email, Qt.Key.Key_Return)
         settle(self.dialog)
-        self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only")
+        self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only",
+                                                          keep_signed_in=False)
 
     def test_search_filter_create_edit_and_delete_routes(self):
         self.sign_in()
@@ -495,7 +510,8 @@ class PortalChecks(unittest.TestCase):
         self.dialog.txt_auth_pwd.setText(" fixture-only ")
         self.dialog._do_authenticate()
         settle(self.dialog)
-        self.service.authenticate.assert_called_once_with("developer@example.com", " fixture-only ")
+        self.service.authenticate.assert_called_once_with("developer@example.com", " fixture-only ",
+                                                          keep_signed_in=False)
         self.assertEqual(self.dialog.stack.currentIndex(), 0)
         self.assertEqual(self.dialog.lbl_auth_error.text(), message)
         self.assertFalse(self.dialog.lbl_auth_error.isHidden())
@@ -761,7 +777,7 @@ class PortalChecks(unittest.TestCase):
         def read_config():
             self.assertIsNot(QThread.currentThread(), APP.thread())
             return {"owner_email": "developer@example.com", "use_firebase": False}
-        def authenticate(email, password):
+        def authenticate(email, password, **_options):
             self.assertIsNot(QThread.currentThread(), APP.thread())
             return True, "Local access unlocked"
         self.service.get_config.side_effect = read_config
@@ -822,6 +838,94 @@ class PortalChecks(unittest.TestCase):
             self.assertLessEqual(self.dialog.auth_card.width(), viewport.width())
             self.assertEqual(self.dialog.auth_scroll.horizontalScrollBar().maximum(), 0)
         capture(self.dialog, "login-centered-compact")
+
+    def test_keep_signed_in_reaches_the_service_and_log_out_forgets_it(self):
+        self.assertFalse(self.dialog.chk_keep_signed_in.isChecked())
+        self.dialog.chk_keep_signed_in.setChecked(True)
+        self.dialog.txt_auth_pwd.setText("fixture-only")
+        self.dialog._do_authenticate()
+        settle(self.dialog)
+        self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only",
+                                                          keep_signed_in=True)
+        self.assertEqual(self.dialog.stack.currentIndex(), 1)
+        self.assertTrue(self.dialog.btn_lock.isVisibleTo(self.dialog))
+        self.assertEqual(self.dialog.btn_lock.text(), "Log out")
+        self.dialog.btn_lock.click()
+        settle(self.dialog)
+        self.service.sign_out.assert_called_once()
+        self.assertEqual(self.dialog.stack.currentIndex(), 0)
+        self.assertFalse(self.dialog.chk_keep_signed_in.isChecked())
+        self.assertEqual(self.dialog._tickets, [])
+
+    def test_a_kept_session_opens_straight_to_the_tickets(self):
+        self.service.restore_session.return_value = (True, "Signed in from your kept session.")
+        self.service.authenticate.reset_mock()
+        dialog = portal.OwnerTicketDialog()
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        show(dialog)
+        settle(dialog)
+        self.assertEqual(dialog.stack.currentIndex(), 1)
+        self.service.authenticate.assert_not_called()
+        self.assertTrue(dialog.chk_keep_signed_in.isChecked())
+        self.assertEqual(len(dialog.cards_container.findChildren(portal.TicketCard)), len(self.tickets))
+
+    def test_refresh_reloads_and_live_changes_rerender_quietly(self):
+        self.sign_in()
+        self.assertEqual(self.dialog.btn_refresh.text(), "Refresh")
+        self.assertIsNotNone(self.dialog._local_watch, "a local session watches its tickets folder")
+        before = self.service.get_tickets.call_count
+        self.tickets.append({**self.tickets[0], "id": "refreshed-fixture", "title": "Refreshed fixture"})
+        self.dialog.btn_refresh.click()
+        settle(self.dialog)
+        self.assertEqual(self.service.get_tickets.call_count, before + 1)
+        titles = lambda: [card.ticket.get("title") for card in self.dialog.cards_container.findChildren(portal.TicketCard)
+                          if card.isVisibleTo(self.dialog)]
+        self.assertIn("Refreshed fixture", titles())
+
+        # Another client writes: one quiet re-read, the dashboard stays usable throughout.
+        self.tickets.append({**self.tickets[0], "id": "pushed-fixture", "title": "Pushed from elsewhere"})
+        cards = set(self.dialog.cards_container.findChildren(portal.TicketCard))
+        self.dialog._live_signals.changed.emit(self.dialog._live_generation)
+        self.dialog._live_signals.changed.emit(self.dialog._live_generation)
+        self.assertTrue(self.dialog.btn_new.isEnabled())
+        deadline = time.monotonic() + 4
+        while "Pushed from elsewhere" not in titles() and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertIn("Pushed from elsewhere", titles())
+        self.assertEqual(self.service.get_tickets.call_count, before + 2, "a burst of notices costs one read")
+        self.assertTrue(self.dialog.btn_new.isEnabled())
+
+        # Nothing changed: no rebuild. A stale watcher's notice is ignored.
+        cards = [card for card in self.dialog.cards_container.findChildren(portal.TicketCard) if card.isVisibleTo(self.dialog)]
+        self.dialog._live_signals.changed.emit(self.dialog._live_generation)
+        self.dialog._live_signals.changed.emit(self.dialog._live_generation - 1)
+        QTest.qWait(self.dialog.LIVE_REFRESH_DELAY_MS + 300)
+        settle(self.dialog)
+        self.assertEqual([card for card in self.dialog.cards_container.findChildren(portal.TicketCard)
+                          if card.isVisibleTo(self.dialog)], cards)
+
+    def test_cloud_sessions_watch_for_pushed_changes_until_log_out_or_close(self):
+        self.service.is_cloud_authenticated = True
+        self.sign_in()
+        self.assertEqual(len(self.watchers), 1)
+        watcher = self.watchers[0]
+        watcher.start.assert_called_once()
+        self.assertIs(watcher.args[0], self.service)
+        self.assertIn("Live updates on", self.dialog.live_label.text())
+        watcher.kwargs["on_end"]("session")
+        settle(self.dialog)
+        self.assertIn("session ended", self.dialog.live_label.text())
+        self.dialog._start_live_updates()
+        self.assertEqual(len(self.watchers), 2)
+        self.dialog.btn_lock.click()
+        settle(self.dialog)
+        self.watchers[1].stop.assert_called()
+        self.service.is_cloud_authenticated = True
+        self.sign_in()
+        self.dialog.close()
+        settle(self.dialog)
+        self.watchers[2].stop.assert_called()
 
     def test_render_all_themes_and_compact_forms(self):
         self.sign_in()

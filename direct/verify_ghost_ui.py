@@ -60,8 +60,33 @@ class GhostUIChecks(unittest.TestCase):
             time.sleep(.005)
         self.assertTrue(condition())
 
+    def test_save_dialog_defaults_to_mysketch_and_validates_names(self):
+        from main.qt.ghost_sketch import GhostSaveDialog
+        dialog = GhostSaveDialog(None, fixture_path())
+        self.addCleanup(dialog.deleteLater)
+        self.assertEqual(dialog.sketch_name(), "MySketch")
+        self.assertEqual(dialog.save_parent(), fixture_path())
+        self.assertTrue(dialog.save_button.isEnabled())
+        self.assertIn("MySketch (1)", dialog.note.text())
+        dialog.name_edit.setText("bad/name")
+        self.assertFalse(dialog.save_button.isEnabled())
+        dialog.name_edit.setText("Rover")
+        dialog.location_edit.setText("")
+        self.assertFalse(dialog.save_button.isEnabled())
+
+    def test_chosen_name_reaches_the_save_worker(self):
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(fixture_path(), "Rover")):
+            self.controller.request_save()
+        self.flush[0]["callback"]()
+        self.pump_until(lambda: bool(self.promotions))
+        self.window._backend.save_ghost_project.assert_called_once_with(fixture_path(), sketch_name="Rover")
+        self.promotions[0][1]["callback"]()
+        name, payload = self.window._backend.emit.call_args.args
+        self.assertEqual((name, payload["type"]), ("notification", "success"))
+        self.assertIn(fixture_path("SavedSketch"), payload["message"])
+
     def test_cancel_location_keeps_project_and_buffers(self):
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory", return_value=""):
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=None):
             self.controller.request_save()
         self.assertEqual(self.flush, [])
         self.window._backend.save_ghost_project.assert_not_called()
@@ -70,7 +95,7 @@ class GhostUIChecks(unittest.TestCase):
 
     def test_acknowledged_flush_precedes_copy_and_renderer_ack_precedes_completion(self):
         done = Mock()
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory", return_value=fixture_path("SavedSketch")):
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(fixture_path(), "SavedSketch")):
             self.controller.request_save(callback=done)
         self.assertFalse(self.window.isEnabled())
         self.window._backend.save_ghost_project.assert_not_called()
@@ -100,7 +125,7 @@ class GhostUIChecks(unittest.TestCase):
 
     def test_flush_failure_keeps_ghost_without_copy(self):
         failed = Mock()
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory", return_value=fixture_path("SavedSketch")), \
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(fixture_path(), "SavedSketch")), \
                 patch("main.qt.ghost_sketch.QMessageBox.warning"):
             self.controller.request_save(failure_callback=failed)
             self.flush[0]["failure_callback"]()
@@ -111,7 +136,7 @@ class GhostUIChecks(unittest.TestCase):
     def test_saved_project_warning_is_reported_after_ack_without_vetoing_success(self):
         done = Mock()
         self.window._backend.save_ghost_project.return_value['warning'] = 'Saved, but recent-project preferences could not be updated.'
-        with patch('main.qt.ghost_sketch.QFileDialog.getExistingDirectory', return_value=fixture_path('SavedSketch')):
+        with patch('main.qt.ghost_sketch.ask_ghost_save_location', return_value=(fixture_path(), "SavedSketch")):
             self.controller.request_save(callback=done)
         self.flush[0]['callback']()
         self.pump_until(lambda: bool(self.promotions))
@@ -125,7 +150,7 @@ class GhostUIChecks(unittest.TestCase):
 
     def test_failed_promotion_locks_editor_and_explicit_save_retries_without_copy(self):
         failed, done = Mock(), Mock()
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory", return_value=fixture_path("SavedSketch")):
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(fixture_path(), "SavedSketch")):
             self.controller.request_save(failure_callback=failed)
         self.flush[0]["callback"]()
         self.pump_until(lambda: bool(self.promotions))
@@ -138,7 +163,7 @@ class GhostUIChecks(unittest.TestCase):
         self.assertFalse(self.editor.isEnabled())
         self.assertTrue(self.controller.needs_recovery)
         self.assertFalse(self.controller.is_saving)
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory") as picker:
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location") as picker:
             self.controller.request_save(callback=done)
         picker.assert_not_called()
         self.assertEqual(self.window._backend.save_ghost_project.call_count, 1)
@@ -152,7 +177,7 @@ class GhostUIChecks(unittest.TestCase):
     def test_copy_worker_error_notifies_before_failure_callback_once(self):
         self.window._backend.save_ghost_project.side_effect = OSError('owned fixture refused copy')
         notified = []
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory", return_value=fixture_path("SavedSketch")), \
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(fixture_path(), "SavedSketch")), \
                 patch("main.qt.ghost_sketch.QMessageBox.warning") as warning:
             self.controller.request_save(failure_callback=lambda: notified.append(warning.call_count))
             self.flush[0]['callback']()
@@ -226,7 +251,7 @@ controller._release_project(sys.argv[3])
             self.assertTrue(probe.isVisible())
             probe._backend.stop_services.assert_not_called()
             with patch('main.qt.ghost_sketch.QMessageBox.question', return_value=QMessageBox.StandardButton.Save), \
-                    patch('main.qt.ghost_sketch.QFileDialog.getExistingDirectory', return_value=fixture_path('SavedSketch')):
+                    patch('main.qt.ghost_sketch.ask_ghost_save_location', return_value=(fixture_path(), "SavedSketch")):
                 event = QCloseEvent()
                 probe.closeEvent(event)
             self.assertFalse(event.isAccepted())
@@ -283,7 +308,7 @@ controller._release_project(sys.argv[3])
         with patch('main.core.config.clean_instance_config'), \
                 patch('src.modules.ubuntu_download_manager.quit_if_last_workspace'), \
                 patch('main.qt.ghost_sketch.QMessageBox.question', return_value=QMessageBox.StandardButton.Save), \
-                patch('main.qt.ghost_sketch.QFileDialog.getExistingDirectory') as picker, \
+                patch('main.qt.ghost_sketch.ask_ghost_save_location') as picker, \
                 patch.object(self.controller, '_release_project') as release:
             event = QCloseEvent()
             probe.closeEvent(event)
@@ -298,7 +323,7 @@ controller._release_project(sys.argv[3])
     def test_actual_workspace_close_save_with_cancelled_chooser_stays_open(self):
         probe = self.close_probe()
         with patch('main.qt.ghost_sketch.QMessageBox.question', return_value=QMessageBox.StandardButton.Save), \
-                patch('main.qt.ghost_sketch.QFileDialog.getExistingDirectory', return_value=''):
+                patch('main.qt.ghost_sketch.ask_ghost_save_location', return_value=None):
             event = QCloseEvent()
             probe.closeEvent(event)
         self.assertFalse(event.isAccepted())
@@ -318,7 +343,7 @@ controller._release_project(sys.argv[3])
         self.window._backend.discard_ghost_project.assert_not_called()
 
     def test_pending_promotion_refuses_close_or_repeat_save(self):
-        with patch("main.qt.ghost_sketch.QFileDialog.getExistingDirectory", return_value=fixture_path("SavedSketch")) as picker:
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(fixture_path(), "SavedSketch")) as picker:
             self.controller.request_save()
             self.controller.request_save()
         picker.assert_called_once()

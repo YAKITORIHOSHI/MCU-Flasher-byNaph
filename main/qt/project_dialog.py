@@ -1160,9 +1160,13 @@ class ProjectDialog(GlassDialog):
                 "Please wait for the current action to finish or stop it first.",
             )
             return
-        if item is None:
+        # QPushButton.clicked passes its checked state (False) here, which is not an item:
+        # "Open selected" used to return at once and never open anything.
+        if not isinstance(item, QListWidgetItem):
             item = self._recent_list.currentItem()
         if not item:
+            self._recent_preview_lbl.set_icon("warning")
+            self._recent_preview_lbl.setText("Choose a recent project to open.")
             return
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path:

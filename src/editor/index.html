@@ -30,6 +30,12 @@
         for (const name of ['width', 'height', 'x', 'y', 'radius']) {
           if (Number.isFinite(backdrop[name])) style.setProperty('--scene-' + name, backdrop[name] + 'px');
         }
+        // The widget's own logical size. Chromium rounds a fractional-scale surface up to
+        // whole device pixels, which made the viewport, and the sheet filling it, larger
+        // than the widget: its right and bottom rim were cut off.
+        for (const [name, property] of [['hostWidth', '--host-width'], ['hostHeight', '--host-height']]) {
+          if (Number.isFinite(backdrop[name]) && backdrop[name] > 0) style.setProperty(property, backdrop[name] + 'px');
+        }
       };
       const backdrop = (parameters.get('backdrop') || '').split(',').map(Number);
       if (backdrop.length === 5) {
@@ -244,7 +250,11 @@
       display: flex;
       flex-direction: column;
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
+      /* The host widget's size, never more than the viewport: see setGlassBackdrop. */
+      width: min(100%, var(--host-width, 100%));
+      height: min(100%, var(--host-height, 100%));
       min-width: 0;
       min-height: 0;
       /* The same sheet of glass the window paints under its own panes. */
@@ -461,7 +471,38 @@
       -webkit-text-stroke: .25px currentColor;
     }
 
+    /* Hovering the selected tab keeps the chip and its ink: the plain hover fill is translucent
+       glass meant for text-colored labels, and the chip's ink would vanish into it. */
+    .tab.active:hover { background: var(--chip); color: var(--chip-ink); }
     .tab.active::before { background: var(--chip-ink); opacity: 1; }
+    .tab.active .dirty-dot { box-shadow: 0 0 0 1.5px var(--chip-ink); }
+
+    /* New file: a round chip at the end of the tabs, the same glass as an unselected tab. */
+    #tab-add {
+      flex: 0 0 auto;
+      width: 30px;
+      height: 30px;
+      margin: 0 8px 0 -2px;
+      padding: 0;
+      border: 1px solid var(--tab-rim);
+      border-radius: 50%;
+      background: var(--tab-fill);
+      color: var(--text);
+      cursor: pointer;
+    }
+    #tab-add::before {
+      content: '';
+      display: block;
+      width: 14px;
+      height: 14px;
+      margin: auto;
+      background: currentColor;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M7 1.5v11M1.5 7h11' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    #tab-add:hover { background: var(--tab-fill-hover); border-color: var(--accent); }
+    #tab-add:focus-visible { border-color: var(--accent); }
+    @media (max-height: 460px) { #tab-add { width: 26px; height: 26px; } }
+    @media (max-height: 200px) { #tab-add { width: 22px; height: 22px; } }
 
     .tab .dirty-dot {
       width: 6px;
@@ -1215,10 +1256,10 @@
       <button class="save" data-action="save">Save</button>
       <button class="save-all" data-action="save_all">Save All</button>
       <button class="reload" data-action="reload">Reload</button>
-      <button class="modify" data-action="modify">Modify</button>
     </div>
     <div id="editor-tab-row">
       <div id="tab-bar" role="tablist" aria-label="Source files"></div>
+      <button id="tab-add" type="button" aria-label="New file" title="New file (choose its name and extension)"></button>
       <button id="ai-banner-toggle" type="button" aria-controls="ai-diff-banner" aria-expanded="false">AI Review</button>
     </div>
     <div id="editor-container" role="tabpanel" aria-label="Source editor">
@@ -1870,8 +1911,19 @@
           const height = editorAnchorElem ? editorAnchorElem.clientHeight : 0;
           const ratio = window.devicePixelRatio || 1;
           if (!editor || typeof editor.layout !== 'function' || width < 1 || height < 1) return;
-          if (!mustLayout && width === lastEditorLayoutWidth && height === lastEditorLayoutHeight
-              && ratio === lastEditorLayoutRatio) return;
+          // Compare with what Monaco actually has, not only with what was last requested here:
+          // a bare layout() elsewhere, made while the anchor could not be measured, otherwise
+          // left Monaco at its own size until the anchor's size happened to change again.
+          let fitted = width === lastEditorLayoutWidth && height === lastEditorLayoutHeight;
+          if (typeof editor.getLayoutInfo === 'function') {
+            try {
+              const info = editor.getLayoutInfo();
+              fitted = !!info && info.width === width && info.height === height;
+            } catch (_) {
+              fitted = false;
+            }
+          }
+          if (!mustLayout && fitted && ratio === lastEditorLayoutRatio) return;
           lastEditorLayoutWidth = width;
           lastEditorLayoutHeight = height;
           lastEditorLayoutRatio = ratio;
@@ -2018,6 +2070,19 @@
 
       const tabBar = document.getElementById('tab-bar');
       observer.observe(tabBar, { childList: true });
+
+      // Files are added from the + chip and removed or renamed from a tab's own menu; Qt asks
+      // for the name and extension and confirms, and a deleted file moves into the project's bak.
+      document.getElementById('tab-add')?.addEventListener('click', () => {
+        window.pywebview?.api?.request_new_file?.();
+      });
+      tabBar.addEventListener('contextmenu', (e) => {
+        const tab = e.target.closest('.tab');
+        if (!tab || !tab._filePath) return;
+        e.preventDefault();
+        if (!tab.classList.contains('active')) tab.click();
+        window.pywebview?.api?.request_file_menu?.(tab._filePath);
+      });
 
       let dragSrcEl = null;
 
@@ -4480,6 +4545,29 @@
         let hideHoverTimer = null;
         let lastHoverWord = '';
         let isMouseOverCard = false;
+        // The card opens at once while Ctrl (Cmd) alone is held, or after the pointer rests on
+        // one symbol for three seconds. Ctrl+Shift belongs to selection, so it never opens it.
+        const HOVER_DWELL_MS = 3000;
+        let dwellTimer = null;
+        let dwellKey = '';
+        window.__mcuHoverDwellMs = HOVER_DWELL_MS;
+
+        function cancelDwell() {
+          if (dwellTimer) clearTimeout(dwellTimer);
+          dwellTimer = null;
+          dwellKey = '';
+        }
+
+        function pointerAt(event, fallback) {
+          // Monaco's mouse event keeps the browser's coordinates on browserEvent (or posx/posy).
+          const raw = event.browserEvent || event;
+          return [raw.clientX ?? event.posx ?? (fallback && fallback.clientX) ?? 100,
+                  raw.clientY ?? event.posy ?? (fallback && fallback.clientY) ?? 100];
+        }
+
+        function descriptorModifier(event) {
+          return !!((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey);
+        }
 
         function hideHoverCard(immediate = false) {
           if (hoverTimer) clearTimeout(hoverTimer);
@@ -4514,7 +4602,14 @@
           }
         }, true);
 
+        // Typing or a selection shortcut (Ctrl+Shift+arrows, Shift+click) is not a request to describe a symbol.
+        window.addEventListener('keydown', (e) => {
+          cancelDwell();
+          if (e.shiftKey || e.key === 'Shift' || e.key === 'Escape') disposeControlHover();
+        }, true);
+
         window.addEventListener('blur', () => {
+          cancelDwell();
           disposeControlHover();
         }, true);
 
@@ -4652,12 +4747,38 @@
           customHoverCard.style.display = 'block';
         }
 
-        editor.onMouseMove((e) => {
+        function onDescriptorMove(e) {
           const event = e.event || e.browserEvent || {};
           const pos = e.target && e.target.position;
-          const isCtrl = !!(event.ctrlKey || event.metaKey);
+          const isCtrl = descriptorModifier(event);
+          const buttonsHeld = !!(event.buttons || (event.browserEvent && event.browserEvent.buttons));
 
-          if (!isCtrl || !pos) {
+          if (!isCtrl) {
+            // No modifier: rest on one symbol for three seconds. Moving to another word, holding a
+            // mouse button (selecting) or Shift (Ctrl+Shift selection) restarts nothing and closes a dwell card.
+            clearCtrlHover();
+            const model = editor.getModel();
+            const wordInfo = pos && model && !buttonsHeld && !event.shiftKey && !event.altKey
+              && !isPositionInStringOrComment(model, pos) ? model.getWordAtPosition(pos) : null;
+            const key = wordInfo && wordInfo.word
+              ? `${model.uri}|${model.getAlternativeVersionId()}|${pos.lineNumber}|${wordInfo.startColumn}` : '';
+            if (key !== dwellKey) {
+              cancelDwell();
+              if (!isMouseOverCard) hideHoverCard(false);
+              if (key) {
+                dwellKey = key;
+                const [cx, cy] = pointerAt(event, e.browserEvent);
+                const element = e.target && e.target.element;
+                dwellTimer = setTimeout(() => {
+                  dwellTimer = null;
+                  if (dwellKey === key) renderHoverCardAt(pos, cx, cy, element);
+                }, HOVER_DWELL_MS);
+              }
+            }
+            return;
+          }
+          cancelDwell();
+          if (!pos) {
             disposeControlHover();
             return;
           }
@@ -4691,24 +4812,31 @@
           updateCtrlHover(pos, true);
 
           if (hoverTimer) clearTimeout(hoverTimer);
-          const cx = event.clientX || (e.browserEvent && e.browserEvent.clientX) || 100;
-          const cy = event.clientY || (e.browserEvent && e.browserEvent.clientY) || 100;
+          const [cx, cy] = pointerAt(event, e.browserEvent);
           hoverTimer = setTimeout(() => {
             renderHoverCardAt(pos, cx, cy, e.target && e.target.element);
           }, 80);
-        });
+        }
+        editor.onMouseMove(onDescriptorMove);
+        // Fixtures drive the same decision with Monaco-shaped events.
+        window.__mcuDescriptorMove = onDescriptorMove;
 
         editor.onMouseLeave(() => {
+          cancelDwell();
           if (!isMouseOverCard) disposeControlHover();
         });
+        editor.onMouseDown(() => cancelDwell());
+        editor.onDidScrollChange(() => cancelDwell());
         editor.onKeyUp((e) => {
           const event = e.browserEvent || {};
           if (!event.ctrlKey && !event.metaKey && !isMouseOverCard) disposeControlHover();
         });
         editor.onDidChangeModelContent(() => {
+          cancelDwell();
           disposeControlHover();
         });
         editor.onDidChangeModel(() => {
+          cancelDwell();
           disposeControlHover();
         });
 

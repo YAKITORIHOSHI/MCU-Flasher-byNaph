@@ -78,6 +78,24 @@ def register_fonts() -> None:
         pass
 
 
+def group_title_room(widget=None) -> int:
+    """Logical pixels of margin above a QGroupBox rim that hold its whole title.
+
+    Titles are placed in that margin. When it is shorter than the title, the rim runs
+    through the text, and a translucent glass card cannot mask it. The title font is the
+    stylesheet's 11px semibold Montserrat; Qt metrics are already logical pixels.
+    """
+    try:
+        from PySide6.QtGui import QFont, QFontMetrics
+        font = QFont(widget.font()) if widget is not None else QFont("Montserrat")
+        font.setFamilies(["Montserrat", "Segoe UI", "Ubuntu", "sans-serif"])
+        font.setPixelSize(11)
+        font.setWeight(QFont.Weight.DemiBold)
+        return max(20, QFontMetrics(font).height() + 6)
+    except Exception:
+        return 22
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Stylesheet builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +203,15 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     btn_blue_h          = "#0858b8" if theme_mode == "light" else pal.get("BTN_BLUE_H", "#2563a6")
     btn_grey            = "#e2e8f0" if theme_mode == "light" else pal.get("BTN_GREY", "#283342")
 
+    from src.modules.ui_palette import contrast_ratio, readable_foreground
+    # The current row of an open combo list: the theme's deep accent, with whichever of the
+    # theme's bright text or plain black/white actually reads on it.
+    combo_selected = cyan_dim
+    combo_selected_ink = (text_bright if contrast_ratio(text_bright, cyan_dim) >= 4.5
+                          else readable_foreground(cyan_dim))
+
+    title_room = group_title_room()
+
     translucent = _translucent
     glass_values = glass_tokens(theme_mode)
     lit = _lit
@@ -207,7 +234,7 @@ def build_stylesheet(theme_mode: str = "default") -> str:
                         "btn-toggle-editor", "btn-toggle-monitors", "btn-settings", "btn-ai-assistant",
                         "btn-copy-console", "btn-clear-console", "btn-serial-send", "btn-terminal-new",
                         "btn-terminal-restart", "btn-terminal-clear", "btn-terminal-open")
-    accent_button_ids = ("btn-compile", "btn-upload", "btn-save", "btn-save-all", "btn-modify")
+    accent_button_ids = ("btn-compile", "btn-upload", "btn-save", "btn-save-all")
 
     def buttons(ids, state: str, *, plain: bool = False) -> str:
         names = [f"QPushButton#{name}{state}" for name in ids]
@@ -478,22 +505,6 @@ QPushButton#btn-reload:enabled:hover {{
     color: {text_bright};
 }}
 QPushButton#btn-reload:disabled {{
-    background-color: {btn_disabled_bg};
-    color: {btn_disabled_fg};
-    border: 1px solid {btn_disabled_border};
-}}
-
-QPushButton#btn-modify:enabled {{
-    background-color: {btn_monitor};
-    color: #ffffff;
-    border: 1px solid {cyan_dim};
-}}
-QPushButton#btn-modify:enabled:hover {{
-    background-color: {btn_monitor_h};
-    border: 1px solid {border_lit};
-    color: #ffffff;
-}}
-QPushButton#btn-modify:disabled {{
     background-color: {btn_disabled_bg};
     color: {btn_disabled_fg};
     border: 1px solid {btn_disabled_border};
@@ -978,16 +989,19 @@ QGroupBox {{
     background-color: {bg_dark};
     border: 1px solid {border};
     border-radius: 6px;
-    margin-top: 10px;
-    padding-top: 14px;
+    margin-top: {title_room}px;
+    padding-top: 10px;
     color: {cyan};
     font-size: 11px;
     font-weight: 600;
 }}
+/* Titles sit wholly in the margin above the rim; glass cards cannot mask a rim behind them. */
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    padding: 0 6px;
+    left: 10px;
+    top: 0px;
+    padding: 0 4px;
     background-color: {bg_dark};
     color: {cyan};
 }}
@@ -1114,12 +1128,23 @@ QHeaderView::section {{
 }}
 QLabel[role="title"] {{ color: {accent_on_sheet}; }}
 QTableCornerButton::section {{ background: transparent; border: none; }}
-/* Popups are their own windows with nothing behind them, so they keep a solid theme fill. */
+/* Popups are their own windows with nothing behind them, so they keep a solid theme fill.
+   Fusion otherwise opens a combo's list over the combo itself, shifted up to line up the
+   current item (a long list covered the whole screen), and paints its items with a menu
+   delegate that ignores ::item rules. A list that drops straight down from the field's
+   left edge, at its width, with theme-colored rows, is what every combo here wants. */
+QComboBox {{ combobox-popup: 0; }}
 QComboBox QAbstractItemView {{
-    background: {bg_mid}; color: {text}; border: 1px solid {border}; border-radius: 0;
-    alternate-background-color: {bg_mid};
-    selection-background-color: {bg_hover}; selection-color: {text_bright};
+    background: {bg_mid}; color: {text}; border: 1px solid {border_lit}; border-radius: 0;
+    alternate-background-color: {bg_mid}; padding: 2px; outline: none;
+    selection-background-color: {combo_selected}; selection-color: {combo_selected_ink};
 }}
+QComboBox QAbstractItemView::item {{
+    min-height: 22px; padding: 2px 8px; border: none; color: {text}; background: transparent;
+}}
+QComboBox QAbstractItemView::item:hover {{ background: {bg_hover}; color: {text_bright}; }}
+QComboBox QAbstractItemView::item:selected {{ background: {combo_selected}; color: {combo_selected_ink}; }}
+QComboBox QAbstractItemView::item:disabled {{ color: {disabled_ink}; background: transparent; }}
 QScrollBar:vertical {{ background: transparent; border: none; }}
 QScrollBar:horizontal {{ background: transparent; border: none; }}
 QScrollBar::handle:vertical {{ background: {handle}; border-radius: 4px; margin: 3px; }}

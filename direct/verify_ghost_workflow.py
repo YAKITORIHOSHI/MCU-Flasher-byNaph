@@ -260,7 +260,7 @@ class GhostWorkflowChecks(unittest.TestCase):
         api.current_board = "Fixture target"
         api.compile_sketch = Mock(side_effect=lambda: build_snapshots.append(
             {(project / name).name: (project / name).read_text(encoding='utf-8') for name in ("GhostSketch.ino", "notes.txt")}))
-        with patch.object(QFileDialog, "getExistingDirectory", side_effect=AssertionError("Build opened save picker")) as picker:
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", side_effect=AssertionError("Build opened save prompt")) as picker:
             window._primary_toolbar._do_compile()
             self.until(lambda: len(build_snapshots) == 1, "acknowledged build flush")
             picker.assert_not_called()
@@ -280,9 +280,9 @@ class GhostWorkflowChecks(unittest.TestCase):
           return file.isDirty;
         })()""" % (json.dumps(note), json.dumps(note_text))))
         self.until(lambda: api.modified_files.get(note), "detached edit acknowledgement")
+        # Saved like the Arduino IDE: the sketch's own folder is created and its main .ino renamed.
         target = self.root / "SavedGhost"
-        target.mkdir()
-        with patch.object(QFileDialog, "getExistingDirectory", return_value=str(target)) as picker:
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(str(self.root), "SavedGhost")) as picker:
             detached.activateWindow()
             window._editor_panel._view.setFocus()
             self.js(page, "window.editorInstance.focus(); true")
@@ -292,7 +292,7 @@ class GhostWorkflowChecks(unittest.TestCase):
             self.until(lambda: not window._ghost_sketch.is_saving, "source publication and model remap")
         self.assertFalse(api.is_ghost_sketch)
         self.assertEqual(api.sketch_dir_path, target)
-        self.assertEqual((target / "GhostSketch.ino").read_text(encoding='utf-8'), source_text)
+        self.assertEqual((target / "SavedGhost.ino").read_text(encoding='utf-8'), source_text)
         self.assertEqual((target / "notes.txt").read_text(encoding='utf-8'), note_text)
         state = self.js(page, """(() => {
           const prior=window.__ghostFixture, files=window.__mcuProjectFileStore.list();
@@ -304,11 +304,12 @@ class GhostWorkflowChecks(unittest.TestCase):
         })()""")
         state = json.loads(state)
         self.assertTrue(state["same"], state)
-        self.assertEqual(state["order"], state["previousOrder"])
+        self.assertEqual(state["order"], [{"GhostSketch.ino": "SavedGhost.ino"}.get(name, name)
+                                          for name in state["previousOrder"]])
         self.assertEqual(state["selection"], state["previousSelection"])
         self.assertTrue(state["undo"])
         self.assertFalse(any(state["dirty"]))
-        self.assertEqual(set(state["paths"]), {str(target / "GhostSketch.ino"), str(target / "notes.txt")})
+        self.assertEqual(set(state["paths"]), {str(target / "SavedGhost.ino"), str(target / "notes.txt")})
         self.assertTrue(all(str(target) in path for path in api.fixture_tab_order))
         self.until(lambda: not project.exists(), "release of acknowledged temporary project")
         self.assertTrue(detached.grab().save(str(CAPTURES / "detached-after-save.png")))
@@ -333,13 +334,13 @@ class GhostWorkflowChecks(unittest.TestCase):
         text = "// saved through close prompt\nvoid setup() {}\nvoid loop() {}\n"
         self.assertTrue(self.js(page, "window.editorInstance.setValue(" + json.dumps(text) + "); true"))
         self.until(lambda: any(api.modified_files.values()), "close-save dirty acknowledgement")
-        target = self.root / "SavedOnClose"
-        target.mkdir()
+        (self.root / "SavedOnClose").mkdir()  # Taken: the save goes to "SavedOnClose (1)" unasked.
+        target = self.root / "SavedOnClose (1)"
         self.questions.return_value = QMessageBox.StandardButton.Save
-        with patch.object(QFileDialog, "getExistingDirectory", return_value=str(target)):
+        with patch("main.qt.ghost_sketch.ask_ghost_save_location", return_value=(str(self.root), "SavedOnClose")):
             self.assertFalse(window.close(), "Async Save must initially veto close")
             self.until(lambda: not isValid(window), "Save-and-close model acknowledgement")
-        self.assertEqual((target / "GhostSketch.ino").read_text(encoding='utf-8'), text)
+        self.assertEqual((target / "SavedOnClose (1).ino").read_text(encoding='utf-8'), text)
         self.assertFalse(api.is_ghost_sketch)
         self.until(lambda: not project.exists(), "Save-and-close temporary release")
 

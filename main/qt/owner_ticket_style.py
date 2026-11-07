@@ -31,6 +31,7 @@ def portal_colors(mode: str) -> dict[str, str]:
 def portal_stylesheet(mode: str) -> str:
     c = portal_colors(mode)
     arrow = (Path(__file__).resolve().parents[2] / "src/assets/icons/developer-chevron.svg").as_posix()
+    check = (Path(__file__).resolve().parents[2] / "src/assets/icons/developer-check.svg").as_posix()
     return f"""
         QDialog, QWidget#developer-portal-surface {{ background: #fffdf5; }}
         QWidget {{ font-family: 'Montserrat', 'Segoe UI', sans-serif; font-size: 12px; color: #141414; }}
@@ -65,6 +66,15 @@ def portal_stylesheet(mode: str) -> str:
             background: #ffffff; color: #141414; border: 2px solid #141414;
             selection-background-color: #ffe85b; selection-color: #141414; padding: 4px;
         }}
+        /* Paper rows in every workspace theme; the workspace's own row inks are for its glass. */
+        QComboBox QAbstractItemView::item {{ color: #141414; background: transparent; min-height: 22px; padding: 2px 8px; }}
+        QComboBox QAbstractItemView::item:hover {{ background: #fff5b8; color: #141414; }}
+        QComboBox QAbstractItemView::item:selected {{ background: #ffe85b; color: #141414; }}
+        QCheckBox {{ color: #141414; spacing: 8px; font-weight: 700; background: transparent; }}
+        QCheckBox::indicator {{ width: 16px; height: 16px; border: 2px solid #141414; border-radius: 2px; background: #ffffff; }}
+        QCheckBox::indicator:hover {{ background: #fff5b8; }}
+        QCheckBox::indicator:checked {{ background: #ffe85b; image: url("{check}"); }}
+        QCheckBox::indicator:disabled {{ background: #e7e3e5; }}
         QPushButton {{
             background: #ffffff; color: #141414; border: 2px solid #141414;
             border-radius: 2px; padding: 9px 12px; font-weight: 800;

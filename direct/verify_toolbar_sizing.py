@@ -127,7 +127,7 @@ class ToolbarSizingChecks(unittest.TestCase):
                 self.assertFalse(self.controls.is_compact(), "Intrinsic workspace actions fit this allocation")
                 self.essentials()
                 for button in (self.toolbar.btn_stop, self.toolbar.btn_clean, self.toolbar.btn_save,
-                               self.toolbar.btn_save_all, self.toolbar.btn_reload, self.toolbar.btn_modify):
+                               self.toolbar.btn_save_all, self.toolbar.btn_reload):
                     self.contained(button, self.toolbar)
                 for button in (self.controls.btn_detach_editor, self.controls.btn_toggle_editor,
                                self.controls.btn_toggle_monitors, self.controls.btn_settings, self.controls.btn_ai):

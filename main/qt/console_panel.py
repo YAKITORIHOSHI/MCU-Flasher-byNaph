@@ -429,7 +429,11 @@ class ConsolePanel(QPlainTextEdit):
         event_block = cursor.block()
         if self._timestamp_enabled and entry["ts"]:
             cursor.insertText(entry["ts"] + " ", self._format("timestamp"))
-        _insert_with_bar_styling(cursor, entry["text"], self._format(entry["tag"]))
+        runs = entry.get("sgr")
+        if runs:
+            self._insert_styled(cursor, entry["text"], entry["tag"], runs)
+        else:
+            _insert_with_bar_styling(cursor, entry["text"], self._format(entry["tag"]))
         if entry["newline"] or event_block.userData() is None:
             event_block.setUserData(_ProgressBlockData(entry["id"], entry["tag"]))
         if entry.get("replace_pattern") or entry.get("progress_key"):
@@ -442,6 +446,30 @@ class ConsolePanel(QPlainTextEdit):
                 self._remember_keyed_progress(entry, cursor.block())
             else:
                 self._remember_keyed_progress(entry)
+
+    def _styled_format(self, tag, style):
+        key = (tag, style)
+        fmt = self._formats.get(key)
+        if fmt is None:
+            from main.qt.ansi_format import styled_format
+            fmt = styled_format(self._format(tag), style, self._theme_name)
+            # Truecolor output can name thousands of styles; keep the cache bounded.
+            if len(self._formats) >= 512:
+                self._formats.clear()
+            self._formats[key] = fmt
+        return fmt
+
+    def _insert_styled(self, cursor, text, tag, runs):
+        """Insert one entry with its SGR spans; unstyled gaps keep the entry's semantic color."""
+        position = 0
+        for start, length, style in runs:
+            if start > position:
+                _insert_with_bar_styling(cursor, text[position:start], self._format(tag))
+            if length > 0:
+                _insert_with_bar_styling(cursor, text[start:start + length], self._styled_format(tag, style))
+            position = max(position, start + length)
+        if position < len(text):
+            _insert_with_bar_styling(cursor, text[position:], self._format(tag))
 
     def _remember_keyed_progress(self, entry, block=None):
         key = entry.get("progress_key")
@@ -526,18 +554,23 @@ class ConsolePanel(QPlainTextEdit):
     def append_log(self, payload: dict) -> None:
         from main.qt.log_buffer import display_text
         original = display_text(payload.get("text", ""))
-        text = self._cleaner.clean(original)
+        text, runs = self._cleaner.clean_styled(original)
         if original and not text:
             return
         ts = payload.get("timestamp") or payload.get("ts") or time.strftime("[%H:%M:%S]")
         stamp = re.match(r"^(\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\])\s?([\s\S]*)$", text)
         if stamp:
             ts, text = stamp.groups()
+            if runs:
+                # The prefix left the text; styled spans keep their place in what remains.
+                cut = stamp.start(2)
+                runs = tuple((max(0, start - cut), min(start + length, len(text) + cut) - max(start, cut), style)
+                             for start, length, style in runs if start + length > cut)
         pattern = payload.get("replace_pattern")
         progress_key = payload.get("progress_key")
         if not isinstance(progress_key, str) or not 0 < len(progress_key) <= 160:
             progress_key = None
-        self._queue.append((text, payload.get("tag", "normal"), payload.get("newline", True), pattern if isinstance(pattern, str) else None, ts, progress_key))
+        self._queue.append((text, payload.get("tag", "normal"), payload.get("newline", True), pattern if isinstance(pattern, str) else None, ts, progress_key, runs))
         if not self._flush_timer.isActive():
             self._flush_timer.start()
 
@@ -551,8 +584,10 @@ class ConsolePanel(QPlainTextEdit):
         cursor = QTextCursor(self.document())
         cursor.beginEditBlock()
         pending_render = []
-        for text, tag, newline, pattern, ts, progress_key in items:
-            record = dict(text=text, tag=tag, newline=newline, replace_pattern=pattern, ts=ts, progress_key=progress_key)
+        for item in items:
+            text, tag, newline, pattern, ts, progress_key = item[:6]
+            record = dict(text=text, tag=tag, newline=newline, replace_pattern=pattern, ts=ts, progress_key=progress_key,
+                          sgr=item[6] if len(item) > 6 else ())
             rendered = self._store_entry(self._entries, record)
             # Only declared live progress is mutable. Compilation file events
             # have no replacement pattern and are always rendered individually.

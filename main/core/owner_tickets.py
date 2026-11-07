@@ -18,6 +18,8 @@ import uuid
 import hashlib
 import hmac
 import secrets
+import socket
+import threading
 import urllib.request
 import urllib.error
 import unicodedata
@@ -34,6 +36,7 @@ from src.modules.offline_runtime import firebase_network_access
 from main.core.firebase_provider import firebase_configuration, validate_firebase_destination
 from main.core.credential_store import (
     CredentialStore,
+    SecureStorageError,
 )
 
 _TICKETS_FILE_NAME = ".owner_tickets.json"
@@ -50,6 +53,12 @@ _DEFAULT_TICKET_CATEGORIES = (
 )
 _MAX_TICKET_CATEGORIES = 64
 _MAX_TICKET_CATEGORY_LENGTH = 80
+# A kept Developer Access session lives only in the OS credential vault, never in a file.
+_KEPT_SESSION_RECORD = "developer-session:"
+# Firebase sends a keep-alive event every 30 seconds on an open event stream.
+_STREAM_READ_TIMEOUT = 75.0
+_STREAM_LINE_LIMIT = 64 * 1024
+_POLL_INTERVAL = 30.0
 
 
 def _clean_ticket_category(value: Any) -> str:
@@ -183,6 +192,7 @@ class OwnerTicketService:
         self._user_email: Optional[str] = None
         self._is_authenticated: bool = False
         self._active_root_collection: Optional[str] = None
+        self._keeping_session = False
 
         try:
             self._init_storage()
@@ -367,8 +377,12 @@ class OwnerTicketService:
     # Authentication (Local Access & Firebase Auth REST API)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def authenticate(self, email_or_user: str, password: str) -> tuple[bool, str]:
-        """Authenticate with the configured local key or Firebase Auth REST API."""
+    def authenticate(self, email_or_user: str, password: str, *, keep_signed_in: bool = False) -> tuple[bool, str]:
+        """Authenticate with the configured local key or Firebase Auth REST API.
+
+        ``keep_signed_in`` stores a renewable session in the OS credential vault so the
+        next launch signs in without a password; without it any kept session is forgotten.
+        """
         try:
             self.logout()
             email_clean = (email_or_user or "").strip()
@@ -376,6 +390,9 @@ class OwnerTicketService:
 
             if not pwd_clean.strip():
                 return False, "Password cannot be blank."
+            if keep_signed_in and not self._credential_store.status[0]:
+                return False, ("Keep me signed in needs your system's secure credential storage. "
+                               + self._credential_store.status[1])
 
             cfg = self.get_config()
 
@@ -387,7 +404,9 @@ class OwnerTicketService:
                     self._is_authenticated = True
                     self._user_email = email_clean or "Local developer"
                     # A local key never supplies a cloud UID or token.
-                    return True, "Signed in to local developer tickets."
+                    return True, self._keep_session(keep_signed_in, {
+                        "kind": "local", "email": self._user_email, "key": record["hash"]},
+                        "Signed in to local developer tickets.")
 
             # 2. Firebase Cloud Authentication via REST API
             if cfg.get("use_firebase") and cfg.get("firebase_api_key"):
@@ -417,7 +436,8 @@ class OwnerTicketService:
                         self._uid = uid
                         self._user_email = data.get("email", email_clean)
                         self._is_authenticated = True
-                        return True, "Firebase Cloud authentication successful."
+                        return True, self._keep_session(keep_signed_in, self._firebase_session_record(),
+                                                        "Firebase Cloud authentication successful.")
                 except urllib.error.HTTPError as e:
                     return False, _firebase_auth_error(e)
                 except Exception as e:
@@ -470,6 +490,148 @@ class OwnerTicketService:
         except Exception:
             pass
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Kept sessions ("Keep me signed in") and sign-out
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _kept_session_name(self) -> str:
+        provider = firebase_configuration()
+        scope = "\n".join((provider["firebase_database_url"], provider["firebase_project_id"]))
+        return _KEPT_SESSION_RECORD + hashlib.sha256(scope.encode("utf-8")).hexdigest()[:32]
+
+    def _firebase_session_record(self) -> Dict[str, Any]:
+        return {"kind": "firebase", "uid": self._uid, "email": self._user_email or "",
+                "refresh_token": self._refresh_token or ""}
+
+    def _forget_kept_session(self) -> bool:
+        try:
+            if self._credential_store.status[0]:
+                self._credential_store.delete(self._kept_session_name())
+            return True
+        except Exception:
+            return False
+
+    def _keep_session(self, keep: bool, record: Dict[str, Any], message: str) -> str:
+        """Store or forget the kept session after a successful sign-in; never fail the sign-in."""
+        if not keep:
+            self._forget_kept_session()
+            self._keeping_session = False
+            return message
+        if record.get("kind") == "firebase" and not record.get("refresh_token"):
+            self._keeping_session = False
+            return message + " This sign-in cannot be kept; sign in again next time."
+        try:
+            self._credential_store.set(self._kept_session_name(), record)
+            self._keeping_session = True
+            return message + " You will stay signed in on this device."
+        except Exception:
+            self._keeping_session = False
+            return message + " This device could not keep you signed in, so sign in again next time."
+
+    @property
+    def keeps_session(self) -> bool:
+        return bool(getattr(self, "_keeping_session", False))
+
+    def restore_session(self) -> tuple[bool, str]:
+        """Sign in from a session kept in the OS vault. Returns (signed in, message for the user)."""
+        self.logout()
+        try:
+            if not self._credential_store.status[0]:
+                return False, ""
+            record = self._credential_store.get(self._kept_session_name())
+        except SecureStorageError as error:
+            return False, str(error)
+        except Exception:
+            return False, ""
+        if not isinstance(record, dict):
+            return False, ""
+        kind = record.get("kind")
+        if kind == "local":
+            try:
+                current = self.get_config().get("local_access")
+            except Exception:
+                current = None
+            key = record.get("key")
+            if (self._local_access_valid(current) and isinstance(key, str)
+                    and hmac.compare_digest(key.encode("ascii", "replace"), current["hash"].encode("ascii", "replace"))):
+                self._is_authenticated = True
+                self._user_email = str(record.get("email") or "Local developer")[:256]
+                self._keeping_session = True
+                return True, "Signed in from your kept session."
+            self._forget_kept_session()
+            return False, "The local access key changed, so your kept session ended. Sign in again."
+        if kind != "firebase":
+            self._forget_kept_session()
+            return False, ""
+        uid, refresh = record.get("uid"), record.get("refresh_token")
+        if not (isinstance(uid, str) and uid and isinstance(refresh, str) and refresh):
+            self._forget_kept_session()
+            return False, "Your kept session was incomplete. Sign in again."
+        self._uid, self._refresh_token = uid, refresh
+        self._user_email = str(record.get("email") or "")[:256] or None
+        # Kept from the start, so the renewal below writes its rotated refresh token back.
+        self._keeping_session = True
+        ok, message = self.refresh_id_token()
+        if not ok:
+            expired = self._refresh_token is None
+            self.logout()
+            self._keeping_session = False
+            if expired:
+                self._forget_kept_session()
+                return False, "Your kept session has expired. Sign in again."
+            return False, message
+        self._keeping_session = True
+        return True, "Signed in from your kept session."
+
+    def refresh_id_token(self) -> tuple[bool, str]:
+        """Exchange the refresh token for a new ID token (they last one hour).
+
+        On a refused token the session ends; on a connection failure it stays as it was.
+        """
+        try:
+            api_key = firebase_configuration()["firebase_api_key"]
+            if not self._refresh_token or not self._uid:
+                return False, "Sign in again."
+            url = f"https://securetoken.googleapis.com/v1/token?key={quote(api_key, safe='')}"
+            payload = urlencode({"grant_type": "refresh_token", "refresh_token": self._refresh_token}).encode("ascii")
+            req = urllib.request.Request(url, data=payload, method="POST",
+                                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+            try:
+                with _open_firebase_request(req, timeout=5.0) as resp:
+                    data = _read_firebase_json(resp, _AUTH_RESPONSE_BYTES)
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code in (400, 401, 403):
+                    self._id_token = None
+                    self._refresh_token = None
+                    self._is_authenticated = False
+                    return False, "Your session has expired. Sign in again."
+                return False, "The cloud service is unavailable. Try again."
+            token = data.get("id_token") if isinstance(data, dict) else None
+            refresh = data.get("refresh_token") if isinstance(data, dict) else None
+            uid = data.get("user_id") if isinstance(data, dict) else None
+            if not (isinstance(token, str) and token and isinstance(refresh, str) and refresh and uid == self._uid):
+                return False, "Firebase returned an incomplete session. Sign in again."
+            self._id_token, self._refresh_token = token, refresh
+            self._is_authenticated = True
+            if getattr(self, "_keeping_session", False):
+                try:
+                    self._credential_store.set(self._kept_session_name(), self._firebase_session_record())
+                except Exception:
+                    pass  # The current session continues; the next launch may ask to sign in.
+            return True, ""
+        except Exception as error:
+            return False, _cloud_request_error(error)
+
+    def sign_out(self) -> tuple[bool, str]:
+        """End this session and forget any kept session, so the next launch asks to sign in."""
+        self.logout()
+        self._keeping_session = False
+        if self._forget_kept_session():
+            return True, "Signed out."
+        return False, ("Signed out here, but your system's credential storage could not forget the kept "
+                       "session. Unlock it and sign out again.")
+
     @property
     def is_authenticated(self) -> bool:
         return self._is_authenticated
@@ -515,6 +677,16 @@ class OwnerTicketService:
             if ticket_id:
                 return f"{base_path}/{quote(ticket_id, safe='')}.json{auth_param}"
             return f"{base_path}.json{auth_param}"
+        except Exception:
+            return None
+
+    def ticket_feed_url(self) -> Optional[str]:
+        """The signed-in account's tickets location, for watching changes; None without a cloud session."""
+        try:
+            if not self.is_cloud_authenticated:
+                return None
+            root = self._active_root_collection or self.get_config().get("firebase_root_collection")
+            return self._get_firebase_tickets_url(root_collection=root)
         except Exception:
             return None
 
@@ -837,3 +1009,182 @@ class OwnerTicketService:
     def check_connection(self) -> tuple[bool, str]:
         """Probe Firebase independently of package Offline Mode and local settings."""
         return self.test_firebase_connection()
+
+
+class TicketChangeWatcher:
+    """Tells the portal when this account's tickets change in another client.
+
+    It opens the Realtime Database event stream for the signed-in account's tickets
+    (``Accept: text/event-stream``), where Firebase pushes ``put``/``patch`` events
+    for every write, a keep-alive every 30 seconds, ``auth_revoked`` when the hour-long
+    ID token ends and ``cancel`` when access is refused. If the server will not stream
+    to this exact host (a redirect is refused, so a token is never forwarded), it
+    compares a digest of the tickets every 30 seconds instead. Lines are read in
+    bounded pieces and nothing in the stream is interpreted beyond its event name;
+    the portal re-reads tickets through the ordinary request path.
+
+    Runs on its own daemon thread. ``on_change`` and ``on_end`` run on that thread and
+    must only hand off to the GUI thread. ``lock`` is the portal's service lock.
+    """
+
+    def __init__(self, service: "OwnerTicketService", lock, on_change, on_end=None):
+        self._service, self._lock = service, lock
+        self._on_change, self._on_end = on_change, on_end
+        self._stop = threading.Event()
+        self._response = None
+        self._response_lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self.mode = "starting"
+
+    def start(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._run, name="developer-ticket-watch", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        with self._response_lock:
+            response = self._response
+        if response is not None:
+            self._interrupt(response)
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+    @staticmethod
+    def _interrupt(response) -> None:
+        # A blocked read only returns when its socket closes under it.
+        try:
+            raw = getattr(getattr(response, "fp", None), "raw", None)
+            sock = getattr(raw, "_sock", None)
+            if sock is not None:
+                sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            response.close()
+        except Exception:
+            pass
+
+    def _locked(self, function):
+        while not self._stop.is_set():
+            if self._lock.acquire(timeout=0.5):
+                try:
+                    return function()
+                finally:
+                    self._lock.release()
+        return None
+
+    def _changed(self) -> None:
+        if not self._stop.is_set():
+            try:
+                self._on_change()
+            except Exception:
+                pass
+
+    def _end(self, reason: str) -> None:
+        self.mode = "ended"
+        if not self._stop.is_set() and self._on_end is not None:
+            try:
+                self._on_end(reason)
+            except Exception:
+                pass
+
+    def _run(self) -> None:
+        backoff, polling, digest = 1.0, False, None
+        while not self._stop.is_set():
+            url = self._locked(self._service.ticket_feed_url)
+            if self._stop.is_set():
+                return
+            if not url:
+                self._end("signed-out")
+                return
+            try:
+                if polling:
+                    self.mode = "polling"
+                    current = self._digest(url)
+                    if digest is not None and current != digest:
+                        self._changed()
+                    digest, backoff = current, 1.0
+                    self._stop.wait(_POLL_INTERVAL)
+                    continue
+                outcome = self._stream(url)
+                if outcome == "streamed":
+                    backoff = 1.0
+            except urllib.error.HTTPError as error:
+                code = error.code
+                error.close()
+                outcome = ("auth" if code in (401, 403)
+                           else "fallback" if 300 <= code < 400 or code in (400, 404, 405, 406, 501)
+                           else "retry")
+            except Exception:
+                outcome = "retry"
+            if self._stop.is_set():
+                return
+            if outcome == "auth":
+                renewed = self._locked(self._service.refresh_id_token)
+                if not renewed or not renewed[0]:
+                    self._end("session")
+                    return
+                continue
+            if outcome == "cancel":
+                self._end("denied")
+                return
+            if outcome == "fallback":
+                polling = True
+                continue
+            if outcome == "streamed":
+                continue  # The server closed a healthy stream; reconnect at once.
+            self.mode = "reconnecting"
+            self._stop.wait(backoff)
+            backoff = min(60.0, backoff * 2)
+
+    def _digest(self, url: str) -> str:
+        request = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-OwnerApp/1.0"})
+        with _open_firebase_request(request, timeout=10.0) as response:
+            raw = response.read(_TICKET_RESPONSE_BYTES + 1)
+        return hashlib.sha256(raw).hexdigest()
+
+    def _stream(self, url: str) -> str:
+        request = urllib.request.Request(url, headers={"Accept": "text/event-stream",
+                                                       "User-Agent": "MCUFlasher-OwnerApp/1.0"})
+        response = _open_firebase_request(request, timeout=_STREAM_READ_TIMEOUT)
+        with self._response_lock:
+            self._response = response
+        try:
+            if self._stop.is_set():
+                return "stopped"
+            if "text/event-stream" not in (response.headers.get("Content-Type") or ""):
+                return "fallback"
+            self.mode = "live"
+            event, continuing, received = "", False, False
+            while not self._stop.is_set():
+                chunk = response.readline(_STREAM_LINE_LIMIT)
+                if not chunk:
+                    return "streamed" if received else "retry"
+                complete = chunk.endswith(b"\n")
+                if continuing:  # The rest of an over-long data line: never kept.
+                    continuing = not complete
+                    continue
+                continuing = not complete
+                line = chunk.rstrip(b"\r\n")
+                if line.startswith(b"event:"):
+                    event = line[6:].strip().decode("ascii", "replace")
+                elif not line and event:
+                    received = True
+                    if event in ("put", "patch"):
+                        self._changed()
+                    elif event == "auth_revoked":
+                        return "auth"
+                    elif event == "cancel":
+                        return "cancel"
+                    event = ""
+            return "stopped"
+        finally:
+            with self._response_lock:
+                self._response = None
+            try:
+                response.close()
+            except Exception:
+                pass

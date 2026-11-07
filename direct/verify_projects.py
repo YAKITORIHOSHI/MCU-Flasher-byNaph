@@ -923,6 +923,33 @@ class ProjectChecks(unittest.TestCase):
             parent.deleteLater()
             APP.processEvents()
 
+    def test_recent_open_button_opens_the_selected_project(self):
+        """The reported defect: "Open selected" received Qt's checked=False and did nothing."""
+        api = self.backend()
+        api.is_busy, api.active_operation = False, None
+        project = self.folder / "recent-project"
+        project.mkdir()
+        (project / "recent-project.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+        api.get_recent_projects = Mock(return_value=[str(project)])
+        api.open_project = Mock(return_value={"success": True})
+        api.open_project_window = Mock(return_value={"success": True})
+        parent = QWidget()
+        dialog = ProjectDialog(api, parent=parent, open_in_new_window=True)
+        try:
+            self.assertEqual(dialog._recent_list.count(), 1)
+            self.assertTrue(dialog._btn_open_recent.isEnabled())
+            dialog._prepare_current_window_switch = lambda target, done, on_wait=None: done(True, "", False)
+            with patch.object(dialog, "_choose_project_window", return_value=False):
+                dialog._btn_open_recent.click()
+            api.open_project.assert_called_once()
+            self.assertEqual(Path(api.open_project.call_args.args[0]), project)
+            self.assertEqual(dialog.selected_project, project)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            parent.deleteLater()
+            APP.processEvents()
+
     def test_successful_local_and_cloud_selection_finish_the_selector(self):
         for workspace_picker in (False, True):
             for source in ("local", "cloud"):

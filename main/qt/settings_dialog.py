@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QBoxLayout,
 )
 from main.qt.glass import GlassDialog
+from main.qt.theme import group_title_room
 from main.qt.interface_size import INTERFACE_SIZES, interface_choice
 from main.qt.icons import ActionButton as QPushButton
 
@@ -125,6 +126,7 @@ class SettingsDialog(GlassDialog):
         combo_bg, combo_fg, combo_border = glass["well"], pal["TEXT"], glass["rim"]
         chk_bg, chk_border = glass["well"], glass["rim"]
         chk_checked_bg, chk_checked_hover = pal["CYAN_DIM"], pal["BTN_MONITOR_H"]
+        title_room = group_title_room(self)
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -139,14 +141,20 @@ class SettingsDialog(GlassDialog):
                 background-color: {group_bg};
                 border: 1px solid {group_border};
                 border-radius: 14px;
-                margin-top: 10px;
-                padding-top: 14px;
+                font-size: 11px;
+                font-weight: 600;
+                margin-top: {title_room}px;
+                padding-top: 10px;
                 color: {group_title};
             }}
+            /* The title sits in the margin above the rim, never across it: a glass card's
+               fill is translucent, so it cannot mask the rim behind a legend-style title. */
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 6px;
+                left: 10px;
+                top: 0px;
+                padding: 0 4px;
                 background: transparent;
             }}
             QLabel {{
@@ -283,7 +291,10 @@ class SettingsDialog(GlassDialog):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         container = QWidget()
-        container.setStyleSheet("background: transparent;")
+        # Scoped: a bare declaration cascades into every descendant, including each
+        # combo's popup list, which then lost its fill and showed light rows on white.
+        container.setObjectName("settings-content")
+        container.setStyleSheet("QWidget#settings-content { background: transparent; }")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 4, 8, 4)
         layout.setSpacing(12)

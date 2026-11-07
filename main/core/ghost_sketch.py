@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import tempfile
@@ -19,6 +20,13 @@ SOURCE_EXTENSIONS = frozenset({".ino", ".cpp", ".c", ".h", ".hpp", ".txt"})
 _MARKER = ".ghost-sketch.json"
 _PROJECT_NAME = "GhostSketch"
 _MARKER_BYTES = json.dumps({"schema": 1, "project": _PROJECT_NAME}, sort_keys=True).encode("utf-8")
+# Saving works like the Arduino IDE: the user names the sketch, the folder is created for it,
+# and the .ino holding setup() and loop() takes the folder's name.
+DEFAULT_SKETCH_NAME = "MySketch"
+_MAX_NUMBERED_FOLDERS = 10_000
+_SETUP = re.compile(r"\bvoid\s+setup\s*\(", re.MULTILINE)
+_LOOP = re.compile(r"\bvoid\s+loop\s*\(", re.MULTILINE)
+_WINDOWS_RESERVED = re.compile(r"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$", re.IGNORECASE)
 
 
 def _ghost_store_root() -> Path:
@@ -77,12 +85,15 @@ def _source_snapshot(project: Path) -> dict[str, tuple[tuple[int, int, int, int]
     return sources
 
 
-def promote_ghost_project(project_path: str | Path, destination: str | Path) -> Path:
+def promote_ghost_project(project_path: str | Path, destination: str | Path,
+                          *, renames: dict[str, str] | None = None) -> Path:
     """Publish verified root source bytes to an absent or empty destination.
 
     All staging happens beside the destination. Existing destination content is
     never merged or overwritten, and the original Ghost project stays intact.
+    ``renames`` gives a source its saved name (the main sketch takes the folder's).
     """
+    renames = dict(renames or {})
     if not str(destination).strip():
         raise ValueError("Choose a folder to save Ghost Sketch.")
     source = Path(project_path).absolute()
@@ -102,11 +113,18 @@ def promote_ghost_project(project_path: str | Path, destination: str | Path) -> 
     destination_identity = target.stat() if target.exists() else None
     source_identity = source.stat()
     snapshot = _source_snapshot(source)
+    saved_names = [renames.get(name, name) for name in snapshot]
+    if (any(name not in snapshot for name in renames)
+            or len({name.casefold() for name in saved_names}) != len(saved_names)
+            or any(Path(name).name != name or Path(name).suffix.lower() not in SOURCE_EXTENSIONS
+                   for name in saved_names)):
+        raise ValueError("The saved source names would collide. Choose another sketch name.")
     stage = Path(tempfile.mkdtemp(prefix=".mcu-ghost-save-", dir=target.parent))
     try:
         for name, (_identity, content) in snapshot.items():
-            shutil.copyfile(source / name, stage / name)
-            if (stage / name).read_bytes() != content:
+            saved = renames.get(name, name)
+            shutil.copyfile(source / name, stage / saved)
+            if (stage / saved).read_bytes() != content:
                 raise OSError("Sketch sources changed while copying. Try again.")
         current_source = source.stat()
         if (not is_ghost_project(source)
@@ -129,6 +147,64 @@ def promote_ghost_project(project_path: str | Path, destination: str | Path) -> 
     finally:
         if stage.exists():
             shutil.rmtree(stage)
+
+
+def sketch_name_problem(name: str) -> str:
+    """Why a sketch name cannot name both a folder and its main .ino, or "" when it can."""
+    clean = str(name or "")
+    if not clean.strip():
+        return "Enter a sketch name."
+    if clean != clean.strip():
+        return "A sketch name cannot start or end with a space."
+    if clean.endswith(".") or clean.startswith("."):
+        return "A sketch name cannot start or end with a dot."
+    if any(character in '<>:"/\\|?*' or ord(character) < 32 for character in clean):
+        return 'A sketch name cannot contain < > : " / \\ | ? * or control characters.'
+    if _WINDOWS_RESERVED.match(clean.split(" ")[0]):
+        return "That name is reserved by Windows. Choose another sketch name."
+    if len(clean) > 120:
+        return "Use a sketch name of at most 120 characters."
+    return ""
+
+
+def main_sketch_source(sources: dict[str, bytes]) -> str | None:
+    """The root .ino defining setup() and loop(); the Arduino IDE names the folder after it."""
+    inos = sorted(name for name in sources if name.lower().endswith(".ino"))
+    def defines(name, pattern):
+        return bool(pattern.search(sources[name].decode("utf-8", "replace")))
+    for wanted in ((_SETUP, _LOOP), (_SETUP,), (_LOOP,)):
+        for name in inos:
+            if all(defines(name, pattern) for pattern in wanted):
+                return name
+    return inos[0] if inos else None
+
+
+def plan_ghost_save(project_path: str | Path, parent: str | Path,
+                    name: str = DEFAULT_SKETCH_NAME) -> tuple[Path, dict[str, str]]:
+    """Choose ``parent/name``, or ``name (1)``, ``(2)``… when taken, and the main sketch's new name.
+
+    Nothing is asked of the user: an existing folder, file or link with a candidate
+    name is skipped, as is a candidate whose ``.ino`` would collide with another source.
+    """
+    problem = sketch_name_problem(name)
+    if problem:
+        raise ValueError(problem)
+    folder = Path(parent).expanduser().absolute()
+    if folder.is_symlink() or not folder.is_dir():
+        raise ValueError("Choose an existing folder to save the sketch in.")
+    sources = {path.name: path.read_bytes() for path in Path(project_path).iterdir()
+               if path.suffix.lower() in SOURCE_EXTENSIONS and path.is_file() and not path.is_symlink()}
+    main = main_sketch_source(sources)
+    others = {source.casefold() for source in sources if source != main}
+    for number in range(_MAX_NUMBERED_FOLDERS + 1):
+        candidate = name if number == 0 else f"{name} ({number})"
+        if os.path.lexists(folder / candidate):
+            continue
+        if main and f"{candidate}.ino".casefold() in others:
+            continue
+        renames = {main: f"{candidate}.ino"} if main and main != f"{candidate}.ino" else {}
+        return folder / candidate, renames
+    raise FileExistsError(f"Too many sketches named '{name}' already exist in this folder.")
 
 
 def discard_ghost_project_path(project_path: str | Path) -> None:

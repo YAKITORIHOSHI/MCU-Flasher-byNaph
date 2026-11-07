@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from main.qt.glass import GlassDialog
 from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
+from main.qt.assistant_loader import _PhaseTrace
 from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, CloudLocalConflict, CloudError, read_project_link
 
 
@@ -269,10 +270,33 @@ class CloudSketchPanel(QWidget):
     project_pulled = Signal(str)
     cloud_opened = Signal(str)
     _finished = Signal(int, object)
+    _job_phase = Signal(int, int)
 
-    def __init__(self, backend=None, parent=None, *, service=None):
+    # Account loading and sign-in say what is happening, step by step, in place of the form.
+    # Deliberately still, like the assistant's loader: a step lights when it really starts.
+    _LOADING_STEPS = {
+        "initialize": ("Loading your cloud account", (
+            "Restoring a kept sign-in, if you chose Remember me…",
+            "Checking the connection to the cloud service…",
+            "Loading your sketches…")),
+        "sign_in": ("Signing in", (
+            "Checking your email and password with the cloud service…",
+            "Checking the connection to the cloud service…",
+            "Signed in. Loading your sketches…")),
+        "create": ("Creating your account", (
+            "Creating your account with the cloud service…",
+            "Checking the connection to the cloud service…",
+            "Account created. Loading your sketches…")),
+    }
+    LOADING_ELAPSED_AFTER_SECONDS = 5
+
+    def __init__(self, backend=None, parent=None, *, service=None, offer_sync=False):
         super().__init__(parent)
         self._backend = backend
+        # The workspace's Cloud view always shows Push/Pull for its open project, disabled
+        # with the reason when that project has no cloud link. The project selector, made for
+        # choosing projects, keeps its compact footer and shows them only for a linked project.
+        self._offer_sync = bool(offer_sync)
         self._service = service or getattr(backend, "cloud_sketch_service", None) or CloudSketchService()
         self._closed = False
         self._initialized = False
@@ -293,6 +317,7 @@ class CloudSketchPanel(QWidget):
         self.setMinimumSize(0, 0)
         self._setup_ui()
         self._finished.connect(self._finish_job, Qt.ConnectionType.QueuedConnection)
+        self._job_phase.connect(self._on_job_phase, Qt.ConnectionType.QueuedConnection)
         self.apply_theme()
         self._update_controls()
 
@@ -361,6 +386,30 @@ class CloudSketchPanel(QWidget):
         account_summary_row.setContentsMargins(0, 0, 0, 0)
         account_summary_row.addWidget(self._account_summary, 1)
         account.addLayout(account_summary_row)
+        self._loading = QWidget(self._account_card)
+        self._loading.setObjectName("cloud-loading")
+        self._loading.setAccessibleName("Cloud account loading")
+        loading = QVBoxLayout(self._loading)
+        loading.setContentsMargins(0, 6, 0, 6)
+        loading.setSpacing(6)
+        self._loading_trace = _PhaseTrace(self._loading, steps=3)
+        loading.addWidget(self._loading_trace)
+        self._loading_title = self._label("", self._loading)
+        self._loading_title.setObjectName("cloud-heading")
+        loading.addWidget(self._loading_title)
+        self._loading_detail = self._label("", self._loading)
+        loading.addWidget(self._loading_detail)
+        self._loading_elapsed = self._label("", self._loading)
+        self._loading_elapsed.setObjectName("cloud-secondary")
+        self._loading_elapsed.hide()
+        loading.addWidget(self._loading_elapsed)
+        self._loading.hide()
+        account.addWidget(self._loading)
+        self._loading_kind = ""
+        self._loading_started = 0.0
+        self._loading_clock = QTimer(self)
+        self._loading_clock.setInterval(1000)
+        self._loading_clock.timeout.connect(self._tick_loading)
         self._auth_pages = QWidget(self._account_card)
         auth_pages_layout = QVBoxLayout(self._auth_pages)
         auth_pages_layout.setContentsMargins(0, 0, 0, 0)
@@ -675,7 +724,8 @@ class CloudSketchPanel(QWidget):
                          include_saved=True, include_connectivity=True):
             self._initialized = True
 
-    def _snapshot(self, root, *, load_sketches=True, include_saved=False, include_connectivity=False):
+    def _snapshot(self, root, *, load_sketches=True, include_saved=False, include_connectivity=False,
+                  progress=None):
         service = self._service
         state = {"configured": service.configured, "authenticated": service.is_authenticated,
                  "account": service.account_info, "secure": service.secure_storage_status,
@@ -683,7 +733,11 @@ class CloudSketchPanel(QWidget):
         state["configuration_error"] = (getattr(service, "configuration_error", "")
                                         if not state["configured"] else "")
         if include_connectivity:
+            if progress:
+                progress(1)
             state["connectivity"] = bool(service.check_connection())
+        if load_sketches and state["authenticated"] and progress:
+            progress(2)
         if load_sketches or not state["authenticated"]:
             state["sketches"] = service.list_sketches() if state["authenticated"] else []
         if include_saved:
@@ -715,7 +769,14 @@ class CloudSketchPanel(QWidget):
             self._hold_editor()
             self._emit_project_phase(True)
         self._status.setText(message)
+        if kind in self._LOADING_STEPS:
+            self._show_loading(kind)
         self._update_controls()
+        def phase(step):
+            try:
+                self._job_phase.emit(generation, step)
+            except RuntimeError:
+                pass  # The panel closed; its loader has nothing left to show.
 
         def run():
             result = {"kind": kind, "value": None, "state": {}, "error": "", "refresh_error": ""}
@@ -741,7 +802,7 @@ class CloudSketchPanel(QWidget):
                     result["value"] = root
             try:
                 result["state"] = self._snapshot(root, include_saved=include_saved,
-                                                  include_connectivity=include_connectivity)
+                                                  include_connectivity=include_connectivity, progress=phase)
             except Exception as exc:
                 result["refresh_error"] = safe_message(exc)
                 try:
@@ -773,6 +834,7 @@ class CloudSketchPanel(QWidget):
         if self._closed or generation != self._generation:
             self._complete_job()
             return
+        self._hide_loading()
         self._apply_state(result.get("state", {}))
         kind, value = result["kind"], result.get("value")
         if result.get("local_conflict"):
@@ -865,6 +927,9 @@ class CloudSketchPanel(QWidget):
         self._busy = False
         self._release_editor(restart_autosave=restart_autosave)
         if not self._closed:
+            if self._loading_kind:
+                self._hide_loading()
+                self._apply_state({})
             self._update_controls()
 
     def _pull_handler(self):
@@ -1024,15 +1089,61 @@ class CloudSketchPanel(QWidget):
             self._empty.setVisible(not self._sketches.count())
             self._empty.setText("No cloud sketches yet. Upload a local sketch to begin." if authenticated else "Sign in to see your sketches.")
         link = self._state.get("link")
-        if link:
+        own_link = bool(link and link.get("uid") == self._state.get("account", {}).get("uid"))
+        if own_link:
             metadata = next((row for row in self._state.get("sketches", [])
                              if row.get("id") == link.get("sketch_id")), {})
             name = metadata.get("name") or link.get("name") or "Current cloud sketch"
             self._linked.setText(f"Open sketch: {name}\nVersion {link['revision']} on this computer")
+        elif link:
+            self._linked.setText("This sketch is linked to another cloud account.\n"
+                                 "Sign in with that account to push or pull it.")
         else:
-            self._linked.setText("")
+            self._linked.setText("This sketch is not in your cloud yet.\n"
+                                 "Upload it, then open the cloud copy to push and pull.")
         self._update_controls()
         self._fit_centered_content()
+
+    # ── Loading ─────────────────────────────────────────────────────────────
+
+    def _show_loading(self, kind):
+        import time
+        title, steps = self._LOADING_STEPS[kind]
+        self._loading_kind = kind
+        self._loading_started = time.monotonic()
+        self._loading_title.setText(title)
+        self._loading_detail.setText(steps[0])
+        self._loading_trace.set_phase(0)
+        self._loading_elapsed.hide()
+        # The form stays as typed; it only steps aside so nobody edits it mid-sign-in.
+        for widget in (self._auth_pages, self._auth_action_pages, self._auth_options,
+                       self._security, self._forget_btn):
+            widget.hide()
+        self._loading.show()
+        self._loading_clock.start()
+
+    def _hide_loading(self):
+        self._loading_kind = ""
+        self._loading_clock.stop()
+        self._loading.hide()
+
+    def _on_job_phase(self, generation, step):
+        if generation != self._generation or not self._loading_kind:
+            return
+        _title, steps = self._LOADING_STEPS[self._loading_kind]
+        step = max(0, min(len(steps) - 1, int(step)))
+        self._loading_trace.set_phase(step)
+        self._loading_detail.setText(steps[step])
+
+    def _tick_loading(self):
+        import time
+        if not self._loading_kind:
+            self._loading_clock.stop()
+            return
+        seconds = int(time.monotonic() - self._loading_started)
+        if seconds >= self.LOADING_ELAPSED_AFTER_SECONDS:
+            self._loading_elapsed.setText(f"Still working… {seconds} s")
+            self._loading_elapsed.show()
 
     def _selected_sketch(self):
         item = self._sketches.currentItem()
@@ -1061,14 +1172,25 @@ class CloudSketchPanel(QWidget):
         self._rename_sketch_action.setEnabled(self._sketch_actions.isEnabled())
         self._delete_sketch_action.setEnabled(self._sketch_actions.isEnabled())
         link = self._state.get("link")
-        linked_account = bool(link and link.get("uid") == self._state.get("account", {}).get("uid")
-                              and any(row.get("id") == link.get("sketch_id") for row in self._state.get("sketches", [])))
-        self._linked_section.setVisible(authenticated and linked_account)
-        self._linked_actions.setVisible(authenticated and linked_account)
+        # Push and Pull belong to the open project's own cloud link. They no longer also
+        # wait for that sketch to appear in a freshly loaded list: one timed-out or
+        # unreadable list made them vanish. The service still checks the link, account,
+        # revision and ETag before any transfer, and reports a sketch that is gone.
+        linked_account = bool(link and link.get("uid") == self._state.get("account", {}).get("uid"))
+        shown = bool(self._active_root()) and (linked_account or self._offer_sync)
+        self._linked_section.setVisible(authenticated and shown)
+        self._linked_actions.setVisible(authenticated and shown)
         if not linked_account:
             self._history_box.hide()
         for button in (self._push_btn, self._pull_btn, self._history_btn):
             button.setEnabled(idle and authenticated and linked_account and not self._backend_busy())
+        unlinked = ("This sketch is not linked to your cloud account yet. Upload it, then open "
+                    "the cloud copy from the list to push and pull its changes.")
+        self._push_btn.setToolTip("Save editor changes and update this sketch's cloud copy"
+                                  if linked_account else unlinked)
+        self._pull_btn.setToolTip("Restore the latest cloud copy into this sketch" if linked_account else unlinked)
+        self._history_btn.setToolTip("Choose an earlier version of this sketch to restore"
+                                     if linked_account else unlinked)
         self._restore_btn.setEnabled(self._pull_btn.isEnabled() and self._revisions.count() > 0)
         secure = self._state.get("secure", (False, ""))[0]
         self._save_login.setEnabled(idle and secure)
@@ -1076,7 +1198,8 @@ class CloudSketchPanel(QWidget):
         self._check_connection_btn.setEnabled(idle and not authenticated)
         self._forget_btn.setEnabled(idle and secure)
         self._forget_btn.setText("Forget saved login")
-        self._forget_btn.setVisible(secure and self._saved_login_exists and not authenticated)
+        self._forget_btn.setVisible(secure and self._saved_login_exists and not authenticated
+                                    and not self._loading_kind)
         self._forget_btn.setEnabled(idle and secure and self._saved_login_exists)
         self._configure_toggle.setEnabled(idle and not authenticated)
         self._account_button.setEnabled(idle)
@@ -1448,6 +1571,7 @@ class CloudSketchPanel(QWidget):
                 button.setIcon(icon(button._icon_name, primary if button.property("cloudPrimary") else pal["TEXT_BRIGHT"]))
         for index in range(self._sketches.count()):
             self._sketches.item(index).setIcon(icon("cloud", pal["CYAN"]))
+        self._loading_trace.set_inks(pal["CYAN"], original["BORDER"], original["BG_DARK"])
         self.palette_changed.emit(original)
 
 
@@ -1461,7 +1585,7 @@ class CloudSketchDialog(GlassDialog):
         self._glass.lower()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
-        self.panel = CloudSketchPanel(backend, self)
+        self.panel = CloudSketchPanel(backend, self, offer_sync=True)
         self._glass.set_palette(self.panel._palette)
         self.panel.palette_changed.connect(self._glass.set_palette)
         self.panel.cloud_opened.connect(self.accept)

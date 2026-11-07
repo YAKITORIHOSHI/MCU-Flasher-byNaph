@@ -50,20 +50,33 @@ def _visible_serial_controls(text: str) -> str:
 
 
 from main.qt.icons import IconLabel as QLabel
+from main.core.ansi_sgr import PLAIN, apply_sgr
+
+
+def _styled_tag(tag, style):
+    """A plain run keeps its semantic tag; a styled run carries (tag, SgrStyle)."""
+    return tag if style is None or style.plain else (tag, style)
+
 
 class _SerialAnsiParser:
     """Bounded incremental terminal controls for an append-only serial log.
 
     A random/incomplete escape must not swallow unlimited subsequent output.
     Cursor-home does not erase history; only an explicit erase-screen does.
+    SGR (``ESC [ … m``) sets the style of the text after it: colors (16, 256 and
+    truecolor, foreground and background), bold, dim, italic, underline, inverse
+    and strikethrough. Other CSI sequences are still consumed without display.
     """
     def __init__(self):
         self._sequence_id = 0
+        self.style = PLAIN
         self.reset()
 
-    def reset(self):
+    def reset(self, *, style=False):
         self._state = "text"
         self._pending = ""
+        if style:
+            self.style = PLAIN
 
     def finish(self):
         text = _visible_serial_controls(self._pending)
@@ -71,16 +84,17 @@ class _SerialAnsiParser:
         return text
 
     def feed(self, text):
+        """Events of (visible text, erase-screen, style) in received order."""
         if self._state == "text" and "\x1b" not in text:
-            return [(_visible_serial_controls(text), False)]
+            return [(_visible_serial_controls(text), False, self.style)]
         events, pieces = [], []
 
         def emit(clear=False):
             if pieces:
-                events.append((_visible_serial_controls("".join(pieces)), False))
+                events.append((_visible_serial_controls("".join(pieces)), False, self.style))
                 pieces.clear()
             if clear:
-                events.append(("", True))
+                events.append(("", True, self.style))
 
         for char in text:
             if self._state == "text":
@@ -102,10 +116,14 @@ class _SerialAnsiParser:
                     pieces.append(self.finish())
             elif self._state == "csi":
                 if "@" <= char <= "~":
-                    clear = char == "J" and self._pending[2:-1] in ("2", "3")
+                    parameters = self._pending[2:-1]
+                    clear = char == "J" and parameters in ("2", "3")
                     self.reset()
                     if clear:
                         emit(True)
+                    elif char == "m":
+                        emit()  # Text before the change keeps the style it arrived in.
+                        self.style = apply_sgr(self.style, parameters)
                 elif not (" " <= char <= "?"):
                     pieces.append(self.finish())
             elif self._state == "string":
@@ -369,12 +387,20 @@ class SerialOutputView(QPlainTextEdit):
         return [("".join(parts), tag) for parts, tag in groups], line_start
 
     def _text_format(self, tag):
-        key = tag if tag in self._tag_colors else "normal"
-        fmt = self._serial_formats.get(key)
-        if fmt is None:
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor(self._tag_colors[key]))
-            self._serial_formats[key] = fmt
+        fmt = self._serial_formats.get(tag)
+        if fmt is not None:
+            return fmt
+        base_tag, style = tag if isinstance(tag, tuple) else (tag, None)
+        key = base_tag if base_tag in self._tag_colors else "normal"
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(self._tag_colors[key]))
+        if style is not None:
+            from main.qt.ansi_format import styled_format
+            fmt = styled_format(fmt, style, self._theme_name)
+        # Truecolor gradients can name thousands of styles; keep the cache bounded.
+        if len(self._serial_formats) >= 512:
+            self._serial_formats.clear()
+        self._serial_formats[tag] = fmt
         return fmt
 
     @staticmethod
@@ -555,13 +581,14 @@ class SerialOutputView(QPlainTextEdit):
             if generation is not None and generation != self._stream_generation:
                 finish_pending()
                 self._stream_generation = generation
+                self._ansi_parser.style = PLAIN  # A new connection starts unstyled.
             if not stream:
                 finish_pending()
                 line_open = not self._history_line_start or bool(events)
                 prefix = "\n" if line_open and (text or newline) and not text.startswith("\n") else ""
                 events.append((prefix + _visible_serial_controls(text) + ("\n" if newline else ""), False, tag, stamp))
             else:
-                events.extend((content, erased, tag, stamp) for content, erased in
+                events.extend((content, erased, _styled_tag(tag, style), stamp) for content, erased, style in
                               self._ansi_parser.feed(text + ("\n" if newline else "")))
             if self._ansi_parser._pending and self._ansi_parser._sequence_id != sequence:
                 self._ansi_pending_tag = tag
@@ -608,7 +635,7 @@ class SerialOutputView(QPlainTextEdit):
     def clear(self) -> None:
         self._entries.clear()
         self._queue.clear()
-        self._ansi_parser.reset()
+        self._ansi_parser.reset(style=True)
         self._render_line_start = True
         self._history_line_start = True
         self._stream_generation = None
@@ -725,7 +752,8 @@ class SerialPanel(QWidget):
         # Baud rate container (label + combo)
         self.baud_container = QWidget()
         self.baud_container.setObjectName("serial-baud-container")
-        self.baud_container.setStyleSheet("background: transparent;")
+        # Scoped, so the baud list's popup keeps its own theme fill.
+        self.baud_container.setStyleSheet("QWidget#serial-baud-container { background: transparent; }")
         b_layout = QHBoxLayout(self.baud_container)
         b_layout.setContentsMargins(0, 0, 0, 0)
         b_layout.setSpacing(6)

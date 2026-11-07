@@ -274,6 +274,26 @@ class EmbeddedViewportChecks(unittest.TestCase):
         for rects in data["seen"]:
             self.assertEqual(rects, data["before"], "Selecting a source tab must not move any tab or label")
 
+    def test_editor_sheet_fits_its_host_at_fractional_scales(self):
+        """Chromium rounds a fractional-scale surface up, so a 100% sheet overhung its widget."""
+        from main.qt.glass import page_backdrop_for
+        self.load("index.html")
+        wait_for(lambda: self.js("!!window.editorInstance && !!window.monaco"), "Monaco did not initialize")
+        for width, height in ((421, 251), (517, 303), (639, 389), (700, 420)):
+            self.view.setMaximumSize(width, height)
+            self.host.resize(width, height)
+            wait_for(lambda: self.view.width() <= width and abs(self.js("innerWidth") - self.view.width()) <= 1,
+                     "The fixture view did not settle")
+            self.js(f"window.setGlassBackdrop({json.dumps(page_backdrop_for(self.view))}); true")
+            QTest.qWait(30)
+            sheet = self.state("""const box = document.getElementById('app-container').getBoundingClientRect();
+                                  return {width: box.width, height: box.height, left: box.left, top: box.top};""")
+            self.assertEqual((sheet["left"], sheet["top"]), (0, 0))
+            self.assertAlmostEqual(sheet["width"], self.view.width(), delta=0.01,
+                                   msg=f"sheet {sheet} overhangs its {self.view.size().toTuple()} host")
+            self.assertAlmostEqual(sheet["height"], self.view.height(), delta=0.01,
+                                   msg=f"sheet {sheet} overhangs its {self.view.size().toTuple()} host")
+
     def test_monaco_fills_native_viewport_and_preserves_model_undo(self):
         self.load("index.html")
         wait_for(lambda: self.js("!!window.editorInstance && !!window.monaco"), "Monaco did not initialize")

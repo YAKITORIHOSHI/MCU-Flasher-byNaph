@@ -464,6 +464,7 @@ class CloudUIChecks(unittest.TestCase):
         self.assertEqual(call[2], {"save_login": True, "remember_me": True})
         self.assertEqual(panel._password.text(), "")
         self.assertTrue(panel._management.isVisible())
+        # An unlinked project shows no Push in the selector's compact footer.
         self.assertFalse(panel._push_btn.isVisible())
         self.assertFalse(panel._save_login.isVisible())
         self.assertFalse(panel._remember.isVisible())
@@ -473,6 +474,76 @@ class CloudUIChecks(unittest.TestCase):
         panel._forget_login()
         self.wait(lambda: not panel._busy)
         self.assertTrue(next(row for row in self.service.calls if row[0] == "sign_out")[2]["forget_saved"])
+
+    def test_account_loading_and_sign_in_show_a_still_loader_in_place_of_the_form(self):
+        self.service.authenticated = False
+        self.service.hold = threading.Event()
+        panel = CloudSketchPanel(self.backend, None, service=self.service)
+        self.widgets.append(panel)
+        panel.resize(720, 650)
+        panel.show()
+        self.wait(lambda: panel._loading.isVisible())
+        self.assertEqual(panel._loading_title.text(), "Loading your cloud account")
+        self.assertFalse(panel._auth_pages.isVisible(), "the form steps aside while the account loads")
+        self.assertFalse(panel._auth_action_pages.isVisible())
+        panel._on_job_phase(panel._generation, 1)
+        self.assertIn("connection", panel._loading_detail.text())
+        panel._on_job_phase(panel._generation - 1, 2)
+        self.assertIn("connection", panel._loading_detail.text(), "a stale job cannot move the loader")
+        self.assertFalse(panel._loading_elapsed.isVisible())
+        with patch.object(CloudSketchPanel, "LOADING_ELAPSED_AFTER_SECONDS", 0):
+            panel._tick_loading()
+        self.assertTrue(panel._loading_elapsed.isVisible())
+        self.assertIn("Still working", panel._loading_elapsed.text())
+        self.assertTrue(panel.grab().save(str(self.output / "cloud-account-loading.png")))
+        self.service.hold.set()
+        self.wait(lambda: not panel._busy)
+        self.assertFalse(panel._loading.isVisible())
+        self.assertFalse(panel._loading_clock.isActive())
+        self.assertTrue(panel._auth_pages.isVisible())
+
+        self.service.hold = threading.Event()
+        panel._email.setText("fixture@example.invalid")
+        panel._password.setText("fixture pass")
+        panel._sign_in()
+        self.wait(lambda: panel._loading.isVisible())
+        self.assertEqual(panel._loading_title.text(), "Signing in")
+        self.assertFalse(panel._auth_pages.isVisible())
+        self.assertFalse(panel._forget_btn.isVisible())
+        self.assertEqual(panel._password.text(), "fixture pass", "the typed form is kept, only hidden")
+        self.service.hold.set()
+        self.wait(lambda: not panel._busy)
+        self.assertFalse(panel._loading.isVisible())
+        self.assertTrue(panel._management.isVisible())
+
+    def test_push_and_pull_stay_available_when_the_sketch_list_cannot_load(self):
+        # The reported "missing" buttons: one failed list refresh hid them for a linked sketch.
+        self.service.pull_project("fixture", destination=self.local)
+        self.service.list_error = True
+        panel = self.panel()
+        self.assertIn("refresh failed", panel._status.text())
+        for button in (panel._push_btn, panel._pull_btn, panel._history_btn):
+            self.assertTrue(button.isVisible(), button.text())
+            self.assertTrue(button.isEnabled(), button.text())
+        self.assertIn("Version", panel._linked.text())
+
+    def test_cloud_view_explains_push_and_pull_for_an_unlinked_sketch(self):
+        dialog = CloudSketchDialog(self.backend)
+        self.widgets.append(dialog)
+        dialog.show()
+        panel = dialog.panel
+        self.wait(lambda: not panel._busy)
+        self.assertTrue(panel._state.get("authenticated"))
+        for button in (panel._push_btn, panel._pull_btn, panel._history_btn):
+            self.assertTrue(button.isVisible(), button.text())
+            self.assertFalse(button.isEnabled(), button.text())
+            self.assertIn("not linked", button.toolTip())
+        self.assertIn("not in your cloud yet", panel._linked.text())
+        self.service.pull_project("fixture", destination=self.local)
+        panel._refresh()
+        self.wait(lambda: not panel._busy)
+        self.assertTrue(panel._push_btn.isEnabled())
+        self.assertIn("Sensor sketch", panel._linked.text())
 
     def test_auth_screens_are_separate_and_sketch_actions_require_sign_in(self):
         self.service.authenticated = False

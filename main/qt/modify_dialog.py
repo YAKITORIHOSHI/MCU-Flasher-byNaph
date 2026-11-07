@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QScrollArea, QFrame,
 )
 from main.qt.glass import GlassDialog
-from main.qt.icons import ActionButton as QPushButton, icon
+from main.qt.icons import ActionButton as QPushButton, icon, tab_icon
 
 ALLOWED_EXTENSIONS = [".h", ".cpp", ".ino", ".hpp", ".c", ".txt"]
 
@@ -115,6 +115,9 @@ class ModifyFilesDialog(GlassDialog):
         self._header_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {accent}; font-family: 'Montserrat', 'Segoe UI', sans-serif;")
         self._path_lbl.setStyleSheet(f"font-size: 11px; color: {text_dim}; font-family: Consolas, monospace;")
 
+        # A selected tab is a solid chip: its glyph needs the chip's ink, re-rendered per theme.
+        for index, glyph in enumerate(("add", "modify", "clear")[:self._tabs.count()]):
+            self._tabs.setTabIcon(index, tab_icon(glyph))
         self._tabs.setStyleSheet(f"""
             QTabWidget::pane {{
                 border: 1px solid {glass['rim']};
@@ -309,7 +312,7 @@ class ModifyFilesDialog(GlassDialog):
         self._btn_add.clicked.connect(self._on_add_file)
         actions.addWidget(self._btn_add, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self._tabs.addTab(tab, icon("add"), "Add")
+        self._tabs.addTab(tab, tab_icon("add"), "Add")
 
     def _setup_rename_tab(self) -> None:
         tab, layout, actions = self._file_tab()
@@ -340,7 +343,7 @@ class ModifyFilesDialog(GlassDialog):
         self._btn_rename.clicked.connect(self._on_rename_file)
         actions.addWidget(self._btn_rename, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self._tabs.addTab(tab, icon("modify"), "Rename")
+        self._tabs.addTab(tab, tab_icon("modify"), "Rename")
 
     def _setup_delete_tab(self) -> None:
         tab, layout, actions = self._file_tab()
@@ -369,7 +372,7 @@ class ModifyFilesDialog(GlassDialog):
         self._btn_delete.clicked.connect(self._on_delete_file)
         actions.addWidget(self._btn_delete, alignment=Qt.AlignmentFlag.AlignRight)
 
-        self._tabs.addTab(tab, icon("clear"), "Delete")
+        self._tabs.addTab(tab, tab_icon("clear"), "Delete")
 
     # ── Helpers & Actions ────────────────────────────────────────────────────
 

@@ -1541,7 +1541,7 @@ MCU Flasher by Naph/
 - **Existing project → Browse** always starts in your system's Documents folder, including redirected or localized Documents locations. Every click starts there; cancelling keeps the selected project path unchanged.
 - **Existing project validation**: Select the sketch folder itself, not the whole Documents folder. It must contain a non-empty top-level `.ino`, `.cpp`, or `.c` source file. Invalid folders are rejected before the app switches windows, saves buffers, creates files, updates history, or writes project metadata. Use **New project** for an empty folder.
 - **New project** scaffolds a sketch with optional header/source files and asks where to open it. An existing folder is never overwritten; choose it through **Existing project** instead.
-- **Modify Project Files**: Click **`📝 Modify Files`** to create new files, rename existing files, or delete sketch files (`.ino`, `.cpp`, `.h`).
+- **Project files from the source tabs**: the **+** chip after the editor's file tabs creates a file; it always asks for a name and an extension (`.h`, `.cpp`, `.ino`, `.hpp`, `.c`, `.txt`) and opens the new file. Right-click a file tab for **Rename…**, **Delete** and **New file…**. Delete never erases: the file moves into a hidden `bak` folder inside the project (hidden by attribute on Windows, `UF_HIDDEN` on macOS and the project's `.hidden` list on Linux), named `name (1).ext`, `(2)`… when an earlier copy is already there, so it can be restored by hand. `bak` is not part of the sketch: it gets no tab and is never compiled. The Actions row no longer has a Modify button.
   File changes update the editor and related project information without
   restarting terminal/assistant sessions or resetting unrelated panels.
   Successful local or cloud project selection closes the project selector,
@@ -1817,8 +1817,7 @@ model's saved tab/space indentation. New sketches contain empty `setup()` and
 `loop()` functions. Checking **.h** creates a `#pragma once` header and includes
 it automatically in the generated `.ino` and optional `.cpp`, using the same
 sanitized project filename. Without **.h**, the optional `.cpp` stays empty.
-Modify starts with the sketch's filename and scrolls on short
-screens. Explicit Blink remains available.
+Explicit Blink remains available.
 
 The **AI Changes** tool tab retains recent timestamped file previews grouped by
 submitted prompt. Each file has its own Accept/Reject review with a queue counter
@@ -1836,7 +1835,7 @@ and older entries show **Unknown**: earlier versions tagged both channels as CLI
 so their original source cannot be recovered reliably. Existing journals remain
 unchanged. Source association follows observed prompts and settled file changes;
 it is not an operating-system audit of which process wrote each file.
-Add/Rename/Delete in Modify are
+Adding, renaming and deleting files from the source tabs are
 registered as manual operations before disk changes and never become AI reviews.
 Whenever a new pending AI edit is detected, its review bar automatically opens
 with Accept and Reject available, even if an earlier AI history bar was hidden.

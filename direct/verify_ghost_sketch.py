@@ -170,6 +170,56 @@ class GhostSketchChecks(unittest.TestCase):
         self.assertTrue(updates[0]["preserve_buffers"])
         self.assertEqual(updates[0]["operation"], "ghost_saved")
 
+    def test_saving_by_name_creates_the_folder_like_the_arduino_ide(self):
+        # Default name, no folder prompt; the main .ino takes the folder's name.
+        api = self.backend()
+        self.assertTrue(api.create_ghost_project()["success"])
+        ghost = api.sketch_dir_path
+        (ghost / "helper.h").write_text("#pragma once\n", encoding="utf-8")
+        old_main = api.active_file_path
+        api.modified_files = {old_main: False, str(ghost / "helper.h"): False}
+        parent = self.root / "Sketchbook"
+        parent.mkdir()
+        result = api.save_ghost_project(str(parent), sketch_name=self.ghost.DEFAULT_SKETCH_NAME)
+        self.assertTrue(result["success"], result)
+        target = parent / "MySketch"
+        self.assertEqual(sorted(p.name for p in target.iterdir()), ["MySketch.ino", "helper.h"])
+        self.assertIn("void setup()", (target / "MySketch.ino").read_text(encoding="utf-8"))
+        self.assertEqual(result["path_mapping"], {old_main: str(target / "MySketch.ino"),
+                                                  str(ghost / "helper.h"): str(target / "helper.h")})
+        self.assertEqual(api.active_file_path, str(target / "MySketch.ino"))
+        self.assertTrue((ghost / "GhostSketch.ino").is_file(), "the temporary original is untouched")
+
+    def test_taken_names_are_numbered_without_asking(self):
+        parent = self.root / "Sketchbook"
+        parent.mkdir()
+        (parent / "MySketch").mkdir()
+        (parent / "MySketch (1)").write_text("a file, not a folder", encoding="utf-8")
+        source = self.create()
+        target, renames = self.ghost.plan_ghost_save(source, parent)
+        self.assertEqual(target, parent / "MySketch (2)")
+        self.assertEqual(renames, {"GhostSketch.ino": "MySketch (2).ino"})
+        saved = self.ghost.promote_ghost_project(source, target, renames=renames)
+        self.assertEqual(sorted(p.name for p in saved.iterdir()), ["MySketch (2).ino"])
+        self.assertEqual(sorted(p.name for p in parent.iterdir()), ["MySketch", "MySketch (1)", "MySketch (2)"])
+        # A user-chosen name; a candidate whose .ino would collide with another source is skipped.
+        (source / "Robot.ino").write_text("// a second tab\n", encoding="utf-8")
+        target, renames = self.ghost.plan_ghost_save(source, parent, "Robot")
+        self.assertEqual(target, parent / "Robot (1)")
+        self.assertEqual(renames, {"GhostSketch.ino": "Robot (1).ino"})
+
+    def test_the_main_sketch_is_the_ino_that_defines_setup_and_loop(self):
+        pick = self.ghost.main_sketch_source
+        self.assertEqual(pick({"a.ino": b"void loop() {}", "b.ino": b"void setup() {}\nvoid loop() {}"}), "b.ino")
+        self.assertEqual(pick({"only.ino": b"// empty"}), "only.ino")
+        self.assertIsNone(pick({"notes.txt": b""}))
+        for bad in ("", "a/b", "x:y", " lead", "trail.", "con", "COM1.txt", "x" * 121):
+            self.assertTrue(self.ghost.sketch_name_problem(bad), bad)
+        for good in ("MySketch", "My Robot 2", "MySketch (3)", "über-sketch"):
+            self.assertEqual(self.ghost.sketch_name_problem(good), "", good)
+        with self.assertRaises(ValueError):
+            self.ghost.plan_ghost_save(self.create(), self.root / "missing-folder")
+
     def test_busy_dirty_cancel_and_registration_failure_preserve_ghost(self):
         api = self.backend()
         self.assertTrue(api.create_ghost_project()["success"])

@@ -173,9 +173,10 @@ class DetachedActionChecks(unittest.TestCase):
         toolbar.btn_save.click()
         toolbar.btn_save_all.click()
         toolbar.btn_reload.click()
-        toolbar.btn_modify.click()
+        # Files are added and removed from the source tabs; the Actions row has no Modify.
+        self.assertFalse(hasattr(toolbar, "btn_modify"))
         self.assertEqual((self.window.saved, self.window.saved_all, self.window.reloaded,
-                          self.window.modified), (1, 1, 1, 1))
+                          self.window.modified), (1, 1, 1, 0))
         self.window._active_operation = "compile"
         self.assertTrue(toolbar._is_busy(), "Workspace busy state must survive toolbar transfer")
         self.window._active_operation = None
