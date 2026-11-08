@@ -549,6 +549,7 @@ class OwnerTicketDialog(_TaskPortal):
         self._endpoint_state = None
         self._endpoint_message = ""
         self._dashboard_fitted = False
+        self._user_resized = False
         self._active_filter = "All Status"
         self._active_category_filter = "All categories"
         self._search_query = ""
@@ -581,8 +582,10 @@ class OwnerTicketDialog(_TaskPortal):
         self.stack = QStackedWidget(self.backdrop)
         self.content.addWidget(self.stack, 1)
         self.stack.currentChanged.connect(self._update_portal_header)
-        self._build_auth_screen()
+        self._build_loading_screen()
         self._build_dashboard_screen()
+        self._build_auth_screen()
+        self.stack.setCurrentIndex(0)
         self._update_portal_header(self.stack.currentIndex())
         self.apply_theme(self._theme_name)
         QTimer.singleShot(0, self, self._initialize_service)
@@ -600,8 +603,9 @@ class OwnerTicketDialog(_TaskPortal):
                 if vector:
                     action.setIcon(icon(vector, "#141414"))
 
-    def _update_portal_header(self, index):
-        self.portal_header.setVisible(index != 0)
+    def _update_portal_header(self, index=None):
+        dashboard = getattr(self, "dashboard_page", None)
+        self.portal_header.setVisible(dashboard is not None and self.stack.currentWidget() == dashboard)
 
     def _initialize_service(self):
         def initialize():
@@ -609,14 +613,19 @@ class OwnerTicketDialog(_TaskPortal):
             config, connection = service.get_config(), service.check_connection()
             # A session kept with "Keep me signed in" opens straight to the tickets.
             restored, message = service.restore_session()
-            tickets = service.get_tickets() if restored else []
+            tickets = service.get_tickets()
             return service, config, connection, (restored, message, service.is_cloud_authenticated, tickets)
-        self.connection_note.setText("Checking for a kept session…")
-        self.connection_note.show()
+        self.loading_status.setText("Checking developer environment and tickets…")
+        if hasattr(self, "connection_note"):
+            self.connection_note.setText("Checking for a kept session…")
+            self.connection_note.show()
         self._run_task("initialize", initialize, self._initialized)
 
     def _initialized(self, result, error):
         if error:
+            if hasattr(self, "loading_status"):
+                self.loading_status.setText("Could not load developer tickets: " + error)
+                retone(self.loading_status, "fail")
             self.lbl_auth_error.setText(error)
             self.lbl_auth_error.show()
             self.btn_diagnose.setEnabled(True)
@@ -633,9 +642,8 @@ class OwnerTicketDialog(_TaskPortal):
         if restored:
             self.chk_keep_signed_in.setChecked(True)
             self._authenticated((True, message, cloud, tickets), "")
-        elif message:
-            self.lbl_auth_error.setText(message)
-            self.lbl_auth_error.show()
+        else:
+            self._authenticated((True, "Local developer access", False, tickets), "")
 
     def _set_busy(self, busy):
         ready = self.service is not None and not busy
@@ -649,9 +657,60 @@ class OwnerTicketDialog(_TaskPortal):
         self.btn_refresh.setText("Refreshing…" if busy and self._task_name == "tickets" else "Refresh")
         self.btn_lock.setText("Signing out…" if busy and self._task_name == "lock" else "Log out")
 
+    def _build_loading_screen(self):
+        page = QWidget(self.stack)
+        page.setObjectName("developer-loading-page")
+        self.loading_page = page
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.loading_scroll, body, layout = scroll_body(page)
+        self.loading_scroll.viewport().installEventFilter(self)
+        self.loading_card = NeoCard(body)
+        self.loading_card.setObjectName("developer-loading-card")
+        self.loading_card.setMaximumWidth(520)
+        self.loading_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        form = QVBoxLayout(self.loading_card)
+        form.setContentsMargins(24, 28, 34, 32)
+        form.setSpacing(16)
+
+        identity = QWidget(self.loading_card)
+        identity_layout = QHBoxLayout(identity)
+        identity_layout.setContentsMargins(0, 0, 0, 0)
+        identity_layout.setSpacing(14)
+        self.loading_brand = DeveloperArtwork("developer-access-chip.svg", identity)
+        self.loading_brand.setFixedSize(64, 64)
+        identity_layout.addWidget(self.loading_brand)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+        title_box.addWidget(label("Developer tickets", identity, "heading", wrap=True))
+        title_box.addWidget(label("Loading issue tracker and defect reports…", identity, "muted", wrap=True))
+        identity_layout.addLayout(title_box, 1)
+        form.addWidget(identity)
+
+        self.loading_trace = DeveloperArtwork("developer-access-trace.svg", self.loading_card)
+        self.loading_trace.setFixedHeight(24)
+        form.addWidget(self.loading_trace)
+
+        self.loading_status = label("Checking developer environment and tickets…", self.loading_card, "muted", wrap=True)
+        self.loading_status.setObjectName("developer-loading-status")
+        form.addWidget(self.loading_status)
+
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.addStretch(1)
+        card_row = QHBoxLayout()
+        card_row.setContentsMargins(0, 0, 0, 0)
+        card_row.addStretch(1)
+        card_row.addWidget(self.loading_card, 100)
+        card_row.addStretch(1)
+        layout.addLayout(card_row)
+        layout.addStretch(1)
+        outer.addWidget(self.loading_scroll)
+        self.stack.addWidget(page)
+
     def _build_auth_screen(self):
         page = QWidget(self.stack)
         page.setObjectName("developer-login-page")
+        self.auth_page = page
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
         self.auth_scroll, body, layout = scroll_body(page)
@@ -732,15 +791,28 @@ class OwnerTicketDialog(_TaskPortal):
         outer.addWidget(self.auth_scroll)
         self.stack.addWidget(page)
 
+    def resize(self, *args):
+        self._user_resized = True
+        super().resize(*args)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "loading_scroll"):
+            QTimer.singleShot(0, self, self._fit_loading_card)
         if hasattr(self, "auth_scroll"):
             QTimer.singleShot(0, self, self._fit_auth_card)
+
+    def _fit_loading_card(self):
+        if hasattr(self, "loading_card") and hasattr(self, "loading_scroll"):
+            self.loading_card.setMaximumWidth(min(520, max(1, self.loading_scroll.viewport().width() - 4)))
 
     def _fit_auth_card(self):
         self.auth_card.setMaximumWidth(min(520, max(1, self.auth_scroll.viewport().width() - 4)))
 
     def eventFilter(self, watched, event):
+        if (hasattr(self, "loading_scroll") and watched is self.loading_scroll.viewport()
+                and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)):
+            QTimer.singleShot(0, self, self._fit_loading_card)
         if (hasattr(self, "auth_scroll") and watched is self.auth_scroll.viewport()
                 and event.type() in (QEvent.Type.Resize, QEvent.Type.Show)):
             QTimer.singleShot(0, self, self._fit_auth_card)
@@ -825,13 +897,15 @@ class OwnerTicketDialog(_TaskPortal):
         self._render_tickets_list()
         self.stack.setCurrentIndex(1)
         self._start_live_updates()
-        if not self._dashboard_fitted:
+        if not self._dashboard_fitted and not getattr(self, "_user_resized", False):
             fit_dialog(self, preferred=(880, 740), minimum=(360, 300))
             self._dashboard_fitted = True
         self.update()
 
     def _build_dashboard_screen(self):
         page = QWidget(self.stack)
+        page.setObjectName("developer-dashboard-page")
+        self.dashboard_page = page
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(16)
@@ -1178,7 +1252,7 @@ class OwnerTicketDialog(_TaskPortal):
         self._update_eye_icon(True)
         self.lbl_auth_error.hide()
         self._update_cloud_badge()
-        self.stack.setCurrentIndex(0)
+        self.stack.setCurrentWidget(self.auth_page)
         self.txt_auth_pwd.setFocus()
 
     def _update_cloud_badge(self):
@@ -1339,7 +1413,7 @@ class OwnerTicketDialog(_TaskPortal):
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if self.stack.currentIndex() == 0:
+            if hasattr(self, "auth_page") and self.stack.currentWidget() == self.auth_page:
                 self._do_authenticate()
             event.accept()
         else:

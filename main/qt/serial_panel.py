@@ -49,6 +49,30 @@ def _visible_serial_controls(text: str) -> str:
     return _SERIAL_CONTROLS_RE.sub(escape, text.replace("\r\n", "\n"))
 
 
+_CLIPBOARD_ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?: ]*[@-~]"              # Standard CSI
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)" # OSC sequences
+    r"|\x1b[PX^_][^\x1b]*\x1b\\"          # DCS, PM, APC, SOS
+    r"|\x1b[()#%][0-9a-zA-Z]"             # Charset and line mode escapes
+    r"|\x1b[=><cMNEH78FNO]"               # 2-character escape sequences
+    r"|\x1b"                              # Lone raw ESC
+    r"|(?i:\\x1b\[[0-9;?: ]*[@-~])"       # Literal escaped CSI
+    r"|(?i:\\x1b\[)"                      # Literal escaped ESC[
+    r"|(?i:\\x1b)"                        # Literal escaped ESC
+)
+_LITERAL_CR_RE = re.compile(r"\\x0d", re.IGNORECASE)
+
+
+def sanitize_serial_clipboard_text(text: str) -> str:
+    """Strip ANSI control sequences, raw carriage returns, and escape artifacts for clean clipboard text."""
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "")
+    text = _LITERAL_CR_RE.sub("", text)
+    text = _CLIPBOARD_ANSI_RE.sub("", text)
+    return text
+
+
 from main.qt.icons import IconLabel as QLabel
 from main.core.ansi_sgr import PLAIN, apply_sgr
 
@@ -62,7 +86,8 @@ class _SerialAnsiParser:
     """Bounded incremental terminal controls for an append-only serial log.
 
     A random/incomplete escape must not swallow unlimited subsequent output.
-    Cursor-home does not erase history; only an explicit erase-screen does.
+    Cursor-home (H, f) and erase-display (J) sequences clear the view buffer while
+    preserving active SGR color styling across clears.
     SGR (``ESC [ … m``) sets the style of the text after it: colors (16, 256 and
     truecolor, foreground and background), bold, dim, italic, underline, inverse
     and strikethrough. Other CSI sequences are still consumed without display.
@@ -117,7 +142,10 @@ class _SerialAnsiParser:
             elif self._state == "csi":
                 if "@" <= char <= "~":
                     parameters = self._pending[2:-1]
-                    clear = char == "J" and parameters in ("2", "3")
+                    clear = (
+                        (char == "J" and parameters in ("", "0", "2", "3"))
+                        or (char in ("H", "f") and all(part in ("", "0", "1") for part in parameters.split(";")))
+                    )
                     self.reset()
                     if clear:
                         emit(True)
@@ -291,7 +319,7 @@ class SerialOutputView(QPlainTextEdit):
         self._timestamp_enabled = enabled
         self._rebuild_document()
 
-    def get_content_for_clipboard(self, include_timestamp: bool | None = None) -> str:
+    def get_content_for_clipboard(self, include_timestamp: bool | None = None, *, clean: bool = False) -> str:
         """Copy retained serial data, including output awaiting a display batch.
 
         Qt shortens very long visual lines to protect responsiveness. Copy uses
@@ -307,16 +335,18 @@ class SerialOutputView(QPlainTextEdit):
         pending = _visible_serial_controls(self._ansi_parser._pending)
         tail = [(pending, self._ansi_pending_tag, False, self._ansi_pending_stamp)] if pending else []
         chunks, _ = self._formatted_chunks(chain(self._entries, tail), bool(include_timestamp))
-        return "".join(text for text, _tag in chunks)
+        raw = "".join(text for text, _tag in chunks)
+        return sanitize_serial_clipboard_text(raw) if clean else raw
 
     def copy(self) -> None:
-        """Copy exactly the selected visible text, without reinterpretation."""
+        """Copy selected visible text sanitized of ANSI codes and CR artifacts."""
         cursor = self.textCursor()
         if not cursor.hasSelection():
             return
         selected_text = cursor.selectedText().replace("\u2029", "\n")
+        clean_text = sanitize_serial_clipboard_text(selected_text)
         self.copy_started.emit()
-        QApplication.clipboard().setText(selected_text)
+        QApplication.clipboard().setText(clean_text)
 
     def keyPressEvent(self, event) -> None:
         # QPlainTextEdit.copy is a non-virtual C++ slot. Native shortcuts must
@@ -615,7 +645,11 @@ class SerialOutputView(QPlainTextEdit):
             return
 
         if cleared:
-            super().clear()
+            if sys.platform != "win32":
+                self._follow.clear_document(super().clear)
+            else:
+                super().clear()
+            self._follow.reset()
         chunks, self._render_line_start = self._formatted_chunks(
             additions, self._timestamp_enabled, self._render_line_start)
 
@@ -1093,9 +1127,10 @@ class SerialPanel(QWidget):
             sig_bus.flush_pending_logs("serial")
         include_ts = self._output._timestamp_enabled if hasattr(self._output, "_timestamp_enabled") else False
         text = self._output.get_content_for_clipboard(include_timestamp=include_ts)
+        clean_text = sanitize_serial_clipboard_text(text)
         self._ensure_copy_timers()
         self._cancel_copy_output()
-        self._copy_snapshot = text
+        self._copy_snapshot = clean_text
         self._copy_attempts = 0
         self._copy_active = True
         self.btn_copy.set_icon("copy")
