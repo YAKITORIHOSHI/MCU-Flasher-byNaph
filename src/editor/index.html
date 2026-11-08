@@ -549,18 +549,40 @@
       inset: 0;
       z-index: 2;
       display: flex;
-      align-items: flex-start;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
       padding: 24px;
       box-sizing: border-box;
       background: transparent;
       color: var(--text-dim);
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.6;
       pointer-events: none;
     }
     #editor-loading[hidden] { display: none; }
     #editor-loading > span { border-left: 2px solid var(--accent); padding-left: 12px; }
     #editor-loading strong { display: block; font-weight: 600; color: var(--text); }
+    .circular-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid rgba(128, 217, 206, 0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: mcu-spin 0.8s linear infinite;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    @keyframes mcu-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .monaco-editor, .monaco-editor .view-lines {
+      letter-spacing: 0px !important;
+    }
+    .monaco-editor .selected-text {
+      border-radius: 2px !important;
+    }
 
     .monaco-editor .decorationsOverviewRuler {
       display: none !important;
@@ -1264,7 +1286,10 @@
     </div>
     <div id="editor-container" role="tabpanel" aria-label="Source editor">
       <div id="monaco-anchor"></div>
-      <div id="editor-loading" role="status" aria-live="polite"><span><strong>Opening your sketch</strong>Preparing the source editor…</span></div>
+      <div id="editor-loading" role="status" aria-live="polite">
+        <div class="circular-spinner" aria-hidden="true"></div>
+        <span><strong>Opening your sketch</strong>Preparing the source editor…</span>
+      </div>
       <div id="ai-diff-banner" role="region" aria-live="polite" aria-label="AI edit review">
         <span id="ai-review-title" class="review-title" title="AI Review"><span class="review-title-icon" aria-hidden="true"></span><span class="review-title-label">AI Review</span></span>
         <span id="ai-review-source" class="review-source" aria-label="Unknown source" title="Unknown source"><span class="review-source-label">Unknown</span><span class="review-source-short" aria-hidden="true">?</span></span>
@@ -1303,6 +1328,9 @@
       let attempts = 0;
       function apply() {
         if (window.editorInstance) {
+          if (typeof window.installCrossPlatformSelectionKeybindings === 'function') {
+            window.installCrossPlatformSelectionKeybindings(window.editorInstance);
+          }
           if (window.__mcuPerformanceApplied === Boolean(constrained)) return;
           window.__mcuPerformanceApplied = Boolean(constrained);
           if (constrained) window.editorInstance.updateOptions({
@@ -1655,8 +1683,16 @@
       const rendererToken = new URLSearchParams(window.location.search).get('renderer') || '';
       window.safeLoadProject = function () {
         if (projectLoadInFlight) return projectLoadInFlight;
-        if (!window.pywebview || !window.pywebview.api) return Promise.resolve(false);
-        if (typeof originalLoadProject !== 'function') return Promise.resolve();
+        const loading = document.getElementById('editor-loading');
+        if (loading) loading.hidden = false;
+        if (!window.pywebview || !window.pywebview.api) {
+          if (loading) loading.hidden = true;
+          return Promise.resolve(false);
+        }
+        if (typeof originalLoadProject !== 'function') {
+          if (loading) loading.hidden = true;
+          return Promise.resolve();
+        }
         window.__mcuProjectLoadReady = false;
         const readFailures = window._editorReadFailures || 0;
         projectLoadInFlight = Promise.resolve(originalLoadProject())
@@ -5072,6 +5108,7 @@
               'editorIndentGuide.background': '#073642',
               'editorIndentGuide.activeBackground': '#586e75',
               'editor.selectionBackground': '#0d4a59cc',
+              'editor.inactiveSelectionBackground': '#0d4a5966',
               'editorGutter.background': '#00000000'
             }
           });
@@ -5092,6 +5129,7 @@
               'editorIndentGuide.background': '#d0d7de',
               'editorIndentGuide.activeBackground': '#afb8c1',
               'editor.selectionBackground': '#7fcbcdb3',
+              'editor.inactiveSelectionBackground': '#7fcbcd66',
               'editorGutter.background': '#00000000'
             }
           });
@@ -5109,6 +5147,7 @@
               'editor.lineHighlightBackground': '#434f5410',
               'editorCursor.foreground': '#dae3e3',
               'editor.selectionBackground': '#00818480',
+              'editor.inactiveSelectionBackground': '#00818440',
               'editorGutter.background': '#00000000'
             }
           });
@@ -5174,6 +5213,53 @@
         }
       };
 
+      function installCrossPlatformSelectionKeybindings(editor) {
+        editor = editor || window.editorInstance;
+        const monacoObj = window.monaco || (typeof monaco !== 'undefined' ? monaco : null);
+        if (!editor || !monacoObj || editor._crossPlatformKeybindingsInstalled) return;
+        editor._crossPlatformKeybindingsInstalled = true;
+
+        try {
+          editor.updateOptions({ disableMonospaceOptimizations: true });
+        } catch (e) {}
+
+        const { KeyMod, KeyCode } = monacoObj;
+        if (!KeyMod || !KeyCode) return;
+
+        // Left arrow: word select left (CtrlCmd + Shift + Left & WinCtrl + Shift + Left)
+        editor.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.LeftArrow, () => {
+          editor.trigger('keyboard', 'cursorWordLeftSelect');
+        });
+        editor.addCommand(KeyMod.WinCtrl | KeyMod.Shift | KeyCode.LeftArrow, () => {
+          editor.trigger('keyboard', 'cursorWordLeftSelect');
+        });
+
+        // Right arrow: word select right (CtrlCmd + Shift + Right & WinCtrl + Shift + Right)
+        editor.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.RightArrow, () => {
+          editor.trigger('keyboard', 'cursorWordRightSelect');
+        });
+        editor.addCommand(KeyMod.WinCtrl | KeyMod.Shift | KeyCode.RightArrow, () => {
+          editor.trigger('keyboard', 'cursorWordRightSelect');
+        });
+
+        // Up arrow: select up (CtrlCmd + Shift + Up & WinCtrl + Shift + Up)
+        editor.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.UpArrow, () => {
+          editor.trigger('keyboard', 'cursorUpSelect');
+        });
+        editor.addCommand(KeyMod.WinCtrl | KeyMod.Shift | KeyCode.UpArrow, () => {
+          editor.trigger('keyboard', 'cursorUpSelect');
+        });
+
+        // Down arrow: select down (CtrlCmd + Shift + Down & WinCtrl + Shift + Down)
+        editor.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.DownArrow, () => {
+          editor.trigger('keyboard', 'cursorDownSelect');
+        });
+        editor.addCommand(KeyMod.WinCtrl | KeyMod.Shift | KeyCode.DownArrow, () => {
+          editor.trigger('keyboard', 'cursorDownSelect');
+        });
+      }
+      window.installCrossPlatformSelectionKeybindings = installCrossPlatformSelectionKeybindings;
+
       async function autoInitTheme() {
         if (window.__mcuInitialTheme !== null) return;
         if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_theme_mode === 'function') {
@@ -5199,6 +5285,7 @@
       window.addEventListener('pywebviewready', () => {
         autoInitTheme();
         autoInitFontSize();
+        if (window.editorInstance) installCrossPlatformSelectionKeybindings(window.editorInstance);
       });
       document.addEventListener('DOMContentLoaded', () => {
         window.setPerformanceMode(window.__mcuResourceConstrained);
@@ -5208,6 +5295,15 @@
         if (!window.pywebview?.api && (typeof qt === 'undefined' || !qt.webChannelTransport)) {
           document.getElementById('editor-loading').hidden = true;
         }
+        let pollCount = 0;
+        const pollTimer = setInterval(() => {
+          if (window.editorInstance) {
+            installCrossPlatformSelectionKeybindings(window.editorInstance);
+            clearInterval(pollTimer);
+          } else if (++pollCount > 40) {
+            clearInterval(pollTimer);
+          }
+        }, 50);
       });
       // Register custom themes before the bundle's DOMContentLoaded constructor
       // chooses its theme. This also paints the loading surface correctly.

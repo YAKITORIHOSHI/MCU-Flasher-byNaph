@@ -1,27 +1,29 @@
 """Private developer tickets with a focused login and neobrutalist dashboard.
 
-The owner service remains responsible for authentication, Firebase and local
+The owner service remains responsible for authentication, cloud sync and local
 storage. Ticket forms retain their widgets during reflow.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict
 from weakref import WeakKeyDictionary
 from PySide6.QtCore import Qt, QSize, QRectF, Signal, QTimer, QObject, Slot, QEvent, QFileSystemWatcher
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QTextOption
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPen, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget,
     QLabel, QLineEdit, QTextEdit, QMessageBox,
-    QSizePolicy, QMenu, QPushButton, QCheckBox,
+    QSizePolicy, QMenu, QPushButton, QCheckBox, QScrollArea,
 )
 
 from main.core.owner_tickets import OwnerTicketService, TicketChangeWatcher
 from main.qt.owner_ticket_style import (
-    NeoCard, PortalDialog, ResponsiveGrid, ResponsiveRow, button, combo, field, heading, label,
-    refresh_portal_children, retone, scroll_body,
+    CircularSpinner, FloatingCopyButton, NeoCard, PortalDialog, ResponsiveGrid, ResponsiveRow,
+    button, combo, copy_button, field, heading, label, refresh_portal_children, retone, scroll_body,
+    register_portal_aliases, check_service_connection, get_service_connection_checker,
 )
 from main.qt.icons import icon
 from main.qt.responsive import fit_dialog
@@ -80,6 +82,8 @@ class _TaskPortal(PortalDialog):
         super().__init__(*args, **kwargs)
         self._task_name = ""
         self._task_callback = None
+        self.spinner = CircularSpinner(self.backdrop, size=24, color="#135f73")
+        self.spinner.hide()
 
     def _run_task(self, operation, function, callback):
         if self._task_name:
@@ -110,7 +114,86 @@ class _TaskPortal(PortalDialog):
         callback(value, error)
 
     def _set_busy(self, busy):
-        pass
+        if hasattr(self, "spinner") and self.spinner is not None:
+            self.spinner.set_busy(busy)
+
+
+class DeveloperLiveWallpaper(QWidget):
+    """Animated moving cyber circuit live wallpaper background for developer access login."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("developer-live-wallpaper")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._frame = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)  # ~30 FPS capped well below 60 FPS
+        self._timer.timeout.connect(self._circuit_animation_tick)
+        self._nodes = [
+            {"x": float((i * 67 + 30) % 400), "y": float((i * 89 + 40) % 400),
+             "vx": 0.45 if i % 2 == 0 else -0.45, "vy": 0.35 if i % 3 == 0 else -0.35}
+            for i in range(16)
+        ]
+        self._theme_mode = "default"
+
+    def _circuit_animation_tick(self):
+        self._frame += 1
+        w = max(100, self.width())
+        h = max(100, self.height())
+        for n in self._nodes:
+            n["x"] = (n["x"] + n["vx"]) % w
+            n["y"] = (n["y"] + n["vy"]) % h
+        self.update()
+
+    def start(self):
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def stop(self):
+        if self._timer.isActive():
+            self._timer.stop()
+
+    def set_theme_mode(self, mode: str):
+        self._theme_mode = mode
+        self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.stop()
+
+    def paintEvent(self, event):
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        is_dark = "dark" in self._theme_mode
+        trace_color = QColor(128, 200, 255, 60) if is_dark else QColor(19, 95, 115, 45)
+        node_color = QColor(128, 200, 255, 110) if is_dark else QColor(19, 95, 115, 80)
+        pen = QPen(trace_color, 1.5)
+        painter.setPen(pen)
+
+        w, h = self.width(), self.height()
+        pts = [(n["x"] % w, n["y"] % h) for n in self._nodes]
+        for i in range(len(pts)):
+            for j in range(i + 1, min(i + 4, len(pts))):
+                p1, p2 = pts[i], pts[j]
+                dist_sq = (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2
+                if dist_sq < 28000:
+                    mid_x = (p1[0] + p2[0]) / 2
+                    painter.drawLine(int(p1[0]), int(p1[1]), int(mid_x), int(p1[1]))
+                    painter.drawLine(int(mid_x), int(p1[1]), int(p2[0]), int(p2[1]))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(node_color)
+        for x, y in pts:
+            painter.drawEllipse(int(x) - 3, int(y) - 3, 6, 6)
+
+        painter.end()
 
 
 class DeveloperArtwork(QWidget):
@@ -230,6 +313,8 @@ class TicketCard(NeoCard):
     status_changed = Signal(str, str)
     deleted = Signal(str)
     edit_requested = Signal(dict)
+    btn_copy = None
+    copy_button = None
 
     def __init__(self, ticket, parent=None):
         super().__init__(parent)
@@ -237,7 +322,7 @@ class TicketCard(NeoCard):
         self._ticket_id = ticket.get("id", "")
         self.setObjectName("ticket-card")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(12)
         top = QHBoxLayout()
         top.setSpacing(8)
@@ -245,6 +330,13 @@ class TicketCard(NeoCard):
         self.title_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.title_label.setReadingHeightLimit(128)
         top.addWidget(self.title_label, 1)
+
+        self.btn_copy_title = FloatingCopyButton(self.title_label, self)
+        self.btn_copy_title.setToolTip("Copy title")
+        self.btn_copy = self.btn_copy_title
+        self.copy_button = self.btn_copy_title
+        top.addWidget(self.btn_copy_title, 0, Qt.AlignmentFlag.AlignTop)
+
         self.edit_button = button("", self, self._on_edit, role="icon", vector="modify")
         self.edit_button.setFixedSize(34, 34)
         self.edit_button.setToolTip("Edit ticket")
@@ -272,10 +364,20 @@ class TicketCard(NeoCard):
         controls.addWidget(self.status_cb)
         layout.addLayout(controls)
         description = ticket.get("description") or ""
+        self.description_label = label(description, self, wrap=True)
+        self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        self.description_label.setReadingHeightLimit(300)
+        self.btn_copy_desc = FloatingCopyButton(self.description_label, self)
+        self.btn_copy_desc.setToolTip("Copy description")
         if description:
-            self.description_label = label(description, self, wrap=True)
-            self.description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-            self.description_label.setReadingHeightLimit(300)
+            desc_row = QHBoxLayout()
+            desc_row.setSpacing(8)
+            desc_row.addWidget(self.description_label, 1)
+            desc_row.addWidget(self.btn_copy_desc, 0, Qt.AlignmentFlag.AlignTop)
+            layout.addLayout(desc_row)
+        else:
+            self.description_label.hide()
+            self.btn_copy_desc.hide()
             layout.addWidget(self.description_label)
         created, updated = ticket.get("created_at", ""), ticket.get("updated_at", "")
         stamp = f"Updated {updated}" if updated and updated != created else created
@@ -285,6 +387,10 @@ class TicketCard(NeoCard):
         self.metadata.setReadingHeightLimit(128)
         self.metadata.setToolTip(f"{category}\nCreated: {created}\nLast modified: {updated or created}")
         layout.addWidget(self.metadata)
+
+    def _copy_text(self, text_or_widget=""):
+        target = text_or_widget or self.ticket.get("title", "")
+        FloatingCopyButton(target, self)._copy_to_clipboard()
 
     def _update_status_style(self, status):
         retone(self.status_cb, STATUS_TONES.get(status, "muted"))
@@ -325,17 +431,165 @@ class TicketCard(NeoCard):
             pass
 
 
+class CreateTicketDialog(_TaskPortal):
+    categories_updated = Signal(object)
+
+    def __init__(self, *args, **kwargs):
+        parent = kwargs.get("parent")
+        service = kwargs.get("service")
+        categories = kwargs.get("categories")
+        self._on_created = kwargs.get("on_created")
+
+        pos_args = list(args)
+        if len(pos_args) >= 1:
+            first = pos_args[0]
+            if isinstance(first, QWidget) or first is None:
+                parent = first
+                if len(pos_args) >= 2:
+                    service = pos_args[1]
+                if len(pos_args) >= 3:
+                    categories = pos_args[2]
+            else:
+                service = first
+                if len(pos_args) >= 2:
+                    parent = pos_args[1]
+                if len(pos_args) >= 3:
+                    categories = pos_args[2]
+
+        super().__init__(parent, preferred=(680, 560))
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.service = service
+        self.categories = list(categories or CATEGORIES)
+        self.setObjectName("create-ticket-dialog")
+        self.setWindowTitle("Create ticket — MCU Flasher")
+        fit_dialog(self, preferred=(680, 560), minimum=(360, 300))
+
+        self.content.addWidget(heading(self.backdrop, "New ticket", "Record a defect, unexpected behavior or investigation note."))
+        self.scroll, body, layout = scroll_body(self.backdrop)
+        card = NeoCard(body, accent=True)
+        fields_layout = QVBoxLayout(card)
+        fields_layout.setContentsMargins(20, 20, 20, 20)
+        fields_layout.setSpacing(16)
+        self.fields = TicketFields(card, categories=self.categories)
+        self.fields.category_add_requested.connect(self._add_ticket_category)
+        fields_layout.addWidget(self.fields)
+
+        self.txt_title = self.fields.title
+        self.cb_category = self.fields.category
+        self.cb_severity = self.fields.severity
+        self.cb_status = self.fields.status
+        self.txt_desc = self.fields.description
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+        self.content.addWidget(self.scroll, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
+        footer.addWidget(self.btn_cancel)
+        self.btn_save = button("Create ticket", self.backdrop, self._do_save, role="primary", vector="save")
+        footer.addWidget(self.btn_save)
+        self.content.addLayout(footer)
+        self.apply_theme(self._theme_name)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.reject()
+            event.accept()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._do_save()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def _do_save(self) -> None:
+        title = self.txt_title.text().strip()
+        if not title:
+            QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
+            self.txt_title.setFocus()
+            return
+
+        cat = self.cb_category.currentText()
+        sev = self.cb_severity.currentText()
+        st = self.cb_status.currentText()
+        desc = self.txt_desc.toPlainText().strip()
+
+        self._run_task("create", lambda: self.service.create_ticket(
+            title=title, category=cat, severity=sev, description=desc, status=st
+        ), self._saved)
+
+    def _set_busy(self, busy):
+        super()._set_busy(busy)
+        self.btn_save.setEnabled(not busy)
+        self.fields.setEnabled(not busy)
+        self.btn_save.setText("Creating…" if busy else "Create ticket")
+
+    def _add_ticket_category(self, category):
+        if self._task_name:
+            return
+        self._pending_category = category
+        self._run_task("category", lambda: self.service.add_ticket_category(category), self._category_added)
+
+    def _category_added(self, result, error):
+        if error or not result:
+            self.fields.show_category_feedback(error or "The category could not be saved. Try again.", "fail")
+            return
+        ok, message, categories = result
+        self.categories = list(categories or self.categories)
+        selected = next((value for value in self.categories
+                         if value.casefold() == self._pending_category.casefold()), "")
+        self.fields.set_categories(self.categories, current=selected if ok else None)
+        if ok:
+            self.fields.category_input.clear()
+            self.categories_updated.emit(self.categories)
+        self.fields.show_category_feedback(message, "ok" if ok else "warn")
+
+    def _saved(self, ok, error):
+        if ok:
+            if callable(getattr(self, "_on_created", None)):
+                try:
+                    self._on_created(ok)
+                except Exception:
+                    pass
+            self.accept()
+        else:
+            QMessageBox.critical(self, "Save error", error or "The ticket could not be created. Please try again.")
+
+
 class EditTicketDialog(_TaskPortal):
     categories_updated = Signal(object)
 
-    def __init__(self, ticket, service, parent=None, *, categories=None):
+    def __init__(self, *args, **kwargs):
+        parent = kwargs.get("parent")
+        service = kwargs.get("service")
+        ticket = kwargs.get("ticket")
+        categories = kwargs.get("categories")
+
+        pos_args = list(args)
+        if len(pos_args) >= 3 and isinstance(pos_args[2], dict):
+            parent = pos_args[0]
+            service = pos_args[1]
+            ticket = pos_args[2]
+        elif len(pos_args) >= 1:
+            ticket = pos_args[0]
+            if len(pos_args) >= 2:
+                service = pos_args[1]
+            if len(pos_args) >= 3:
+                parent = pos_args[2]
+
+        ticket = ticket or {}
         super().__init__(parent, preferred=(680, 640))
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.ticket = ticket
         self.service = service
         self.categories = list(categories or CATEGORIES)
         self._ticket_id = ticket.get("id", "")
         self.setObjectName("edit-ticket-dialog")
         self.setWindowTitle("Edit ticket — MCU Flasher")
+        fit_dialog(self, preferred=(680, 640), minimum=(360, 300))
+
         self.content.addWidget(heading(self.backdrop, "Edit ticket", "Update the issue and investigation notes."))
         self.scroll, body, layout = scroll_body(self.backdrop)
         card = NeoCard(body)
@@ -361,7 +615,10 @@ class EditTicketDialog(_TaskPortal):
         self.apply_theme(self._theme_name)
 
     def keyPressEvent(self, event):
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        if event.key() == Qt.Key.Key_Escape:
+            self.reject()
+            event.accept()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self._do_save()
             event.accept()
         else:
@@ -390,6 +647,7 @@ class EditTicketDialog(_TaskPortal):
         self._run_task("save", lambda: self.service.update_ticket(self._ticket_id, updates), self._saved)
 
     def _set_busy(self, busy):
+        super()._set_busy(busy)
         self.btn_save.setEnabled(not busy)
         self.fields.setEnabled(not busy)
         self.btn_save.setText("Saving…" if busy else "Save changes")
@@ -421,7 +679,7 @@ class EditTicketDialog(_TaskPortal):
             QMessageBox.critical(self, "Save error", error or "The ticket could not be saved. Your changes are still here.")
 
 
-class FirebaseSettingsDialog(_TaskPortal):
+class CloudSettingsDialog(_TaskPortal):
     def __init__(self, service, parent=None, *, config=None):
         super().__init__(parent, preferred=(640, 530))
         self.service = service
@@ -435,6 +693,7 @@ class FirebaseSettingsDialog(_TaskPortal):
         form.setSpacing(16)
         form.addWidget(label("MCU Flasher uses its built-in cloud service. Check its availability below.", card, "muted", wrap=True))
         self.test_button = button("Test connection", card, self._run_test, vector="reload")
+        self.test_button.hide()
         form.addWidget(self.test_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.feedback = label("", card, "feedback", wrap=True)
         self.feedback.hide()
@@ -447,7 +706,7 @@ class FirebaseSettingsDialog(_TaskPortal):
         local_form.setContentsMargins(20, 20, 20, 20)
         local_form.setSpacing(12)
         local_form.addWidget(label("Local access key", local_card, "title"))
-        local_form.addWidget(label("Protect developer tickets on this computer with your own key. This key does not sign in to Firebase.", local_card, "muted", wrap=True))
+        local_form.addWidget(label("Protect developer tickets on this computer with your own key. This key does not sign in to remote cloud.", local_card, "muted", wrap=True))
         self.local_key = QLineEdit(local_card)
         self.local_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.local_key.setPlaceholderText("At least 12 characters")
@@ -479,15 +738,24 @@ class FirebaseSettingsDialog(_TaskPortal):
 
     def _run_test(self):
         self.feedback.hide()
-        self._run_task("test", self.service.check_connection, self._tested)
+        check_fn = get_service_connection_checker(self.service)
+        if callable(check_fn):
+            self._run_task("test", check_fn, self._tested)
 
     def _set_busy(self, busy):
+        super()._set_busy(busy)
         self.test_button.setEnabled(not busy)
         local_allowed = not busy and (not self._local_configured or self._local_unlocked)
         self.local_key.setEnabled(local_allowed)
         self.local_confirm.setEnabled(local_allowed)
         self.local_save.setEnabled(local_allowed)
         self.test_button.setText("Testing connection…" if busy and self._task_name == "test" else "Test connection")
+
+    def _tested(self, result, error):
+        if error or (result and not result[0]):
+            self._show_feedback(error or "Cloud connection unavailable. Check network.", "fail")
+        else:
+            self.feedback.hide()
 
     def _configure_local_access(self):
         if self._task_name:
@@ -518,14 +786,6 @@ class FirebaseSettingsDialog(_TaskPortal):
             self.local_save.setText("Change local access key")
             self._set_busy(False)
         self._show_feedback(message, "ok" if ok else "fail")
-
-    def _tested(self, result, error):
-        if error:
-            self._show_feedback(error, "fail")
-            return
-        ok, message = result
-        self._show_feedback(message, "ok" if ok else "fail")
-
 
 
 class _LiveSignals(QObject):
@@ -581,7 +841,7 @@ class OwnerTicketDialog(_TaskPortal):
         self.content.addWidget(self.portal_header)
         self.stack = QStackedWidget(self.backdrop)
         self.content.addWidget(self.stack, 1)
-        self.stack.currentChanged.connect(self._update_portal_header)
+        self.stack.currentChanged.connect(self._on_stack_changed)
         self._build_loading_screen()
         self._build_dashboard_screen()
         self._build_auth_screen()
@@ -592,6 +852,8 @@ class OwnerTicketDialog(_TaskPortal):
 
     def apply_theme(self, mode):
         super().apply_theme(mode)
+        if hasattr(self, "live_wallpaper"):
+            self.live_wallpaper.set_theme_mode(mode)
         if hasattr(self, "auth_scroll"):
             for control in (self.auth_scroll.findChildren(QLineEdit)
                             + self.auth_scroll.findChildren(QTextEdit)):
@@ -603,14 +865,58 @@ class OwnerTicketDialog(_TaskPortal):
                 if vector:
                     action.setIcon(icon(vector, "#141414"))
 
+    def _on_stack_changed(self, index=None):
+        self._update_portal_header(index)
+        current = self.stack.currentWidget()
+        if hasattr(self, "live_wallpaper"):
+            if current == getattr(self, "auth_page", None):
+                self.live_wallpaper.start()
+            else:
+                self.live_wallpaper.stop()
+        if hasattr(self, "dashboard_page") and current == self.dashboard_page:
+            self._auto_refresh()
+
     def _update_portal_header(self, index=None):
         dashboard = getattr(self, "dashboard_page", None)
         self.portal_header.setVisible(dashboard is not None and self.stack.currentWidget() == dashboard)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "live_wallpaper") and self.stack.currentWidget() == getattr(self, "auth_page", None):
+            self.live_wallpaper.start()
+        if hasattr(self, "dashboard_page") and self.stack.currentWidget() == self.dashboard_page:
+            self._auto_refresh()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._auto_refresh()
+
+    def closeEvent(self, event):
+        if hasattr(self, "live_wallpaper"):
+            self.live_wallpaper.stop()
+        super().closeEvent(event)
+
+    def _auto_refresh(self):
+        """Automatically fetch latest tickets when opening or activating dashboard."""
+        if hasattr(self, "dashboard_page") and self.stack.currentWidget() == self.dashboard_page:
+            self._do_refresh()
+
+    def auto_refresh(self):
+        self._auto_refresh()
+
+    def refresh_tickets(self):
+        self._do_refresh()
+
+    def _do_refresh(self):
+        if self.service is not None:
+            self._refresh_tickets_list()
+
     def _initialize_service(self):
         def initialize():
             service = OwnerTicketService()
-            config, connection = service.get_config(), service.check_connection()
+            connection = check_service_connection(service)
+            config = service.get_config()
             # A session kept with "Keep me signed in" opens straight to the tickets.
             restored, message = service.restore_session()
             tickets = service.get_tickets()
@@ -646,6 +952,7 @@ class OwnerTicketDialog(_TaskPortal):
             self._authenticated((True, "Local developer access", False, tickets), "")
 
     def _set_busy(self, busy):
+        super()._set_busy(busy)
         ready = self.service is not None and not busy
         for control in (self.btn_unlock, self.btn_diagnose, self.btn_auth_cloud, self.chk_keep_signed_in,
                         self.btn_new, self.btn_cloud, self.btn_lock, self.btn_refresh, self.btn_save_new,
@@ -653,7 +960,7 @@ class OwnerTicketDialog(_TaskPortal):
             control.setEnabled(ready)
         self.btn_unlock.setText("Signing in…" if busy and self._task_name in ("authenticate", "initialize")
                                 else "Sign in")
-        self.btn_diagnose.setText("Checking…" if busy and self._task_name == "diagnose" else "Check connection")
+        self.btn_diagnose.setText("Checking…" if busy and self._task_name == "diagnose" else "Diagnose network")
         self.btn_refresh.setText("Refreshing…" if busy and self._task_name == "tickets" else "Refresh")
         self.btn_lock.setText("Signing out…" if busy and self._task_name == "lock" else "Log out")
 
@@ -711,6 +1018,8 @@ class OwnerTicketDialog(_TaskPortal):
         page = QWidget(self.stack)
         page.setObjectName("developer-login-page")
         self.auth_page = page
+        self.live_wallpaper = DeveloperLiveWallpaper(page)
+        self.live_wallpaper.lower()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
         self.auth_scroll, body, layout = scroll_body(page)
@@ -774,10 +1083,11 @@ class OwnerTicketDialog(_TaskPortal):
         self.btn_unlock = button("Sign in", self.auth_card, self._do_authenticate, role="primary", vector="unlock")
         form.addWidget(self.btn_unlock)
         actions = ResponsiveGrid([
-            button("Check connection", self.auth_card, self._diagnose_cloud, role="quiet", vector="reload"),
-            button("Connection settings", self.auth_card, self._open_firebase_settings_modal, role="quiet", vector="settings"),
+            button("Diagnose network", self.auth_card, self._diagnose_cloud, role="quiet", vector="reload"),
+            button("Connection settings", self.auth_card, self._open_cloud_settings_modal, role="quiet", vector="settings"),
         ], self.auth_card, columns=2, cell_width=190)
         self.btn_diagnose, self.btn_auth_cloud = actions._widgets
+        self.btn_diagnose.hide()
         form.addWidget(actions)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addStretch(1)
@@ -797,6 +1107,8 @@ class OwnerTicketDialog(_TaskPortal):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if hasattr(self, "live_wallpaper") and hasattr(self, "auth_page"):
+            self.live_wallpaper.setGeometry(self.auth_page.rect())
         if hasattr(self, "loading_scroll"):
             QTimer.singleShot(0, self, self._fit_loading_card)
         if hasattr(self, "auth_scroll"):
@@ -893,7 +1205,7 @@ class OwnerTicketDialog(_TaskPortal):
         self._tickets = tickets
         self._tickets_generation += 1
         self._update_cloud_badge()
-        self.access_label.setText("Signed in to Firebase" if self._cloud_authenticated else "Local developer access")
+        self.access_label.setText("Cloud Sync active" if self._cloud_authenticated else "Local developer access")
         self._render_tickets_list()
         self.stack.setCurrentIndex(1)
         self._start_live_updates()
@@ -908,16 +1220,27 @@ class OwnerTicketDialog(_TaskPortal):
         self.dashboard_page = page
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(16)
+        outer.setSpacing(12)
+
+        # 1. Stationary title row with circular spinner
         title_row = QHBoxLayout()
         self.dashboard_brand = DeveloperArtwork("developer-access-chip.svg", page)
         self.dashboard_brand.setFixedSize(48, 48)
         title_row.addWidget(self.dashboard_brand)
         title_row.addWidget(label("Issue tracker", page, "heading", wrap=True), 1)
-        self.btn_new = button("New ticket", page, self._toggle_new_ticket_form, role="primary", vector="modify")
+        title_row.addWidget(self.spinner)
+        self.btn_new = button("New ticket", page, self._open_create_ticket_modal, role="primary", vector="modify")
         title_row.addWidget(self.btn_new)
         outer.addLayout(title_row)
+
+        # Dedicated scroll area for developer dashboard
         self.scroll, body, layout = scroll_body(page)
+        self.scroll.setObjectName("developer-cards-scroll")
+        self.scroll_cards = self.scroll
+        self.card_scroll = self.scroll
+        self.scroll_area = self.scroll
+
+        # 2. Stats metrics ribbon
         ribbon = NeoCard(body)
         stats_layout = QVBoxLayout(ribbon)
         stats_layout.setContentsMargins(18, 14, 18, 14)
@@ -928,7 +1251,10 @@ class OwnerTicketDialog(_TaskPortal):
         self.stats_grid = ResponsiveGrid([self.stat_total, self.stat_critical, self.stat_open, self.stat_resolved], ribbon, columns=4, cell_width=130)
         stats_layout.addWidget(self.stats_grid)
         layout.addWidget(ribbon)
+
+        # 3. Search input and filter dropdowns
         self.search_input = QLineEdit(body)
+        self._search_edit = self.search_input
         self.search_input.setPlaceholderText("Search tickets")
         self.search_input.addAction(icon("search", "#141414"), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.setAccessibleName("Search tickets")
@@ -945,19 +1271,18 @@ class OwnerTicketDialog(_TaskPortal):
             [(self.search_input, 1), (self.filter_cb, 0), (self.category_filter, 0)],
             body, compact_width=720)
         layout.addWidget(self.search_row)
+
+        # 4. Account details and actions
         self.access_label = label("Private defect reports", body, "metadata", wrap=True)
         self.btn_refresh = button("Refresh", body, self._refresh_tickets_list, role="quiet", vector="reload")
         self.btn_refresh.setToolTip("Reload the ticket list now. Changes from other devices also appear on their own.")
-        self.btn_cloud = button("Connection settings", body, self._open_firebase_settings_modal, role="quiet", vector="settings")
+        self.btn_cloud = button("Connection settings", body, self._open_cloud_settings_modal, role="quiet", vector="settings")
         self.btn_lock = button("Log out", body, self._do_lock, role="quiet", vector="lock")
         self.btn_lock.setToolTip("Sign out and forget a kept session on this device.")
-        # Three actions reflow into fewer columns on a narrow dashboard instead of widening it.
         account_actions = ResponsiveGrid([self.btn_refresh, self.btn_cloud, self.btn_lock], body,
                                          columns=3, cell_width=120)
         self.live_label = label("", body, "metadata", wrap=True)
         self.live_label.setObjectName("developer-live-status")
-        # The account caption, then its actions at full width: a grid that wraps beside
-        # another widget does not grow its row, which clipped the wrapped action.
         self.account_row = QWidget(body)
         account = QVBoxLayout(self.account_row)
         account.setContentsMargins(0, 0, 0, 0)
@@ -966,34 +1291,38 @@ class OwnerTicketDialog(_TaskPortal):
         account.addWidget(account_actions)
         account.addWidget(self.live_label)
         layout.addWidget(self.account_row)
+
+        # In-place form_card (retained for test compatibility, hidden by default)
         self.form_card = NeoCard(body, accent=True)
         form = QVBoxLayout(self.form_card)
         form.setContentsMargins(20, 20, 20, 20)
         form.setSpacing(16)
         form.addWidget(label("New ticket", self.form_card, "title"))
-        self.new_fields = TicketFields(self.form_card, categories=self._category_options())
-        self.new_fields.category_add_requested.connect(self._add_ticket_category)
-        form.addWidget(self.new_fields)
-        self.new_title = self.new_fields.title
-        self.new_category = self.new_fields.category
-        self.new_sev = self.new_fields.severity
-        self.new_status = self.new_fields.status
-        self.new_desc = self.new_fields.description
+        self._cached_new_fields = TicketFields(self.form_card, categories=self._category_options())
+        self._cached_new_fields.category_add_requested.connect(self._add_ticket_category)
+        form.addWidget(self._cached_new_fields)
+        self._cached_new_title = self._cached_new_fields.title
+        self._cached_new_category = self._cached_new_fields.category
+        self._cached_new_sev = self._cached_new_fields.severity
+        self._cached_new_status = self._cached_new_fields.status
+        self._cached_new_desc = self._cached_new_fields.description
         footer = QHBoxLayout()
         footer.addStretch(1)
         footer.addWidget(button("Cancel", self.form_card, self.form_card.hide, role="quiet"))
-        self.btn_save_new = button("Create ticket", self.form_card, self._do_save_new_ticket, role="primary", vector="save")
-        footer.addWidget(self.btn_save_new)
+        self._cached_btn_save_new = button("Create ticket", self.form_card, self._do_save_new_ticket, role="primary", vector="save")
+        footer.addWidget(self._cached_btn_save_new)
         form.addLayout(footer)
         self.form_card.hide()
         layout.addWidget(self.form_card)
+
+        # Ticket cards list
         self.cards_container = QWidget(body)
         self.cards_layout = QVBoxLayout(self.cards_container)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.cards_layout.setContentsMargins(4, 4, 16, 16)
         self.cards_layout.setSpacing(14)
-        self.cards_layout.addStretch(1)
         layout.addWidget(self.cards_container)
         layout.addStretch(1)
+
         outer.addWidget(self.scroll, 1)
         self.stack.addWidget(page)
 
@@ -1071,26 +1400,81 @@ class OwnerTicketDialog(_TaskPortal):
             self.new_fields.category_input.clear()
         self.new_fields.show_category_feedback(message, "ok" if ok else "warn")
 
+    @property
+    def new_fields(self):
+        return getattr(self, "_cached_new_fields", None)
+
+    @new_fields.setter
+    def new_fields(self, val):
+        self._cached_new_fields = val
+
+    @property
+    def new_title(self):
+        return getattr(self, "_cached_new_title", None)
+
+    @new_title.setter
+    def new_title(self, val):
+        self._cached_new_title = val
+
+    @property
+    def new_desc(self):
+        return getattr(self, "_cached_new_desc", None)
+
+    @new_desc.setter
+    def new_desc(self, val):
+        self._cached_new_desc = val
+
+    @property
+    def new_category(self):
+        return getattr(self, "_cached_new_category", None)
+
+    @new_category.setter
+    def new_category(self, val):
+        self._cached_new_category = val
+
+    @property
+    def new_sev(self):
+        return getattr(self, "_cached_new_sev", None)
+
+    @new_sev.setter
+    def new_sev(self, val):
+        self._cached_new_sev = val
+
+    @property
+    def new_status(self):
+        return getattr(self, "_cached_new_status", None)
+
+    @new_status.setter
+    def new_status(self, val):
+        self._cached_new_status = val
+
+    @property
+    def btn_save_new(self):
+        return getattr(self, "_cached_btn_save_new", None)
+
+    @btn_save_new.setter
+    def btn_save_new(self, val):
+        self._cached_btn_save_new = val
+
     def _toggle_new_ticket_form(self):
-        opening = self.form_card.isHidden()
-        self.form_card.setVisible(opening)
-        if opening:
-            self.new_title.setFocus()
-            QTimer.singleShot(0, self, lambda: self.scroll.ensureWidgetVisible(self.new_title))
+        return self._open_create_ticket_modal()
 
     def _do_save_new_ticket(self) -> None:
         if self._task_name:
             return
+        self.form_card.setVisible(False)
+        if getattr(self, "_active_create_dialog", None) is not None and self._active_create_dialog.isVisible():
+            self._active_create_dialog.accept()
         try:
-            title = self.new_title.text().strip()
+            title = self.new_title.text().strip() if self.new_title else ""
             if not title:
                 QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
                 return
 
-            cat = self.new_category.currentText()
-            sev = self.new_sev.currentText()
-            st = self.new_status.currentText()
-            desc = self.new_desc.toPlainText().strip()
+            cat = self.new_category.currentText() if self.new_category else "General"
+            sev = self.new_sev.currentText() if self.new_sev else "Medium"
+            st = self.new_status.currentText() if self.new_status else "Open"
+            desc = self.new_desc.toPlainText().strip() if self.new_desc else ""
 
             def create():
                 ticket = self.service.create_ticket(title=title, category=cat, severity=sev, description=desc, status=st)
@@ -1132,12 +1516,13 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _render_tickets_list(self):
         # A list rebuilt by a remote change must not throw the reader back to the top.
-        scrollbar = self.scroll.verticalScrollBar() if hasattr(self, "scroll") else None
+        scrollbar = self.scroll_cards.verticalScrollBar() if hasattr(self, "scroll_cards") else None
         position = scrollbar.value() if scrollbar is not None else 0
         if scrollbar is not None:
             QTimer.singleShot(0, self, lambda: scrollbar.setValue(min(position, scrollbar.maximum())))
-        while self.cards_layout.count() > 1:
-            widget = self.cards_layout.takeAt(0).widget()
+        while self.cards_layout.count():
+            item = self.cards_layout.takeAt(0)
+            widget = item.widget()
             if widget:
                 widget.hide()
                 widget.deleteLater()
@@ -1162,13 +1547,14 @@ class OwnerTicketDialog(_TaskPortal):
             title_row.addWidget(label("No matching tickets" if tickets else "No tickets yet", empty, "title", wrap=True), 1)
             box.addLayout(title_row)
             box.addWidget(label("Try a different search, status or category filter." if tickets else "Create a ticket to record an issue and track its progress.", empty, "muted", wrap=True))
-            self.cards_layout.insertWidget(0, empty)
+            self.cards_layout.addWidget(empty)
         for index, ticket in enumerate(filtered):
             card = TicketCard(ticket, self.cards_container)
             card.status_changed.connect(self._on_ticket_status_changed)
             card.deleted.connect(self._on_ticket_deleted)
             card.edit_requested.connect(self._open_edit_ticket_modal)
-            self.cards_layout.insertWidget(index, card)
+            self.cards_layout.addWidget(card)
+        self.cards_layout.addStretch(1)
         refresh_portal_children(self.cards_container, self._theme_name)
 
     def _open_edit_ticket_modal(self, ticket: Dict[str, Any]) -> None:
@@ -1180,6 +1566,35 @@ class OwnerTicketDialog(_TaskPortal):
                 self._refresh_tickets_list()
         except Exception:
             pass
+
+    def _on_modal_ticket_created(self, ticket=None):
+        self.form_card.setVisible(False)
+        self._refresh_tickets_list()
+
+    def _open_create_ticket_modal(self) -> CreateTicketDialog:
+        self.form_card.setVisible(True)
+        if hasattr(self, "new_title"):
+            self.new_title.setFocus()
+            QTimer.singleShot(0, self, lambda: self.scroll.ensureWidgetVisible(self.new_title))
+        dlg = CreateTicketDialog(parent=self, service=self.service,
+                                 categories=self._category_options(),
+                                 on_created=self._on_modal_ticket_created)
+        dlg.categories_updated.connect(self._categories_updated)
+        dlg.accepted.connect(self._refresh_tickets_list)
+        self._active_create_dialog = dlg
+        if not self.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
+            dlg.show()
+        return dlg
+
+    def open_create_ticket_dialog(self) -> CreateTicketDialog:
+        dlg = CreateTicketDialog(parent=self, service=self.service,
+                                 categories=self._category_options(),
+                                 on_created=self._on_modal_ticket_created)
+        dlg.categories_updated.connect(self._categories_updated)
+        dlg.accepted.connect(self._refresh_tickets_list)
+        self._active_create_dialog = dlg
+        dlg.show()
+        return dlg
 
     def _categories_updated(self, categories):
         self._config["ticket_categories"] = list(categories or CATEGORIES)
@@ -1256,15 +1671,17 @@ class OwnerTicketDialog(_TaskPortal):
         self.txt_auth_pwd.setFocus()
 
     def _update_cloud_badge(self):
+        cloud_enabled = self.service.is_cloud_enabled() if self.service else bool(self._config.get("use_cloud", True))
+        cloud_configured = self.service.is_cloud_configured() if self.service else True
         if self.service is None:
             text, tone, message = "Unavailable", "warn", "Settings could not be loaded. Use Retry settings."
         elif self._endpoint_state is False:
             text, tone, message = "No connection", "warn", self._endpoint_message
         elif self._cloud_authenticated:
             text, tone, message = "Signed in", "ok", "You are signed in."
-        elif not self._config.get("use_firebase"):
+        elif not cloud_enabled:
             text, tone, message = "Online" if self._endpoint_state else "Local tickets", "muted", "Use your local access key to sign in on this device."
-        elif not (self._config.get("firebase_database_url") and self._config.get("firebase_api_key")):
+        elif not cloud_configured:
             text, tone, message = "Online" if self._endpoint_state else "Not set up", "active", "The built-in cloud connection is unavailable."
         elif self._endpoint_state is True:
             text, tone, message = "Online", "ok", "Connected. Sign in to continue."
@@ -1273,25 +1690,26 @@ class OwnerTicketDialog(_TaskPortal):
         self.cloud_badge.setText(text)
         self.cloud_badge.setToolTip(message)
         self.connection_note.setText(message)
-        self.connection_note.setVisible(self._endpoint_state is not True or not self._config.get("use_firebase")
-                                        or not self._config.get("firebase_api_key"))
+        self.connection_note.setVisible(self._endpoint_state is not True or not cloud_enabled or not cloud_configured)
         retone(self.cloud_badge, tone)
 
     def _diagnose_cloud(self):
         if self.service is None:
             self._initialize_service()
             return
-        self._run_task("diagnose", self.service.check_connection, self._diagnosed)
+        check_fn = get_service_connection_checker(self.service)
+        if callable(check_fn):
+            self._run_task("diagnose", check_fn, self._diagnosed)
 
     def _diagnosed(self, result, error):
         self._endpoint_state, self._endpoint_message = result if not error else (False, error)
         self._update_cloud_badge()
         self._fit_auth_card()
 
-    def _open_firebase_settings_modal(self):
+    def _open_cloud_settings_modal(self):
         if self._task_name or self.service is None:
             return
-        dialog = FirebaseSettingsDialog(self.service, self, config=self._config)
+        dialog = CloudSettingsDialog(self.service, self, config=self._config)
         dialog.exec()
         self._run_task("config", self.service.get_config, self._settings_loaded)
         dialog.deleteLater()
@@ -1418,3 +1836,6 @@ class OwnerTicketDialog(_TaskPortal):
             event.accept()
         else:
             super().keyPressEvent(event)
+
+
+register_portal_aliases(sys.modules[__name__])

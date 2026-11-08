@@ -1122,7 +1122,8 @@ class MonacoEditorPanel(QWidget):
     def eventFilter(self, watched: QObject, event: Any) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             modifiers = event.modifiers()
-            if modifiers & Qt.KeyboardModifier.ControlModifier:
+            has_ctrl = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
+            if has_ctrl:
                 key = event.key()
                 text = event.text()
                 if key == Qt.Key.Key_F and modifiers & Qt.KeyboardModifier.ShiftModifier:
@@ -1138,7 +1139,9 @@ class MonacoEditorPanel(QWidget):
                     self._step_font_size(0)
                     return True
         elif event.type() == QEvent.Type.Wheel:
-            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            modifiers = event.modifiers()
+            has_ctrl = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
+            if has_ctrl:
                 y_delta = event.angleDelta().y()
                 if y_delta != 0:
                     delta = 1 if y_delta > 0 else -1

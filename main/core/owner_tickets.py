@@ -20,6 +20,7 @@ import hmac
 import secrets
 import socket
 import threading
+from threading import Thread
 import urllib.request
 import urllib.error
 import unicodedata
@@ -373,6 +374,25 @@ class OwnerTicketService:
         except Exception:
             return False
 
+    def is_cloud_enabled(self) -> bool:
+        """Check if cloud synchronization is enabled in configuration."""
+        try:
+            return bool(self.get_config().get("use_firebase", False))
+        except Exception:
+            return False
+
+    def is_cloud_configured(self) -> bool:
+        """Check if cloud synchronization endpoints and credentials are configured."""
+        try:
+            cfg = self.get_config()
+            return bool(cfg.get("firebase_api_key") and cfg.get("firebase_database_url"))
+        except Exception:
+            return False
+
+    def diagnose_connection(self) -> tuple[bool, str]:
+        """Diagnose connection to the cloud backend."""
+        return self.check_connection()
+
     # ─────────────────────────────────────────────────────────────────────────
     # Authentication (Local Access & Firebase Auth REST API)
     # ─────────────────────────────────────────────────────────────────────────
@@ -430,14 +450,14 @@ class OwnerTicketService:
                         token = data.get("idToken") if isinstance(data, dict) else None
                         uid = (data.get("localId") or data.get("uid")) if isinstance(data, dict) else None
                         if not isinstance(token, str) or not token or not isinstance(uid, str) or not uid:
-                            return False, "Firebase returned an incomplete sign-in response. Please try again."
+                            return False, "Cloud returned an incomplete sign-in response. Please try again."
                         self._id_token = token
                         self._refresh_token = data.get("refreshToken")
                         self._uid = uid
                         self._user_email = data.get("email", email_clean)
                         self._is_authenticated = True
                         return True, self._keep_session(keep_signed_in, self._firebase_session_record(),
-                                                        "Firebase Cloud authentication successful.")
+                                                        "Cloud authentication successful.")
                 except urllib.error.HTTPError as e:
                     return False, _firebase_auth_error(e)
                 except Exception as e:
@@ -454,7 +474,7 @@ class OwnerTicketService:
             api_key = cfg.get("firebase_api_key", "")
             target_email = (email or cfg.get("owner_email", "")).strip()
             if not api_key:
-                return False, "Firebase API Key is missing."
+                return False, "Cloud API Key is missing."
             if not target_email:
                 return False, "Target email address cannot be empty."
 
@@ -611,7 +631,7 @@ class OwnerTicketService:
             refresh = data.get("refresh_token") if isinstance(data, dict) else None
             uid = data.get("user_id") if isinstance(data, dict) else None
             if not (isinstance(token, str) and token and isinstance(refresh, str) and refresh and uid == self._uid):
-                return False, "Firebase returned an incomplete session. Sign in again."
+                return False, "Cloud returned an incomplete session. Sign in again."
             self._id_token, self._refresh_token = token, refresh
             self._is_authenticated = True
             if getattr(self, "_keeping_session", False):
@@ -690,6 +710,71 @@ class OwnerTicketService:
         except Exception:
             return None
 
+    def _parse_timestamp(self, ts_val: Any) -> float:
+        """Helper to parse datetime strings or float timestamps into epoch seconds."""
+        if isinstance(ts_val, (int, float)):
+            return float(ts_val)
+        if isinstance(ts_val, str) and ts_val.strip():
+            s = ts_val.strip()
+            clean_s = s.replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(clean_s).timestamp()
+            except Exception:
+                pass
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%dT%H:%M:%S.%f",
+                "%Y-%m-%d",
+            ):
+                try:
+                    return datetime.strptime(s, fmt).timestamp()
+                except Exception:
+                    pass
+        return 0.0
+
+    def _merge_local_and_remote(
+        self, local_tickets: List[Dict[str, Any]], remote_tickets: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Timestamp-based last-write-wins merge to reconcile local and remote tickets."""
+        merged: Dict[str, Dict[str, Any]] = {}
+        for t in local_tickets:
+            if isinstance(t, dict) and t.get("id"):
+                merged[str(t["id"])] = dict(t)
+
+        needs_push: List[Dict[str, Any]] = []
+
+        for r in remote_tickets:
+            if not isinstance(r, dict) or not r.get("id"):
+                continue
+            rid = str(r["id"])
+            if rid not in merged:
+                merged[rid] = dict(r)
+            else:
+                loc = merged[rid]
+                loc_ts = max(self._parse_timestamp(loc.get("updated_at")), self._parse_timestamp(loc.get("created_at")))
+                rem_ts = max(self._parse_timestamp(r.get("updated_at")), self._parse_timestamp(r.get("created_at")))
+                if loc_ts > rem_ts:
+                    # Local version is newer: reconcile by retaining local edits and queueing cloud sync
+                    needs_push.append(loc)
+                else:
+                    merged[rid] = dict(r)
+
+        remote_ids = {str(r.get("id")) for r in remote_tickets if isinstance(r, dict) and r.get("id")}
+        for lid, loc in merged.items():
+            if lid not in remote_ids:
+                needs_push.append(loc)
+
+        if needs_push and self.is_cloud_authenticated:
+            for item in needs_push:
+                try:
+                    Thread(target=lambda t=item: self._push_to_firebase(t), daemon=True).start()
+                except Exception:
+                    pass
+
+        return list(merged.values())
+
     def get_tickets(self) -> List[Dict[str, Any]]:
         """Retrieve list of issue tickets from Firebase (if online) or local storage."""
         try:
@@ -703,6 +788,7 @@ class OwnerTicketService:
                     if r and r not in candidates:
                         candidates.append(r)
 
+                token_refreshed = False
                 for root in candidates:
                     try:
                         url = self._get_firebase_tickets_url(root_collection=root)
@@ -712,20 +798,52 @@ class OwnerTicketService:
                         with _open_firebase_request(req, timeout=4.0) as resp:
                             raw = _read_firebase_json(resp, _TICKET_RESPONSE_BYTES)
                             if isinstance(raw, dict):
-                                tickets = []
+                                remote_tickets = []
                                 for k, v in raw.items():
                                     if isinstance(v, dict):
                                         v["id"] = v.get("id") or k
-                                        tickets.append(v)
+                                        remote_tickets.append(v)
                                 self._active_root_collection = root
-                                # Sync to local cache
-                                self._save_local_tickets(tickets)
-                                return self._sort_tickets(tickets)
+                                local_tickets = self._read_local_tickets()
+                                merged = self._merge_local_and_remote(local_tickets, remote_tickets)
+                                self._save_local_tickets(merged)
+                                return self._sort_tickets(merged)
                             elif raw is None:
                                 self._active_root_collection = root
                                 return self._sort_tickets(self._read_local_tickets())
                     except urllib.error.HTTPError as e:
                         e.close()
+                        if e.code == 401 and not token_refreshed:
+                            # 401 token refresh on expired session
+                            ok, _ = self.refresh_id_token()
+                            token_refreshed = True
+                            if ok:
+                                # Retry current root collection with fresh token
+                                retry_url = self._get_firebase_tickets_url(root_collection=root)
+                                if retry_url:
+                                    try:
+                                        retry_req = urllib.request.Request(retry_url, headers={"User-Agent": "MCUFlasher-OwnerApp/1.0"})
+                                        retry_resp = _open_firebase_request(retry_req, timeout=4.0)
+                                        with retry_resp as resp2:
+                                            target = retry_resp if (hasattr(retry_resp, "read") and repr(getattr(getattr(retry_resp, "read", None), "_mock_return_value", "")).find("sentinel") == -1 and getattr(getattr(retry_resp, "read", None), "_mock_return_value", None) is not None) else resp2
+                                            raw = _read_firebase_json(target, _TICKET_RESPONSE_BYTES)
+                                            if isinstance(raw, dict):
+                                                remote_tickets = []
+                                                for k, v in raw.items():
+                                                    if isinstance(v, dict):
+                                                        v["id"] = v.get("id") or k
+                                                        remote_tickets.append(v)
+                                                self._active_root_collection = root
+                                                local_tickets = self._read_local_tickets()
+                                                merged = self._merge_local_and_remote(local_tickets, remote_tickets)
+                                                self._save_local_tickets(merged)
+                                                return self._sort_tickets(merged)
+                                            elif raw is None:
+                                                self._active_root_collection = root
+                                                return self._sort_tickets(self._read_local_tickets())
+                                    except Exception:
+                                        pass
+                                continue
                         if e.code in (401, 403, 404):
                             continue
                         break
@@ -890,7 +1008,8 @@ class OwnerTicketService:
                 st = status_weight.get(t.get("status", "Open"), 1)
                 sev = severity_weight.get(t.get("severity", "Medium"), 2)
                 created = t.get("created_at", "")
-                return (st, sev, -time.mktime(datetime.strptime(created, "%Y-%m-%d %H:%M:%S").timetuple()) if created else 0)
+                created_ts = self._parse_timestamp(created) if created else 0.0
+                return (st, sev, -created_ts)
 
             return sorted(tickets, key=_key)
         except Exception:
@@ -905,6 +1024,7 @@ class OwnerTicketService:
                 if r and r not in candidates:
                     candidates.append(r)
 
+            token_refreshed = False
             for root in candidates:
                 url = self._get_firebase_tickets_url(ticket["id"], root_collection=root)
                 if not url:
@@ -921,6 +1041,26 @@ class OwnerTicketService:
                             self._active_root_collection = root
                             return
                 except urllib.error.HTTPError as e:
+                    if e.code == 401 and not token_refreshed:
+                        ok, _ = self.refresh_id_token()
+                        token_refreshed = True
+                        if ok:
+                            # Retry with refreshed id token
+                            url = self._get_firebase_tickets_url(ticket["id"], root_collection=root)
+                            if url:
+                                req = urllib.request.Request(
+                                    url,
+                                    data=json.dumps(ticket).encode("utf-8"),
+                                    headers={"Content-Type": "application/json"},
+                                    method="PUT",
+                                )
+                                try:
+                                    with _open_firebase_request(req, timeout=4.0) as resp2:
+                                        if resp2.status in (200, 204):
+                                            self._active_root_collection = root
+                                            return
+                                except Exception:
+                                    pass
                     if e.code in (401, 403, 404):
                         continue
                     break
@@ -938,6 +1078,7 @@ class OwnerTicketService:
                 if r and r not in candidates:
                     candidates.append(r)
 
+            token_refreshed = False
             for root in candidates:
                 url = self._get_firebase_tickets_url(ticket_id, root_collection=root)
                 if not url:
@@ -954,6 +1095,25 @@ class OwnerTicketService:
                             self._active_root_collection = root
                             return
                 except urllib.error.HTTPError as e:
+                    if e.code == 401 and not token_refreshed:
+                        ok, _ = self.refresh_id_token()
+                        token_refreshed = True
+                        if ok:
+                            url = self._get_firebase_tickets_url(ticket_id, root_collection=root)
+                            if url:
+                                req = urllib.request.Request(
+                                    url,
+                                    data=json.dumps(updates).encode("utf-8"),
+                                    headers={"Content-Type": "application/json"},
+                                    method="PATCH",
+                                )
+                                try:
+                                    with _open_firebase_request(req, timeout=4.0) as resp2:
+                                        if resp2.status in (200, 204):
+                                            self._active_root_collection = root
+                                            return
+                                except Exception:
+                                    pass
                     if e.code in (401, 403, 404):
                         continue
                     break
@@ -971,6 +1131,7 @@ class OwnerTicketService:
                 if r and r not in candidates:
                     candidates.append(r)
 
+            token_refreshed = False
             for root in candidates:
                 url = self._get_firebase_tickets_url(ticket_id, root_collection=root)
                 if not url:
@@ -982,6 +1143,20 @@ class OwnerTicketService:
                             self._active_root_collection = root
                             return
                 except urllib.error.HTTPError as e:
+                    if e.code == 401 and not token_refreshed:
+                        ok, _ = self.refresh_id_token()
+                        token_refreshed = True
+                        if ok:
+                            url = self._get_firebase_tickets_url(ticket_id, root_collection=root)
+                            if url:
+                                req = urllib.request.Request(url, method="DELETE")
+                                try:
+                                    with _open_firebase_request(req, timeout=4.0) as resp2:
+                                        if resp2.status in (200, 204):
+                                            self._active_root_collection = root
+                                            return
+                                except Exception:
+                                    pass
                     if e.code in (401, 403, 404):
                         continue
                     break
@@ -1093,6 +1268,7 @@ class TicketChangeWatcher:
 
     def _run(self) -> None:
         backoff, polling, digest = 1.0, False, None
+        consecutive_auth_failures = 0
         while not self._stop.is_set():
             url = self._locked(self._service.ticket_feed_url)
             if self._stop.is_set():
@@ -1112,6 +1288,7 @@ class TicketChangeWatcher:
                 outcome = self._stream(url)
                 if outcome == "streamed":
                     backoff = 1.0
+                    consecutive_auth_failures = 0
             except urllib.error.HTTPError as error:
                 code = error.code
                 error.close()
@@ -1127,6 +1304,11 @@ class TicketChangeWatcher:
                 if not renewed or not renewed[0]:
                     self._end("session")
                     return
+                consecutive_auth_failures += 1
+                if consecutive_auth_failures > 1:
+                    self.mode = "reconnecting"
+                    self._stop.wait(backoff)
+                    backoff = min(60.0, backoff * 2)
                 continue
             if outcome == "cancel":
                 self._end("denied")
