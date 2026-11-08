@@ -26,7 +26,7 @@ from PySide6.QtGui import QContextMenuEvent, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMenu, QPlainTextEdit
 from main.core import config
-from main.qt.serial_panel import SerialOutputView, SerialPanel
+from main.qt.serial_panel import SerialOutputView, SerialPanel, sanitize_serial_clipboard_text
 from src.modules.runtime_resources import performance_profile
 
 APP = QApplication.instance() or QApplication([])
@@ -382,8 +382,11 @@ class SerialViewChecks(unittest.TestCase):
     def test_fragmented_ansi_and_screen_clear_keep_history_consistent(self):
         self.feed("old screen\n\x1b[")
         self.feed("31mred\x1b]title")
-        self.feed("\x07 text\x1b[H")
+        self.feed("\x07 text")
         self.assertEqual(self.view.get_content_for_clipboard(), "old screen\nred text")
+        self.feed("\x1b[H")
+        self.assertEqual(self.view.get_content_for_clipboard(), "")
+        self.assertEqual(self.view.toPlainText(), "")
         self.feed("\x1b[")
         self.feed("2Jnew screen")
         self.assertEqual(self.view.get_content_for_clipboard(), "new screen")
@@ -589,6 +592,115 @@ class SerialViewChecks(unittest.TestCase):
         self.assertLessEqual(self.view.document().lastBlock().length(), 16384)
         self.assertIn("Long line display truncated", self.view.toPlainText())
         self.assertLessEqual(self.view._entries.chars, self.view._entries.max_chars)
+
+    def test_ansi_clear_variants_and_cursor_home_clear_view(self):
+        clear_sequences = [
+            "\x1b[2J",
+            "\x1b[3J",
+            "\x1b[J",
+            "\x1b[0J",
+            "\x1b[H",
+            "\x1b[1;1H",
+            "\x1b[;H",
+            "\x1b[0;0H",
+            "\x1b[f",
+            "\x1b[1;1f",
+            "\x1b[;f",
+            "\x1b[0;0f",
+            "\x1b[2J\x1b[H",
+            "\x1b[H\x1b[2J",
+            "\x1b[2J\x1b[1;1H",
+            "\x1b[H\x1b[J",
+        ]
+        for seq in clear_sequences:
+            with self.subTest(seq=seq):
+                self.view.clear()
+                self.feed("pre-clear message\n")
+                self.assertEqual(self.view.toPlainText(), "pre-clear message\n")
+                self.feed(seq + "post-clear message\n")
+                self.assertEqual(self.view.toPlainText(), "post-clear message\n")
+                self.assertEqual(self.view.get_content_for_clipboard(), "post-clear message\n")
+                self.assertNotIn("pre-clear message", self.view.toPlainText())
+
+    def test_ansi_color_formatting_preserved_across_clears(self):
+        self.view.clear()
+        self.view.apply_theme("default")
+        # ANSI green followed by cursor home
+        self.feed("\x1b[32m\x1b[Hgreen text\n")
+        self.assertEqual(self.view.toPlainText(), "green text\n")
+        entry = list(self.view._entries)[0]
+        self.assertEqual(entry[0], "green text\n")
+        self.assertEqual(entry[1][1].fg, ("i", 2))
+        cursor = self.view.document().find("green text")
+        self.assertTrue(cursor.charFormat().foreground().color().isValid())
+
+        # Further output retains active green style
+        self.feed("second green line\n")
+        self.assertEqual(self.view.toPlainText(), "green text\nsecond green line\n")
+        entry2 = list(self.view._entries)[1]
+        self.assertEqual(entry2[1][1].fg, ("i", 2))
+
+        # Reset style with \x1b[0m
+        self.feed("\x1b[0mplain line\n")
+        entry3 = list(self.view._entries)[2]
+        self.assertTrue(entry3[1] == "normal" or entry3[1][1].plain)
+
+        # Compound sequence: bold red + clear screen + cursor home
+        self.feed("\x1b[1;31m\x1b[2J\x1b[Hbold red text\n")
+        self.assertEqual(self.view.toPlainText(), "bold red text\n")
+        entry4 = list(self.view._entries)[0]
+        self.assertEqual(entry4[1][1].fg, ("i", 1))
+        self.assertTrue(entry4[1][1].bold)
+        cursor4 = self.view.document().find("bold red text")
+        self.assertGreaterEqual(cursor4.charFormat().fontWeight(), 700)
+
+    def test_clipboard_copy_strips_ansi_and_carriage_return_artifacts(self):
+        # 1. Direct unit verification of sanitize_serial_clipboard_text
+        dirty_samples = [
+            ("Hello \x1b[31mRed\x1b[0m World", "Hello Red World"),
+            ("Title: \x1b]0;Terminal Window\x07Done", "Title: Done"),
+            ("Title2: \x1b]2;Terminal Window\x1b\\Done", "Title2: Done"),
+            ("DCS: \x1bP1$txxx\x1b\\Done", "DCS: Done"),
+            ("2-char: \x1b=Keypad\x1b>Normal", "2-char: KeypadNormal"),
+            ("Lone ESC: \x1bPlain", "Lone ESC: Plain"),
+            ("Literal escaped: \\x1b[31mRed\\x1b[0m", "Literal escaped: Red"),
+            ("Literal pending: Hello\\x1b[", "Literal pending: Hello"),
+            ("Literal lone ESC: Hello\\x1bWorld", "Literal lone ESC: HelloWorld"),
+            ("Raw CR: line1\r\nline2\rline3", "Raw CR: line1\nline2line3"),
+            ("Literal CR lower: status\\x0dOK", "Literal CR lower: statusOK"),
+            ("Literal CR upper: status\\x0DOK", "Literal CR upper: statusOK"),
+            ("Charset: \x1b(BASCII\x1b)0Line", "Charset: ASCIILine"),
+            ("DECALN: \x1b#8Screen", "DECALN: Screen"),
+            ("\x1b[2J\x1b[H[00:01:02] sensor\\x0d \x1b[32mPASS\x1b[0m\r\n", "[00:01:02] sensor PASS\n"),
+        ]
+        for raw, clean in dirty_samples:
+            with self.subTest(raw=raw):
+                self.assertEqual(sanitize_serial_clipboard_text(raw), clean)
+
+        # 2. Integration verification with view selection copy
+        self.view.clear()
+        self.feed("Device init:\\x0d\r\n\x1b[32m[OK]\x1b[0m Sensor ready\\x0D\r\n")
+        self.view.selectAll()
+        self.view.copy()
+        clipboard_content = APP.clipboard().text()
+        self.assertEqual(clipboard_content, "Device init:\n[OK] Sensor ready\n")
+        self.assertNotIn("\\x0d", clipboard_content)
+        self.assertNotIn("\\x0D", clipboard_content)
+        self.assertNotIn("\x1b", clipboard_content)
+        self.assertNotIn("\r", clipboard_content)
+
+        # 3. Integration verification with panel full copy
+        panel = self.panel()
+        panel._output.append_log({"text": "Status: \\x0d\r\n\x1b[1;31mERR\x1b[0m\\x0D\r\n", "newline": False})
+        panel._output._flush_queue()
+        panel._copy_output()
+        self.wait_for_copy(panel)
+        panel_copied = APP.clipboard().text()
+        self.assertEqual(panel_copied, "Status: \nERR\n")
+        self.assertNotIn("\\x0d", panel_copied)
+        self.assertNotIn("\\x0D", panel_copied)
+        self.assertNotIn("\x1b", panel_copied)
+        self.assertNotIn("\r", panel_copied)
 
 
 if __name__ == "__main__":

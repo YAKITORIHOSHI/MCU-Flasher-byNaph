@@ -3203,6 +3203,12 @@ class MCUWebBackendAPI:
             mcu_connected = bool(port_device)
             board_selected = bool(board_name)
 
+            port_number = None
+            if mcu_connected and port_device:
+                match = re.search(r"\d+", port_device)
+                if match:
+                    port_number = int(match.group(0))
+
             if board_selected and mcu_connected:
                 status_summary = f"Ready: {board_name} on {port_device}."
             elif board_selected and not mcu_connected:
@@ -3231,6 +3237,8 @@ class MCUWebBackendAPI:
                     "fqbn": ((board_info.get("fqbn", "") or board_info.get("board", "")) if board_selected else "") or None,
                     "build_mcu": ((board_info.get("build_mcu", "") or board_info.get("mcu", "")) if board_selected else "") or None,
                     "port": port_device if mcu_connected else None,
+                    "port_name": port_device if mcu_connected else None,
+                    "port_number": port_number,
                     "port_label": port_label if mcu_connected else None,
                     "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
                     "upload_speed": int(upload_spd_val) if upload_spd_val else None,
@@ -3254,6 +3262,8 @@ class MCUWebBackendAPI:
                     "fqbn": ((board_info.get("fqbn", "") or board_info.get("board", "")) if board_selected else "") or None,
                     "build_mcu": ((board_info.get("build_mcu", "") or board_info.get("mcu", "")) if board_selected else "") or None,
                     "port": port_device if mcu_connected else None,
+                    "port_name": port_device if mcu_connected else None,
+                    "port_number": port_number,
                     "port_label": port_label if mcu_connected else None,
                     "baud_rate": int(baud_val) if str(baud_val).isdigit() else 115200,
                     "upload_speed": int(upload_spd_val) if upload_spd_val else None,
@@ -3265,6 +3275,9 @@ class MCUWebBackendAPI:
 
             payload_text = json.dumps(state_data, indent=2, ensure_ascii=False)
             self._queue_hardware_state_write(sketch_dir, state_payload, payload_text)
+            t = getattr(self, "_hardware_state_thread", None)
+            if t and t.is_alive():
+                t.join(timeout=1.0)
             if sys.platform != "win32":
                 return state_payload  # Native assistant waits for this exact durable revision.
         except Exception as exc:
@@ -3318,7 +3331,9 @@ class MCUWebBackendAPI:
                                               "tag": "warning", "newline": True})
 
         try:
-            threading.Thread(target=worker, name="MCU_SyncHardwareState", daemon=True).start()
+            t = threading.Thread(target=worker, name="MCU_SyncHardwareState", daemon=True)
+            self._hardware_state_thread = t
+            t.start()
         except Exception as exc:
             with self._hardware_state_lock:
                 self._hardware_state_running = False

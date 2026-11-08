@@ -382,6 +382,7 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(APP.clipboard().text(), literal)
 
     def test_login_keyboard_mask_and_lock(self):
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         self.assertTrue(self.dialog.auth_brand.renderer.isValid())
         self.assertTrue(self.dialog.auth_trace.renderer.isValid())
         self.assertFalse(self.dialog.btn_unlock.icon().isNull())
@@ -402,7 +403,7 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(self.dialog.txt_auth_pwd.echoMode(), QLineEdit.EchoMode.Password)
         self.dialog._do_lock()
         settle(self.dialog)
-        self.assertEqual(self.dialog.stack.currentIndex(), 0)
+        self.assertEqual(self.dialog.stack.currentIndex(), 2)
         self.service.sign_out.assert_called_once()
         self.service.authenticate.reset_mock()
         self.dialog.txt_auth_email.setFocus()
@@ -505,6 +506,7 @@ class PortalChecks(unittest.TestCase):
             self.dialog._update_cloud_badge()
             self.assertEqual(self.dialog.cloud_badge.text(), "Signed in")
             mode.assert_not_called()
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         message = "The cloud connection timed out. Try again."
         self.service.authenticate.return_value = (False, message)
         self.dialog.txt_auth_pwd.setText(" fixture-only ")
@@ -512,7 +514,7 @@ class PortalChecks(unittest.TestCase):
         settle(self.dialog)
         self.service.authenticate.assert_called_once_with("developer@example.com", " fixture-only ",
                                                           keep_signed_in=False)
-        self.assertEqual(self.dialog.stack.currentIndex(), 0)
+        self.assertEqual(self.dialog.stack.currentIndex(), 2)
         self.assertEqual(self.dialog.lbl_auth_error.text(), message)
         self.assertFalse(self.dialog.lbl_auth_error.isHidden())
 
@@ -562,8 +564,9 @@ class PortalChecks(unittest.TestCase):
         settle(toolbar._owner_dialog)
         self.assertIsInstance(toolbar._owner_dialog, real_dialog)
         self.assertTrue(toolbar._owner_dialog.isVisible())
-        self.assertEqual(toolbar._owner_dialog.stack.currentIndex(), 0)
-        self.assertTrue(toolbar._owner_dialog.btn_unlock.isEnabled())
+        self.assertEqual(toolbar._owner_dialog.stack.currentIndex(), 1)
+        self.assertEqual(toolbar._owner_dialog.stack.currentWidget(), toolbar._owner_dialog.dashboard_page)
+        self.assertTrue(toolbar._owner_dialog.btn_new.isEnabled())
 
     def test_logo_counts_double_click_releases_once_and_ignores_incomplete_clicks(self):
         logo = _DeveloperLogoLabel("Fixture logo")
@@ -710,6 +713,7 @@ class PortalChecks(unittest.TestCase):
                     fields.category_input.setText("New category draft")
 
     def test_login_and_connection_feedback_fit_without_clipping_actions(self):
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         cloud = portal.FirebaseSettingsDialog(self.service, self.dialog)
         self.addCleanup(cloud.close)
         self.addCleanup(cloud.deleteLater)
@@ -746,6 +750,7 @@ class PortalChecks(unittest.TestCase):
                     cloud.close_button.mapTo(cloud, QPoint()), cloud.close_button.size())))
 
     def test_cloud_diagnosis_is_async_and_never_claims_sign_in(self):
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         self.dialog._config.update(use_firebase=True, firebase_database_url="https://fixture.firebasedatabase.app/", firebase_api_key="fixture-key")
         started, release = Event(), Event()
         self.addCleanup(release.set)
@@ -788,7 +793,10 @@ class PortalChecks(unittest.TestCase):
         self.assertEqual(self.dialog.cloud_badge.text(), "Online")
 
     def test_local_key_setup_keeps_passwords_out_of_config_updates(self):
-        settings = portal.FirebaseSettingsDialog(self.service, self.dialog, config={"local_access_configured": False})
+        from PySide6.QtWidgets import QWidget
+        unauth_dialog = QWidget()
+        unauth_dialog._authenticated_access = False
+        settings = portal.FirebaseSettingsDialog(self.service, unauth_dialog, config={"local_access_configured": False})
         show(settings, (420, 420))
         settings.local_key.setText("long-fixture-key")
         settings.local_confirm.setText("different-key")
@@ -827,6 +835,8 @@ class PortalChecks(unittest.TestCase):
 
     def test_connection_checked_automatically_and_login_centered_after_resize(self):
         self.service.check_connection.assert_called_once_with()
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
+        pump()
         for size in ((590, 580), (880, 740), (380, 600)):
             self.dialog.resize(*size)
             pump()
@@ -840,6 +850,7 @@ class PortalChecks(unittest.TestCase):
         capture(self.dialog, "login-centered-compact")
 
     def test_keep_signed_in_reaches_the_service_and_log_out_forgets_it(self):
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         self.assertFalse(self.dialog.chk_keep_signed_in.isChecked())
         self.dialog.chk_keep_signed_in.setChecked(True)
         self.dialog.txt_auth_pwd.setText("fixture-only")
@@ -853,9 +864,33 @@ class PortalChecks(unittest.TestCase):
         self.dialog.btn_lock.click()
         settle(self.dialog)
         self.service.sign_out.assert_called_once()
-        self.assertEqual(self.dialog.stack.currentIndex(), 0)
+        self.assertEqual(self.dialog.stack.currentIndex(), 2)
         self.assertFalse(self.dialog.chk_keep_signed_in.isChecked())
         self.assertEqual(self.dialog._tickets, [])
+
+    def test_dialog_opens_with_loading_screen_and_bypasses_login_to_dashboard(self):
+        dialog = portal.OwnerTicketDialog()
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        # Starts on loading screen at index 0
+        self.assertEqual(dialog.stack.currentIndex(), 0)
+        self.assertEqual(dialog.stack.currentWidget(), dialog.loading_page)
+        self.assertEqual(dialog.loading_page.objectName(), "developer-loading-page")
+        self.assertIsInstance(dialog.loading_card, NeoCard)
+        self.assertEqual(dialog.loading_card.objectName(), "developer-loading-card")
+        self.assertIn("Checking developer environment", dialog.loading_status.text())
+        self.assertFalse(dialog.portal_header.isVisible())
+
+        # Completes initialization directly to dashboard at index 1 without manual login
+        show(dialog)
+        settle(dialog)
+        self.assertEqual(dialog.stack.currentIndex(), 1)
+        self.assertEqual(dialog.stack.currentWidget(), dialog.dashboard_page)
+        self.assertEqual(dialog.dashboard_page.objectName(), "developer-dashboard-page")
+        self.assertTrue(dialog.portal_header.isVisible())
+        self.assertEqual(dialog.access_label.text(), "Local developer access")
+        self.assertEqual(len(dialog.cards_container.findChildren(portal.TicketCard)), len(self.tickets))
+        self.service.authenticate.assert_not_called()
 
     def test_a_kept_session_opens_straight_to_the_tickets(self):
         self.service.restore_session.return_value = (True, "Signed in from your kept session.")
@@ -863,9 +898,12 @@ class PortalChecks(unittest.TestCase):
         dialog = portal.OwnerTicketDialog()
         self.addCleanup(dialog.deleteLater)
         self.addCleanup(dialog.close)
+        self.assertEqual(dialog.stack.currentIndex(), 0)
+        self.assertEqual(dialog.stack.currentWidget(), dialog.loading_page)
         show(dialog)
         settle(dialog)
         self.assertEqual(dialog.stack.currentIndex(), 1)
+        self.assertEqual(dialog.stack.currentWidget(), dialog.dashboard_page)
         self.service.authenticate.assert_not_called()
         self.assertTrue(dialog.chk_keep_signed_in.isChecked())
         self.assertEqual(len(dialog.cards_container.findChildren(portal.TicketCard)), len(self.tickets))
@@ -943,9 +981,9 @@ class PortalChecks(unittest.TestCase):
                 control.initStyleOption(option)
                 text_rect = control.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option, QStyle.SubControl.SC_ComboBoxEditField, control)
                 self.assertGreaterEqual(text_rect.width(), control.fontMetrics().horizontalAdvance(control.currentText()), (mode, control.currentText()))
-            self.dialog.stack.setCurrentIndex(0)
+            self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
             capture(self.dialog, "login-" + mode)
-            self.dialog.stack.setCurrentIndex(1)
+            self.dialog.stack.setCurrentWidget(self.dialog.dashboard_page)
             edit = portal.EditTicketDialog(TICKETS[0], self.service, self.dialog)
             show(edit)
             capture(edit, "edit-" + mode)
@@ -971,12 +1009,13 @@ class PortalChecks(unittest.TestCase):
         point = self.dialog.btn_save_new.mapTo(self.dialog.scroll.viewport(), self.dialog.btn_save_new.rect().center())
         self.assertTrue(self.dialog.scroll.viewport().rect().contains(point))
         capture(self.dialog, "create-compact")
-        self.dialog.stack.setCurrentIndex(0)
+        self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         pump()
         self.dialog.auth_scroll.ensureWidgetVisible(self.dialog.btn_unlock)
         pump()
         self.assertLessEqual(self.dialog.auth_card.width(), self.dialog.auth_scroll.viewport().width())
         capture(self.dialog, "login-compact")
+        self.dialog.stack.setCurrentWidget(self.dialog.dashboard_page)
         edit = portal.EditTicketDialog(TICKETS[0], self.service, self.dialog)
         show(edit, (380, 320))
         self.assertEqual(edit.width(), 380)

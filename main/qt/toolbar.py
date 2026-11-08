@@ -2113,12 +2113,12 @@ class ControlsBar(QWidget):
                 # so the Upload button correctly disables.
                 self.port_combo.setCurrentIndex(-1)
                 if self._backend and self._backend.current_port:
-                    self._backend.current_port = ""
+                    self._backend.select_port("")
         else:
             self.port_combo.addItem("No ports detected", userData="")
             self.port_combo.setCurrentIndex(-1)
             if self._backend and self._backend.current_port:
-                self._backend.current_port = ""
+                self._backend.select_port("")
         self.port_combo.blockSignals(False)
         self.port_combo.refresh_current_text()
         self._update_action_button_states_on_controls()
