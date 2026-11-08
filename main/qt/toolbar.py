@@ -652,6 +652,8 @@ class PrimaryToolbar(QToolBar):
             else:
                 self._owner_dialog.raise_()
                 self._owner_dialog.activateWindow()
+                if hasattr(self._owner_dialog, "auto_refresh"):
+                    self._owner_dialog.auto_refresh()
         except Exception as exc:
             self._show_owner_ticket_error(exc)
 

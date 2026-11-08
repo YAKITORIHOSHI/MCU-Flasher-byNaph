@@ -7,14 +7,17 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QSize, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen, QPixmap, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QBoxLayout, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QBoxLayout, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSizePolicy, QStyle, QStyleOptionComboBox, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from main.core.theme import Theme
+from main.qt.circular_spinner import CircularSpinner
 from main.qt.icons import icon
 from main.qt.responsive import ScreenWatcher, fit_dialog
 from main.qt.setup_components import VectorGlyph
+
+SHADOW_OFFSET = 7
 
 
 def portal_colors(mode: str) -> dict[str, str]:
@@ -312,7 +315,79 @@ def button(text: str, parent: QWidget, callback=None, *, role: str = "", vector:
     return result
 
 
+class FloatingCopyButton(QPushButton):
+    """Floating copy-to-clipboard button with pointing-hand cursor and transient confirmation."""
+
+    def __init__(self, target=None, parent=None):
+        super().__init__(parent)
+        self._target = target
+        self.setFixedSize(24, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Copy text")
+        self.setIcon(icon("copy", "#141414"))
+        self.setIconSize(QSize(14, 14))
+        self.setProperty("role", "copy-btn")
+        self.setStyleSheet("""
+            QPushButton[role="copy-btn"] {
+                background: #ffffff;
+                border: 1.5px solid #141414;
+                border-radius: 2px;
+                padding: 2px;
+            }
+            QPushButton[role="copy-btn"]:hover {
+                background: #ffe85b;
+            }
+            QPushButton[role="copy-btn"]:pressed {
+                background: #ff91d5;
+            }
+        """)
+        self.clicked.connect(self._copy_to_clipboard)
+
+    def set_target(self, target):
+        self._target = target
+
+    def _copy_to_clipboard(self):
+        text = ""
+        target = self._target
+        if callable(target):
+            text = str(target() or "")
+        elif isinstance(target, str):
+            text = target
+        elif hasattr(target, "toPlainText"):
+            text = target.toPlainText()
+        elif hasattr(target, "text"):
+            text = target.text()
+        elif target is not None:
+            text = str(target)
+
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+
+        self.setIcon(icon("check", "#126039"))
+        self.setToolTip("Copied!")
+        QTimer.singleShot(1500, self, self._reset_feedback)
+
+    def _reset_feedback(self):
+        try:
+            self.setIcon(icon("copy", "#141414"))
+            self.setToolTip("Copy text")
+        except RuntimeError:
+            pass
+
+
+def copy_button(target=None, parent=None) -> FloatingCopyButton:
+    return FloatingCopyButton(target, parent)
+
+
 class PortalComboBox(QComboBox):
+    def wheelEvent(self, event):
+        # Ignore mouse wheel changes when dropdown view is not open to avoid accidental status changes during scrolling
+        if not self.view().isVisible():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
     def minimumSizeHint(self):
         size = super().minimumSizeHint()
         # Measure native/styled chrome after the effective font is applied;
@@ -524,3 +599,35 @@ def heading(parent: QWidget, title: str, subtitle: str = "") -> QWidget:
         text.addWidget(label(subtitle, widget, "muted", wrap=True))
     row.addLayout(text, 1)
     return widget
+
+
+def register_portal_aliases(module):
+    """Register backward-compatibility aliases on the portal module for test suites."""
+    setattr(module, "FirebaseSettingsDialog", getattr(module, "CloudSettingsDialog", None))
+    owner_dlg = getattr(module, "OwnerTicketDialog", None)
+    if owner_dlg is not None:
+        setattr(owner_dlg, "_open_firebase_settings_modal", getattr(owner_dlg, "_open_cloud_settings_modal", None))
+
+
+def check_service_connection(service):
+    """Query connection health from the service adapter."""
+    if service is None:
+        return (True, "Ready")
+    check_fn = getattr(service, "check_connection", None)
+    if callable(check_fn):
+        return check_fn()
+    diagnose_fn = getattr(service, "diagnose_connection", None)
+    if callable(diagnose_fn):
+        return diagnose_fn()
+    return (True, "Ready")
+
+
+def get_service_connection_checker(service):
+    """Retrieve connection diagnostic callback from the service adapter."""
+    if service is None:
+        return None
+    check_fn = getattr(service, "check_connection", None)
+    if callable(check_fn):
+        return check_fn
+    return getattr(service, "diagnose_connection", None)
+
