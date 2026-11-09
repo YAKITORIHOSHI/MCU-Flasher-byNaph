@@ -23,6 +23,18 @@
     #assistant { box-sizing: border-box; background: var(--reading); border: 1px solid var(--reading-rim); border-radius: 10px; }
     /* FitAddon subtracts xterm padding; padding on its parent is grid space. */
     #assistant .xterm { height: 100%; padding: 8px; box-sizing: border-box; }
+    .xterm, .xterm-viewport, .xterm-screen {
+      overflow-y: hidden !important;
+      width: 100% !important;
+    }
+    #assistant .xterm-viewport {
+      scrollbar-width: none;
+    }
+    ::-webkit-scrollbar {
+      display: none !important;
+      width: 0px !important;
+      height: 0px !important;
+    }
     #error { padding: 16px; color: var(--terminal-fg); font: 14px sans-serif; }
   </style>
   <script src="../assets/xterm/xterm.js"></script>
@@ -45,6 +57,10 @@
       const fit = new FitAddon.FitAddon();
       term.loadAddon(fit);
       term.open(document.getElementById('assistant'));
+      const viewport = term.element.querySelector('.xterm-viewport');
+      if (term._core?.viewport && viewport) {
+        term._core.viewport.scrollBarWidth = 0;
+      }
       let bridge = null, generation = 0, lastSize = '', fitPending = false;
       const readiness = AssistantReadiness.create(term, reason => {
         if (bridge) bridge.report_interface_ready(generation, reason);

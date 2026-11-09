@@ -2037,9 +2037,154 @@ def _install_python_update(package_id: str) -> bool:
     return False
 
 
+def _opencode_installed_version() -> str | None:
+    """Return the installed OpenCode version string (e.g. '1.1.28') with a fast non-blocking timeout."""
+    cli_path = check_opencode_cli()
+    if not cli_path:
+        return None
+
+    # Fast path 1: Check if sibling/parent node_modules package.json exists (<1ms, no subprocess)
+    try:
+        p_cli = Path(cli_path)
+        candidate_pkgs = [
+            p_cli.parent / "node_modules" / "opencode-ai" / "package.json",
+            p_cli.parent.parent / "package.json",
+            p_cli.parent / "package.json",
+        ]
+        for pkg_json in candidate_pkgs:
+            if pkg_json.is_file():
+                data = json.loads(pkg_json.read_text(encoding="utf-8"))
+                if data.get("name") in ("opencode-ai", "opencode") and data.get("version"):
+                    return str(data["version"]).strip()
+    except Exception:
+        pass
+
+    # Fast path 2: Run [cli_path, "--version"] with a 2.0s non-blocking timeout
+    test_target = cli_path
+    is_script = str(cli_path).lower().endswith((".cmd", ".bat"))
+    if is_script and sys.platform == "win32":
+        sibling_exe = Path(cli_path).parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
+        if sibling_exe.is_file() and _is_valid_pe_binary(sibling_exe):
+            test_target = str(sibling_exe)
+            is_script = False
+
+    try:
+        result = subprocess.run(
+            [test_target, "--version"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=is_script if sys.platform == "win32" else False,
+            creationflags=_hidden_subprocess_flags(),
+            timeout=2.0,
+        )
+        if result.returncode == 0:
+            import re
+            m = re.search(r"(\d+\.\d+[\.\d\w\-]*)", result.stdout or "")
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        pass
+
+    return None
+
+
+def check_opencode_update() -> dict:
+    """Check OpenCode AI Assistant for updates with a non-blocking 2.0s socket timeout.
+
+    Handles offline states cleanly without blocking startup.
+    Returns: {"name": "opencode", "installed": str|None, "latest": str|None,
+              "update_available": bool, "error": str|None}
+    """
+    installed = _opencode_installed_version()
+    if installed is None:
+        if not check_opencode_cli():
+            return {"name": "opencode", "installed": None, "latest": None,
+                    "update_available": False, "error": "not installed"}
+
+    # Non-blocking network check: if offline, return immediately without waiting
+    if not _is_network_reachable(timeout=1.5):
+        return {"name": "opencode", "installed": installed, "latest": None,
+                "update_available": False, "error": "network unavailable — skipping"}
+
+    latest = None
+    body = _fetch_url("https://registry.npmjs.org/opencode-ai/latest", timeout=2)
+    if body:
+        try:
+            data = json.loads(body)
+            latest = data.get("version")
+        except Exception:
+            pass
+
+    if latest is None:
+        return {"name": "opencode", "installed": installed, "latest": None,
+                "update_available": False, "error": "could not reach npm registry"}
+
+    update_available = False
+    if installed and latest:
+        try:
+            update_available = _version_tuple(latest) > _version_tuple(installed)
+        except Exception:
+            update_available = False
+
+    return {
+        "name": "opencode",
+        "installed": installed,
+        "latest": latest,
+        "update_available": update_available,
+        "error": None,
+    }
+
+
+def _upgrade_opencode(target_version: str) -> bool:
+    """Upgrade OpenCode AI Assistant via npm to target_version."""
+    if is_any_opencode_process_running():
+        warn("OpenCode AI Assistant process is currently active; skipping upgrade.")
+        return False
+
+    npm_cmd = _find_usable_npm_cmd()
+    if not npm_cmd:
+        warn("npm is not available; cannot upgrade OpenCode AI Assistant.")
+        return False
+
+    install_cmd = [
+        npm_cmd,
+        "install",
+        "-g",
+        "--no-audit",
+        "--no-fund",
+        "--no-update-notifier",
+        "--loglevel=error",
+        "--fetch-retries=2",
+        "--fetch-retry-mintimeout=2000",
+        "--fetch-retry-maxtimeout=10000",
+        "--allow-scripts=opencode-ai",
+        f"opencode-ai@{target_version}",
+    ]
+    try:
+        res = subprocess.run(
+            install_cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=sys.platform == "win32" and str(npm_cmd).lower().endswith((".cmd", ".bat")),
+            creationflags=_hidden_subprocess_flags(),
+            timeout=90,
+        )
+        _refresh_node_npm_path()
+        return res.returncode == 0
+    except Exception as exc:
+        warn(f"OpenCode upgrade failed: {exc}")
+        return False
+
+
 _UPDATE_CHECK_PACKAGES = [
     "python", "pip", "pyserial", "psutil", "pywebview",
-    "pywinpty", "websockets", "esptool", "pyside6", "platformio", "arduino-cli",
+    "pywinpty", "websockets", "esptool", "pyside6", "platformio", "arduino-cli", "opencode",
 ]
 
 
@@ -2163,6 +2308,7 @@ def run_update_checks(auto_update: bool = False):
         ("pyside6",    lambda: check_pip_package_update("PySide6", "PySide6.QtWidgets")),
         ("platformio", lambda: check_pio_update()),
         ("arduino-cli",lambda: check_arduino_cli_update()),
+        ("opencode",   lambda: globals().get("check_opencode_update", lambda: {"name": "opencode", "installed": None, "latest": None, "update_available": False, "error": None})()),
     ]
     if sys.platform == "win32":
         checks.append(("pywin32", lambda: check_pip_package_update("pywin32")))
@@ -2200,9 +2346,10 @@ def run_update_checks(auto_update: bool = False):
         return "up_to_date"
 
     # ── Prompt / auto-update ─────────────────────────────────
-    pip_updates  = [r for r in updates_found if r["name"] not in ("arduino-cli", "python")]
-    cli_updates  = [r for r in updates_found if r["name"] == "arduino-cli"]
-    python_updates = [r for r in updates_found if r["name"] == "python"]
+    pip_updates      = [r for r in updates_found if r["name"] not in ("arduino-cli", "python", "opencode")]
+    cli_updates      = [r for r in updates_found if r["name"] == "arduino-cli"]
+    python_updates   = [r for r in updates_found if r["name"] == "python"]
+    opencode_updates = [r for r in updates_found if r["name"] == "opencode"]
 
     if auto_update:
         answer = "y"
@@ -2336,6 +2483,23 @@ def run_update_checks(auto_update: bool = False):
                 new_cli = find_arduino_cli()
                 if new_cli:
                     _cache_arduino_cli_path(new_cli)
+
+        if opencode_updates:
+            r = opencode_updates[0]
+            status(f"Upgrading OpenCode AI Assistant {r['installed']} → {r['latest']}...")
+            if _upgrade_opencode(r["latest"]):
+                try:
+                    actual = _opencode_installed_version()
+                    verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
+                except Exception as exc:
+                    actual, verified = None, False
+                    warn(f"Could not verify OpenCode AI Assistant after update: {exc}")
+                if verified:
+                    ok(f"OpenCode AI Assistant upgraded and verified at {actual}")
+                else:
+                    warn(f"OpenCode AI Assistant update was not verified (found {actual or 'no version'}); continuing")
+            else:
+                warn("Failed to upgrade OpenCode AI Assistant — continuing")
         
         import threading
         if threading.current_thread().name == "fast-path-update-check":
