@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from main.core.theme import Theme
 from main.qt.circular_spinner import CircularSpinner
 from main.qt.icons import icon
-from main.qt.responsive import ScreenWatcher, fit_dialog
+from main.qt.responsive import ScreenWatcher, clamp_window, fit_dialog
 from main.qt.setup_components import VectorGlyph
 
 SHADOW_OFFSET = 7
@@ -102,10 +102,59 @@ def portal_stylesheet(mode: str) -> str:
         QTextEdit[wrappedLabel="true"][role="severity"] {{ border: 2px solid #141414; background: #fff5b8; padding: 5px; font-weight: 800; }}
         QTextEdit[wrappedLabel="true"][role="severity"][tone="fail"] {{ background: #ffe4f4; }}
         QTextEdit[wrappedLabel="true"][role="severity"][tone="ok"] {{ background: #e4f5e9; }}
-        QScrollBar:vertical {{ background: #fffdf5; width: 10px; margin: 2px; }}
-        QScrollBar::handle:vertical {{ background: #141414; border-radius: 0; min-height: 28px; }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        QScrollBar:vertical {{
+            background: #fffdf5;
+            width: 14px;
+            border-left: 2px solid #141414;
+            margin: 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: #141414;
+            min-height: 32px;
+            border: 1.5px solid #141414;
+            border-radius: 0px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: #ffe85b;
+            border: 1.5px solid #141414;
+        }}
+        QScrollBar::handle:vertical:pressed {{
+            background: #ff91d5;
+            border: 1.5px solid #141414;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            height: 0px;
+            width: 0px;
+            background: transparent;
+            border: none;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            background: transparent;
+        }}
+        QScrollArea#developer-cards-scroll QScrollBar:vertical {{
+            background: #fffdf5;
+            width: 14px;
+            border-left: 2px solid #141414;
+            margin: 0px;
+        }}
+        QScrollArea#developer-cards-scroll QScrollBar::handle:vertical {{
+            background: #141414;
+            min-height: 32px;
+            border: 1.5px solid #141414;
+            border-radius: 0px;
+        }}
+        QScrollArea#developer-cards-scroll QScrollBar::handle:vertical:hover {{
+            background: #ffe85b;
+            border: 1.5px solid #141414;
+        }}
+        QScrollArea#developer-cards-scroll QScrollBar::handle:vertical:pressed {{
+            background: #ff91d5;
+            border: 1.5px solid #141414;
+        }}
+        QScrollArea#developer-cards-scroll QScrollBar:horizontal {{
+            height: 0px;
+            background: transparent;
+        }}
         QMenu {{ background: #ffffff; color: #141414; border: 2px solid #141414; padding: 5px; }}
         QMenu::item {{ padding: 8px 16px; }}
         QMenu::item:selected {{ background: #ffe85b; }}
@@ -318,6 +367,33 @@ def button(text: str, parent: QWidget, callback=None, *, role: str = "", vector:
 class FloatingCopyButton(QPushButton):
     """Floating copy-to-clipboard button with pointing-hand cursor and transient confirmation."""
 
+    _DEFAULT_STYLE = """
+        QPushButton[role="copy-btn"] {
+            background: #ffffff;
+            border: 1.5px solid #141414;
+            border-radius: 2px;
+            padding: 2px;
+        }
+        QPushButton[role="copy-btn"]:hover {
+            background: #ffe85b;
+        }
+        QPushButton[role="copy-btn"]:pressed {
+            background: #ff91d5;
+        }
+    """
+
+    _FLASH_STYLE = """
+        QPushButton[role="copy-btn"] {
+            background: #bbf7d0;
+            border: 1.5px solid #126039;
+            border-radius: 2px;
+            padding: 2px;
+        }
+        QPushButton[role="copy-btn"]:hover {
+            background: #a7f3d0;
+        }
+    """
+
     def __init__(self, target=None, parent=None):
         super().__init__(parent)
         self._target = target
@@ -327,20 +403,7 @@ class FloatingCopyButton(QPushButton):
         self.setIcon(icon("copy", "#141414"))
         self.setIconSize(QSize(14, 14))
         self.setProperty("role", "copy-btn")
-        self.setStyleSheet("""
-            QPushButton[role="copy-btn"] {
-                background: #ffffff;
-                border: 1.5px solid #141414;
-                border-radius: 2px;
-                padding: 2px;
-            }
-            QPushButton[role="copy-btn"]:hover {
-                background: #ffe85b;
-            }
-            QPushButton[role="copy-btn"]:pressed {
-                background: #ff91d5;
-            }
-        """)
+        self.setStyleSheet(self._DEFAULT_STYLE)
         self.clicked.connect(self._copy_to_clipboard)
 
     def set_target(self, target):
@@ -364,12 +427,14 @@ class FloatingCopyButton(QPushButton):
         if clipboard:
             clipboard.setText(text)
 
+        self.setStyleSheet(self._FLASH_STYLE)
         self.setIcon(icon("check", "#126039"))
         self.setToolTip("Copied!")
         QTimer.singleShot(1500, self, self._reset_feedback)
 
     def _reset_feedback(self):
         try:
+            self.setStyleSheet(self._DEFAULT_STYLE)
             self.setIcon(icon("copy", "#141414"))
             self.setToolTip("Copy text")
         except RuntimeError:
@@ -568,6 +633,7 @@ class PortalDialog(QDialog):
         self.content.setContentsMargins(24, 20, 24, 20)
         self.content.setSpacing(18)
         fit_dialog(self, preferred=preferred, minimum=(360, 300))
+        clamp_window(self)
         self._screen_watcher = ScreenWatcher(self)
 
     def apply_theme(self, mode: str):

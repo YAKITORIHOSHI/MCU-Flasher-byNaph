@@ -6,10 +6,55 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 7, 2026<br>
+> **Notes Updated:** November 9, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
+
+## November 9 Update: Modal Disconnect, Developer Tools Polish, Compiler Hints, Steadier AI
+
+**Serial Monitor disconnect confirmation.** Clicking the **CONNECTED** badge in the Serial
+Monitor header now opens a glass confirmation dialog asking whether to disconnect from the
+active board. A red **YES** button cleanly releases the serial port and UART control lines
+without freezing worker threads, and **Cancel** (the default) keeps monitoring active. The
+previously selected COM port remains selected in the port picker for quick reconnection.
+
+**Arduino UNO global F() macro diagnostic.** When compiling AVR sketches (such as for the
+Arduino Uno, Nano, or Mega), using the `F()` macro at global scope causes GCC to fail with
+`statement-expressions are not allowed outside functions`. The core header `WString.h` is
+not corrupted — AVR's `PSTR()` expands to a GNU statement-expression `({ ... })` which C++
+strictly forbids outside functions. The Build Console now detects this specific error and
+prints an actionable diagnostic box explaining the root cause, confirming that core headers
+are intact, and showing how to use `PROGMEM` directly or move `F()` inside `setup()`. A full
+technical analysis is documented in `NOTE.txt` at the project root.
+
+**Developer access and ticket management.** The Developer Section header (title, statistics
+ribbon, and search filter) stays fixed at the top while ticket cards scroll underneath.
+Creating and modifying tickets opens in dedicated modal windows clamped to the monitor work
+area, with internal form scrolling that fits high-DPI screens. A dedicated 14-pixel neobrutalist
+scrollbar provides distinct border and hover feedback. The ticket list features balanced
+margins, auto-refreshes upon entering the dashboard, and includes a floating copy button on
+text fields with green confirmation feedback. Session authentication falls back cleanly to the
+login screen on expired sessions, and logging out forgets stored credentials. An animated
+cyber wallpaper runs edge-to-edge behind the login card, dynamically rescales, and pauses
+when hidden. Ticket synchronization uses queued mutations and ISO UTC timestamps to eliminate
+update loss and state reversion.
+
+**Silent cloud connectivity.** Manual connection test buttons and settings have been removed
+from the developer portal and Cloud panel. Connectivity checks run quietly in the background,
+and error messages are sanitized to user-friendly language without exposing internal provider
+names or project details.
+
+**Editor and loading polish.** Text selection in the Monaco editor (including Ctrl+Shift+Arrow)
+maintains proper highlight alignment and contrast across themes using explicit monospace
+font fallbacks and selection tokens. Long-running actions — including sketch loading and ticket
+submissions — display a smooth circular spinner while mutation controls are safely locked.
+
+**OpenCode AI Assistant stability.** The redundant header close ('x') button has been removed
+from both Windows and POSIX AI panels. The supervisor PTY command sets `OPENCODE_DISABLE_AUTOUPDATE=1`
+and configures `"autoupdate": false`, eliminating the interactive npm update loop in the
+embedded terminal. Bootstrap checks for OpenCode updates with a non-blocking 2.0-second socket
+timeout, safely skipping checks when offline, and the terminal's outer scrollbar is cleanly hidden.
 
 ## November 7 Update: Files From the Tabs, Colors in the Logs, Steadier Accounts
 

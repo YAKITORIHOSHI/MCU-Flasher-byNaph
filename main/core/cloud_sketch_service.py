@@ -464,7 +464,7 @@ class CloudSketchService:
         except CloudError:
             raise
         except OfflineDependencyError:
-            raise CloudError("Could not reach Firebase. Check your internet connection and try again.") from None
+            raise CloudError("Could not reach cloud service. Check your internet connection and try again.") from None
         except urllib.error.HTTPError as error:
             status = error.code
             try:
@@ -487,7 +487,7 @@ class CloudSketchService:
                 "INVALID_PASSWORD": "The email or password is incorrect.",
                 "USER_DISABLED": "This account has been disabled.",
                 "TOO_MANY_ATTEMPTS_TRY_LATER": "Too many sign-in attempts. Try again later.",
-                "OPERATION_NOT_ALLOWED": "Email/password accounts are not enabled for this Firebase project.",
+                "OPERATION_NOT_ALLOWED": "Email/password accounts are not enabled for this service.",
                 "CREDENTIAL_TOO_OLD_LOGIN_AGAIN": "Sign in again before deleting your account.",
                 "INVALID_REFRESH_TOKEN": "Your saved session expired. Sign in again.",
                 "TOKEN_EXPIRED": "Your saved session expired. Sign in again.",
@@ -496,9 +496,9 @@ class CloudSketchService:
             if code in messages:
                 raise CloudError(messages[code]) from None
             if status in (401, 403):
-                raise CloudError("Firebase denied access. Check your account and the deployed database security rules.") from None
+                raise CloudError("Cloud service denied access. Please check your account.") from None
             if status == 400:
-                raise CloudError("Firebase rejected this request. Check your account details and try again.") from None
+                raise CloudError("Cloud service rejected this request. Please check your account details and try again.") from None
             raise CloudError("The cloud service is unavailable. Try again later.") from None
         except (OSError, ValueError, TypeError):
             raise CloudError("Could not reach the cloud service. Check internet access and try again.") from None
@@ -510,19 +510,19 @@ class CloudSketchService:
 
     def _session(self, value: Any, *, expected_uid: str | None = None) -> None:
         if not isinstance(value, dict):
-            raise CloudError("Firebase returned an incomplete sign-in response.")
+            raise CloudError("Cloud service returned an incomplete sign-in response.")
         token = value.get("idToken", value.get("id_token"))
         refresh = value.get("refreshToken", value.get("refresh_token"))
         uid = value.get("localId", value.get("user_id"))
         if not isinstance(token, str) or not token or not isinstance(refresh, str) or not refresh:
-            raise CloudError("Firebase returned an incomplete sign-in response.")
+            raise CloudError("Cloud service returned an incomplete sign-in response.")
         uid = _safe_id(uid)
         if expected_uid and uid != expected_uid:
-            raise CloudError("Firebase returned a different account. Sign in again.")
+            raise CloudError("Cloud service returned a different account. Sign in again.")
         try:
             lifetime = max(1, min(int(value.get("expiresIn", value.get("expires_in", 3600))), 3600))
         except (ValueError, TypeError):
-            raise CloudError("Firebase returned an invalid session lifetime.") from None
+            raise CloudError("Cloud service returned an invalid session lifetime.") from None
         self._id_token, self._refresh_token, self._uid = token, refresh, uid
         self._email = value.get("email", self._email) or self._email
         self._expires_at = time.monotonic() + lifetime
@@ -776,7 +776,7 @@ class CloudSketchService:
                                          headers={"X-Firebase-ETag": "true"})
         etag = next((str(v) for k, v in headers.items() if k.lower() == "etag"), "")
         if not etag:
-            raise CloudError("Firebase did not provide a revision guard. No cloud files were changed.")
+            raise CloudError("Cloud service did not provide a revision guard. No cloud files were changed.")
         if not isinstance(value, dict) or value.get("schema") != 1:
             raise CloudError("This cloud sketch is unavailable or uses an unsupported format.")
         meta = value.get("meta", {})

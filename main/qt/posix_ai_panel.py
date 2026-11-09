@@ -236,14 +236,6 @@ class PosixAIPanel(QWidget):
         row.addWidget(self._title, 1)
         self._status_badge = QLabel("Ready", self._header)
         row.addWidget(self._status_badge)
-        self._hide_button = QPushButton(self._header)
-        self._hide_button.setFixedSize(24, 24)
-        self._hide_button.setStyleSheet("padding: 0px;")
-        self._hide_button.setIconSize(QSize(12, 12))
-        self._hide_button.setAccessibleName("Hide AI Assistant")
-        self._hide_button.setToolTip("Hide AI Assistant; keep OpenCode running")
-        self._hide_button.clicked.connect(self._hide_panel)
-        row.addWidget(self._hide_button)
         layout.addWidget(self._header)
         self._body = QWidget(self)
         self._stack = QStackedLayout(self._body)
@@ -421,7 +413,7 @@ class PosixAIPanel(QWidget):
         status = {"idle": "Ready", "loading": "Loading…", "active": "Active", "error": "Unavailable"}[self._state]
         row = self._header.layout()
         margins = row.contentsMargins()
-        reserved = margins.left() + margins.right() + 2 * row.spacing() + self._hide_button.width()
+        reserved = margins.left() + margins.right() + row.spacing()
         status_width = self._status_badge.fontMetrics().horizontalAdvance(status)
         if width < max(340, reserved + status_width + self._title.fontMetrics().horizontalAdvance(title) + 2):
             title = "OpenCode AI"
@@ -450,7 +442,6 @@ class PosixAIPanel(QWidget):
         self._header.setStyleSheet("QFrame#opencode-header { background: transparent; border: none; }")
         inks = glass_inks(self._theme)
         self._title.setStyleSheet(f"color: {inks['system']}; font-size: 11px; font-weight: 700;")
-        self._hide_button.setIcon(icon("close", palette['TEXT'], size=12))
         ink = inks['success' if self._state == "active" else 'error' if self._state == "error" else 'normal']
         self._status_badge.setStyleSheet(f"color: {ink}; font-size: 10px; font-weight: 600;")
 

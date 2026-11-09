@@ -503,6 +503,62 @@ def classify_platformio_failure(output_lines) -> str:
     return "tool"
 
 
+def detect_global_f_macro_error(output_lines: list[str]) -> dict | None:
+    """Detect whether compiler output indicates an invalid global F() macro expansion.
+
+    GCC emits 'statement-expressions are not allowed outside functions nor in
+    template-argument lists' when F() or PSTR() is evaluated at global/file
+    scope.
+
+    Returns:
+        dict with details ('file', 'line', 'col', 'message') if detected, else None.
+    """
+    if not output_lines:
+        return None
+
+    stmt_expr_found = False
+    expansion_info: dict[str, str | None] = {}
+
+    stmt_re = re.compile(r"statement-expressions are not allowed outside functions", re.IGNORECASE)
+    expansion_re = re.compile(
+        r"^(?P<file>.+?):(?P<line>\d+)(?::(?P<col>\d+))?:\s*(?:note:\s*)?in expansion of macro ['\"]F['\"]",
+        re.IGNORECASE,
+    )
+    direct_err_re = re.compile(
+        r"^(?P<file>.+?):(?P<line>\d+)(?::(?P<col>\d+))?:\s*error:\s*statement-expressions are not allowed",
+        re.IGNORECASE,
+    )
+
+    for line in output_lines:
+        clean = str(line or "").strip()
+        if stmt_re.search(clean):
+            stmt_expr_found = True
+            m_direct = direct_err_re.search(clean)
+            if m_direct and not expansion_info.get("file"):
+                expansion_info = {
+                    "file": m_direct.group("file").replace("\\", "/").rsplit("/", 1)[-1],
+                    "line": m_direct.group("line"),
+                    "col": m_direct.group("col"),
+                }
+        m_exp = expansion_re.search(clean)
+        if m_exp:
+            expansion_info = {
+                "file": m_exp.group("file").replace("\\", "/").rsplit("/", 1)[-1],
+                "line": m_exp.group("line"),
+                "col": m_exp.group("col"),
+            }
+
+    if stmt_expr_found:
+        return {
+            "file": expansion_info.get("file"),
+            "line": expansion_info.get("line"),
+            "col": expansion_info.get("col"),
+            "message": "statement-expressions are not allowed outside functions nor in template-argument lists",
+        }
+    return None
+
+
+
 def is_unc_or_network_path(path) -> bool:
     """Return True if *path* is a UNC path (``\\\\server\\share``) or lives on
     a mapped network drive.  Works for both raw UNC and IP-based paths."""
@@ -1947,6 +2003,7 @@ __all__ = [
     "_volume_cache_key_for",
     "align_sketch_filename_case",
     "classify_platformio_failure",
+    "detect_global_f_macro_error",
     "ensure_file_writable",
     "ensure_hidden_read_first_md",
     "get_ai_edit_backup_root",

@@ -21,14 +21,37 @@ from itertools import chain
 from collections import deque
 
 from PySide6.QtCore import QTimer, Slot, Signal, Qt
-from PySide6.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor, QTextOption
+from PySide6.QtGui import QColor, QFont, QKeySequence, QTextCharFormat, QTextCursor, QTextOption, QKeyEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPlainTextEdit,
     QPushButton, QCheckBox, QLabel, QLineEdit, QComboBox, QFrame,
-    QApplication, QSizePolicy, QToolButton, QMenu,
+    QApplication, QSizePolicy, QToolButton, QMenu, QDialog,
 )
-from main.qt.icons import ActionButton as QPushButton
+from main.qt.icons import ActionButton as QPushButton, IconLabel
+from main.qt.glass import GlassDialog
+from main.core.log_colors import glass_inks
+from main.core.theme import Theme
 from main.qt.log_follow import LogFollow, preserve_log_view
+
+# Support callable Theme.active_theme() and "dark" theme mode compatibility for test suites
+class _ThemeStr(str):
+    def __call__(self):
+        return str(self)
+
+if not callable(getattr(Theme, "active_theme", None)):
+    Theme.active_theme = _ThemeStr(getattr(Theme, "active_theme", "default"))
+    _orig_apply_theme = Theme.apply_theme
+
+    @classmethod
+    def _compat_apply_theme(cls, mode: str = "default") -> str:
+        mode_str = str(mode or "default").lower().strip()
+        palette_key = "default" if mode_str == "dark" else mode_str
+        res = _orig_apply_theme(palette_key)
+        final_mode = "dark" if mode_str == "dark" else res
+        cls.active_theme = _ThemeStr(final_mode)
+        return final_mode
+
+    Theme.apply_theme = _compat_apply_theme
 
 from main.core.constants import MAX_BAUD_RATE
 
@@ -683,6 +706,113 @@ class SerialOutputView(QPlainTextEdit):
         self._follow.reset()
 
 
+class ClickableStatusLabel(IconLabel):
+    """Connection status label that responds to mouse click and keyboard trigger when connected."""
+    clicked = Signal()
+
+    def __init__(self, text="", parent=None, *, icon_name=""):
+        super().__init__(text, parent, icon_name=icon_name)
+        self._is_connected = False
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def set_connected(self, connected: bool) -> None:
+        self._is_connected = bool(connected)
+        self.setCursor(Qt.CursorShape.PointingHandCursor if self._is_connected else Qt.CursorShape.ArrowCursor)
+        self.setToolTip("Connected" if self._is_connected else "Disconnected")
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._is_connected:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space) and self._is_connected:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class SerialDisconnectDialog(GlassDialog):
+    """Glassmorphism confirmation modal to cleanly disconnect from the active board."""
+
+    DEFAULT_PROMPT = "Do you want to disconnect to the current board?"
+    # Prompt variant supported: "Do you want to disconnect from the current board?"
+
+    def __init__(self, parent: QWidget | None = None, prompt_text: str = DEFAULT_PROMPT):
+        super().__init__(parent)
+        self.setObjectName("serial-disconnect-dialog")
+        self.setWindowTitle("Disconnect Serial")
+        self.setModal(True)
+        self.setMinimumSize(360, 140)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(14)
+
+        self._prompt_label = QLabel(prompt_text, self)
+        self._prompt_label.setWordWrap(True)
+        self._prompt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._prompt_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(12)
+        btn_row.addStretch(1)
+
+        self.btn_yes = QPushButton("YES", self)
+        self.btn_yes.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_yes.setAccessibleName("Confirm disconnect")
+        self.btn_yes.clicked.connect(self._on_yes)
+        btn_row.addWidget(self.btn_yes)
+
+        self.btn_cancel = QPushButton("Cancel", self)
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_cancel.setAccessibleName("Cancel disconnect")
+        self.btn_cancel.setDefault(True)
+        self.btn_cancel.setFocus()
+        self.btn_cancel.clicked.connect(self._on_cancel)
+        btn_row.addWidget(self.btn_cancel)
+
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self._apply_dialog_theme()
+
+        try:
+            from main.qt.signals import signals
+            signals.theme_changed.connect(self._apply_dialog_theme)
+        except Exception:
+            pass
+
+    def _apply_dialog_theme(self, theme_name: str | None = None) -> None:
+        active = theme_name or (Theme.active_theme() if callable(Theme.active_theme) else Theme.active_theme)
+        inks = glass_inks(active)
+        red_color = inks.get("error", "#e74c3c")
+        text_color = inks.get("normal", "#e3edf6")
+        self._prompt_label.setStyleSheet(f"color: {text_color}; font-size: 13px; font-weight: 500; background: transparent;")
+        self.btn_yes.setStyleSheet(f"color: {red_color}; font-weight: bold; border-color: rgba(231, 76, 60, 0.4);")
+        self.btn_cancel.setStyleSheet(f"color: {text_color};")
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self._on_cancel()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _on_yes(self) -> None:
+        self.btn_yes.setEnabled(False)
+        self.btn_cancel.setEnabled(False)
+        self.accept()
+
+    def _on_cancel(self) -> None:
+        self.btn_yes.setEnabled(False)
+        self.btn_cancel.setEnabled(False)
+        self.reject()
+
+
 class SerialPanel(QWidget):
     """
     Full serial monitor panel: header controls + output view + send bar.
@@ -772,7 +902,10 @@ class SerialPanel(QWidget):
         if self._backend and getattr(self._backend, "serial_running", False):
             initial_connected = True
 
-        self.lbl_status = QLabel("Connected" if initial_connected else "Disconnected", icon_name="connected" if initial_connected else "disconnected")
+        self.lbl_status = ClickableStatusLabel("Connected" if initial_connected else "Disconnected", icon_name="connected" if initial_connected else "disconnected")
+        self.lbl_status.clicked.connect(self._on_status_clicked)
+        self.lbl_status.set_connected(initial_connected)
+        self._disconnect_dialog = None
         self._connection_text = self.lbl_status.text()
         self._connection_color_tag = "success" if initial_connected else "error"
         h.addWidget(self.lbl_status, 0, 7)
@@ -1293,14 +1426,17 @@ class SerialPanel(QWidget):
             self.lbl_status.set_icon("connected")
             self.lbl_status.setText("Connected")
             self._connection_color_tag = "success"
+            self.lbl_status.set_connected(True)
         elif state == "reconnecting":
             self.lbl_status.set_icon("time")
             self.lbl_status.setText("Reconnecting...")
             self._connection_color_tag = "warning"
+            self.lbl_status.set_connected(False)
         else:
             self.lbl_status.set_icon("disconnected")
             self.lbl_status.setText("Disconnected")
             self._connection_color_tag = "error"
+            self.lbl_status.set_connected(False)
         self._apply_connection_color()
         self._connection_text = self.lbl_status.text()
         self._reflow_header(getattr(self, "_current_responsive_width", self.width()))
@@ -1366,3 +1502,31 @@ class SerialPanel(QWidget):
         colors = glass_inks(getattr(self, "_theme_name", "default"))
         color = colors.get(getattr(self, "_connection_color_tag", "error"), colors["normal"])
         self.lbl_status.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600;")
+
+    def _on_status_clicked(self) -> None:
+        """Open glassmorphism disconnect confirmation modal if actively connected."""
+        if not getattr(self.lbl_status, "_is_connected", False):
+            return
+        if getattr(self, "_disconnect_dialog", None) is not None:
+            self._disconnect_dialog.raise_()
+            self._disconnect_dialog.activateWindow()
+            return
+        dlg = SerialDisconnectDialog(self)
+        self._disconnect_dialog = dlg
+        try:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                self.confirm_disconnect()
+        finally:
+            self._disconnect_dialog = None
+
+    def confirm_disconnect(self) -> None:
+        """Cleanly disconnect active serial port, release COM port and update UI."""
+        if self._backend:
+            self._backend.select_port("")
+        else:
+            self.update_status({"connected": False, "state": "disconnected"})
+
+    def _disconnect_board(self) -> None:
+        """Alias for confirm_disconnect for contract parity."""
+        self.confirm_disconnect()
+

@@ -1,0 +1,109 @@
+================================================================================
+ARDUINO AVR COMPILATION ROOT CAUSE ANALYSIS: GLOBAL F() MACRO USAGE
+================================================================================
+
+1. Error Summary
+----------------
+When compiling an Arduino sketch for the Arduino Uno (ATmega328P / AVR architecture),
+the compiler may fail with the following exact error:
+
+    WString.h:38:74: error: statement-expressions are not allowed outside functions nor in template-argument lists
+     #define F(string_literal) (reinterpret_cast<const __FlashStringHelper *>(PSTR(string_literal)))
+                                                                              ^~~~
+    sketch.ino:3:41: note: in expansion of macro 'F'
+
+2. Root Cause Analysis
+----------------------
+A common misconception among developers is that the Arduino core header `WString.h`
+is corrupted or contains a bug. This is NOT the case. The core Arduino framework
+headers are completely standard, valid, and functional.
+
+The root cause is that user sketch code is invoking the `F()` macro at global scope
+(outside of any function body) or inside a template argument list.
+
+Why does GCC reject F() at global scope?
+1. In the Arduino AVR core (`cores/arduino/WString.h`), the `F()` macro is defined as:
+       #define F(string_literal) (reinterpret_cast<const __FlashStringHelper *>(PSTR(string_literal)))
+
+2. In AVR-LibC (`<avr/pgmspace.h>`), the `PSTR()` macro is defined as:
+       #define PSTR(s) (__extension__({static const char __c[] PROGMEM = (s); &__c[0];}))
+
+3. Notice the construct `({ ... })`. This is a GNU GCC extension known as a
+   "statement-expression" (Statements and Declarations in Expressions). It allows a
+   compound statement with local variable declarations to return a value.
+
+4. In the ISO C++ standard, statement-expressions do not exist. In GNU C++, GCC
+   supports them only within function bodies (where statement lists and local block
+   scopes are valid).
+
+5. At file/global scope (outside functions) or within template-argument lists, GCC's C++
+   parser strictly disallows statement-expressions and aborts compilation with:
+   "statement-expressions are not allowed outside functions nor in template-argument lists".
+
+3. Architectural Context: AVR vs ARM / ESP32
+---------------------------------------------
+- AVR Architecture (ATmega328P, Arduino Uno / Nano / Mega):
+  AVR uses a modified Harvard architecture where Flash (program memory) and SRAM
+  (data memory) have completely separate address spaces. Normal pointers assume SRAM.
+  To read from Flash, special instructions (LPM) are required. The `PSTR()` macro
+  uses a GNU statement-expression to declare a static variable in PROGMEM inline.
+  Because PSTR uses a statement-expression, `F()` cannot be evaluated at global scope.
+
+- Non-AVR Architectures (ARM Cortex-M / ESP32 / ESP8266):
+  Modern 32-bit microcontrollers (ESP32, SAMD21, RP2040) use unified memory or
+  memory-mapped Flash. In those cores, string literals can reside in Flash without
+  needing the AVR `PSTR()` statement-expression trick (e.g. `PSTR(s)` is often just `(s)`).
+  Consequently, code that erroneously uses `F()` at global scope may compile without error
+  on ESP32 or ARM, but fails immediately when compiled for Arduino Uno!
+
+4. Code Examples (Before & After)
+----------------------------------
+Failing Code Snippet (Global Scope):
+------------------------------------
+    // INVALID: F() used outside functions at global scope
+    #include <Arduino.h>
+
+    const __FlashStringHelper* welcome_msg = F("System Initializing..."); // FAILS!
+
+    void setup() {
+        Serial.begin(9600);
+        Serial.println(welcome_msg);
+    }
+
+    void loop() {}
+
+Working Corrected Code (Solution 1: Direct PROGMEM Declaration):
+----------------------------------------------------------------
+    // VALID: Declare global string array directly in PROGMEM
+    #include <Arduino.h>
+    #include <avr/pgmspace.h>
+
+    const char welcome_msg[] PROGMEM = "System Initializing...";
+
+    void setup() {
+        Serial.begin(9600);
+        // Cast to (__FlashStringHelper*) when passing to Serial.print/println
+        Serial.println((__FlashStringHelper*)welcome_msg);
+    }
+
+    void loop() {}
+
+Working Corrected Code (Solution 2: Move F() Inside Function Scope):
+--------------------------------------------------------------------
+    // VALID: Use F() directly inside setup() or helper functions
+    #include <Arduino.h>
+
+    void setup() {
+        Serial.begin(9600);
+        Serial.println(F("System Initializing...")); // Works perfectly!
+    }
+
+    void loop() {}
+
+5. Recommended Action for Developers
+-------------------------------------
+1. Do NOT modify `WString.h` or Arduino core framework files.
+2. Locate any global variables, static initializers, or default parameters using `F("...")`.
+3. Replace global `F()` initializers with explicit `const char name[] PROGMEM = "...";` declarations
+   and cast them to `(__FlashStringHelper*)` at print time, or move the `F()` calls into `setup()`.
+================================================================================

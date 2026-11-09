@@ -151,11 +151,9 @@ class DedicatedAssistantChecks(unittest.TestCase):
             self.assertNotIn(forbidden, buttons)
         self.assertEqual(panel.findChildren(QTabWidget), [])
         self.assertFalse(hasattr(panel, "add_session"))
-        self.assertEqual(panel._hide_button.accessibleName(), "Hide AI Assistant")
-        self.assertFalse(panel._hide_button.icon().isNull())
         self.assertFalse(panel.close())
         self.assertTrue(panel.isVisible())
-        panel._hide_button.click()
+        panel._hide_panel()
         self.assertFalse(panel.isVisible())
 
     def test_start_is_explicit_and_hide_reveal_preserves_process_view_and_input(self):
@@ -387,7 +385,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
                     panel._set_state(state, "Fixture state")
                     APP.processEvents()
                     self.assertLessEqual(panel.width(), width)
-                    for widget in (panel._title, panel._status_badge, panel._hide_button):
+                    for widget in (panel._title, panel._status_badge):
                         self.assertTrue(panel._header.rect().contains(widget.geometry()), widget.geometry())
                     for label in (panel._title, panel._status_badge):
                         self.assertLessEqual(label.fontMetrics().horizontalAdvance(label.text()),
@@ -527,7 +525,7 @@ while True:
             session.write(epoch, payload)
             wait_for(lambda: payload.encode("utf-8") in input_bytes(pid), "unchanged Unicode bracketed paste")
             assert not panel.close() and panel.isVisible()
-            panel._hide_button.click()
+            panel._hide_panel()
             assert not panel.isVisible() and first.process.isalive()
             if owner:
                 owner.toggle_ai_panel(True)
@@ -579,7 +577,6 @@ while True:
                     APP.processEvents()
                     time.sleep(.01)
                 assert panel._view is view and session._child is first
-                assert panel._header.rect().contains(panel._hide_button.geometry())
                 if owner:
                     assert owner._editor_panel.has_input_focus(), "Theme/resize stole editor input focus"
                 if render_dir:

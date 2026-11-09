@@ -3367,11 +3367,21 @@ class MCUWebBackendAPI:
             token = self._serial_reconnect_token
 
             def _switch_port_worker():
-                # Debounce: coalesce rapid port/baud changes within 200ms
-                time.sleep(0.2)
+                if port:
+                    # Debounce: coalesce rapid port/baud changes within 200ms
+                    time.sleep(0.2)
                 if self._serial_reconnect_token != token:
                     return
-                self._start_serial_monitor()
+                if not port:
+                    self._stop_serial_monitor()
+                    self.emit("serial:log", {
+                        "stream": False,
+                        "text": "--- Serial Monitor disconnected ---",
+                        "tag": "info",
+                        "newline": True,
+                    })
+                else:
+                    self._start_serial_monitor()
 
             threading.Thread(
                 target=_switch_port_worker, name="MCU_SwitchPort", daemon=True
@@ -5163,6 +5173,47 @@ class MCUWebBackendAPI:
                     is_board_mismatch = False
                     compat_boards = set()
 
+                # ── Check for Arduino UNO Global F() Macro Diagnostic Hint ────────
+                from main.core.file_utils import detect_global_f_macro_error
+                f_macro_error = detect_global_f_macro_error(output_lines)
+                if f_macro_error:
+                    loc_suffix = ""
+                    if f_macro_error.get("file"):
+                        loc_suffix = f" in {f_macro_error['file']}"
+                        if f_macro_error.get("line"):
+                            loc_suffix += f":{f_macro_error['line']}"
+
+                    self.emit("console:log", {"text": "", "newline": True})
+                    self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "  💡 ARDUINO COMPILER DIAGNOSTIC HINT: Global F() Macro Error", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": f"  Scope Violation Detected{loc_suffix}:", "tag": "error", "newline": True})
+                    self.emit("console:log", {"text": "    statement-expressions are not allowed outside functions nor in template-argument lists", "tag": "dim", "newline": True})
+                    self.emit("console:log", {"text": "", "newline": True})
+                    self.emit("console:log", {"text": "  Root Cause:", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "    The F() macro was used outside a function body (at global/file scope).", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "    On AVR (Arduino Uno, Nano, Mega), F() expands via PSTR() into a GCC", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "    statement-expression ({ ... }). GNU C++ forbids statement-expressions", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "    outside functions or in template arguments.", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "", "newline": True})
+                    self.emit("console:log", {"text": "  Note on WString.h:", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "    The core header WString.h is NOT broken or corrupt! It is reported only", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "    because F() is defined there. The issue is where F() is called in your sketch.", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "", "newline": True})
+                    self.emit("console:log", {"text": "  Actionable Solutions:", "tag": "success", "newline": True})
+                    self.emit("console:log", {"text": "    Option 1: Define global flash strings using PROGMEM directly:", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": '      const char myMessage[] PROGMEM = "Your string";', "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "      // Then print using: Serial.print((__FlashStringHelper*)myMessage);", "tag": "dim", "newline": True})
+                    self.emit("console:log", {"text": "", "newline": True})
+                    self.emit("console:log", {"text": "    Option 2: Move the F() macro call inside setup() or a function body:", "tag": "normal", "newline": True})
+                    self.emit("console:log", {"text": "      void setup() {", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": '          Serial.println(F("Your string")); // F() is valid inside functions', "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "      }", "tag": "info", "newline": True})
+                    self.emit("console:log", {"text": "", "newline": True})
+                    self.emit("console:log", {"text": "  For full technical analysis, see NOTE.txt in the project root.", "tag": "dim", "newline": True})
+                    self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "", "newline": True})
+
                 if is_board_mismatch:
                     # ── Board mismatch: show a single, clear message ──
                     _platforms = {
@@ -5214,7 +5265,13 @@ class MCUWebBackendAPI:
                             })
                     self.emit("console:log", {"text": "─" * 50, "tag": header_tag, "newline": True})
 
-                self.emit("notification", {"title": "Build Failed", "message": f"Compilation failed with exit code {rc}", "type": "error"})
+                notif_msg = f"Global F() macro error outside functions (exit code {rc}). See Console Hint." if f_macro_error else f"Compilation failed with exit code {rc}"
+                self.emit("notification", {
+                    "title": "Build Failed",
+                    "message": notif_msg,
+                    "type": "error",
+                    "details": {"hint": "global_f_macro", "file": f_macro_error.get("file"), "line": f_macro_error.get("line")} if f_macro_error else {}
+                })
                 self.is_busy = False
                 self.active_operation = None
                 self._current_op_phase = None

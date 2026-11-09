@@ -26,7 +26,7 @@ import urllib.error
 import unicodedata
 from urllib.parse import quote, urlencode, urlsplit
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Any, List, Dict
 
 from main.core.file_utils import (
@@ -116,7 +116,7 @@ def _firebase_database_url(value: str) -> str:
     clean_url = (value or "").strip().rstrip("/")
     validate_firebase_destination(clean_url)
     if clean_url != firebase_configuration()["firebase_database_url"]:
-        raise ValueError("Use MCU Flasher's built-in Firebase database.")
+        raise ValueError("Use MCU Flasher's built-in cloud service.")
     return clean_url
 
 
@@ -507,6 +507,7 @@ class OwnerTicketService:
             self._uid = None
             self._user_email = None
             self._active_root_collection = None
+            self._active_cloud_cache = None
         except Exception:
             pass
 
@@ -711,14 +712,17 @@ class OwnerTicketService:
             return None
 
     def _parse_timestamp(self, ts_val: Any) -> float:
-        """Helper to parse datetime strings or float timestamps into epoch seconds."""
+        """Helper to parse datetime strings or float timestamps into epoch seconds in UTC."""
         if isinstance(ts_val, (int, float)):
             return float(ts_val)
         if isinstance(ts_val, str) and ts_val.strip():
             s = ts_val.strip()
             clean_s = s.replace("Z", "+00:00")
             try:
-                return datetime.fromisoformat(clean_s).timestamp()
+                dt = datetime.fromisoformat(clean_s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
             except Exception:
                 pass
             for fmt in (
@@ -729,7 +733,8 @@ class OwnerTicketService:
                 "%Y-%m-%d",
             ):
                 try:
-                    return datetime.strptime(s, fmt).timestamp()
+                    dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+                    return dt.timestamp()
                 except Exception:
                     pass
         return 0.0
@@ -755,9 +760,10 @@ class OwnerTicketService:
                 loc = merged[rid]
                 loc_ts = max(self._parse_timestamp(loc.get("updated_at")), self._parse_timestamp(loc.get("created_at")))
                 rem_ts = max(self._parse_timestamp(r.get("updated_at")), self._parse_timestamp(r.get("created_at")))
-                if loc_ts > rem_ts:
-                    # Local version is newer: reconcile by retaining local edits and queueing cloud sync
-                    needs_push.append(loc)
+                if loc_ts >= rem_ts:
+                    # Local version is newer or equal: retain local edits and queue cloud sync if strictly newer
+                    if loc_ts > rem_ts:
+                        needs_push.append(loc)
                 else:
                     merged[rid] = dict(r)
 
@@ -868,7 +874,7 @@ class OwnerTicketService:
         """Create a new defect issue ticket."""
         try:
             ticket_id = f"tkt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
-            now_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_iso = datetime.now(timezone.utc).isoformat()
 
             ticket: Dict[str, Any] = {
                 "id": ticket_id,
@@ -913,7 +919,7 @@ class OwnerTicketService:
             for t in tickets:
                 if t.get("id") == ticket_id:
                     t.update(updates)
-                    t["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    t["updated_at"] = datetime.now(timezone.utc).isoformat()
                     target_ticket = t
                     found = True
                     break
@@ -964,7 +970,11 @@ class OwnerTicketService:
             database = _firebase_database_url(cfg.get("firebase_database_url", "")).lower()
             identity = "\n".join((database, cfg.get("firebase_project_id", ""), self._uid))
             partition = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-            return self._storage_dir / (".owner_cloud_tickets_" + partition + ".json")
+            cloud_cache = self._storage_dir / (".owner_cloud_tickets_" + partition + ".json")
+            self._active_cloud_cache = cloud_cache
+            return cloud_cache
+        if getattr(self, "_active_cloud_cache", None) is not None and self._active_cloud_cache.exists():
+            return self._active_cloud_cache
         return self._tickets_file
 
     def _read_local_tickets(self) -> List[Dict[str, Any]]:
@@ -1209,6 +1219,7 @@ class TicketChangeWatcher:
         self._response = None
         self._response_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._last_payload: Optional[bytes] = None
         self.mode = "starting"
 
     def start(self) -> None:
@@ -1340,7 +1351,7 @@ class TicketChangeWatcher:
             if "text/event-stream" not in (response.headers.get("Content-Type") or ""):
                 return "fallback"
             self.mode = "live"
-            event, continuing, received = "", False, False
+            event, data_payload, continuing, received = "", b"", False, False
             while not self._stop.is_set():
                 chunk = response.readline(_STREAM_LINE_LIMIT)
                 if not chunk:
@@ -1353,15 +1364,20 @@ class TicketChangeWatcher:
                 line = chunk.rstrip(b"\r\n")
                 if line.startswith(b"event:"):
                     event = line[6:].strip().decode("ascii", "replace")
+                elif line.startswith(b"data:"):
+                    data_payload = line[5:].strip()
                 elif not line and event:
                     received = True
                     if event in ("put", "patch"):
-                        self._changed()
+                        if data_payload != self._last_payload:
+                            self._last_payload = data_payload
+                            self._changed()
                     elif event == "auth_revoked":
                         return "auth"
                     elif event == "cancel":
                         return "cancel"
                     event = ""
+                    data_payload = b""
             return "stopped"
         finally:
             with self._response_lock:

@@ -115,13 +115,6 @@ class AIPanel(QWidget):
 
         hl.addStretch()
 
-        self._btn_close = QPushButton("", icon_name="close")
-        self._btn_close.setToolTip("Hide AI Assistant")
-        self._btn_close.setFixedSize(24, 24)
-        self._btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_close.clicked.connect(self._on_close_clicked)
-        hl.addWidget(self._btn_close)
-
         main_layout.addWidget(header)
 
         # ── Stacked View (Loading View & Embedded Terminal Container) ────────
@@ -147,10 +140,6 @@ class AIPanel(QWidget):
         palette = get_palette(mode)
         self._header.setStyleSheet("QFrame#opencode-header { background: transparent; border: none; }")
         self._title_lbl.setStyleSheet(f"color: {glass_inks(mode)['system']}; font-size: 11px; font-weight: 700;")
-        self._btn_close.setStyleSheet(
-            f"QPushButton {{ background: transparent; border-radius: 5px; border: 1px solid transparent; padding: 0px; }}"
-            f"QPushButton:hover {{ background: {glass_tokens(mode)['hover']}; border-color: {palette['BORDER']}; }}")
-        self._btn_close.refresh_icon()
         self._embed_container.setStyleSheet(f"background: {palette['BG_DARKEST']};")
         self._loader_card.apply_theme(mode)
         self._set_badge(*self._badge)

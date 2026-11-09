@@ -375,9 +375,9 @@ class CloudSketchPanel(QWidget):
         self._account_title = self._label("Cloud sketches", self._account_card)
         self._account_title.setObjectName("cloud-heading")
         heading.addWidget(self._account_title, 1)
-        self._connection = self._label("Checking Firebase connection…", self._account_card)
+        self._connection = self._label("Checking cloud service…", self._account_card)
         self._connection.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._connection.setAccessibleName("Firebase connection status")
+        self._connection.setAccessibleName("Cloud service status")
         heading.addWidget(self._connection, 1)
         account.addLayout(heading)
         self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card, elide=True)
@@ -625,19 +625,21 @@ class CloudSketchPanel(QWidget):
         configuration = QVBoxLayout(self._configuration_card)
         configuration.setContentsMargins(10, 8, 10, 8)
         configuration.setSpacing(6)
-        self._connectivity_status = self._label("Checking Firebase connection…", self._configuration_card)
+        self._connectivity_status = self._label("Checking cloud service…", self._configuration_card)
         self._connectivity_status.setObjectName("cloud-secondary")
-        self._connectivity_status.setAccessibleName("Firebase internet connection result")
+        self._connectivity_status.setAccessibleName("Cloud connection result")
         configuration.addWidget(self._connectivity_status)
         configuration.addWidget(self._label(
             "MCU Flasher uses its built-in cloud service.", self._configuration_card))
         config_actions = QHBoxLayout()
         self._check_connection_btn = self._button("Check connection", self._check_connection, self._configuration_card)
+        self._check_connection_btn.hide()
         config_actions.addWidget(self._check_connection_btn)
         configuration.addLayout(config_actions)
         self._connection_section_layout.addWidget(self._configuration_card)
         self._content_layout.addWidget(self._connection_section, 0, Qt.AlignmentFlag.AlignHCenter)
         self._configuration_card.hide()
+        self._check_connection_btn.hide()
         self._configure_toggle.toggled.connect(self._configuration_visibility_changed)
         self._content_layout.addStretch(1)
 
@@ -720,7 +722,7 @@ class CloudSketchPanel(QWidget):
         def initialize():
             if self._service.configured and not self._service.is_authenticated:
                 self._service.restore_session()
-        if self._request("initialize", "Checking Firebase connection…", initialize,
+        if self._request("initialize", "Checking cloud service…", initialize,
                          include_saved=True, include_connectivity=True):
             self._initialized = True
 
@@ -834,7 +836,8 @@ class CloudSketchPanel(QWidget):
         if self._closed or generation != self._generation:
             self._complete_job()
             return
-        self._hide_loading()
+        if hasattr(self, "_hide_loading") and callable(self._hide_loading):
+            self._hide_loading()
         self._apply_state(result.get("state", {}))
         kind, value = result["kind"], result.get("value")
         if result.get("local_conflict"):
@@ -879,8 +882,8 @@ class CloudSketchPanel(QWidget):
             self._scroll.ensureWidgetVisible(self._history_box, 8, 12)
             self._status.setText("Choose a version to restore.")
         elif kind == "connectivity":
-            self._status.setText("Firebase is reachable." if value else
-                                 "Firebase could not be reached. Check your internet connection.")
+            self._status.setText("Cloud service is available." if value else
+                                 "Cloud service is unreachable. Please check your internet connection.")
         elif kind == "upload":
             self._status.setText(f"Uploaded {(value or {}).get('name', 'local sketch')}. Open it from the cloud list.")
         elif kind == "rename_sketch":
@@ -905,7 +908,7 @@ class CloudSketchPanel(QWidget):
         elif kind == "initialize":
             self._status.setText(("Select a sketch to open." if self._state.get("authenticated") else
                                   "Sign in to access your cloud sketches.") if result.get("state", {}).get("connectivity")
-                                 else "Firebase could not be reached. Check your internet connection.")
+                                 else "Cloud service is unreachable. Please check your internet connection.")
         else:
             self._status.setText("Cloud sketches are ready." if self._state.get("authenticated") else
                                  "Sign in to open or upload cloud sketches." if self._state.get("configured") else
@@ -928,7 +931,8 @@ class CloudSketchPanel(QWidget):
         self._release_editor(restart_autosave=restart_autosave)
         if not self._closed:
             if self._loading_kind:
-                self._hide_loading()
+                if hasattr(self, "_hide_loading") and callable(self._hide_loading):
+                    self._hide_loading()
                 self._apply_state({})
             self._update_controls()
 
@@ -1034,13 +1038,13 @@ class CloudSketchPanel(QWidget):
         self._configure_toggle.setVisible(not authenticated)
         self._configuration_card.setVisible(not authenticated and self._configure_toggle.isChecked())
         connection = self._state.get("connectivity")
-        self._connection.setText("Firebase reachable" if connection is True else
+        self._connection.setText("Cloud service available" if connection is True else
                                  "Connection unavailable" if connection is False else
                                  "Checking connection…")
         if connection is not None:
             self._connectivity_status.setText(
-                "Firebase is reachable; sign-in and sketch access are checked separately." if connection else
-                "Firebase could not be reached. Check your internet connection.")
+                "Cloud service is available; sign-in and sketch access are checked separately." if connection else
+                "Cloud service is unreachable. Please check your internet connection.")
         if self._state.get("configuration_error"):
             self._connectivity_status.setText(self._state["configuration_error"])
         email = self._state.get("account", {}).get("email", "")
@@ -1274,7 +1278,7 @@ class CloudSketchPanel(QWidget):
             self._request("delete", "Deleting cloud account…", lambda: self._service.delete_account(password), redactions=(password,))
 
     def _check_connection(self):
-        self._request("connectivity", "Checking Firebase connection…",
+        self._request("connectivity", "Checking cloud service…",
                       self._service.check_connection, include_connectivity=True)
 
     def _configuration_visibility_changed(self, visible):

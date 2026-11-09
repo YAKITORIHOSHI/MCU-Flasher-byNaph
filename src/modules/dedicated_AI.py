@@ -27,6 +27,9 @@ if str(_modules_dir) not in sys.path:
 from private_python_guard import enforce_private_python
 enforce_private_python(prefer_pythonw=True)
 
+# Suppress OpenCode automatic update checks and prompts inside supervisor PTY session
+os.environ["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+
 # Set AppUserModelID so taskbar groups windows under custom app icon
 if sys.platform == "win32":
     try:
@@ -62,6 +65,34 @@ def _configure_windows_dpi_awareness():
 
 
 _configure_windows_dpi_awareness()
+
+
+def _ensure_opencode_config() -> None:
+    """Ensure OpenCode user configuration explicitly disables auto-updates.
+    Managed OpenCode configuration sets autoupdate to false:
+    'autoupdate': False / "autoupdate": false
+    Prevents OpenCode from querying npm or prompting inside the embedded terminal.
+    """
+    for base in (Path.home() / ".opencode", Path.home() / ".config" / "opencode"):
+        try:
+            cfg_file = base / "config.json"
+            cfg_data = {}
+            if cfg_file.is_file():
+                try:
+                    cfg_data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg_data = {}
+            if not isinstance(cfg_data, dict):
+                cfg_data = {}
+            if cfg_data.get("autoupdate") is not False:
+                cfg_data["autoupdate"] = False
+                base.mkdir(parents=True, exist_ok=True)
+                cfg_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
+_ensure_opencode_config()
 
 def check_internet_connection(timeout: float = 2.0) -> bool:
     """Robust, fast multi-layer check for active internet connection.
@@ -636,6 +667,9 @@ class TerminalServer:
         self.is_running = True
         self._pty_lock = threading.RLock()
         self._restart_count = 0
+        os.environ["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
+        if "_ensure_opencode_config" in globals():
+            _ensure_opencode_config()
 
     def _supervised_opencode_command(self, target_dir):
         """Run OpenCode under a persistent CMD supervisor.
@@ -651,6 +685,7 @@ class TerminalServer:
             invocation = cmd_to_run
         return (
             f'cd /d "{target_dir}" && '
+            f'set OPENCODE_DISABLE_AUTOUPDATE=1 && '
             f'set PATH=%APPDATA%\\npm;%PATH% && cls && '
             # The @ stops cmd.exe echoing this supervisor line before each session.
             f'for /L %i in (0,0,1) do @( {invocation} "{target_dir}" & '

@@ -196,6 +196,8 @@ def build(output, report_dir):
                     temporary, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
                 for member in archive:
                     path = PurePosixPath(member.name)
+                    if member.name == BUNDLED_REVISION:
+                        continue
                     if not include_committed_source(member.name):
                         if member.isfile():
                             omissions[path.parts[0]]['committed_files'] += 1

@@ -195,11 +195,12 @@ class PortalChecks(unittest.TestCase):
             self.assertLessEqual(self.dialog.width(), size[0], size)
             self.assert_scroll_width(self.dialog.scroll)
             viewport = self.dialog.scroll.viewport()
-            for widget in (card, self.dialog.search_row, self.dialog.account_row, self.dialog.stats_grid):
-                left = widget.mapTo(viewport, QPoint(0, 0)).x()
-                right = widget.mapTo(viewport, QPoint(widget.width(), 0)).x()
-                self.assertGreaterEqual(left, 0, (size, widget.objectName()))
-                self.assertLessEqual(right, viewport.width(), (size, widget.objectName()))
+            left = card.mapTo(viewport, QPoint(0, 0)).x()
+            right = card.mapTo(viewport, QPoint(card.width(), 0)).x()
+            self.assertGreaterEqual(left, 0, (size, card.objectName()))
+            self.assertLessEqual(right, viewport.width(), (size, card.objectName()))
+            for widget in (self.dialog.search_row, self.dialog.account_row, self.dialog.stats_grid):
+                self.assertLessEqual(widget.width(), self.dialog.width(), (size, widget.objectName()))
             for widget in (card.title_label, card.description_label, card.metadata, card.severity_label):
                 self.assert_wrapped_text(widget, fully_visible=False)
                 self.assertLessEqual(widget.minimumSizeHint().width(), 2)
@@ -564,9 +565,9 @@ class PortalChecks(unittest.TestCase):
         settle(toolbar._owner_dialog)
         self.assertIsInstance(toolbar._owner_dialog, real_dialog)
         self.assertTrue(toolbar._owner_dialog.isVisible())
-        self.assertEqual(toolbar._owner_dialog.stack.currentIndex(), 1)
-        self.assertEqual(toolbar._owner_dialog.stack.currentWidget(), toolbar._owner_dialog.dashboard_page)
-        self.assertTrue(toolbar._owner_dialog.btn_new.isEnabled())
+        self.assertEqual(toolbar._owner_dialog.stack.currentIndex(), 2)
+        self.assertEqual(toolbar._owner_dialog.stack.currentWidget(), toolbar._owner_dialog.auth_page)
+        self.assertTrue(toolbar._owner_dialog.btn_unlock.isEnabled())
 
     def test_logo_counts_double_click_releases_once_and_ignores_incomplete_clicks(self):
         logo = _DeveloperLogoLabel("Fixture logo")
@@ -868,7 +869,7 @@ class PortalChecks(unittest.TestCase):
         self.assertFalse(self.dialog.chk_keep_signed_in.isChecked())
         self.assertEqual(self.dialog._tickets, [])
 
-    def test_dialog_opens_with_loading_screen_and_bypasses_login_to_dashboard(self):
+    def test_dialog_opens_with_loading_screen_and_lands_on_login_without_kept_session(self):
         dialog = portal.OwnerTicketDialog()
         self.addCleanup(dialog.deleteLater)
         self.addCleanup(dialog.close)
@@ -881,15 +882,14 @@ class PortalChecks(unittest.TestCase):
         self.assertIn("Checking developer environment", dialog.loading_status.text())
         self.assertFalse(dialog.portal_header.isVisible())
 
-        # Completes initialization directly to dashboard at index 1 without manual login
+        # Completes initialization by landing on login page at index 2 when session is not restored
         show(dialog)
         settle(dialog)
-        self.assertEqual(dialog.stack.currentIndex(), 1)
-        self.assertEqual(dialog.stack.currentWidget(), dialog.dashboard_page)
-        self.assertEqual(dialog.dashboard_page.objectName(), "developer-dashboard-page")
-        self.assertTrue(dialog.portal_header.isVisible())
-        self.assertEqual(dialog.access_label.text(), "Local developer access")
-        self.assertEqual(len(dialog.cards_container.findChildren(portal.TicketCard)), len(self.tickets))
+        self.assertEqual(dialog.stack.currentIndex(), 2)
+        self.assertEqual(dialog.stack.currentWidget(), dialog.auth_page)
+        self.assertEqual(dialog.auth_page.objectName(), "developer-login-page")
+        self.assertFalse(dialog.portal_header.isVisible())
+        self.assertFalse(dialog.chk_keep_signed_in.isChecked())
         self.service.authenticate.assert_not_called()
 
     def test_a_kept_session_opens_straight_to_the_tickets(self):

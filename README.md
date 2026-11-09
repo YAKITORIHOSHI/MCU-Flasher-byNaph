@@ -11,6 +11,18 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
+The November 9 update introduces a glassmorphic disconnect confirmation modal
+on the Serial Monitor's clickable Connected indicator, releasing serial ports
+cleanly while retaining port selection. A new compiler diagnostic interceptor
+identifies AVR global `F()` macro statement-expression errors and outputs
+actionable solutions directly to the Build Console without modifying core
+headers. Developer Access features stationary header controls, dedicated modal
+dialogs clamped to screen bounds, a custom neobrutalist scrollbar, edge-to-edge
+animated login wallpaper, silent cloud connectivity, and queued ticket
+synchronization with optimistic updates. The Monaco editor features refined
+selection highlights and circular loading feedback, and the OpenCode AI
+supervisor suppresses auto-update terminal loops and redundant close buttons.
+
 The November 5 update makes Windows Bootstrap's package work concurrent, so
 per-file antivirus scanning no longer multiplies into tens of minutes, and it
 reports progress through quiet phases. A one-line edit now recompiles one unit
@@ -1688,6 +1700,7 @@ Firebase administrative credentials or changes server rules automatically.
     retains each successful build and enables **Skip Compile** when it matches.
     Arduino CLI opt-in boards use their own subfolder within the same layout.
   - **Offline Toolchain Preparation**: Add a board platform or library to `direct/offline-packages.json`, then run bootstrap while online. The main app blocks registry/VCS package installation and uses the prepared local store.
+  - **AVR Compiler Diagnostic Hinting**: If compilation fails with GCC statement-expression errors (e.g. `statement-expressions are not allowed outside functions nor in template-argument lists`), the Build Console intercepts the error, confirms that Arduino framework headers (`WString.h`) are intact, and provides an actionable explanation with corrected code snippets demonstrating direct `PROGMEM` declarations or moving `F()` inside function bodies (see `NOTE.txt`).
   - **Resource-Aware Throttling**: Checks physical RAM and logical CPU cores via `psutil`. Background subprocesses are scheduled with `BELOW_NORMAL_PRIORITY_CLASS` (`0x00004000`), ensuring the UI, Monaco editor, and serial monitor stay fully responsive even during heavy compiles.
 - **Upload Firmware (`⚡ Upload`)**:
   - Serial uploads require a selected board and port. Boards with verified native USB/programmer interfaces (such as ST-Link, J-Link, CMSIS-DAP, picotool, DFU or Teensy) can upload without a serial port; the tooltip identifies this interface. Unknown transports require a port. Buttons and keyboard shortcuts recheck selection and busy state after saving.
@@ -1718,6 +1731,9 @@ Firebase administrative credentials or changes server rules automatically.
 - Serial Monitor **Reset** reports missing or unverified board selections in
   the Serial Monitor. If no board is selected, it asks you to select one in
   Controls and preserves serial history without resetting the device.
+- **Interactive Disconnect Confirmation**:
+  - The **Connected** status badge in the Serial Monitor header is interactive with a pointing hand cursor.
+  - Clicking it displays a glassmorphic confirmation modal asking whether to disconnect the board. Confirming with **YES** cleanly releases the serial port and UART lines without thread deadlocks, while retaining the active COM port in the port selector dropdown.
 - **Upload & Reset Parity**:
   - Upon a successful upload, hard reset, or soft reset, the application automatically switches the bottom view to the **Serial Monitor** after a 500ms grace delay.
   - After upload completion, MCU Flasher requests a silent DTR/RTS reset pulse
