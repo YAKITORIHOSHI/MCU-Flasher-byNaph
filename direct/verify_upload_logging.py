@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -215,7 +216,7 @@ class UploadPresentationChecks(unittest.TestCase):
         method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
                       and node.name == "_sync_project_hardware_state")
         from datetime import datetime
-        namespace = dict(Path=Path, datetime=datetime, json=json, sys=type("Host", (), {"platform": "win32"}),
+        namespace = dict(Path=Path, datetime=datetime, json=json, re=re, sys=type("Host", (), {"platform": "win32"}),
                          DEFAULT_UPLOAD_SPEED="460800", Optional=__import__("typing").Optional)
         exec(compile(ast.Module(body=[method], type_ignores=[]), "isolated_hardware_report", "exec"), namespace)
         api = Mock()

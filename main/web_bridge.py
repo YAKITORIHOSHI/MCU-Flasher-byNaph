@@ -6995,6 +6995,10 @@ class MCUWebBackendAPI:
         upload_started = None
         upload_log_finished = False
         connection_guard = None
+        board_name = getattr(self, "current_board", "")
+        uploader_restarted = False
+        firmware_written = success = False
+        self._restart_failed = False
         try:
             owner = port_occupied_owner(monitor_port) if monitor_port else None
             if owner:
@@ -7006,6 +7010,8 @@ class MCUWebBackendAPI:
             # First compile can install the platform and reveal its native
             # transport. Re-read metadata before passing any serial argument.
             info = self._resolve_board_info() or getattr(self, "_active_board_info", {})
+            if self.current_board != board_name:
+                raise RuntimeError("The selected board changed during compilation.")
             port = monitor_port if requires_upload_port(info) else ""
             if info and requires_upload_port(info) and (not port or self.current_port != port):
                 raise RuntimeError("The selected serial upload port disconnected or changed during compilation.")
@@ -7074,6 +7080,8 @@ class MCUWebBackendAPI:
                 line_clean = line.rstrip("\r\n")
                 if not line_clean:
                     continue
+                if "hard resetting" in line_clean.lower():
+                    uploader_restarted = True
                 if not write_started and _platformio_upload_write_started(line_clean):
                     write_started = True
                     self._current_op_phase = "flashing"
@@ -7130,6 +7138,10 @@ class MCUWebBackendAPI:
                         "tag": "info", "newline": True,
                     })
                 raise RuntimeError(f"PlatformIO upload exited with code {code}. Review the console for the programmer or device requirement.")
+            firmware_written = True
+            if not uploader_restarted:
+                self._require_board_restart(port, board_name, info)
+            success = True
             if upload_log is not None:
                 upload_log.finish(True, time.monotonic() - upload_started)
                 upload_log_finished = True
@@ -7152,7 +7164,8 @@ class MCUWebBackendAPI:
             self.is_busy = False
             self.active_operation = None
             self._current_op_phase = None
-            self.emit("operation:phase", {"phase": "idle", "is_busy": False})
+            self.emit("operation:phase", {"phase": "idle", "is_busy": False, "op": "upload",
+                                         "success": success, "firmware_written": firmware_written})
             self.emit("window:closable", {"closable": True})
             self._unmap_unc_after_build()
             if monitor_paused and self.current_port == monitor_port and not getattr(self, "_operation_connection_loss", ""):

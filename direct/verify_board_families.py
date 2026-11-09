@@ -76,6 +76,7 @@ class BoardFamilyChecks(unittest.TestCase):
         self.api.sketch_dir_path = self.root
         self.api._board_frameworks = {}
         self.api.emit = Mock()
+        self.api._trigger_actual_board_reset = Mock(return_value=True)
         self.api._effective_cache_root = lambda path: self.root
         self.api._scan_includes_for_libs = lambda: []
         self.stack.enter_context(patch.object(web_bridge, "_project_root", self.root))

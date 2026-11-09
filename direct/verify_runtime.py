@@ -438,6 +438,8 @@ class RuntimeChecks(unittest.TestCase):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         api._active_port_label, api.current_port = "", ""
+        api.current_board = "Fixture native programmer"
+        api._resolve_board_info = lambda name=None: {"require_upload_port": False}
         api.sketch_dir_path = ROOT / "temp/audit/nonexistent-sketch"
         api._active_process = None
         api._stop_requested = False

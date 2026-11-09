@@ -91,7 +91,7 @@ class MonitorConnections(unittest.TestCase):
 
 class IntentionalResets(unittest.TestCase):
     def setUp(self):
-        tree = ast.parse((ROOT / "main/web_bridge.py").read_text())
+        tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         methods = [n for n in cls.body if isinstance(n, ast.FunctionDef)]
         for name in ("_require_board_restart", "_trigger_actual_board_reset", "_start_serial_monitor"):

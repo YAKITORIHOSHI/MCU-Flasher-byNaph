@@ -496,6 +496,7 @@ class BoardBuildCacheChecks(unittest.TestCase):
         self.assertFalse(self.api.check_can_skip_compile())
 
     def prepare_native_upload(self):
+        self.api._trigger_actual_board_reset = Mock(return_value=True)
         self.api._active_port_label = self.api.current_port = "COM-FIXTURE"
         self.api._active_board_info = self.api._resolve_board_info()
         self.api._check_write_connection = Mock()

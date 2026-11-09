@@ -150,6 +150,7 @@ class SystemSetupChecks(unittest.TestCase):
                     patch("src.modules.platform_runtime.native_platformio_dir", return_value=root / "native-core"), \
                     patch("src.modules.offline_mode.offline_enabled", return_value=False), \
                     patch("src.modules.offline_mode.finish_bootstrap") as finish, \
+                    patch("src.modules.default_board_folders.prepare_default_board_folders") as defaults, \
                     patch("src.modules.package_jobs.package_store_lease", return_value=nullcontext()), \
                     patch.dict(os.environ, {"MCU_FLASHER_OFFLINE_RUNTIME": "", "MCU_FLASHER_WORKSPACE_RUNTIME": ""}):
                 self.assertEqual(setup.main([]), 0)
@@ -157,6 +158,7 @@ class SystemSetupChecks(unittest.TestCase):
             finish.assert_called_once_with(root / "native-core")
             arduino.assert_called_once()
             opencode.assert_called_once()
+            defaults.assert_called_once_with(root / ".venv-linux/bin/python", env=self.run.call_args.kwargs["env"])
         commands = [call.args[0] for call in self.run.call_args_list]
         self.assertEqual(len(commands), 5)  # apt update/install, private pip, imports, toolchain preparation.
         self.assertEqual(commands[1][-2:], ["libxcb-cursor0", "libxcb-xinerama0"])

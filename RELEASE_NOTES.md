@@ -23,6 +23,11 @@ longer schedules a second hardware reset. A failed restart identifies written
 firmware separately; no upload is replayed. USB-driver opening transients require
 physical confirmation beyond hardware-free tests.
 
+The native Ubuntu upload worker now publishes an explicit operation result,
+preserves written-firmware status when restarting fails, and performs a declared
+restart only when the uploader has not already reported one. Failure never
+becomes a successful UI completion.
+
 **Dropdowns, terminals and workspace columns.** Native combo dropdowns paint a
 cached frosted scene with rounded clipping, theme-aware rows and bounded geometry.
 Terminal card styles are scoped so child labels do not acquire duplicate frames.

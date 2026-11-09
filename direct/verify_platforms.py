@@ -293,6 +293,7 @@ class PlatformChecks(unittest.TestCase):
         api._check_write_connection = Mock()
         api._needs_recompile = Mock(return_value=(False, "fixture verified"))
         api.current_board, api.upload_speed = "Fixture Arduino Uno", "115200"
+        api._trigger_actual_board_reset = Mock(return_value=True)
         api._active_board_info = dict(platform="atmelavr", board="uno", framework="arduino", require_upload_port=True)
         api._resolve_board_info = lambda name=None: api._active_board_info
         api.sketch_dir_path = self.root
@@ -357,7 +358,7 @@ class PlatformChecks(unittest.TestCase):
         self.assertIn("Upload Target", shown_text)
         self.assertIn("Upload Summary", shown_text)
 
-    def native_log_fixture(self, lines, code=0, host="linux"):
+    def native_log_fixture(self, lines, code=0, host="linux", reset_expected=False, reset_ok=True):
         from main import web_bridge
         api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
         api.current_port = api._active_port_label = "/dev/fixture0"
@@ -372,7 +373,7 @@ class PlatformChecks(unittest.TestCase):
         api._generate_platformio_ini = api._stop_serial_monitor = api._start_serial_monitor = Mock()
         api._unmap_unc_after_build = Mock()
         api._probe_chip_info = Mock(side_effect=AssertionError("Logging probed hardware"))
-        api._trigger_actual_board_reset = Mock(side_effect=AssertionError("Logging reset hardware"))
+        api._trigger_actual_board_reset = Mock(return_value=reset_ok)
         api._get_jobs = lambda: 2
         api._stop_requested = False
         api.emit = Mock()
@@ -389,7 +390,10 @@ class PlatformChecks(unittest.TestCase):
             api._native_upload_worker(can_skip=True)
         self.assertEqual(launch.call_count, 1)
         api._probe_chip_info.assert_not_called()
-        api._trigger_actual_board_reset.assert_not_called()
+        if reset_expected:
+            api._trigger_actual_board_reset.assert_called_once_with(api.current_port, api.current_board, api._active_board_info)
+        else:
+            api._trigger_actual_board_reset.assert_not_called()
         return [call.args for call in api.emit.call_args_list]
 
     def test_ubuntu_esp_upload_uses_windows_presentation_without_extra_hardware_work(self):
@@ -424,6 +428,7 @@ class PlatformChecks(unittest.TestCase):
     def test_windows_native_upload_uses_the_same_formatted_presentation(self):
         events = self.native_log_fixture([
             "Chip is ESP32-D0WD-V3 (revision v3.1)", "Writing at 0x00010000... (100 %)",
+            "Hard resetting via RTS pin...",
             "================ [SUCCESS] Took 1.20 seconds ================",
         ], host="win32")
         text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
@@ -431,6 +436,22 @@ class PlatformChecks(unittest.TestCase):
         self.assertIn("Flashing", text)
         self.assertIn("UPLOADING (PlatformIO)", text)
         self.assertIn("Upload Summary", text)
+
+    def test_native_upload_without_programmer_restart_runs_the_declared_reset(self):
+        events = self.native_log_fixture(["Writing at 0x00010000... (100 %)", "[SUCCESS]"], reset_expected=True)
+        phase = [p for name, p in events if name == "operation:phase"][-1]
+        self.assertTrue(phase["success"])
+        self.assertTrue(phase["firmware_written"])
+        self.assertEqual(phase["op"], "upload")
+
+    def test_native_restart_failure_preserves_written_state_and_fails_the_operation(self):
+        events = self.native_log_fixture(["Writing at 0x00010000... (100 %)", "[SUCCESS]"],
+                                         reset_expected=True, reset_ok=False)
+        phase = [p for name, p in events if name == "operation:phase"][-1]
+        self.assertFalse(phase["success"])
+        self.assertTrue(phase["firmware_written"])
+        self.assertFalse(any(name == "notification" and p.get("title") == "Upload completed" for name, p in events))
+        self.assertTrue(any(name == "console:log" and "Firmware written, but Reset" in p["text"] for name, p in events))
 
     def test_ubuntu_native_upload_can_cancel_before_flash_write(self):
         from main import web_bridge
