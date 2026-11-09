@@ -581,6 +581,25 @@ class WindowsPanelChecks(unittest.TestCase):
             self.assertIn(glass_tokens(mode)["reading"], self.panel._loader_card.styleSheet())
             self.assertIn(glass_inks(mode)["normal"], self.panel._status_badge.styleSheet())
 
+    def test_hidden_project_switch_does_not_launch_a_windows_assistant(self):
+        panel = self.panel
+        panel.hide()
+        panel._is_active = True
+        with patch.object(panel, "_stop_ai") as stop, patch.object(self.module.subprocess, "Popen") as spawn:
+            panel.reset_for_project(str(self.root / "next project"))
+        stop.assert_called_once()
+        spawn.assert_not_called()
+        self.assertTrue(panel.isHidden())
+
+    def test_windows_window_lookup_uses_the_owned_child_pid(self):
+        panel = self.panel
+        panel._proc = SimpleNamespace(pid=9876, poll=lambda: None)
+        native = SimpleNamespace(FindWindowW=Mock(return_value=0))
+        with patch.object(self.module, "win32gui", Mock()), patch.object(self.module, "win32con", Mock()), \
+             patch.object(self.module.ctypes, "windll", SimpleNamespace(user32=native), create=True):
+            panel._poll_for_ai_window()
+        native.FindWindowW.assert_called_once_with(None, "MCU Flash GUI - OpenCode AI Assistant [9876]")
+
 
 class LoaderChecks(unittest.TestCase):
     def loader(self, **options):

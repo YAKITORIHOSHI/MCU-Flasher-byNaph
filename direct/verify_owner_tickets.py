@@ -1083,15 +1083,20 @@ class PortalChecks(unittest.TestCase):
         capture(self.dialog, "tickets-empty-neobrutalism")
 
     def test_native_menus_and_recovery_dialog_use_the_portal_style(self):
+        from main.qt.theme import install_no_focus_lines
+        install_no_focus_lines(APP)
         self.sign_in()
         category = self.dialog.category_filter
         view = category.view()
         view.window().setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
         category.showPopup()
         pump()
-        self.assertEqual(view.palette().color(QPalette.ColorRole.Base).name(), "#ffffff")
-        self.assertEqual(view.palette().color(QPalette.ColorRole.Text).name(), "#141414")
-        self.assertEqual(view.palette().color(QPalette.ColorRole.Highlight).name(), "#ffe85b")
+        from main.core.theme import get_palette
+        from main.qt.theme import glass_tokens
+        material = category._mcu_glass_popup
+        self.assertTrue(material.backdrop.isVisible())
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Text).name(), get_palette(material._mode)["TEXT"])
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Highlight).name(), glass_tokens(material._mode)["chip"])
         capture(view.window(), "category-popup")
         category.hidePopup()
 

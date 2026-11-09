@@ -1377,8 +1377,8 @@ class OwnerTicketDialog(_TaskPortal):
         outer.addWidget(self.search_row)
 
         # 4. Account metadata (stationary outside scroll area)
-        self.access_label = label("Private defect reports", page, "metadata", wrap=True)
-        self.live_label = label("", page, "metadata", wrap=True)
+        self.access_label = label("Private defect reports", page, "metadata", wrap=False)
+        self.live_label = label("", page, "metadata", wrap=False)
         self.live_label.setObjectName("developer-live-status")
         self.account_row = QWidget(page)
         account = QHBoxLayout(self.account_row)
@@ -1895,7 +1895,8 @@ class OwnerTicketDialog(_TaskPortal):
                 on_change=lambda: signals.changed.emit(generation),
                 on_end=lambda reason: signals.ended.emit(generation, reason))
             self._watcher.start()
-            self.live_label.setText("Live updates on: changes from your other devices appear here.")
+            self.live_label.setText("Live updates on")
+            self.live_label.setToolTip("Changes from your other devices appear here.")
         else:
             # A local-only session has no remote; another window on this computer writes the
             # same tickets file, which is replaced atomically, so watch its folder.
@@ -1903,7 +1904,8 @@ class OwnerTicketDialog(_TaskPortal):
             if folder:
                 self._local_watch = QFileSystemWatcher([folder], self)
                 self._local_watch.directoryChanged.connect(lambda _path: self._on_live_change(generation))
-                self.live_label.setText("Live updates on: changes from other windows on this computer appear here.")
+                self.live_label.setText("Live updates on")
+                self.live_label.setToolTip("Changes from other windows on this computer appear here.")
         retone(self.live_label, "ok")
 
     def _stop_live_updates(self):
@@ -1918,6 +1920,7 @@ class OwnerTicketDialog(_TaskPortal):
             self._local_watch = None
         if hasattr(self, "live_label"):
             self.live_label.setText("")
+            self.live_label.setToolTip("")
 
     @Slot(int)
     def _on_live_change(self, generation):
@@ -1929,10 +1932,14 @@ class OwnerTicketDialog(_TaskPortal):
         if generation != self._live_generation:
             return
         self._watcher = None
-        messages = {"session": "Live updates stopped because your session ended. Log out and sign in again.",
+        messages = {"session": "Live updates stopped: session ended",
+                    "denied": "Live updates stopped: cloud refused access",
+                    "signed-out": ""}
+        tooltips = {"session": "Live updates stopped because your session ended. Log out and sign in again.",
                     "denied": "Live updates stopped: the cloud refused access to these tickets.",
                     "signed-out": ""}
-        self.live_label.setText(messages.get(reason, "Live updates stopped. Use Refresh to reload."))
+        self.live_label.setText(messages.get(reason, "Live updates stopped"))
+        self.live_label.setToolTip(tooltips.get(reason, "Use Refresh to reload."))
         retone(self.live_label, "warn")
 
     def _start_live_refresh(self):

@@ -224,6 +224,11 @@ def check_monitor(render_dir: Path | None) -> int:
 
     def check_workspace(window, state):
         tabs, bar = window._bottom_tabs, window._bottom_tabs.tabBar()
+        if window._ai_visible and not window._editor_detached:
+            if window._h_splitter.orientation().name != "Horizontal":
+                problems.append((state, "attached OpenCode stacked below the workspace"))
+            if window._ai_panel.x() < window._v_splitter.x() + window._v_splitter.width():
+                problems.append((state, "OpenCode overlaps the editor/monitor column"))
         toolbar, controls = window._primary_toolbar, window._controls_bar
         require_on_screen(state, window)
         for name in ("btn_compile", "btn_upload", "btn_project", "btn_cloud", "btn_download"):

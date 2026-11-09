@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 
 # pyrefly: ignore [missing-import]
-from PySide6.QtCore import Qt, QTimer, Slot, QRect, QEvent, QMargins
+from PySide6.QtCore import Qt, QTimer, Slot, QRect, QEvent, QMargins, QSize
 # pyrefly: ignore [missing-import]
 from PySide6.QtGui import (
     QKeySequence, QShortcut, QCloseEvent,
@@ -463,6 +463,12 @@ class MCUMainWindow(QMainWindow):
                 bar.setAccessibleTabName(index, name)
             self._tab_icon_inks = inks
         count = min(tabs.count(), len(_TOOL_TABS))
+        dense = width < count * _ICON_TAB_WIDTH
+        if bool(bar.property("denseIcons")) != dense:
+            bar.setProperty("denseIcons", dense)
+            bar.setIconSize(QSize(16 if dense else 18, 16 if dense else 18))
+            bar.style().unpolish(bar)
+            bar.style().polish(bar)
         full = [_TOOL_TABS[index][0] for index in range(count)]
         short = [_TOOL_TABS[index][1] for index in range(count)]
         # Icon-only tabs keep their full names in tooltips and accessible names.
@@ -723,7 +729,7 @@ class MCUMainWindow(QMainWindow):
         else:
             from main.qt.ai_panel import AIPanel
         self._ai_panel = AIPanel(self._backend, self)
-        self._ai_panel.setMinimumWidth(240)
+        self._ai_panel.setMinimumWidth(120)
         self._ai_panel.setMinimumHeight(_STACKED_ASSISTANT_MINIMUM)
         # No setMaximumWidth — user can freely resize via splitter handle
         self._ai_panel.setVisible(False)
@@ -1162,29 +1168,22 @@ class MCUMainWindow(QMainWindow):
             if prev_op in ("upload", "flash", "hard_reset", "soft_reset", "reset") and is_success:
                 QTimer.singleShot(500, self, lambda: self._finish_upload_ui(generation, target))
 
-            # After an upload/flash or soft reset, once the Serial Monitor tab is focused, issue
-            # a silent DTR pulse to reboot the MCU so its boot logs and sketch
-            # output appear immediately — no manual Reset button press needed.
-            if prev_op in ("upload", "flash") and is_success:
-                QTimer.singleShot(700, self, lambda: self._finish_upload_ui(generation, target, reset=True))
-
     def _post_upload_target(self):
         if not self._backend:
             return None
         return (self._backend.current_board, self._backend.current_port,
                 str(self._backend.sketch_dir_path))
 
-    def _finish_upload_ui(self, generation, target, reset=False):
+    def _finish_upload_ui(self, generation, target):
         # A previous successful upload must not refocus or reset a new target,
         # even if a second operation has already started AND finished meanwhile.
         if (generation != self._operation_generation or target != self._post_upload_target()
                 or self._active_operation is not None
                 or (self._backend and self._backend.is_busy)):
             return
-        if reset:
-            self._post_upload_dtr_pulse()
-        else:
-            self._focus_serial_monitor()
+        # Restart is complete before the worker publishes success. Delayed UI
+        # callbacks only focus the view; they never drive hardware.
+        self._focus_serial_monitor()
 
     def _focus_serial_monitor(self) -> None:
         """Switch bottom tab to Serial Monitor and set focus (e.g. after upload completes)."""
@@ -1195,21 +1194,6 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setCurrentWidget(self._serial_panel)
         if hasattr(self._serial_panel, "setFocus"):
             self._serial_panel.setFocus()
-
-    def _post_upload_dtr_pulse(self) -> None:
-        """Issue a silent DTR reset pulse after an upload so the MCU starts immediately.
-
-        Only fires when:
-        - No new operation has started since the upload completed (rapid-action guard).
-        - The Serial Monitor tab is currently the visible bottom tab.
-        - The backend serial connection is open.
-        """
-        if getattr(self, "_active_operation", None) is not None:
-            return  # A new operation started during the 700ms delay — abort.
-        if self._bottom_tabs.currentWidget() is not self._serial_panel:
-            return  # User navigated away — skip the pulse.
-        if self._backend:
-            self._backend.pulse_dtr_reset()
 
     @Slot(dict)
     def _on_console_progress(self, payload: dict) -> None:
@@ -1316,7 +1300,7 @@ class MCUMainWindow(QMainWindow):
             active = payload.get("active_file", "")
             if active:
                 self._editor_panel.open_file(active)
-        if hasattr(self, "_ai_panel") and getattr(self._ai_panel, "_is_active", False):
+        if hasattr(self, "_ai_panel"):
             self._ai_panel.reset_for_project(path)
         if hasattr(self, "_terminal_panel") and getattr(self._terminal_panel, "_is_active", False):
             self._terminal_panel.reset_for_project(path)
@@ -1578,12 +1562,8 @@ class MCUMainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _ai_panel_stacks(self) -> bool:
-        """Stack the assistant under the workspace when side by side would crush both."""
-        central = self.centralWidget()
-        width, height = central.width(), central.height()
-        if width < 560:
-            return True
-        return height >= 420 and (width < 900 or height > width * 1.15)
+        """The attached workspace always keeps OpenCode in its right column."""
+        return False
 
     def _arrange_ai_panel(self) -> None:
         """Follow the window across the stacked/side-by-side boundary."""

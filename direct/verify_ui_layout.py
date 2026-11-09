@@ -55,6 +55,7 @@ def checks(group, scale, output):
             yield "verify_shutdown", ["--repeat", "3"]
             yield render("verify_runtime", "workspace", "--no-finalize")
     if group in ("all", "resources", "responsive"):
+        yield render("verify_combo_popups", "dropdowns")
         yield render("verify_package_browser", "resources")
         yield render("verify_bootstrap_headers", "setup")
         yield render("verify_svg_icons", "icons")

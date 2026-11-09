@@ -30,7 +30,8 @@ def reader_fixture():
     methods = [node for node in original.body if isinstance(node, ast.FunctionDef)
                and node.name in ("_start_serial_monitor", "_stop_serial_monitor",
                                  "flush_serial_output", "clear_serial_output",
-                                 "_queue_serial_notification", "_stop_serial_notifications")]
+                                 "_queue_serial_notification", "_stop_serial_notifications",
+                                 "set_baud_rate", "_release_port_lines")]
     fixture = ast.ClassDef(name="ReaderBackend", bases=[], keywords=[], body=methods,
                           decorator_list=[])
     module = ast.fix_missing_locations(ast.Module(body=[fixture], type_ignores=[]))
@@ -39,7 +40,11 @@ def reader_fixture():
             Serial=Mock(), SerialException=OSError,
             EIGHTBITS=8, PARITY_NONE="N", STOPBITS_ONE=1,
         ),
-        "threading": threading, "time": time,
+        "threading": threading, "time": time, "sys": sys,
+        "MAX_BAUD_RATE": 921600,
+        "load_gui_config": Mock(return_value={}),
+        "save_gui_config": Mock(),
+        "port_occupied_owner": Mock(return_value=None),
     }
     exec(compile(module, str(source), "exec"), namespace)
     return namespace["ReaderBackend"], namespace["serial"]
@@ -108,8 +113,13 @@ def backend_fixture(port):
     api._serial_notice_stopped = False
     api._serial_conn = api._serial_thread = None
     api.current_port, api.current_baud = "SIMULATED", 115200
+    api.current_board = "arduino_uno"
+    api.serial_running = False
+    api._serial_reconnect_token = 0
     api.is_busy, api.active_operation = False, None
     api._schedule_serial_recovery = Mock()
+    api._sync_project_hardware_state = Mock()
+    api.pulse_dtr_reset = Mock()
     events = []
     api.emit = lambda name, payload: events.append((name, payload))
     SERIAL.Serial = Mock(return_value=port)
@@ -295,6 +305,7 @@ class ReaderChecks(unittest.TestCase):
             old_thread = api._serial_thread
             self.assertTrue(old_port.idle_entered.wait(1))
             SERIAL.Serial = Mock(return_value=new_port)
+            api.current_port = "SIMULATED_NEW"
             api._start_serial_monitor()
             self.assertTrue(new_port.idle_entered.wait(1))
             old_thread.join(1)
@@ -328,6 +339,7 @@ class ReaderChecks(unittest.TestCase):
             clearer.start()
             self.assertTrue(clear_entered.wait(1))
             SERIAL.Serial = Mock(return_value=new_port)
+            api.current_port = "SIMULATED_NEW"
             api._start_serial_monitor()
             self.assertTrue(new_port.idle_entered.wait(1))
             release_clear.set()
@@ -723,6 +735,90 @@ class ReaderChecks(unittest.TestCase):
         self.assertIsNone(api._serial_log_flush)
         self.assertTrue(any(name == "serial:log" and "cannot allocate reader" in payload["text"]
                             for name, payload in events))
+
+    def test_serial_monitor_connection_and_disconnect_never_assert_dtr_rts(self):
+        port = FakePort([b"data stream\n"], close_when_empty=False)
+        api, events = backend_fixture(port)
+        try:
+            api._start_serial_monitor()
+            self.assertTrue(port.idle_entered.wait(1))
+            limit = time.monotonic() + 1.0
+            while not device_text(events) and time.monotonic() < limit:
+                time.sleep(0.005)
+            self.assertTrue(port.is_open)
+            self.assertTrue(api.serial_running)
+            self.assertIn("data stream\n", device_text(events))
+        finally:
+            api._stop_serial_monitor()
+
+        self.assertFalse(port.is_open)
+        self.assertFalse(api.serial_running)
+        self.assertTrue(len(port.line_changes) > 0)
+        self.assertTrue(all(not value for _, value in port.line_changes),
+                        f"Found asserted lines in: {port.line_changes}")
+
+    def test_in_place_baud_change_updates_open_port_without_reset_or_teardown(self):
+        port = FakePort([b"first baud data\n"], close_when_empty=False)
+        api, events = backend_fixture(port)
+        try:
+            api._start_serial_monitor()
+            self.assertTrue(port.idle_entered.wait(1))
+            self.assertEqual(port.baudrate, 115200)
+
+            # Change baud rate in-place
+            api.set_baud_rate(57600)
+            deadline = time.monotonic() + 2
+            while port.baudrate != 57600 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(api.current_baud, 57600)
+            self.assertEqual(port.baudrate, 57600)
+            self.assertTrue(port.is_open)
+            self.assertTrue(api.serial_running)
+            api.pulse_dtr_reset.assert_not_called()
+            self.assertTrue(all(not value for _, value in port.line_changes),
+                            f"Reset asserted during baud change: {port.line_changes}")
+        finally:
+            api._stop_serial_monitor()
+
+    def test_in_place_baud_change_pulses_reset_when_reset_on_baud_change_is_enabled(self):
+        port = FakePort([b"stream\n"], close_when_empty=False)
+        api, events = backend_fixture(port)
+        try:
+            api._start_serial_monitor()
+            self.assertTrue(port.idle_entered.wait(1))
+            api.reset_on_baud_change = True
+
+            api.set_baud_rate(38400)
+            deadline = time.monotonic() + 2
+            while not api.pulse_dtr_reset.called and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(port.baudrate, 38400)
+            api.pulse_dtr_reset.assert_called_once()
+        finally:
+            api._stop_serial_monitor()
+
+    def test_automatic_project_baud_detection_never_uses_the_reset_preference(self):
+        port = FakePort([b"running\n"], close_when_empty=False)
+        api, _ = backend_fixture(port)
+        try:
+            api._start_serial_monitor()
+            self.assertTrue(port.idle_entered.wait(1))
+            generation = api._serial_generation
+            api._start_serial_monitor()
+            self.assertEqual(api._serial_generation, generation, "Repeated monitor request reopened the port")
+            api.reset_on_baud_change = True
+            api.set_baud_rate(38400, allow_reset=False)
+            deadline = time.monotonic() + 2
+            while port.baudrate != 38400 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(port.baudrate, 38400)
+            api.pulse_dtr_reset.assert_not_called()
+            self.assertTrue(all(not value for _, value in port.line_changes))
+        finally:
+            api._stop_serial_monitor()
+
+
+
 
 
 if __name__ == "__main__":

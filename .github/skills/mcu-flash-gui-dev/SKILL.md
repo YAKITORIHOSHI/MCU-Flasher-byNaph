@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Developer and troubleshooting guide for MCU Flasher's PySide6 editor loading/themes, selector and action readiness, incremental Compile/Upload, shared exact-board reset caches, serial monitor and host launchers."
+description: "Developer and troubleshooting guide for MCU Flasher's PySide6 editor loading/themes, selector and action readiness, incremental Compile/Upload, shared exact-board reset caches, passive monitoring, glass dropdowns, compact OpenCode columns, UNC CMD terminals and host launchers."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -48,6 +48,13 @@ Cloud folder safety must reject Windows junctions on Python 3.11 too, using
 the lstat mount-point tag only when `Path.is_junction` is unavailable. Preserve
 modern Python, Ubuntu and cloud-placeholder behavior; verify native replacement
 refusal without changing Windows launchers or dependency ranges.
+
+Normal monitoring is passive; backend workers own checked intentional restarts.
+Keep attached OpenCode in the right column and hidden assistants idle on project
+changes. All combo popups use cached frosted material. CMD uses local startup
+and environment-bound pushd with owned-drive cleanup. Embedded child titles
+include their PID. See the canonical skill and the monitor_connection,
+cmd_directory and combo_popups verifiers for the exact contracts.
 
 ## Platform Scope
 
@@ -281,7 +288,7 @@ MCU Flasher by Naph/
 - **Operation Phase Scoping**:
   - `_active_operation == "compile"`: Serial Monitor, Reset DTR/RTS pulse, Baud Rate selection, and Send bar remain **fully functional and active**.
   - `_active_operation in ("upload", "flash", "reset")`: Flashing tools take exclusive ownership of the COM port; Serial Monitor is temporarily paused and auto-resumes once flashing completes.
-- **Post-Upload Silent Auto-Reset & Tab Parity**: Upon successful upload or reset, the application automatically switches to the Serial Monitor tab after a 500ms delay and issues a silent DTR/RTS reset pulse so microcontroller boot logs stream immediately. If an error occurs, focus remains on the Build Console.
+- **Post-Upload Silent Auto-Reset & Tab Parity**: Upon successful upload or reset, the application automatically switches to the Serial Monitor tab after a 500ms delay after the backend has completed its declared restart; GUI callbacks never pulse hardware. If an error occurs, focus remains on the Build Console.
 - **Reset on Baud Change**: Configurable preference (`reset_on_baud_change`) to toggle automatic DTR/RTS reset pulses when switching baud rates.
 
 ### 4. Remote / UNC Network Path Pipeline

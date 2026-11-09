@@ -11,7 +11,23 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
-The November 9 update introduces a glassmorphic disconnect confirmation modal
+The November 9 repair makes normal monitoring passive: opening, reconnecting and
+disconnecting request no DTR/RTS reset. POSIX monitoring disables hang-up-on-close,
+reuses healthy connections and changes baud without reopening. Automatic project
+baud detection never invokes Reset on Baud Change. Upload and recovery workers
+complete their declared restart before reporting success; GUI timers only focus
+the monitor. USB-driver transients still require physical-device verification.
+All native combo dropdowns now paint cached frosted scenes with rounded rims,
+readable selection and bounded popup geometry. OpenCode stays to the right of
+the attached editor/monitor column at compact and portrait sizes, and opening
+projects leaves hidden assistants idle. Windows child windows have per-process
+titles so projects cannot attach one another's terminal or assistant.
+CMD opens local and UNC projects through a local supervisor with quoted `pushd`;
+normal exit releases its drive, and forced close cleans only a recorded new
+mapping that still belongs to that share. Terminal card styles no longer cascade
+frames into their labels.
+
+The November 9 update also introduces a glassmorphic disconnect confirmation modal
 on the Serial Monitor's clickable Connected indicator, releasing serial ports
 cleanly while retaining port selection. A new compiler diagnostic interceptor
 identifies AVR global `F()` macro statement-expression errors and outputs
@@ -698,7 +714,7 @@ Compiler concurrency also respects physical core count when the OS reports it.
 | **🖥️ Native PySide6 (Qt) Desktop UI** | High-performance, hardware-accelerated desktop interface built with PySide6 (`main/qt/`), featuring Glass Smoked Dark, Glass Frosted Light, and Solarized Dark themes with Montserrat typography and responsive splitters. |
 | **🔨 Unified One-Click Build & Flash** | Exact PlatformIO board/framework builds with native programmer uploads for AVR, STM32, RP2040, SAM/SAMD, nRF52, Teensy and other declared targets; optimized ESP/AVR serial paths and incremental build caching. |
 | **🛡️ Critical Operation Protection** | Safeguards against closing the application during sensitive hardware writes (flashing, flash erasing, bootloader recovery resets, and toolchain downloads) to prevent bricking microcontrollers or corrupting installations. |
-| **📟 Advanced Serial Monitor & Auto-Reset Parity** | Real-time terminal with ANSI color rendering, timestamps, pause/resume, send bar, and high-throughput batch coalescing. Automatically issues a silent DTR/RTS pulse upon upload completion and focuses the monitor after a 500ms grace delay. |
+| **📟 Advanced Serial Monitor & Auto-Reset Parity** | Real-time terminal with ANSI color rendering, timestamps, pause/resume, send bar, and high-throughput batch coalescing. Normal monitoring stays passive; upload and recovery workers complete the declared restart before focusing the monitor. |
 | **⚡ Reset on Baud Change Toggle** | Configurable setting in Settings Dialog to automatically pulse DTR/RTS when switching baud rates (rebooting MCU into `setup()` at the new baud rate) or maintain uninterrupted execution. |
 | **🔌 Zero-Reset Connection & Port Safety** | Passive port opening with explicitly de-asserted DTR/RTS control lines ensures connected ESP32 microcontrollers continue running active firmware without unintentional reboots. |
 | **✏️ Offline Monaco Code Editor** | Embedded offline Monaco Editor (VS Code engine) via `QWebEngineView` and `QWebChannel` featuring C/C++ syntax highlighting, Go-To-Definition (`F12`), hover cards, and debounced auto-saving with zero CDN dependencies. |
@@ -1736,12 +1752,15 @@ Firebase administrative credentials or changes server rules automatically.
   - Clicking it displays a glassmorphic confirmation modal asking whether to disconnect the board. Confirming with **YES** cleanly releases the serial port and UART lines without thread deadlocks, while retaining the active COM port in the port selector dropdown.
 - **Upload & Reset Parity**:
   - Upon a successful upload, hard reset, or soft reset, the application automatically switches the bottom view to the **Serial Monitor** after a 500ms grace delay.
-  - After upload completion, MCU Flasher requests a silent DTR/RTS reset pulse
-    for the still-selected supported target so the sketch can start and stream
-    boot logs, provided its serial connection remains valid.
-  - Delayed monitor focus and reset callbacks are discarded when the board,
-    port, project or operation changes; the reset worker also rechecks its
-    captured serial connection and generation before touching the device.
+  - The operation worker completes the declared restart after successful writing,
+    checking the captured target and reporting a failed reset separately from
+    written firmware. A successful uploader reset is not repeated by a GUI timer.
+    Post-write restart never performs a 1200-baud bootloader touch.
+  - Normal monitor open/close/reconnect does not issue a reset. POSIX setup clears
+    HUPCL during initial tty configuration and baud changes. OS/USB-driver opening
+    transients require separate physical verification.
+  - Delayed monitor focus callbacks are discarded when the board, port, project
+    or operation changes. They never touch hardware.
   - **Error Visibility Retention**: If an operation fails (`success=False`), the focus strictly remains on the **Build Console** so error traces stay visible and actionable.
 - **Reset on Baud Change Toggle**:
   - Configurable in the Settings Dialog (`reset_on_baud_change`).
@@ -1945,7 +1964,7 @@ verification; board compilation/upload still requires separate target checks.
 ### 9. OpenCode AI Assistant & Pulsating Diff Glow
 - Click the **`🤖 AI Assistant`** button on the toolbar to open the embedded AI side panel.
 - Chat with OpenCode, generate code, or request refactoring.
-- A loading screen covers the assistant until OpenCode's interface has painted, so its startup output never shows. If OpenCode prints plain text and then waits for 8 seconds, that text appears in case it is a question. After 15 seconds, **Show startup output** lets you look behind the cover. In portrait and narrow windows the assistant stacks under the workspace.
+- A loading screen covers the assistant until OpenCode's interface has painted, so its startup output never shows. If OpenCode prints plain text and then waits for 8 seconds, that text appears in case it is a question. After 15 seconds, **Show startup output** lets you look behind the cover. The attached editor and monitors stay in the left column with OpenCode on the right, including compact and portrait windows.
 - **Ubuntu** uses a dedicated OpenCode TUI with one protected session. **Hide** and reveal retain the same running session; closing the assistant container independently is ignored. The separate **Terminal** tab still starts empty and creates Bash sessions only through **New Bash**.
 - On Ubuntu, `/exit` starts a fresh OpenCode PTY without replaying input. Unexpected exits allow at most two automatic restarts in one minute, then show **Retry OpenCode**. Closing the owning workspace ends the assistant.
 - Ubuntu discovers its certified `.ubuntu-tools/opencode` binary first, then installed native `opencode` commands through the desktop account's PATH or standard user installation directories (`~/.opencode/bin`, `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`). Runtime discovery does not download or install the CLI; unavailable installations show a retry message.

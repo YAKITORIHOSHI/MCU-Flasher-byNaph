@@ -202,7 +202,7 @@ class TerminalPanel(QWidget):
         main_layout.setSpacing(0)
 
         # ── Header Bar (Compact VS Code / RECENT-WORKING Parity) ───────────────
-        self._header = QFrame()
+        self._header = QFrame(self)
         header = self._header
         header.setObjectName("terminal-header")
         header.setFixedHeight(28)
@@ -341,11 +341,14 @@ class TerminalPanel(QWidget):
 
         # ── Stacked View (Loader, Embedded Container, Empty Placeholder) ─────
         self._stack = QStackedWidget(self)
+        self._stack.setObjectName("terminal-stack")
+        self._stack.setStyleSheet("QStackedWidget#terminal-stack { background: transparent; border: none; padding: 0; }")
         self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self._stack.setMinimumHeight(36)
 
         # 0. Loading View
-        self._loader_card = QFrame()
+        self._loader_card = QFrame(self._stack)
+        self._loader_card.setObjectName("terminal-loader")
         self._loader_card.setStyleSheet("QFrame { background: #0a0e14; border: none; }")
         lv = QVBoxLayout(self._loader_card)
         lv.setContentsMargins(8, 8, 8, 8)
@@ -372,11 +375,12 @@ class TerminalPanel(QWidget):
         self._stack.addWidget(self._loader_card)
 
         # 1. Native Embedding Container View
-        self._embed_container = _EmbedContainer(self)
+        self._embed_container = _EmbedContainer(self, self._stack)
         self._stack.addWidget(self._embed_container)
 
         # 2. Empty state card
-        self._empty_card = QFrame()
+        self._empty_card = QFrame(self._stack)
+        self._empty_card.setObjectName("terminal-empty")
         self._empty_card.setStyleSheet("QFrame { background: #0a0e14; border: none; }")
         el = QVBoxLayout(self._empty_card)
         el.setContentsMargins(8, 4, 8, 4)
@@ -551,7 +555,9 @@ class TerminalPanel(QWidget):
             except Exception:
                 pass
 
-        hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - Project Terminal")
+        if not self._proc or self._proc.poll() is not None:
+            return
+        hwnd = ctypes.windll.user32.FindWindowW(None, f"MCU Flash GUI - Project Terminal [{self._proc.pid}]")
         if not hwnd or hwnd == 0:
             if self._poll_attempts > 240:  # ~15 seconds timeout
                 self._embed_poll_timer.stop()
@@ -1119,9 +1125,9 @@ class TerminalPanel(QWidget):
             self._btn_clear.setStyleSheet(btn_act_style)
 
         if hasattr(self, "_loader_card") and self._loader_card:
-            self._loader_card.setStyleSheet(f"QFrame {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
+            self._loader_card.setStyleSheet(f"QFrame#terminal-loader {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
         if hasattr(self, "_empty_card") and self._empty_card:
-            self._empty_card.setStyleSheet(f"QFrame {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
+            self._empty_card.setStyleSheet(f"QFrame#terminal-empty {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
         if hasattr(self, "_embed_container") and self._embed_container:
             self._embed_container.setStyleSheet(f"background: {bg_darkest};")
         if hasattr(self, "_btn_open_pwsh") and self._btn_open_pwsh:

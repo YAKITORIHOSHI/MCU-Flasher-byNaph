@@ -25,12 +25,17 @@ failure pre-existing. Name fragments select verifiers by file name.
 ## Choosing checks
 
 - Build, upload or reset changes: `incremental reset_build_cache board_build_cache upload`.
+  Serial lifecycle/restart changes also require `monitor_connection serial_reader serial_send connection_loss`.
+  The owned POSIX PTY checks HUPCL; mocked waveforms do not qualify physical USB-driver transients.
   `verify_incremental_builds.py` drives the real compile worker and PlatformIO.
   Mocked-compiler fixtures cannot see PlatformIO deleting objects.
 - Bootstrap or package changes: `bootstrap offline package`.
 - GUI changes: `runtime responsive controls performance shutdown package_browser monitor_matrix glass
   interface_size taskbar_identity renderer_color_depth`.
 - Assistant changes: `assistant_startup ubuntu_ai_panel embedded_viewports`.
+- Dropdowns: `combo_popups`, plus native `verify_ui_layout.py` at every scale.
+  CMD/UNC changes: `cmd_directory` on native Windows and `terminal` for ConPTY.
+  The SMB fixture owns its share and skips explicitly if the runner cannot create it.
 - Host admission or setup: `ubuntu_release linux_distributions macos_adapter launcher_folder`.
   `direct/verify_ubuntu_first_run.py --execute` is the real cold-start proof on any POSIX
   host, and `other-platforms.yml` runs it on real Fedora, Mint and macOS.

@@ -579,6 +579,7 @@ class RuntimeChecks(unittest.TestCase):
         with patch.object(web_bridge.serial, "Serial", side_effect=[Port(), Port()]):
             api._start_serial_monitor()
             old = api._serial_thread
+            api.current_port = "SIMULATED_NEW"
             api._start_serial_monitor()
             old.join(1)
             self.assertFalse(old.is_alive())

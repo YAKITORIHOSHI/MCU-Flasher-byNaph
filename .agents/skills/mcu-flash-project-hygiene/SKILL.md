@@ -230,6 +230,13 @@ Classify paths before changing attributes or deleting anything:
 
 ## File distribution conventions
 
+When replacing a named public release asset, build and verify the replacement
+from the exact tested commit first. Preserve the requested release/asset name,
+retain the old asset until the staged upload verifies, and verify the published
+size and SHA-256. Do not clean live state to prepare a ZIP. CMD's local supervisor
+storage is owned per terminal session; cleanup never touches project sources or
+pre-existing/reassigned network drives.
+
 For a public Fresh request, run the needed private-runtime integrity verifiers
 before applying cleanup: Ubuntu Fresh removes `.venv-linux`. Review the native
 cleanup plan, apply only its authorized owned targets and retain the process

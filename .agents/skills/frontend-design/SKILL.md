@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: Guidance for intentional visual design, native theme-matched editor surfaces and restrained loading feedback when building or reshaping UI. Helps with typography and choices specific to the application.
+description: Guidance for intentional visual design, native glass dropdowns, steady compact OpenCode columns, theme-matched editor/terminal surfaces and restrained loading feedback. Helps with typography and choices specific to the application.
 license: Complete terms in LICENSE.txt
 ---
 
@@ -76,6 +76,15 @@ Exercise status updates, scrolling, theme changes and closing with queued work;
 none may produce callback warnings or errors.
 
 ## MCU Flasher workspace contract
+
+The attached editor and monitor/tool stack stays in a left column with OpenCode
+on the right, including compact and portrait windows. Do not stack OpenCode below
+the workspace. Project changes never reveal a hidden assistant. Keep terminal
+frame styles scoped so child labels cannot acquire nested rounded cards.
+All application-owned combo dropdowns use the shared cached frosted popup scene,
+rounded clipping and readable native hover/selection. Preserve keyboard selection,
+scrolling, long-label access and monitor-edge bounds at 100–200% scale; include
+Developer Access dropdowns while preserving its surrounding portal identity.
 
 Measure toolbar candidates with their actual font, native margins, spacing and
 mandatory action widths. In a real QMainWindow, require Project and Resources to

@@ -60,7 +60,7 @@ except Exception:
     webview = None
 
 
-WINDOW_TITLE = "MCU Flash GUI - Project Terminal"
+WINDOW_TITLE = f"MCU Flash GUI - Project Terminal [{os.getpid()}]"
 
 
 def _detect_system_theme() -> str:
@@ -955,12 +955,18 @@ class ProjectTerminalServer:
 
         argv = [executable, "-NoLogo", "-ExecutionPolicy", "Bypass", "-NoExit"] if kind == "pwsh" else [executable, "/D"]
         pty = None
+        directory = None
         ready_candidate = None
         try:
             shell_env = _build_terminal_env(self.target_dir)
+            cwd = self.target_dir
+            if kind == "cmd":
+                from main.platforms.windows_terminal import CmdProjectDirectory
+                directory = CmdProjectDirectory(self.target_dir, executable, shell_env)
+                argv, cwd, shell_env = directory.argv, directory.cwd, directory.env
             with session.lock:
                 dimensions = session.dimensions
-            pty = PtyProcess.spawn(argv, cwd=self.target_dir, env=shell_env, dimensions=dimensions)
+            pty = PtyProcess.spawn(argv, cwd=cwd, env=shell_env, dimensions=dimensions)
 
             with session.lock:
                 if not is_current():
@@ -1008,6 +1014,12 @@ class ProjectTerminalServer:
                     pty.close(force=True)
             except Exception:
                 pass
+            if directory:
+                try:
+                    directory.close()
+                except OSError as exc:
+                    self.broadcast({"type": "output", "shell": sid,
+                                    "data": f"\r\n[MCU Flasher] {exc}\r\n"})
             if current:
                 self.broadcast({"type": "status", "shell": sid, "running": False, "ready": False})
 

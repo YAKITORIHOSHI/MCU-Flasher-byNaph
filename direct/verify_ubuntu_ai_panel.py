@@ -194,6 +194,23 @@ class DedicatedAssistantChecks(unittest.TestCase):
         self.assertEqual(panel._session.cwd, str(destination))
         self.assertEqual(panel._session.executable, "/fixture/opencode")
 
+    def test_project_switch_retires_hidden_assistant_without_launching_or_revealing(self):
+        panel = self.started_panel()
+        panel.hide()
+        destination = self.root / "hidden next project"
+        destination.mkdir()
+        count = len(FakePty.instances)
+        panel.reset_for_project(str(destination))
+        APP.processEvents()
+        self.assertTrue(panel.isHidden())
+        self.assertIsNone(panel._session)
+        self.assertFalse(panel._requested)
+        self.assertEqual(len(FakePty.instances), count)
+        panel.show()
+        panel.ensure_started()
+        self.wait_for(lambda: panel._session is not None)
+        self.assertEqual(panel._session.cwd, str(destination))
+
     def test_missing_opencode_shows_wrapped_error_without_starting_bash(self):
         ai.find_opencode_cli.return_value = None
         panel = self.panel()
@@ -239,6 +256,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
 
     def test_project_change_during_discovery_cannot_attach_the_old_project(self):
         panel = self.panel()
+        panel.show()
         entered, release = threading.Event(), threading.Event()
         original = str(self.root)
         destination = self.root / "new project"

@@ -971,6 +971,9 @@ class SerialPanel(QWidget):
         self._display_options.setToolTip("Serial display options, including Wrap lines; also available by right-clicking output")
         self._display_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(self._display_options)
+        self._baud_menu = menu.addMenu("Baud rate")
+        self._baud_menu.aboutToShow.connect(self._populate_baud_menu)
+        self._baud_menu.menuAction().setVisible(False)
         self._display_option_actions = []
         self._wrap_action = menu.addAction("Wrap lines")
         self._wrap_action.setObjectName("serial-wrap-lines")
@@ -1161,6 +1164,14 @@ class SerialPanel(QWidget):
             action.setChecked(checkbox.isChecked())
             action.blockSignals(False)
 
+    def _populate_baud_menu(self):
+        self._baud_menu.clear()
+        for index in range(self.baud_combo.count()):
+            action = self._baud_menu.addAction(self.baud_combo.itemText(index))
+            action.setCheckable(True)
+            action.setChecked(index == self.baud_combo.currentIndex())
+            action.triggered.connect(lambda _checked=False, index=index: self.baud_combo.setCurrentIndex(index))
+
     def _reflow_header(self, width: int) -> None:
         h = self._header_layout
         first = (self._title_lbl, self.btn_reset, self.btn_pause, self.lbl_status, self.btn_copy, self.btn_clear)
@@ -1177,6 +1188,12 @@ class SerialPanel(QWidget):
             h.setContentsMargins(4, 2, 4, 2)
             h.setSpacing(3)
         compact_options = mode in ("micro", "short")
+        short_width = (sum(widget.minimumSizeHint().width() for widget in
+                       (self.btn_reset, self.btn_pause, self.lbl_status, self.baud_container, self._display_options))
+                       + 4 * h.spacing() + h.contentsMargins().left() + h.contentsMargins().right())
+        menu_baud = mode == "short" and width < short_width
+        self.baud_container.setVisible(not menu_baud)
+        self._baud_menu.menuAction().setVisible(menu_baud)
         self.lbl_status.setText("" if compact_options else self._connection_text)
         self.lbl_status.setToolTip(self._connection_text)
         self.lbl_status.setAccessibleName(self._connection_text)

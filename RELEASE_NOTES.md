@@ -13,6 +13,26 @@
 
 ## November 9 Update: Modal Disconnect, Developer Tools Polish, Compiler Hints, Steadier AI
 
+**Passive monitoring and deliberate restart.** Normal serial open, reconnect and
+disconnect request no DTR/RTS pulse. POSIX monitoring clears HUPCL during initial
+tty configuration and baud changes; repeated requests reuse a healthy connection.
+Baud changes run off Qt, and automatic project baud detection never uses the reset
+preference. Upload and recovery workers check their restart results before success.
+Post-write restart no longer performs a 1200-baud bootloader touch, and the GUI no
+longer schedules a second hardware reset. A failed restart identifies written
+firmware separately; no upload is replayed. USB-driver opening transients require
+physical confirmation beyond hardware-free tests.
+
+**Dropdowns, terminals and workspace columns.** Native combo dropdowns paint a
+cached frosted scene with rounded clipping, theme-aware rows and bounded geometry.
+Terminal card styles are scoped so child labels do not acquire duplicate frames.
+CMD starts from a local supervisor and enters local/UNC projects through quoted
+`pushd`, with normal `popd` cleanup and guarded cleanup of its own newly allocated
+drive after forced close. Windows terminal and assistant child titles include
+their PID to prevent attachment across projects. Project switches leave hidden
+assistants idle. The attached editor/monitor column always stays to the left of
+OpenCode, including compact and portrait windows.
+
 **Serial Monitor disconnect confirmation.** Clicking the **CONNECTED** badge in the Serial
 Monitor header now opens a glass confirmation dialog asking whether to disconnect from the
 active board. A red **YES** button cleanly releases the serial port and UART control lines

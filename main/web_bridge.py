@@ -2671,7 +2671,7 @@ class MCUWebBackendAPI:
             try:
                 detected_baud = self._detect_sketch_baud_rate()
                 if detected_baud:
-                    self.set_baud_rate(int(detected_baud))
+                    self.set_baud_rate(int(detected_baud), allow_reset=False)
             except Exception:
                 pass
         threading.Thread(target=_bg_detect_baud, name="MCU_DetectBaud", daemon=True).start()
@@ -3454,7 +3454,7 @@ class MCUWebBackendAPI:
         """Update whether MCU resets via DTR/RTS when baud rate changes."""
         self.reset_on_baud_change = bool(enabled)
 
-    def set_baud_rate(self, baud: int):
+    def set_baud_rate(self, baud: int, *, allow_reset: bool = True):
         """Change serial communication baud rate, capped at MAX_BAUD_RATE (921600)."""
         new_baud = min(int(baud), MAX_BAUD_RATE)
         old_baud = getattr(self, "current_baud", 115200)
@@ -3466,24 +3466,39 @@ class MCUWebBackendAPI:
         self._sync_project_hardware_state()
 
         # If the baud rate did not change and the connection is active, avoid reconnect spam
-        if not baud_changed and self.serial_running and self._serial_conn and self._serial_conn.is_open:
+        if not baud_changed and self.serial_running and self._serial_conn and getattr(self._serial_conn, "is_open", False):
             return
 
         if not self.is_busy:
-            should_reset = baud_changed and getattr(self, "reset_on_baud_change", False)
-
-            # Bump the debounce token so any pending _switch_baud_worker aborts
+            should_reset = allow_reset and baud_changed and getattr(self, "reset_on_baud_change", False)
+            requested_port = self.current_port
             self._serial_reconnect_token += 1
             token = self._serial_reconnect_token
 
             def _switch_baud_worker():
-                # Debounce: wait 200ms then check if a newer request superseded this one
                 time.sleep(0.2)
-                if self._serial_reconnect_token != token:
-                    return  # A more-recent baud/port change will handle reconnect
-                self._start_serial_monitor()
-                if should_reset:
-                    time.sleep(0.15)
+                if self._serial_reconnect_token != token or self.current_port != requested_port:
+                    return
+                reconfigured = False
+                with self._serial_lock:
+                    if self._serial_reconnect_token != token or self.is_busy:
+                        return
+                    conn = self._serial_conn
+                    if self.serial_running and conn and conn.is_open and conn.port == requested_port:
+                        try:
+                            # Driver I/O stays off Qt, without a close/open edge.
+                            conn.baudrate = new_baud
+                            reconfigured = True
+                            self.emit("serial:status", {
+                                "generation": self._serial_generation, "connected": True,
+                                "state": "connected", "port": requested_port, "baud": new_baud,
+                            })
+                        except Exception:
+                            pass  # The normal reader/reconnect path reports open errors.
+                if not reconfigured:
+                    self._start_serial_monitor()
+                if (should_reset and self._serial_reconnect_token == token
+                        and self.current_port == requested_port):
                     self.pulse_dtr_reset()
 
             threading.Thread(
@@ -3499,6 +3514,13 @@ class MCUWebBackendAPI:
 
         with self._serial_lock:
             if _expected_generation is not None and _expected_generation != self._serial_generation:
+                return
+            # Repeated selection/recovery requests must not close a healthy
+            # connection. A reopen is observable by USB drivers even when the
+            # application asks for inactive DTR/RTS.
+            existing = self._serial_conn
+            if (getattr(self, "serial_running", False) and existing and existing.is_open
+                    and existing.port == self.current_port and existing.baudrate == self.current_baud):
                 return
             sender = getattr(self, "_serial_send_queue", None)
             if sender is not None:
@@ -3535,25 +3557,8 @@ class MCUWebBackendAPI:
             port, baud = self.current_port, self.current_baud
 
             try:
-                self._serial_conn = serial.Serial()
-                self._serial_conn.port = port
-                self._serial_conn.baudrate = baud
-                # Be explicit about the ordinary Arduino/USB-UART wire format.
-                # PySerial defaults usually match these values, but drivers can
-                # retain a previous session's flow-control settings on Windows.
-                self._serial_conn.bytesize = serial.EIGHTBITS
-                self._serial_conn.parity = serial.PARITY_NONE
-                self._serial_conn.stopbits = serial.STOPBITS_ONE
-                self._serial_conn.xonxoff = False
-                self._serial_conn.timeout = 0.04
-                self._serial_conn.write_timeout = 1.0
-                self._serial_conn.dsrdtr = False
-                self._serial_conn.rtscts = False
-                self._serial_conn.dtr = False
-                self._serial_conn.rts = False
-                self._serial_conn.open()
-                self._serial_conn.dtr = False
-                self._serial_conn.rts = False
+                from main.core.monitor_connection import open_passive_serial
+                self._serial_conn = open_passive_serial(serial.Serial, port, baud)
                 # Discard bytes captured while a previous baud session was
                 # closing.  Starting the reader from a clean boundary prevents
                 # stale garbled bytes from being presented as current output.
@@ -3877,8 +3882,8 @@ class MCUWebBackendAPI:
             self.serial_running = False
             if self._serial_conn:
                 try:
-                    self._serial_conn.dtr = False
-                    self._serial_conn.rts = False
+                    # Passive open already established the idle line state and
+                    # disabled POSIX hang-up. Disconnect changes no control line.
                     self._serial_conn.close()
                 except Exception:
                     pass
@@ -5870,22 +5875,6 @@ class MCUWebBackendAPI:
                 return True
         return False
 
-    def _release_port_lines(self, port: str, pulse_reset: bool = True) -> None:
-        """Cleanly release serial control lines (DTR/RTS) so MCU returns to normal run mode."""
-        if not port:
-            return
-        try:
-            with serial.Serial(port, baudrate=115200, timeout=0.1) as conn:
-                conn.dtr = False
-                conn.rts = False
-                if pulse_reset:
-                    time.sleep(0.05)
-                    conn.rts = True
-                    time.sleep(0.05)
-                    conn.rts = False
-                    conn.dtr = False
-        except Exception:
-            pass
 
     def _record_fast_upload_diagnostic(self, port: str, command: list[str] | None = None,
                                        return_code: int | None = None, output_lines: list[str] | None = None,
@@ -7649,6 +7638,24 @@ class MCUWebBackendAPI:
             "newline": True,
         })
 
+    def _require_board_restart(self, port, board_name, board_info):
+        """Finish the write operation before success, without using the monitor."""
+        if not port:
+            return  # Nonserial programmers own their run command.
+        if (self.current_board != board_name or self.current_port != port
+                or getattr(self, "_stop_requested", False)
+                or getattr(self, "_operation_connection_loss", "")):
+            self._restart_failed = True
+            raise RuntimeError("Firmware written; restart skipped because the operation target changed or disconnected.")
+        platform = str(board_info.get("platform", "")).lower()
+        if platform not in {"atmelavr", "avr", "espressif32", "esp32", "espressif8266", "esp8266"}:
+            # Native programmers and USB bootloaders own their run command.
+            # A generic DTR/1200-baud touch could put them back in a bootloader.
+            return
+        if not self._trigger_actual_board_reset(port, board_name, board_info):
+            self._restart_failed = True
+            raise RuntimeError("Firmware written, but Reset(DTR/RTS) failed. Use the board's Reset button; no flash was replayed.")
+
     def _trigger_actual_board_reset(self, port: str, board_name: str | None = None, board_info: dict | None = None) -> bool:
         """Open serial port and perform architecture-correct hardware reset pulse."""
         if not port:
@@ -7663,21 +7670,10 @@ class MCUWebBackendAPI:
         is_uno = ("avr" in platform)
         self.emit("console:log", {"text": f"  Rebooting board on {port}...", "tag": "info", "newline": True})
         try:
-            # 1. Native USB-CDC (ESP32-S3 / RP2040 / SAMD) 1200-baud touch reset fallback
-            if not is_uno and (self._is_native_usb_port(port) or platform in ("raspberrypi", "samd")):
-                try:
-                    with serial.Serial(port, baudrate=1200, timeout=0.1) as c1200:
-                        c1200.dtr = False
-                        c1200.rts = True
-                        time.sleep(0.1)
-                        c1200.rts = False
-                        c1200.dtr = False
-                except Exception:
-                    pass
-                time.sleep(0.3)
-
-            # 2. Architecture-correct hardware reset pulse
-            with serial.Serial(port, baudrate=115200, timeout=0.1, dsrdtr=False, rtscts=False) as conn:
+            from main.core.monitor_connection import open_passive_serial
+            # Open idle, then issue exactly the requested reset waveform. Never
+            # use a 1200-baud bootloader touch to run freshly written firmware.
+            with open_passive_serial(serial.Serial, port, 115200, timeout=0.1) as conn:
                 if is_uno:
                     # AVR / Arduino Optiboot reset pulse
                     conn.dtr = False
@@ -7693,7 +7689,7 @@ class MCUWebBackendAPI:
                     conn.dtr = True
                     time.sleep(0.05)
                     conn.dtr = False
-                else:
+                elif platform in {"espressif32", "esp32", "espressif8266", "esp8266"}:
                     # Official esptool hard_reset sequence for ESP32 / ESP8266 auto-reset circuit
                     # DTR=False, RTS=True -> pulls EN low (Reset)
                     # RTS=False -> EN goes high (MCU boots sketch)
@@ -7702,6 +7698,8 @@ class MCUWebBackendAPI:
                     time.sleep(0.15)
                     conn.rts = False
                     conn.dtr = False
+                else:
+                    raise RuntimeError("No serial reset waveform is declared for this target")
                 time.sleep(0.05)
             self.emit("console:log", {"text": "  Reset pulse completed successfully.", "tag": "success", "newline": True})
             return True
@@ -7709,28 +7707,6 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": f"  Could not complete Reset(DTR/RTS): {e}", "tag": "warning", "newline": True})
             return False
 
-    def _release_port_lines(self, port: str, pulse_reset: bool = False):
-        """Cleanly release DTR/RTS serial control lines so MCU is never stuck in reset or bootloop."""
-        if not port:
-            return
-        owner_pid = port_occupied_owner(port)
-        if owner_pid:
-            return
-        try:
-            with serial.Serial(port, baudrate=115200, timeout=0.1, dsrdtr=False, rtscts=False) as conn:
-                conn.dtr = False
-                conn.rts = False
-                if pulse_reset:
-                    # Gentle EN pulse with GPIO0 high to cleanly reboot MCU into its existing sketch
-                    conn.rts = True
-                    time.sleep(0.08)
-                    conn.rts = False
-                    conn.dtr = False
-                    time.sleep(0.05)
-                else:
-                    time.sleep(0.02)
-        except Exception:
-            pass
 
     def _write_esptool_connect_config(self, cache_root: Path, connect_attempts: int = 10,
                                       reset_mode: str = "default-reset") -> str | None:
@@ -7982,6 +7958,8 @@ class MCUWebBackendAPI:
         time.sleep(0.4)
 
         upload_start = time.time()
+        self._restart_failed = False
+        uploader_restarted = False
         binfo = self._resolve_board_info(self.current_board)
         board_name = self.current_board or ""
         platform_str = str(binfo.get("platform", "")).lower()
@@ -8033,12 +8011,12 @@ class MCUWebBackendAPI:
                 fast_ok, fast_error, fast_attempts = self._soft_reset_esptool_write(fast_bins, port)
                 upload_duration = round(time.time() - upload_start, 2)
                 if fast_ok:
+                    rc = 0  # The bytes were written even if the restart fails.
+                    time.sleep(0.5)
+                    self._require_board_restart(port, board_name, binfo)
                     upload_log.finish(True, upload_duration)
                     self.emit("console:progress", {"action": "Completed"})
                     self.emit("notification", {"title": "Upload Succeeded", "message": f"Successfully flashed to {port} ({upload_duration}s)", "type": "success"})
-                    time.sleep(0.5)
-                    self._trigger_actual_board_reset(port, self.current_board, binfo)
-                    rc = 0
                     return
                 elif self._stop_requested:
                     self._finish_upload_connection_status(stopped=True)
@@ -8448,6 +8426,7 @@ class MCUWebBackendAPI:
 
                 # ── Hard resetting ──────────────────────────────────
                 if "hard resetting" in low:
+                    uploader_restarted = True
                     _current_phase[0] = "Resetting"
                     self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "success", "newline": True})
                     continue
@@ -8514,6 +8493,8 @@ class MCUWebBackendAPI:
             upload_duration = round(time.time() - upload_start, 2)
 
             if rc == 0:
+                if not uploader_restarted:
+                    self._require_board_restart(port, board_name, binfo)
                 _flip_to_connected_bar()
                 # Show chip-info box if not shown yet (e.g. AVR boards or unprobed chips)
                 if is_esp and not _chip_info_shown[0]:
@@ -8521,7 +8502,7 @@ class MCUWebBackendAPI:
 
                 self.emit("console:log", {"text": "", "newline": True})
                 self.emit("console:log", {
-                    "text": "  ℹ Reset will continue through the Serial Monitor.",
+                    "text": "  Firmware written; completing the board restart.",
                     "tag": "info",
                     "newline": True
                 })
@@ -8530,9 +8511,6 @@ class MCUWebBackendAPI:
                 self.emit("console:progress", {"action": "Completed"})
                 self.emit("notification", {"title": "Upload Succeeded", "message": f"Successfully flashed to {port} ({upload_duration}s)", "type": "success"})
 
-                time.sleep(0.5)
-                binfo = self._resolve_board_info(self.current_board)
-                self._trigger_actual_board_reset(port, self.current_board, binfo)
             elif self._stop_requested:
                 _pending_pre_box.clear()
                 self._finish_upload_connection_status(stopped=True)
@@ -8617,6 +8595,8 @@ class MCUWebBackendAPI:
         except Exception as e:
             self._finish_upload_connection_status(stopped=bool(self._stop_requested))
             self.emit("console:log", {"text": f"Upload error: {e}", "tag": "error", "newline": True})
+            self.emit("notification", {"title": "Restart Failed" if self._restart_failed else "Upload Failed",
+                      "message": str(e), "type": "error"})
         finally:
             process = getattr(self, "_active_process", None)
             if process is not None and process.poll() is None:
@@ -8635,19 +8615,16 @@ class MCUWebBackendAPI:
             self.is_busy = False
             self.active_operation = None
             self._current_op_phase = None
-            is_success = (rc == 0) if rc is not None else False
+            is_success = rc == 0 and not self._restart_failed
             self.emit("operation:phase", {
                 "phase": "idle",
                 "is_busy": False,
                 "op": "upload",
                 "success": is_success,
+                "firmware_written": rc == 0,
             })
             self.emit("window:closable", {"closable": True})
-            if not is_success and not getattr(self, "_operation_connection_loss", ""):
-                # Release DTR/RTS without resetting the board. A partial flash
-                # must not be rebooted automatically after a transport failure.
-                self._release_port_lines(port, pulse_reset=False)
-            if (is_success or was_monitoring) and not getattr(self, "_operation_connection_loss", ""):
+            if (rc == 0 or was_monitoring) and not getattr(self, "_operation_connection_loss", ""):
                 time.sleep(0.5)
                 self._start_serial_monitor()
 
@@ -8966,7 +8943,7 @@ class MCUWebBackendAPI:
                         self.emit("console:log", {"text": f"  Bootloader burn failed with code {proc.returncode}.", "tag": "error", "newline": True})
                         return
                     time.sleep(0.25)
-                    self._trigger_actual_board_reset(port, board_name, binfo)
+                    self._require_board_restart(port, board_name, binfo)
                     self.emit("console:log", {"text": "  Bootloader burn completed successfully.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Hard Reset Complete", "message": "Bootloader burned successfully.", "type": "success"})
                     hard_reset_success = True
@@ -9033,7 +9010,7 @@ class MCUWebBackendAPI:
                         return
                     self.emit("console:log", {"text": "  ESP8266 full flash erase completed successfully.", "tag": "success", "newline": True})
                     time.sleep(0.75)
-                    self._trigger_actual_board_reset(port, board_name, binfo)
+                    self._require_board_restart(port, board_name, binfo)
                     self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP8266 flash erased successfully.", "type": "success"})
                     hard_reset_success = True
                     return
@@ -9155,7 +9132,7 @@ class MCUWebBackendAPI:
                     restored, error, _attempts = self._soft_reset_esptool_write(recovery_bins, port)
                     if not restored:
                         raise RuntimeError(f"Flash erased, but bootloader recovery failed: {error}")
-                    self._trigger_actual_board_reset(port, board_name, binfo)
+                    self._require_board_restart(port, board_name, binfo)
                     self.emit("console:log", {"text": "  Recovery bootloader and partition metadata restored. Use Upload to install your sketch.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Hard Reset Complete", "message": "ESP32 erased and recovery bootloader restored. Ready for a fresh upload.", "type": "success"})
                     hard_reset_success = True
@@ -9579,7 +9556,7 @@ class MCUWebBackendAPI:
                 if ok:
                     time.sleep(0.5)
                     if port:
-                        self._trigger_actual_board_reset(port, board_name, binfo)
+                        self._require_board_restart(port, board_name, binfo)
                     self.emit("console:log", {"text": "Soft Reset successful! Board restored to clean recovery state.", "tag": "success", "newline": True})
                     self.emit("notification", {"title": "Soft Reset Complete", "message": "Recovery sketch flashed successfully.", "type": "success"})
                 else:

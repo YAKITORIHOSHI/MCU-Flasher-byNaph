@@ -344,6 +344,9 @@ jobs:
           .venv-linux/bin/python -B direct/verify_ubuntu_logging.py
           .venv-linux/bin/python -B direct/verify_ubuntu_maintenance.py
           .venv-linux/bin/python -B direct/verify_serial_reader.py
+          .venv-linux/bin/python -B direct/verify_monitor_connection.py
+          .venv-linux/bin/python -B direct/verify_cmd_directory.py
+          xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_combo_popups.py
           # Clipboard ownership needs a native platform through process exit.
           xvfb-run -a env QT_QPA_PLATFORM=xcb .venv-linux/bin/python -B direct/verify_serial_view.py --no-finalize
           .venv-linux/bin/python -B direct/verify_serial_wrap.py --no-finalize
@@ -464,7 +467,7 @@ jobs:
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_board_build_cache', 'verify_reset_build_cache', 'verify_arduino_library_inputs', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader') {
+          foreach ($check in 'verify_application_guard', 'verify_actions', 'verify_board_build_cache', 'verify_reset_build_cache', 'verify_arduino_library_inputs', 'verify_cursor', 'verify_preferences', 'verify_storage_resources', 'verify_storage_io', 'verify_slow_storage_flow', 'verify_catalog_io', 'verify_upload_workers', 'verify_build_log_routing', 'verify_serial_reader', 'verify_monitor_connection', 'verify_cmd_directory', 'verify_combo_popups') {
             & env/Scripts/python.exe -B "direct/$check.py"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -598,4 +601,5 @@ jobs:
             temp/audit/windows-qualification/*.log
             temp/audit/windows-launcher/*.json
             temp/audit/terminal/protocol-report.json
+            temp/audit/combo-popups/*.png
           if-no-files-found: ignore

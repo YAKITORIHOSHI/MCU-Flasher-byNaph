@@ -45,7 +45,7 @@ class UploadWorkerChecks(unittest.TestCase):
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         names = {"_soft_reset_esptool_write", "_write_esptool_connect_config",
-                 "_fast_upload_retry_allowed", "pulse_dtr_reset", "start_services",
+                 "_fast_upload_retry_allowed", "pulse_dtr_reset", "_require_board_restart", "start_services",
                  "refresh_board_catalog", "update_skip_compile_availability", "stop_operation",
                  "_upload_status_key", "_append_upload_boot_hint",
                  "_finish_upload_connection_status", "_esptool_chip_mismatch",
@@ -184,7 +184,7 @@ class UploadWorkerChecks(unittest.TestCase):
         b._stop_serial_monitor = Mock()
         b._start_serial_monitor = Mock()
         b._release_port_lines = Mock()
-        b._trigger_actual_board_reset = Mock()
+        b._trigger_actual_board_reset = Mock(return_value=True)
         b._unmap_unc_after_build = Mock()
         b._print_info_box = Mock()
         b._probe_chip_info = Mock(return_value=False)
@@ -297,7 +297,7 @@ class UploadWorkerChecks(unittest.TestCase):
         self.assert_terminal_connection("Board mismatch")
         self.assert_upload_caller_completed(success=False)
         self.api._trigger_actual_board_reset.assert_not_called()
-        self.api._release_port_lines.assert_called_once_with("COM99", pulse_reset=False)
+        self.api._release_port_lines.assert_not_called()
 
     def test_platformio_upload_caller_wrong_chip_omits_manual_boot_guide(self):
         self.prepare_upload_caller(fast=False)
@@ -316,7 +316,7 @@ class UploadWorkerChecks(unittest.TestCase):
         self.assert_terminal_connection("Board mismatch")
         self.assert_upload_caller_completed(success=False)
         self.api._trigger_actual_board_reset.assert_not_called()
-        self.api._release_port_lines.assert_called_once_with("COM99", pulse_reset=False)
+        self.api._release_port_lines.assert_not_called()
 
     def test_platformio_success_without_chip_telemetry_retires_polling(self):
         self.prepare_upload_caller(fast=False)
@@ -339,6 +339,26 @@ class UploadWorkerChecks(unittest.TestCase):
         self.api._trigger_actual_board_reset.assert_called_once()
         self.api._start_serial_monitor.assert_called_once()
         self.api._release_port_lines.assert_not_called()
+
+    def test_successful_platformio_reset_is_not_pulsed_again(self):
+        self.prepare_upload_caller(fast=False)
+        self.outputs = [(0, "Hard resetting via RTS pin...\n[SUCCESS]\n")]
+        self.api._upload_worker(can_skip=True)
+        self.assert_upload_caller_completed(success=True)
+        self.api._trigger_actual_board_reset.assert_not_called()
+        self.api._start_serial_monitor.assert_called_once()
+
+    def test_written_firmware_with_failed_restart_is_reported_without_replay(self):
+        self.prepare_upload_caller(fast=False)
+        self.api._trigger_actual_board_reset.return_value = False
+        self.outputs = [(0, "[SUCCESS]\n")]
+        self.api._upload_worker(can_skip=True)
+        self.assert_upload_caller_completed(success=False)
+        phases = [c.args[1] for c in self.api.emit.call_args_list if c.args[0] == "operation:phase"]
+        self.assertTrue(phases[-1]["firmware_written"])
+        self.assertTrue(any("Firmware written, but Reset" in row["text"] for row in self.console_messages()))
+        self.assertEqual(len(self.processes), 1)
+        self.api._trigger_actual_board_reset.assert_called_once()
 
     def test_fast_children_receive_reset_config_and_exact_budget(self):
         self.prime_polling()

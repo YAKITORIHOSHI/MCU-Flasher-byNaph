@@ -273,7 +273,9 @@ class CloudUIChecks(unittest.TestCase):
         self.assertIn("connectivity", [row[0] for row in self.service.calls])
         self.assertEqual(panel._sketches.count(), 1)
         self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
-        self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
+        self.assertFalse(hasattr(panel, "_configuration_card"))
+        self.assertFalse(hasattr(panel, "_configure_toggle"))
+        self.assertFalse(hasattr(panel, "_connection_section"))
         self.assertFalse(panel._pull_btn.isEnabled())
 
     def test_failed_sign_in_clears_previous_private_sketch_list(self):
@@ -288,11 +290,13 @@ class CloudUIChecks(unittest.TestCase):
 
     def test_provider_configuration_has_no_editing_controls(self):
         panel = self.panel()
-        self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
+        self.assertFalse(hasattr(panel, "_configuration_card"))
+        self.assertFalse(hasattr(panel, "_configure_toggle"))
+        self.assertFalse(hasattr(panel, "_connection_section"))
         self.assertFalse(hasattr(panel, "_edit_config_btn"))
         self.assertFalse(hasattr(panel, "_save_configuration"))
         self.assertFalse(hasattr(panel, "_edit_configuration"))
-        self.assertTrue(panel._check_connection_btn)
+        self.assertFalse(hasattr(panel, "_check_connection_btn"))
 
 
     def test_cloud_prompts_fit_changed_work_areas_and_keep_complete_field_lines(self):
@@ -699,7 +703,7 @@ class CloudUIChecks(unittest.TestCase):
         panel = dialog.panel
         self.assertIn("Sensor sketch", panel._linked.text())
         self.assertNotIn("local", panel._linked.text())
-        self.assertIn(panel._connection.text(), ("Cloud service available", "Firebase reachable"))
+        self.assertFalse(hasattr(panel, "_connection"))
         self.assertNotIn("Sign in", panel._status.text())
         self.assertTrue(panel._push_btn.isVisible())
         compact = panel.width() < 480
@@ -799,7 +803,8 @@ class CloudUIChecks(unittest.TestCase):
 
     def test_connection_retry_uses_existing_service_without_configuration_writes(self):
         panel = self.panel()
-        panel._check_connection()
+        self.assertFalse(hasattr(panel, "_check_connection"))
+        self.assertFalse(hasattr(panel, "_check_connection_btn"))
         self.wait(lambda: not panel._busy)
         self.assertIn("connectivity", [call[0] for call in self.service.calls])
         self.assertNotIn("configuration", [call[0] for call in self.service.calls])
@@ -1080,16 +1085,17 @@ class CloudUIChecks(unittest.TestCase):
                 self.assertFalse(panel._sync_actions.isVisible())
                 viewport = panel._scroll.viewport()
                 content = panel._scroll.widget()
-                account_top = panel._account_card.mapTo(content, QPoint()).y()
-                connection_bottom = panel._connection_section.mapTo(content, QPoint()).y() + panel._connection_section.height()
-                self.assertLessEqual(abs((account_top + connection_bottom) / 2 - viewport.height() / 2), 2)
+                account_center = panel._account_card.mapTo(content, QPoint()).y() + panel._account_card.height() / 2
+                self.assertLessEqual(abs(account_center - viewport.height() / 2), 2)
                 self.assertTrue(panel._account_summary.wordWrap())
                 self.assertTrue(dialog.grab().save(str(self.output / f"selector-cloud-{'register' if register else 'sign-in'}.png")))
 
     def test_startup_cloud_login_and_connection_sections_render_all_palettes(self):
         self.service.authenticated = False
         panel = self.panel()
-        panel._configure_toggle.setChecked(False)
+        self.assertFalse(hasattr(panel, "_configure_toggle"))
+        self.assertFalse(hasattr(panel, "_configuration_card"))
+        self.assertFalse(hasattr(panel, "_connection_section"))
         for mode in ("default", "light", "solarized_dark"):
             APP.setStyleSheet(build_stylesheet(mode))
             panel.apply_theme(mode)
@@ -1104,13 +1110,6 @@ class CloudUIChecks(unittest.TestCase):
         viewport_center = panel._scroll.viewport().mapTo(panel, panel._scroll.viewport().rect().center())
         card_center = panel._account_card.mapTo(panel, panel._account_card.rect().center())
         self.assertLessEqual(abs(card_center.x() - viewport_center.x()), 2)
-        panel._configure_toggle.setChecked(True)
-        APP.processEvents()
-        panel._scroll.ensureWidgetVisible(panel._configuration_card)
-        APP.processEvents()
-        self.assertTrue(panel.grab().save(str(self.output / "connection-settings.png")))
-        self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
-        panel._configure_toggle.setChecked(False)
         panel._show_create_account()
         APP.processEvents()
         self.assertTrue(panel._register_fields.isVisible())
@@ -1152,12 +1151,10 @@ class CloudUIChecks(unittest.TestCase):
                 self.assertFalse(panel._save_login.isVisible())
                 self.assertFalse(panel._security.isVisible())
                 self.assertEqual(panel._password.echoMode(), QLineEdit.EchoMode.Password)
-                self.assertFalse(panel._configuration_card.findChildren(QLineEdit))
+                self.assertFalse(hasattr(panel, "_configuration_card"))
+                self.assertFalse(hasattr(panel, "_configure_toggle"))
+                self.assertFalse(hasattr(panel, "_connection_section"))
                 self.assertTrue(panel.grab().save(str(self.output / f"{mode}-{width}-{height}.png")))
-        panel._configure_toggle.setChecked(True)
-        panel._scroll.verticalScrollBar().setValue(panel._scroll.verticalScrollBar().maximum())
-        APP.processEvents()
-        self.assertTrue(panel.grab().save(str(self.output / "connection-settings-compact.png")))
 
 
 if __name__ == "__main__":

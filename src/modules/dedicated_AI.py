@@ -1018,7 +1018,7 @@ def apply_window_icon(window_title):
                         if user32.IsWindowVisible(h):
                             buf = ctypes.create_unicode_buffer(512)
                             user32.GetWindowTextW(h, buf, 512)
-                            if window_title in buf.value or "OpenCode AI" in buf.value:
+                            if buf.value == window_title:
                                 hwnd = h
                                 return False
                         return True
@@ -1128,7 +1128,7 @@ def run_standalone_ai(target_directory=None):
     time.sleep(0.4)
 
     url = f"http://127.0.0.1:{port}"
-    window_title = "MCU Flash GUI - OpenCode AI Assistant"
+    window_title = f"MCU Flash GUI - OpenCode AI Assistant [{os.getpid()}]"
     print(f"[INFO] Launching OpenCode AI Terminal at {url}...")
 
     apply_window_icon(window_title)

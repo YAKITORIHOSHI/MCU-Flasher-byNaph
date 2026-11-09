@@ -375,10 +375,6 @@ class CloudSketchPanel(QWidget):
         self._account_title = self._label("Cloud sketches", self._account_card)
         self._account_title.setObjectName("cloud-heading")
         heading.addWidget(self._account_title, 1)
-        self._connection = self._label("Checking cloud service…", self._account_card)
-        self._connection.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._connection.setAccessibleName("Cloud service status")
-        heading.addWidget(self._connection, 1)
         account.addLayout(heading)
         self._account_summary = self._label("Sign in to keep your sketches in your private cloud account.", self._account_card, elide=True)
         self._account_summary.setWordWrap(True)
@@ -613,34 +609,6 @@ class CloudSketchPanel(QWidget):
         self._name = QLineEdit(self._management)
         self._name.hide()
 
-        self._connection_section = QWidget(content)
-        self._connection_section.setMaximumWidth(700)
-        self._connection_section_layout = QVBoxLayout(self._connection_section)
-        self._connection_section_layout.setContentsMargins(0, 0, 0, 0)
-        self._connection_section_layout.setSpacing(6)
-        self._configure_toggle = QCheckBox("Cloud connection status", self._connection_section)
-        self._connection_section_layout.addWidget(self._configure_toggle)
-        self._configuration_card = GlassCard(self._connection_section, radius=9)
-        self._cards.append(self._configuration_card)
-        configuration = QVBoxLayout(self._configuration_card)
-        configuration.setContentsMargins(10, 8, 10, 8)
-        configuration.setSpacing(6)
-        self._connectivity_status = self._label("Checking cloud service…", self._configuration_card)
-        self._connectivity_status.setObjectName("cloud-secondary")
-        self._connectivity_status.setAccessibleName("Cloud connection result")
-        configuration.addWidget(self._connectivity_status)
-        configuration.addWidget(self._label(
-            "MCU Flasher uses its built-in cloud service.", self._configuration_card))
-        config_actions = QHBoxLayout()
-        self._check_connection_btn = self._button("Check connection", self._check_connection, self._configuration_card)
-        self._check_connection_btn.hide()
-        config_actions.addWidget(self._check_connection_btn)
-        configuration.addLayout(config_actions)
-        self._connection_section_layout.addWidget(self._configuration_card)
-        self._content_layout.addWidget(self._connection_section, 0, Qt.AlignmentFlag.AlignHCenter)
-        self._configuration_card.hide()
-        self._check_connection_btn.hide()
-        self._configure_toggle.toggled.connect(self._configuration_visibility_changed)
         self._content_layout.addStretch(1)
 
         self._sync_actions = QWidget(self)
@@ -881,9 +849,6 @@ class CloudSketchPanel(QWidget):
             self._history_box.setVisible(bool(self._revisions.count()))
             self._scroll.ensureWidgetVisible(self._history_box, 8, 12)
             self._status.setText("Choose a version to restore.")
-        elif kind == "connectivity":
-            self._status.setText("Cloud service is available." if value else
-                                 "Cloud service is unreachable. Please check your internet connection.")
         elif kind == "upload":
             self._status.setText(f"Uploaded {(value or {}).get('name', 'local sketch')}. Open it from the cloud list.")
         elif kind == "rename_sketch":
@@ -1034,19 +999,6 @@ class CloudSketchPanel(QWidget):
         self._management.setVisible(authenticated)
         self._sync_actions.setVisible(authenticated)
         self._signed_in_actions.setVisible(authenticated)
-        self._connection_section.setVisible(not authenticated)
-        self._configure_toggle.setVisible(not authenticated)
-        self._configuration_card.setVisible(not authenticated and self._configure_toggle.isChecked())
-        connection = self._state.get("connectivity")
-        self._connection.setText("Cloud service available" if connection is True else
-                                 "Connection unavailable" if connection is False else
-                                 "Checking connection…")
-        if connection is not None:
-            self._connectivity_status.setText(
-                "Cloud service is available; sign-in and sketch access are checked separately." if connection else
-                "Cloud service is unreachable. Please check your internet connection.")
-        if self._state.get("configuration_error"):
-            self._connectivity_status.setText(self._state["configuration_error"])
         email = self._state.get("account", {}).get("email", "")
         self._account_summary.setWordWrap(not authenticated)
         self._account_summary.setText(email if authenticated else
@@ -1075,8 +1027,6 @@ class CloudSketchPanel(QWidget):
         storage_warning = self._state.get("account", {}).get("storage_warning", "")
         if storage_warning and not self._state.get("secure", (False, ""))[0]:
             self._security.setText("Login encryption: " + storage_warning)
-        if "configured" in state:
-            self._configure_toggle.setChecked(not self._state.get("configured"))
         if "sketches" in state:
             selected = self._selected_sketch().get("id")
             self._sketches.clear()
@@ -1199,13 +1149,11 @@ class CloudSketchPanel(QWidget):
         secure = self._state.get("secure", (False, ""))[0]
         self._save_login.setEnabled(idle and secure)
         self._remember.setEnabled(idle and secure)
-        self._check_connection_btn.setEnabled(idle and not authenticated)
         self._forget_btn.setEnabled(idle and secure)
         self._forget_btn.setText("Forget saved login")
         self._forget_btn.setVisible(secure and self._saved_login_exists and not authenticated
                                     and not self._loading_kind)
         self._forget_btn.setEnabled(idle and secure and self._saved_login_exists)
-        self._configure_toggle.setEnabled(idle and not authenticated)
         self._account_button.setEnabled(idle)
         self._sign_out_action.setEnabled(idle and authenticated)
         self._forget_action.setVisible(secure and self._saved_login_exists)
@@ -1277,12 +1225,6 @@ class CloudSketchPanel(QWidget):
         if accepted and password and not self._closed:
             self._request("delete", "Deleting cloud account…", lambda: self._service.delete_account(password), redactions=(password,))
 
-    def _check_connection(self):
-        self._request("connectivity", "Checking cloud service…",
-                      self._service.check_connection, include_connectivity=True)
-
-    def _configuration_visibility_changed(self, visible):
-        self._configuration_card.setVisible(bool(visible) and not self._state.get("authenticated", False))
 
     def _refresh(self):
         if not self._state.get("authenticated"):
@@ -1532,7 +1474,6 @@ class CloudSketchPanel(QWidget):
         width = min(700, available)
         if width:
             self._account_card.setFixedWidth(width)
-            self._connection_section.setFixedWidth(width)
             self._management.setFixedWidth(width)
             self._sync_actions.setMaximumWidth(width)
             self._status.setMaximumWidth(width)

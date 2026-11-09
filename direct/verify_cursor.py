@@ -95,25 +95,25 @@ class CursorChecks(unittest.TestCase):
     def test_delayed_upload_actions_reject_changed_target_or_new_operation(self):
         from main.qt.main_window import MCUMainWindow
         backend = SimpleNamespace(current_board="fixture", current_port="MOCK",
-                                  sketch_dir_path=ROOT / "temp", is_busy=False)
+                                  sketch_dir_path=ROOT / "temp", is_busy=False, pulse_dtr_reset=Mock())
         fake = SimpleNamespace(_backend=backend, _operation_generation=1,
-                               _active_operation=None, _focus_serial_monitor=Mock(),
-                               _post_upload_dtr_pulse=Mock())
+                               _active_operation=None, _focus_serial_monitor=Mock())
         fake._post_upload_target = lambda: MCUMainWindow._post_upload_target(fake)
         target = fake._post_upload_target()
         MCUMainWindow._finish_upload_ui(fake, 1, target)
         fake._focus_serial_monitor.assert_called_once()
+        backend.pulse_dtr_reset.assert_not_called()
         fake._focus_serial_monitor.reset_mock()
         backend.current_port = "OTHER"
-        MCUMainWindow._finish_upload_ui(fake, 1, target, reset=True)
-        fake._post_upload_dtr_pulse.assert_not_called()
+        MCUMainWindow._finish_upload_ui(fake, 1, target)
+        backend.pulse_dtr_reset.assert_not_called()
         backend.current_port = "MOCK"
         fake._operation_generation = 2
         MCUMainWindow._finish_upload_ui(fake, 1, target)
         fake._focus_serial_monitor.assert_not_called()
         backend.is_busy = True
-        MCUMainWindow._finish_upload_ui(fake, 2, target, reset=True)
-        fake._post_upload_dtr_pulse.assert_not_called()
+        MCUMainWindow._finish_upload_ui(fake, 2, target)
+        backend.pulse_dtr_reset.assert_not_called()
 
     def test_catalog_partial_does_not_touch_controls_and_pending_is_latest_only(self):
         from main.qt.main_window import MCUMainWindow

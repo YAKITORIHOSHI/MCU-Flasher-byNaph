@@ -210,6 +210,12 @@ class AssistantLoader(QFrame):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         height = event.size().height()
+        width = event.size().width()
+        self._trace.setFixedWidth(min(132, max(48, width - 32)))
+        self.reveal_button.setText("Show output" if width < 200 else "Show startup output")
+        self.retry_button.setText("Retry" if width < 200 else "Retry OpenCode")
+        self.reveal_button.setToolTip("Show startup output")
+        self.retry_button.setToolTip("Retry OpenCode")
         # The mark and the trace yield before any words do.
         self._mark.setVisible(height >= 190)
         self._trace.setVisible(self._loading and height >= 110)

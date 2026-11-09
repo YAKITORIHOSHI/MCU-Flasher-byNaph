@@ -166,6 +166,7 @@ class TerminalStartupChecks(unittest.TestCase):
         native = Mock()
         native.IsWindow.return_value = True
         native.GetWindowLong.return_value = 0
+        native.GetClientRect.return_value = (0, 0, 800, 220)
         constants = dict(SW_HIDE=0, SW_SHOW=5, GWL_STYLE=-16, GWL_EXSTYLE=-20)
         style_names = ('WS_CLIPCHILDREN', 'WS_CAPTION', 'WS_THICKFRAME', 'WS_MINIMIZEBOX',
                        'WS_MAXIMIZEBOX', 'WS_SYSMENU', 'WS_POPUP', 'WS_BORDER', 'WS_CHILD',

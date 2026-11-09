@@ -31,7 +31,7 @@ def install_no_focus_lines(app=None) -> bool:
     runs once per widget, so this adds no per-event or per-paint work; the
     stylesheet's universal ``outline: none`` removes the remaining focus rectangles.
     """
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import (QAbstractButton, QAbstractSlider, QApplication, QComboBox,
                                    QProxyStyle, QTabBar, QTabWidget)
 
@@ -44,6 +44,10 @@ def install_no_focus_lines(app=None) -> bool:
             if (isinstance(target, (QAbstractButton, QAbstractSlider, QTabBar, QTabWidget))
                     or (isinstance(target, QComboBox) and not target.isEditable())):
                 target.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            if isinstance(target, QComboBox) and not getattr(target, "_mcu_glass_popup_pending", False):
+                target._mcu_glass_popup_pending = True
+                from main.qt.combo_popup import install_combo_popup
+                QTimer.singleShot(0, target, lambda: install_combo_popup(target))
             return super().polish(target)
 
     # The stylesheet draws nearly every control, and each native style measures and fills
@@ -1179,6 +1183,9 @@ QTabWidget#workspace-tabs QTabBar::tab {{
 }}
 QTabWidget#workspace-tabs[compactPane="true"] QTabBar::tab {{ margin: 3px 3px 2px 0; padding: 2px 9px; }}
 QTabWidget#workspace-tabs QTabBar[iconOnly="true"]::tab {{ padding: 4px 7px; width: 18px; }}
+QTabWidget#workspace-tabs QTabBar[iconOnly="true"][denseIcons="true"]::tab {{
+    width: 16px; padding: 2px 2px; margin: 3px 2px 2px 0;
+}}
 QTabWidget#workspace-tabs QTabBar::tab:selected {{
     background: {chip}; color: {chip_ink}; border: 1px solid {chip};
 }}

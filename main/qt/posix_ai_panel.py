@@ -421,6 +421,8 @@ class PosixAIPanel(QWidget):
             status_text = {"loading": "Wait…", "error": "Retry"}.get(self._state, status)
         else:
             status_text = status
+        if width < 180:
+            title = "AI"
         self._title.setText(title)
         self._status_badge.setText(status_text)
         self._status_badge.setToolTip(status)
@@ -474,7 +476,9 @@ class PosixAIPanel(QWidget):
         self._discard_view()
         self._project_dir = str(path)
         self._requested = False
-        if was_active:
+        # A hidden assistant must not start a new CLI merely because a local
+        # or cloud project opened. Reveal will start the new project lazily.
+        if was_active and not self.isHidden():
             self.ensure_started()
 
     def _stop_ai(self):

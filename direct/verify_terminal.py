@@ -185,6 +185,13 @@ def main() -> int:
         report["burstPeakPendingChars"] = peak_pending[0]
         report["historyLimitChars"] = session.history_limit
         print("Verbose CLI output (>1 MB): bounded pending output and history, renderer consumed all output OK")
+        server.control({"action": "new", "shell": "cmd-audit", "kind": "cmd"})
+        cmd_session = server.sessions["cmd-audit"]
+        wait_until(lambda: cmd_session.ready and cmd_session.pty is not None, "CMD PTY did not start")
+        cmd_session.pty.write("echo MCU_CMD_DIRECTORY:%CD%\r")
+        wait_until(lambda: "MCU_CMD_DIRECTORY:" + str(scratch) in cmd_session.history_text(),
+                   "CMD did not enter the owned project directory")
+        report["cmdProjectDirectory"] = True
         (scratch / "protocol-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         return 0
     finally:

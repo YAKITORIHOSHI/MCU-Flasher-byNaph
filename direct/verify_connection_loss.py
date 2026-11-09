@@ -365,7 +365,11 @@ class ConnectionLossChecks(unittest.TestCase):
         self.assertIn("Waiting for USB bootloader", controls.port_combo.rows[0][1])
         guard.close()
         namespace["on_ports_updated"](controls, [])
-        self.assertEqual(self.api.current_port, "")
+        self.assertIsNone(controls.port_combo.currentData())
+        self.assertFalse(any("Waiting for USB bootloader" in label for _, label in controls.port_combo.rows))
+        # A UI inventory refresh cannot change a flashing worker's target.
+        # The backend loss guard/port monitor owns the actual disconnect.
+        self.assertEqual(self.api.current_port, "COM99")
 
 
 if __name__ == "__main__":

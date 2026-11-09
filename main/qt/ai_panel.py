@@ -57,7 +57,7 @@ class _AIEmbedContainer(QWidget):
         super().__init__(parent)
         self._panel = panel
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-        self.setMinimumWidth(200)
+        self.setMinimumWidth(80)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         from main.qt.responsive import EmbeddedGeometryWatcher
         self._geometry_watcher = EmbeddedGeometryWatcher(self, panel._resize_embedded_ai)
@@ -98,7 +98,7 @@ class AIPanel(QWidget):
         main_layout.setSpacing(0)
 
         # ── Header Bar ────────────────────────────────────────────────────────
-        header = QFrame()
+        header = QFrame(self)
         header.setObjectName("opencode-header")
         header.setFixedHeight(38)
         self._header = header
@@ -159,6 +159,7 @@ class AIPanel(QWidget):
         self._resize_embedded_ai()
 
     def set_responsive_width(self, width: int) -> None:
+        self._status_badge.setVisible(width >= 180)
         if hasattr(self, "_title_lbl") and self._title_lbl:
             if width >= 340:
                 self._title_lbl.set_icon("ai")
@@ -337,7 +338,9 @@ class AIPanel(QWidget):
             self._embed_poll_timer.stop()
             return
 
-        hwnd = ctypes.windll.user32.FindWindowW(None, "MCU Flash GUI - OpenCode AI Assistant")
+        if not self._proc or self._proc.poll() is not None:
+            return
+        hwnd = ctypes.windll.user32.FindWindowW(None, f"MCU Flash GUI - OpenCode AI Assistant [{self._proc.pid}]")
         if not hwnd or hwnd == 0:
             if self._poll_attempts > 240:  # ~15 seconds timeout
                 self._embed_poll_timer.stop()
@@ -495,6 +498,9 @@ class AIPanel(QWidget):
         """
         if not self._is_active:
             return
+        if self.isHidden():
+            self._stop_ai()
+            return  # Only the next explicit reveal may start the new project.
 
         self._embed_poll_timer.stop()
         self._ready_poll_timer.stop()

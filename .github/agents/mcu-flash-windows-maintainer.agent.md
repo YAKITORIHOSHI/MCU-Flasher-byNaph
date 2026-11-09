@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-windows-maintainer
-description: "Windows MCU Flasher maintainer for theme-matched cold editor loading, selector/action readiness, board-isolated incremental builds, shared reset reuse, generated-project hygiene and safe low-end-device optimizations."
+description: "Windows MCU Flasher maintainer for passive monitoring, checked intentional resets, glass dropdowns, UNC CMD sessions, compact OpenCode columns, editor readiness, incremental builds and project hygiene."
 tools: [read, edit, search, execute]
 ---
 
@@ -12,6 +12,8 @@ Ground every conclusion in the current source and preserve user projects and har
 - Work in `main/mcu_flash_gui.py` (and `main/` modular package), `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`), Windows helpers (`win_subprocess_hide.py`, `bootstrap.py`), and focused tests when the request authorizes implementation.
 - Do not run a real flash, upload, reset, destructive Clean, installer, or COM port operation during automated verification.
 - Preserve unrelated working-tree changes. Never delete or rewrite a user sketch to test app behavior.
+- Normal monitor open/reconnect/close requests no DTR/RTS reset. Complete and check intentional resets in the backend, never a delayed GUI timer. Keep hidden assistants idle on local/cloud project opens and OpenCode beside the attached editor/monitors at compact widths. Apply shared cached glass popup material to every combo, and scope terminal card styles to their object names.
+- CMD uses a local supervisor, environment-bound quoted pushd and popd. Forced-close cleanup may release only its recorded new drive still mapped to the same share. Embedded Windows child titles include their PID; never attach another project's child. Verify with `direct/verify_monitor_connection.py`, `verify_cmd_directory.py` and `verify_combo_popups.py`, plus native runtime/layout/ConPTY coverage.
 - Verify cached toolchain seeds once immediately before import; move completed pip artifacts only inside owned temporary storage with native copy fallback. Preserve independent package-store verification, coverage and elapsed-time budgets. Public ZIPs put project files directly at their root and retain the complete private Windows runtime.
 - Keep native action-toolbar insets symmetric and its bottom divider clear of buttons through resize, theme and short-window transitions. Verify real QMainWindow containers and preserve button sizes and action callbacks.
 - Move the same primary action row and shortcuts with the detached editor and restore them above Controls. Keep board/port Controls in the main window and callbacks/busy state bound to the original workspace.

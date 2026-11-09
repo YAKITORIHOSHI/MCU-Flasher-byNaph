@@ -74,7 +74,7 @@ class ResetBuildCacheChecks(unittest.TestCase):
         api._start_reset_worker = lambda _kind, worker: worker()
         api._stop_serial_monitor = Mock()
         api._start_serial_monitor = Mock()
-        api._trigger_actual_board_reset = Mock()
+        api._trigger_actual_board_reset = Mock(return_value=True)
         api._get_jobs = Mock(return_value=2)
         api._is_native_usb_port = Mock(return_value=False)
         api._locate_esp32_boot_app0 = Mock(return_value=self.boot_app)
@@ -203,6 +203,17 @@ class ResetBuildCacheChecks(unittest.TestCase):
         self.assertEqual(self.calls[0][1], self.api._soft_reset_project_dir())
         self.assertFalse(self.calls[0][1].is_relative_to(self.api.sketch_dir_path))
         self.assertTrue((self.calls[0][1] / "platformio.ini").is_file())
+        self.api._trigger_actual_board_reset.assert_called_once()
+
+    def test_soft_reset_restart_failure_is_not_success_and_preserves_build(self):
+        self.api._trigger_actual_board_reset.return_value = False
+        self.api.soft_reset()
+        phases = [c.args[1] for c in self.api.emit.call_args_list if c.args[0] == "operation:phase"]
+        self.assertFalse(phases[-1]["success"])
+        self.assertTrue(compiled_cache.read_receipt(self.api._soft_reset_project_dir()))
+        messages = [c.args[1]["text"] for c in self.api.emit.call_args_list if c.args[0] == "console:log"]
+        self.assertTrue(any("Firmware written, but Reset" in text for text in messages))
+        self.assertFalse(any("Soft Reset successful" in text for text in messages))
 
 
 if __name__ == "__main__":

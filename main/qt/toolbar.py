@@ -1288,7 +1288,9 @@ class MarqueeComboBox(_MarqueeBehavior, QComboBox):
                 item_w = fm.horizontalAdvance(t) + 48
                 if item_w > max_w:
                     max_w = item_w
-            view.setMinimumWidth(max(self.width(), max_w))
+            available = max(80, self.screen().availableGeometry().width() - 16)
+            view.setMaximumWidth(available)
+            view.setMinimumWidth(min(available, max(self.width(), max_w)))
         super().showPopup()
 
     def hidePopup(self) -> None:
@@ -2397,6 +2399,13 @@ class ControlsBar(QWidget):
             speed_width = self._get_adaptive_upload_speed_width()
             actions = (self.btn_detach_editor, self.btn_toggle_editor, self.btn_toggle_monitors,
                        self.btn_settings, self.btn_ai)
+            # Revealing OpenCode changes its label to "Hide AI". Reserve the
+            # larger state so that click cannot change Controls' row count and
+            # move the editor's horizontal divider.
+            ai_width = max(PrimaryToolbar._button_width(self.btn_ai, text)
+                           for text in ("AI Assistant", "Hide AI"))
+            if self.btn_ai.minimumWidth() != ai_width:
+                self.btn_ai.setMinimumWidth(ai_width)
 
             def checkbox_width(widget, text):
                 fm = widget.fontMetrics()
@@ -2404,7 +2413,7 @@ class ControlsBar(QWidget):
 
             checkboxes = (checkbox_width(self.cb_timestamp, "Timestamps")
                           + checkbox_width(self.cb_skip_compile, "Skip Compile") + 3)
-            workspace = checkboxes + sum(button.sizeHint().width() for button in actions) + 18
+            workspace = checkboxes + sum(max(button.minimumWidth(), button.sizeHint().width()) for button in actions) + 18
             caption = self.lbl_spd.fontMetrics().horizontalAdvance("Upload speed")
             # Stacked above its field the caption shares the field's width. On one row it
             # needs its own, so it is the first thing to yield there.

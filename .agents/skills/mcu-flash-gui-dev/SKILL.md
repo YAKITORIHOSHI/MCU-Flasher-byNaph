@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop or troubleshoot MCU Flasher's shipping PySide6 GUI, the PySide6 Library and Board Browser, theme-matched cold editor loading, the assistant loading screen, steady tabs, real glass surfaces, Windows taskbar identity, interface size, action readiness, incremental builds and dedicated reset reuse, responsive layouts, Ghost Sketch saves, safe shutdown, Bootstrap performance, Linux Mint, Fedora and macOS host adapters, native Rust preview, embedded terminals and launchers. Use for app changes and platform verification; firmware work follows sketch skills."
+description: "Develop MCU Flasher's shipping PySide6 GUI, passive serial monitoring and intentional resets, glass dropdowns, compact OpenCode columns, Windows UNC terminals, editor/browser surfaces, incremental builds, Ghost Sketch saves, safe shutdown, Bootstrap and native host adapters. Use for app changes and platform verification; firmware work follows sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -13,6 +13,43 @@ Use this skill when developing, debugging, or extending the **MCU Flash GUI** de
 
 For explicitly requested assistant delegation, use the local
 [`agy-delegation`](../agy-delegation/SKILL.md) workflow for bounded investigation.
+
+## Serial, dropdown and assistant ownership
+
+Normal monitoring uses `main/core/monitor_connection.py`: configure inactive
+DTR/RTS before open, disable POSIX HUPCL in pySerial's configuration hook and
+retain that policy on baud changes. Reuse a healthy identical connection and
+reconfigure baud off Qt. Close does not change control lines. Never reopen a
+port merely to release it after failed flashing. Automatic project baud
+detection passes `allow_reset=False`; explicit baud changes alone may use the
+enabled reset preference. Driver transients at os.open require physical evidence.
+Upload/Soft Reset/Hard Reset finish their declared restart in the backend before
+success. Check reset results, freeze the target and never use a post-write
+1200-baud bootloader touch or a delayed GUI hardware pulse. Native programmers
+retain their own run commands. Verify actual production paths with
+`verify_monitor_connection`, `verify_serial_reader`, `verify_upload_workers` and
+`verify_reset_build_cache`, without physical ports or persistence.
+
+Every native combo popup gets `main/qt/combo_popup.py` after style polish. Paint
+one cached frosted scene in its own clipped popup, with transparent view/viewport,
+readable native selection and bounded work-area geometry. This includes portal
+combos while retaining the portal's surrounding identity. Do not install global
+Python event filters. Verify `verify_combo_popups` and native layout scales.
+Keep terminal loader/empty frame selectors scoped to their object names.
+
+CMD starts through `main/platforms/windows_terminal.py` from local temporary
+storage. Keep paths in environment data, delayed expansion off, quoted pushd,
+a supervising shell and popd on normal exit. Forced close may cancel only its
+recorded new mapping that still points to the same share, without forcing open
+files closed. Never replay terminal input for cleanup. Verify native Windows
+`verify_cmd_directory` and ConPTY. Windows embedded child titles include their
+process PID; never attach a different project's window by a shared title.
+
+Opening local/cloud projects keeps a hidden assistant idle. Discard obsolete
+discovery callbacks, realign a visible assistant, and start a hidden replacement
+only on explicit reveal. The attached editor/monitors remain a left column and
+OpenCode a right column at every supported compact/portrait width. Never switch
+that attached splitter to Vertical. Preserve detached-editor behavior and buffers.
 
 ## Native Rust migration
 
@@ -1222,7 +1259,8 @@ and `opencode.html` paint the same two images, and `PageBackdrop` sends the numb
 whenever the view or anything above it moves. Keep their CSS values equal to `glass_tokens`. Monaco's
 `editor.background` and `editorGutter.background` are `#00000000` and xterm uses `allowTransparency`
 with an alpha-zero `background`. A cover over a page calls `paint_cover`. Native child windows
-(Windows terminal and assistant), popups and selected chips stay solid.
+(Windows terminal and assistant) and selected chips stay solid. Combo popups
+paint a cached frosted scene within their own native window.
 
 The scene can land under any surface, so inks are chosen against each surface's hardest point:
 `glass_worst` in `main/core/theme.py`. `themed_log_colors(mode)` is for reading surfaces and
@@ -1619,7 +1657,7 @@ MCU Flasher by Naph/
 - **Operation Phase Scoping**:
   - `_active_operation == "compile"`: Serial Monitor, Reset DTR/RTS pulse, Baud Rate selection, and Send bar remain **fully functional and active**.
   - `_active_operation in ("upload", "flash", "reset")`: Flashing tools take exclusive ownership of the COM port; Serial Monitor is temporarily paused and auto-resumes once flashing completes.
-- **Post-Upload Silent Auto-Reset & Tab Parity**: Upon successful upload or reset, the application automatically switches to the Serial Monitor tab after a 500ms delay and issues a silent DTR/RTS reset pulse so microcontroller boot logs stream immediately. If an error occurs, focus remains on the Build Console.
+- **Post-upload restart and tab parity**: The operation worker completes its declared restart and checks the result before success. Delayed GUI callbacks only focus Serial Monitor; they never pulse hardware. Errors stay visible in Build Console.
 - **Reset on Baud Change**: Configurable preference (`reset_on_baud_change`) to toggle automatic DTR/RTS reset pulses when switching baud rates.
 
 ### 4. Remote / UNC Network Path Pipeline
@@ -1740,7 +1778,7 @@ MCU Flasher by Naph/
   renderer assertion followed by `os._exit` does not establish normal shutdown.
 - Switching tool or source tabs moves nothing outside that tool. `_on_bottom_tab_changed` must not run the settle pass. `PrimaryToolbar.set_responsive_width` alone owns that bar's insets: a second owner in `main_window.py` once moved the whole workspace 8 pixels on every switch. A state must never change a tab's box, font weight or label position: unselected tabs reserve the selected tab's 2px bottom border, and the active source tab uses a text stroke instead of a heavier font, which widened it by 11 pixels. `_balance_spacers` must invalidate the toolbar layout, because Qt ignores size changes on widgets hidden by native overflow and the actions would stay hidden after narrowing a very wide window. Verify with `direct/verify_monitor_matrix.py`; a final geometry check cannot see these bumps, so it counts Move and Resize events.
 - `direct/verify_monitor_matrix.py` runs each monitor in a fresh process through `QT_QPA_PLATFORM=offscreen:configfile=...` and `QT_SCALE_FACTOR`, so `QScreen` geometry is real rather than a patched `work_area`. Run `--all` for all 45 monitors and `--render-dir temp/...` to look at them. It is not native window-manager evidence.
-- `ui_metrics.workspace_size` and `workspace_minimum_width` hold the sizing policy: fill screens under 1280×800, keep 1440×920 on ordinary desktops, grow to at most 2560×1440, and cap the half-monitor minimum at 960. Under 800 logical pixels high, Controls drops its captions to one row, the inline Upload speed caption yields first, and the action buttons move to Options before the row would ever wrap. The editor takes all spare height; tools start at about 30% of the window, between 170 and 420 pixels. The assistant stacks under the workspace when `_ai_panel_stacks` says side by side would crush both.
+- `ui_metrics.workspace_size` and `workspace_minimum_width` hold the sizing policy: fill screens under 1280×800, keep 1440×920 on ordinary desktops, grow to at most 2560×1440, and cap the half-monitor minimum at 960. Under 800 logical pixels high, Controls drops its captions to one row, the inline Upload speed caption yields first, and the action buttons move to Options before the row would ever wrap. The editor takes all spare height; tools start at about 30% of the window, between 170 and 420 pixels. The attached assistant stays in the right column at every compact/portrait width; `_ai_panel_stacks` remains false.
 - Main windows permit a complete frame of half the current monitor's available width in Qt logical pixels, capped at 960 on wider monitors so they can also tile in thirds. Subtract measured horizontal native borders from the client minimum, using native QWindow frame margins when QWidget frame geometry has not settled. Recalculate after show, monitor and window-state changes without polling or multiplying DPI again. Allow wider resizing and normal maximization, including saved maximized state. Verify decorated windows with `direct/verify_window_alignment.py` at five scales, including native Wayland and xcb separately; client-only or frameless fixtures cannot qualify desktop snapping. Wayland global positioning is compositor-owned, so do not claim exact left/right placement from ignored move calls. Detached editor and explicit dialog sizing keep their own contracts.
 - Verify screen changes and 100/125/150/175/200% scale in fresh processes with `direct/verify_responsive.py`. Couple physical screen dimensions with each scale and taskbar/work-area reservation; convert once to Qt logical pixels. Include half-monitor and full-width windows, portrait and short laptop areas, and chosen content fonts. Assert effective rendered fonts, complete button visibility through ancestors and a complete padded text line. Keep the same hardware-free persistence mocks as the controls verifier. Check full baud digits beside combo padding/arrows and footer visibility. Narrow, short Controls use fewer rows; very short windows retain Timestamps/Skip Compile in Options. Serial Options retains collapsed display/Copy/Clear actions, and all layouts restore when space returns. Reserve Build/Serial output using the document's chosen font, reading margin and scrollbar/frame chrome, and refit after font changes.
 - Short-screen pane budgets use the tallest tool's minimum size hint, never the active tool's, so switching tools cannot move the divider. Hidden pages stay at the pane's size through `_size_hidden_tool_pages`, because `QStackedWidget` sizes only the current one and a stale page reports a stale minimum. Keep log views shrinkable while preserving headers and serial send controls. Check every tool tab in the runtime preview. Mock terminal session creation for layout probes; real PTY checks belong in `direct/verify_terminal.py`.
