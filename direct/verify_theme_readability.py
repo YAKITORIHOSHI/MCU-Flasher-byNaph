@@ -26,9 +26,11 @@ from main.qt.log_colors import contrast_ratio, themed_ansi_colors, themed_log_co
 from main.qt.main_window import MCUMainWindow
 from main.qt.serial_panel import SerialOutputView, SerialPanel
 from main.qt.theme import build_stylesheet, get_palette, install_no_focus_lines
+from main.qt.garbage_collection import install_gui_garbage_collector
 from direct.verify_runtime import PreviewBackend
 
 APP = QApplication.instance() or QApplication([])
+COLLECTOR = install_gui_garbage_collector(APP)
 
 
 def rendered_color(widget, text: str) -> str:

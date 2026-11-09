@@ -217,7 +217,7 @@ async function main() {
     return timer;
   };
   mapped.context.clearTimeout = timer => mappingTimers.delete(timer);
-  mapped.context.document.getElementById = () => ({});
+  mapped.context.document.getElementById = () => ({addEventListener() {}});
   mapped.context.dedupeProjectTabs = () => {};
   mapped.context.MutationObserver = function (callback) {
     mapped.window.__tabMutation = callback;

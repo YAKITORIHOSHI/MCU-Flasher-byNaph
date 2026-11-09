@@ -1007,6 +1007,9 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   refcount cleanup remains immediate. Stop its timer at shutdown; do not collect
   from eventFilter or backend workers. Verify with `direct/verify_gui_lifetime.py`
   and the real runtime renderer fixture.
+  The standalone Library & Board Browser and its native fixtures use the same
+  collector before constructing dropdowns; retire its timer in the entry's
+  finalizer. Readability fixtures must also match the workspace's GC policy.
 - Build and Serial Auto-scroll follow whenever enabled except during a mouse
   hold; resume on release, including outside the view/lost grab. Auto OFF retains
   the reading anchor. Omit only the routine unexpanded ESP32 objcopy recipe and

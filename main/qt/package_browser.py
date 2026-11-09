@@ -1874,6 +1874,7 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
 
 def main() -> int:
     channel = None
+    cycle_collector = None
     if sys.platform != "win32":
         try:
             channel = manager.DownloadManagerChannel(engine.SCRIPT_DIR)
@@ -1889,6 +1890,8 @@ def main() -> int:
         from main.qt.interface_size import prepare_interface_size, settle_interface_size
         interface_factor = prepare_interface_size()
         app = QApplication.instance() or QApplication(sys.argv)
+        from main.qt.garbage_collection import install_gui_garbage_collector
+        cycle_collector = install_gui_garbage_collector(app)
         settle_interface_size(app, interface_factor)
         app.setApplicationName("MCU Flasher Library & Board Browser")
         app.setQuitOnLastWindowClosed(False)
@@ -1903,6 +1906,8 @@ def main() -> int:
         QTimer.singleShot(0, window._initial_load)
         return app.exec()
     finally:
+        if cycle_collector is not None:
+            cycle_collector.stop()
         if channel is not None:
             channel.close()
             manager.close_viewers()

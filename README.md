@@ -18,7 +18,8 @@ baud detection never invokes Reset on Baud Change. Upload and recovery workers
 complete their declared restart before reporting success; GUI timers only focus
 the monitor. USB-driver transients still require physical-device verification.
 All native combo dropdowns now paint cached frosted scenes with rounded rims,
-readable selection and bounded popup geometry. OpenCode stays to the right of
+readable selection and bounded popup geometry. The standalone Library & Board
+Browser uses the workspace's controlled Qt garbage collection policy. OpenCode stays to the right of
 the attached editor/monitor column at compact and portrait sizes, and opening
 projects leaves hidden assistants idle. Windows child windows have per-process
 titles so projects cannot attach one another's terminal or assistant.
@@ -1672,7 +1673,7 @@ Firebase administrative credentials or changes server rules automatically.
 ### 3. Selecting Boards & COM Ports
 - **Manual Hardware Selection**: MCU Flasher opens with no board and no port pre-selected (`""`). You retain full control over target hardware, preventing unintentional flashing or port locking.
 - **Active COM Port Enumeration**: The port dropdown enumerates all active serial ports with hardware descriptions (e.g. `COM9 - USB-SERIAL CH340 (COM9)`). Selecting a port connects instantly.
-- **Zero-Reset ESP32 Protection**: Serial ports open with DTR and RTS explicitly de-asserted (`conn.dtr = False`, `conn.rts = False`). Background `esptool` probing is disabled, ensuring running firmware on an attached ESP32 continues running smoothly without an unintended reset.
+- **Passive monitoring**: Serial ports configure inactive DTR/RTS before opening, and background `esptool` probing stays disabled. POSIX monitoring disables hang-up-on-close. Physical USB-driver opening transients require separate board-and-adapter verification.
 - **Board Catalog Search**: Click **`🔍 Search Boards`** to search the available catalog by board name, chip, architecture, vendor or board ID. Search uses a background worker, a short typing debounce and a virtual list; repeated queries and reopening reuse bounded caches. Architecture filters, recent boards and typo fallback remain available. The footer shows the board count, **Cancel** and **Select Board**. Opening uses the current catalog; **Refresh boards** explicitly checks for newer definitions.
 - **ESP8266 / NodeMCU**: The default bootstrap plan includes `espressif8266` with Arduino. NodeMCU 0.9 (ESP-12 Module) and NodeMCU 1.0 (ESP-12E Module) retain their independent exact PlatformIO definitions. Run bootstrap while online to prepare an older installation; compiling and uploading use the prepared local packages.
 - **Vendor board indexes**: In the separate **Libraries & boards** downloader, open **Board indexes**, enter complete HTTP/HTTPS vendor URLs separated by commas or newlines, and choose **Apply & refresh**. URLs are normalized and deduplicated; malformed index structures and source failures are reported while usable cached catalogs remain available. A failed settings write preserves the previous URL list.

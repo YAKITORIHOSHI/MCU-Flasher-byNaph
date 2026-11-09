@@ -31,6 +31,8 @@ becomes a successful UI completion.
 **Dropdowns, terminals and workspace columns.** Native combo dropdowns paint a
 cached frosted scene with rounded clipping, theme-aware rows and bounded geometry.
 Terminal card styles are scoped so child labels do not acquire duplicate frames.
+The standalone Library & Board Browser now shares the workspace's controlled
+Qt garbage collection policy before creating its controls.
 CMD starts from a local supervisor and enters local/UNC projects through quoted
 `pushd`, with normal `popd` cleanup and guarded cleanup of its own newly allocated
 drive after forced close. Windows terminal and assistant child titles include

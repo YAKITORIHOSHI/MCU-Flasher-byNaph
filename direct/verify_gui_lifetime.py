@@ -109,13 +109,16 @@ class LifetimeChecks(unittest.TestCase):
             collect.assert_called_once()
 
     def test_entry_installs_before_backend_and_retires_at_exit(self):
-        tree = ast.parse((ROOT / "main/mcu_flash_gui.py").read_text(encoding="utf-8-sig"))
-        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-        calls = sorted((node.lineno, ast.unparse(node.func)) for node in ast.walk(main) if isinstance(node, ast.Call))
-        install = next(line for line, name in calls if name == "install_gui_garbage_collector")
-        backend = next(line for line, name in calls if name == "MCUWebBackendAPI")
-        self.assertLess(install, backend)
-        self.assertTrue(any(name == "cycle_collector.stop" for _, name in calls))
+        for path, construction in (("main/mcu_flash_gui.py", "MCUWebBackendAPI"),
+                                   ("main/qt/package_browser.py", "ArduinoBrowser")):
+            with self.subTest(entry=path):
+                tree = ast.parse((ROOT / path).read_text(encoding="utf-8-sig"))
+                main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+                calls = sorted((node.lineno, ast.unparse(node.func)) for node in ast.walk(main) if isinstance(node, ast.Call))
+                install = next(line for line, name in calls if name == "install_gui_garbage_collector")
+                backend = next(line for line, name in calls if name == construction)
+                self.assertLess(install, backend)
+                self.assertTrue(any(name == "cycle_collector.stop" for _, name in calls))
 
     def test_real_webengine_and_modal_churn_with_worker_allocations(self):
         from PySide6.QtWebEngineWidgets import QWebEngineView

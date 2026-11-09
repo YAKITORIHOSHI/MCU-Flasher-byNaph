@@ -22,9 +22,11 @@ from PySide6.QtWidgets import QApplication
 
 from main.core.theme import Theme
 from main.qt import package_browser as pb
+from main.qt.garbage_collection import install_gui_garbage_collector
 from src.modules import arduino_lib_req as engine
 
 APP = QApplication.instance() or QApplication(["verify-package-browser"])
+COLLECTOR = install_gui_garbage_collector(APP)
 pb.install_no_focus_lines(APP)
 
 
