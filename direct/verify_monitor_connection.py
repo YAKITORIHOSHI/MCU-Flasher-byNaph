@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from main.core.monitor_connection import open_passive_serial
+from main.core.monitor_connection import open_passive_serial, idle_after_reset
 
 
 class Port:
@@ -44,6 +44,28 @@ class MonitorConnections(unittest.TestCase):
         self.assertEqual(port.changes, [("dtr", False), ("rts", False)])
         port.close()
         self.assertTrue(all(not value for _, value in port.changes))
+
+    def test_failed_intentional_waveform_still_releases_both_lines(self):
+        conn = Port()
+        with self.assertRaisesRegex(OSError, "waveform failed"):
+            with idle_after_reset(conn):
+                conn.rts = True
+                conn.dtr = True
+                raise OSError("waveform failed")
+        self.assertFalse(conn.dtr)
+        self.assertFalse(conn.rts)
+
+    def test_cleanup_attempts_the_other_line_and_keeps_the_original_error(self):
+        class BrokenLine(Port):
+            def __setattr__(self, name, value):
+                super().__setattr__(name, value)
+                if name == "dtr":
+                    raise OSError("DTR unavailable")
+        conn = BrokenLine()
+        with self.assertRaisesRegex(OSError, "original waveform"):
+            with idle_after_reset(conn):
+                raise OSError("original waveform")
+        self.assertIn(("rts", False), conn.changes)
 
     @unittest.skipUnless(os.name == "posix", "native POSIX tty flags")
     def test_real_owned_pty_disables_hangup_on_open_and_baud_reconfiguration(self):

@@ -817,6 +817,25 @@ class ReaderChecks(unittest.TestCase):
         finally:
             api._stop_serial_monitor()
 
+    def test_delayed_baud_reset_cannot_touch_a_different_board_or_project(self):
+        for change in ("board", "project"):
+            port = FakePort([b"running\n"], close_when_empty=False)
+            api, _ = backend_fixture(port)
+            try:
+                api._start_serial_monitor()
+                self.assertTrue(port.idle_entered.wait(1))
+                api.reset_on_baud_change = True
+                api.set_baud_rate(38400)
+                if change == "board":
+                    api.current_board = "Another board"
+                else:
+                    api.sketch_dir_path = "another project"
+                time.sleep(0.3)
+                api.pulse_dtr_reset.assert_not_called()
+                self.assertEqual(port.baudrate, 115200)
+            finally:
+                api._stop_serial_monitor()
+
 
 
 

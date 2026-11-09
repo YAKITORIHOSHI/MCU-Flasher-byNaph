@@ -2,6 +2,7 @@
 from __future__ import annotations
 from contextlib import ExitStack
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -82,18 +83,19 @@ class CmdDirectories(unittest.TestCase):
     def run_native(self, target):
         executable = str(Path(os.environ["SystemRoot"]) / "System32/cmd.exe")
         item = terminal.CmdProjectDirectory(target, executable, os.environ)
+        probe = self.root / "cwd_probe.py"
+        probe.write_text('import json, os\nprint("MCU_CMD_DIRECTORY:" + json.dumps(os.getcwd(), ensure_ascii=True))\n')
+        item.env.update(MCU_TEST_PYTHON=sys.executable, MCU_TEST_CWD_PROBE=str(probe))
         try:
             result = subprocess.run(item.argv, cwd=item.cwd, env=item.env,
-                input="echo MCU_CMD_DIRECTORY:%CD%\nexit\n", capture_output=True,
+                input='"%MCU_TEST_PYTHON%" -B "%MCU_TEST_CWD_PROBE%"\nexit\n', capture_output=True,
                 text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=0x08000000)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertNotIn("UNC paths are not supported", result.stdout + result.stderr)
-            self.assertIn("MCU_CMD_DIRECTORY:", result.stdout)
-            if not target.startswith("\\\\"):
-                self.assertIn(target, result.stdout)
-            else:
-                self.assertNotIn("Could not open the project", result.stdout)
-                self.assertIn("MCU_SHARE_MARKER", result.stdout)
+            lines = [line.removeprefix("MCU_CMD_DIRECTORY:") for line in result.stdout.splitlines()
+                     if line.startswith("MCU_CMD_DIRECTORY:")]
+            self.assertEqual(len(lines), 1, result.stdout)
+            self.assertEqual(os.path.normcase(json.loads(lines[0])), os.path.normcase(target))
         finally:
             item.close()
 
@@ -115,7 +117,7 @@ class CmdDirectories(unittest.TestCase):
                     input="dir /b MCU_SHARE_MARKER\nexit\n", capture_output=True,
                     text=True, encoding="utf-8", errors="replace", timeout=20, creationflags=0x08000000)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("MCU_SHARE_MARKER", result.stdout)
+                self.assertIn("MCU_SHARE_MARKER", [line.strip() for line in result.stdout.splitlines()])
                 self.assertNotIn("UNC paths are not supported", result.stdout + result.stderr)
                 drive = item.record.read_text().strip()
                 self.assertIsNone(terminal._remote(drive), "Normal CMD exit leaked its pushd drive")

@@ -26,7 +26,11 @@ enabled reset preference. Driver transients at os.open require physical evidence
 Upload/Soft Reset/Hard Reset finish their declared restart in the backend before
 success. Check reset results, freeze the target and never use a post-write
 1200-baud bootloader touch or a delayed GUI hardware pulse. Native programmers
-retain their own run commands. Verify actual production paths with
+retain their own run commands.
+Always attempt both idle control lines after an intentional pulse, including
+waveform failures, while retaining its original diagnostic. Hold the serial
+handoff lock during live reset waveforms and reject obsolete baud-reset targets.
+Verify actual production paths with
 `verify_monitor_connection`, `verify_serial_reader`, `verify_upload_workers` and
 `verify_reset_build_cache`, without physical ports or persistence.
 

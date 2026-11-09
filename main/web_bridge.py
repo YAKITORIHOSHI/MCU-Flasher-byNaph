@@ -3472,16 +3472,23 @@ class MCUWebBackendAPI:
         if not self.is_busy:
             should_reset = allow_reset and baud_changed and getattr(self, "reset_on_baud_change", False)
             requested_port = self.current_port
+            requested_board = self.current_board
+            requested_project = getattr(self, "sketch_dir_path", None)
             self._serial_reconnect_token += 1
             token = self._serial_reconnect_token
 
+            def target_unchanged():
+                return (self._serial_reconnect_token == token and self.current_port == requested_port
+                        and self.current_board == requested_board
+                        and getattr(self, "sketch_dir_path", None) == requested_project)
+
             def _switch_baud_worker():
                 time.sleep(0.2)
-                if self._serial_reconnect_token != token or self.current_port != requested_port:
+                if not target_unchanged():
                     return
                 reconfigured = False
                 with self._serial_lock:
-                    if self._serial_reconnect_token != token or self.is_busy:
+                    if not target_unchanged() or self.is_busy:
                         return
                     conn = self._serial_conn
                     if self.serial_running and conn and conn.is_open and conn.port == requested_port:
@@ -3497,8 +3504,7 @@ class MCUWebBackendAPI:
                             pass  # The normal reader/reconnect path reports open errors.
                 if not reconfigured:
                     self._start_serial_monitor()
-                if (should_reset and self._serial_reconnect_token == token
-                        and self.current_port == requested_port):
+                if should_reset and target_unchanged():
                     self.pulse_dtr_reset()
 
             threading.Thread(
@@ -3963,32 +3969,34 @@ class MCUWebBackendAPI:
                             or not conn.is_open
                             or (self.is_busy and self.active_operation != "compile")):
                         return
-                    if is_uno:
-                        conn.rts = False
-                        conn.dtr = False
-                        time.sleep(0.05)
-                        conn.dtr = True
-                        time.sleep(0.10)
-                        conn.dtr = False
-                        time.sleep(0.05)
-                    elif is_arm:
-                        conn.dtr = False
-                        conn.rts = False
-                        time.sleep(0.05)
-                        conn.dtr = True
-                        time.sleep(0.05)
-                        conn.dtr = False
-                        time.sleep(0.05)
-                    else:
-                        # ESP32 / ESP8266 auto-reset transistor circuit:
-                        # RTS=1, DTR=0 asserts EN (RESET pulled LOW)
-                        # RTS=0, DTR=0 releases EN (MCU boots normally into flash)
-                        conn.dtr = False
-                        conn.rts = True
-                        time.sleep(0.15)
-                        conn.rts = False
-                        conn.dtr = False
-                        time.sleep(0.05)
+                    from main.core.monitor_connection import idle_after_reset
+                    with idle_after_reset(conn):
+                        if is_uno:
+                            conn.rts = False
+                            conn.dtr = False
+                            time.sleep(0.05)
+                            conn.dtr = True
+                            time.sleep(0.10)
+                            conn.dtr = False
+                            time.sleep(0.05)
+                        elif is_arm:
+                            conn.dtr = False
+                            conn.rts = False
+                            time.sleep(0.05)
+                            conn.dtr = True
+                            time.sleep(0.05)
+                            conn.dtr = False
+                            time.sleep(0.05)
+                        else:
+                            # ESP32 / ESP8266 auto-reset transistor circuit:
+                            # RTS=1, DTR=0 asserts EN (RESET pulled LOW)
+                            # RTS=0, DTR=0 releases EN (MCU boots normally into flash)
+                            conn.dtr = False
+                            conn.rts = True
+                            time.sleep(0.15)
+                            conn.rts = False
+                            conn.dtr = False
+                            time.sleep(0.05)
             except Exception:
                 pass  # Port may have been closed or disconnected mid-pulse; ignore silently.
 
@@ -5190,7 +5198,7 @@ class MCUWebBackendAPI:
 
                     self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
-                    self.emit("console:log", {"text": "  💡 ARDUINO COMPILER DIAGNOSTIC HINT: Global F() Macro Error", "tag": "warning", "newline": True})
+                    self.emit("console:log", {"text": "  ARDUINO COMPILER DIAGNOSTIC HINT: Global F() Macro Error", "tag": "warning", "newline": True})
                     self.emit("console:log", {"text": "  ────────────────────────────────────────────────────────────────────────────", "tag": "warning", "newline": True})
                     self.emit("console:log", {"text": f"  Scope Violation Detected{loc_suffix}:", "tag": "error", "newline": True})
                     self.emit("console:log", {"text": "    statement-expressions are not allowed outside functions nor in template-argument lists", "tag": "dim", "newline": True})
@@ -7670,10 +7678,10 @@ class MCUWebBackendAPI:
         is_uno = ("avr" in platform)
         self.emit("console:log", {"text": f"  Rebooting board on {port}...", "tag": "info", "newline": True})
         try:
-            from main.core.monitor_connection import open_passive_serial
+            from main.core.monitor_connection import open_passive_serial, idle_after_reset
             # Open idle, then issue exactly the requested reset waveform. Never
             # use a 1200-baud bootloader touch to run freshly written firmware.
-            with open_passive_serial(serial.Serial, port, 115200, timeout=0.1) as conn:
+            with open_passive_serial(serial.Serial, port, 115200, timeout=0.1) as conn, idle_after_reset(conn):
                 if is_uno:
                     # AVR / Arduino Optiboot reset pulse
                     conn.dtr = False
@@ -8652,10 +8660,21 @@ class MCUWebBackendAPI:
             self.emit("serial:log", {"text": "--- Cannot reset MCU: No COM port selected. ---", "tag": "error", "newline": True})
             return
 
+        requested_board, requested_port = self.current_board, self.current_port
+        requested_project = getattr(self, "sketch_dir_path", None)
+
+        def target_unchanged():
+            return (self.current_board == requested_board and self.current_port == requested_port
+                    and getattr(self, "sketch_dir_path", None) == requested_project
+                    and not (self.is_busy and self.active_operation != "compile"))
+
         def _worker():
             try:
+                if not target_unchanged():
+                    return
+                from main.core.monitor_connection import idle_after_reset
                 self.emit("console:progress", {"action": "Resetting MCU"})
-                binfo = self._resolve_board_info(self.current_board)
+                binfo = self._resolve_board_info(requested_board)
                 platform = str(binfo.get("platform", "")).lower()
                 board_id = str(binfo.get("board", "")).lower()
                 is_uno = ("avr" in platform)
@@ -8663,7 +8682,7 @@ class MCUWebBackendAPI:
                 is_s3_or_cdc = "s3" in board_id or platform in ("raspberrypi", "samd")
 
                 self.emit("serial:log", {
-                    "text": f"--- Triggering pin reset (DTR/RTS) on {self.current_port}... ---",
+                    "text": f"--- Triggering pin reset (DTR/RTS) on {requested_port}... ---",
                     "tag": "info",
                     "newline": True,
                 })
@@ -8674,29 +8693,34 @@ class MCUWebBackendAPI:
 
                 if active_conn:
                     try:
-                        if is_uno:
-                            active_conn.rts = False
-                            active_conn.dtr = False
-                            time.sleep(0.05)
-                            active_conn.dtr = True
-                            time.sleep(0.10)
-                            active_conn.dtr = False
-                            time.sleep(0.05)
-                        elif is_arm:
-                            active_conn.dtr = False
-                            active_conn.rts = False
-                            time.sleep(0.05)
-                            active_conn.dtr = True
-                            time.sleep(0.05)
-                            active_conn.dtr = False
-                            time.sleep(0.05)
-                        else:
-                            active_conn.dtr = False
-                            active_conn.rts = True
-                            time.sleep(0.15)
-                            active_conn.rts = False
-                            active_conn.dtr = False
-                            time.sleep(0.05)
+                        from main.core.monitor_connection import idle_after_reset
+                        with self._serial_lock:
+                            if not target_unchanged() or self._serial_conn is not active_conn or not active_conn.is_open:
+                                return
+                            with idle_after_reset(active_conn):
+                                if is_uno:
+                                    active_conn.rts = False
+                                    active_conn.dtr = False
+                                    time.sleep(0.05)
+                                    active_conn.dtr = True
+                                    time.sleep(0.10)
+                                    active_conn.dtr = False
+                                    time.sleep(0.05)
+                                elif is_arm:
+                                    active_conn.dtr = False
+                                    active_conn.rts = False
+                                    time.sleep(0.05)
+                                    active_conn.dtr = True
+                                    time.sleep(0.05)
+                                    active_conn.dtr = False
+                                    time.sleep(0.05)
+                                else:
+                                    active_conn.dtr = False
+                                    active_conn.rts = True
+                                    time.sleep(0.15)
+                                    active_conn.rts = False
+                                    active_conn.dtr = False
+                                    time.sleep(0.05)
 
                         self.emit("serial:log", {
                             "text": "--- Pin reset (DTR/RTS) completed successfully ---",
@@ -8712,57 +8736,62 @@ class MCUWebBackendAPI:
                         })
 
                 # 2. If not active or in-place failed, briefly connect directly, pulse, and resume monitor
+                if not target_unchanged():
+                    return
                 self._stop_serial_monitor()
                 time.sleep(0.1)
                 try:
-                    if is_s3_or_cdc and not is_uno:
-                        try:
-                            with serial.Serial(port=self.current_port, baudrate=1200, timeout=0.1) as c1200:
-                                c1200.dtr = False
-                                c1200.rts = True
-                                time.sleep(0.1)
-                                c1200.rts = False
-                                c1200.dtr = False
-                        except Exception:
-                            pass
-                        time.sleep(0.2)
+                    with self._serial_lock:
+                        if not target_unchanged():
+                            return
+                        if is_s3_or_cdc and not is_uno:
+                            try:
+                                with serial.Serial(port=requested_port, baudrate=1200, timeout=0.1) as c1200, idle_after_reset(c1200):
+                                    c1200.dtr = False
+                                    c1200.rts = True
+                                    time.sleep(0.1)
+                                    c1200.rts = False
+                                    c1200.dtr = False
+                            except Exception:
+                                pass
+                            time.sleep(0.2)
 
-                    with serial.Serial(
-                        port=self.current_port,
-                        baudrate=self.current_baud or 115200,
-                        timeout=0.1,
-                        dsrdtr=False,
-                        rtscts=False,
-                    ) as conn:
-                        if is_uno:
-                            conn.rts = False
-                            conn.dtr = False
-                            time.sleep(0.05)
-                            conn.dtr = True
-                            time.sleep(0.10)
-                            conn.dtr = False
-                            time.sleep(0.05)
-                        elif is_arm:
-                            conn.dtr = False
-                            conn.rts = False
-                            time.sleep(0.05)
-                            conn.dtr = True
-                            time.sleep(0.05)
-                            conn.dtr = False
-                            time.sleep(0.05)
-                        else:
-                            conn.dtr = False
-                            conn.rts = True
-                            time.sleep(0.15)
-                            conn.rts = False
-                            conn.dtr = False
-                            time.sleep(0.05)
+                        with serial.Serial(
+                            port=requested_port,
+                            baudrate=self.current_baud or 115200,
+                            timeout=0.1,
+                            dsrdtr=False,
+                            rtscts=False,
+                        ) as conn, idle_after_reset(conn):
+                            if is_uno:
+                                conn.rts = False
+                                conn.dtr = False
+                                time.sleep(0.05)
+                                conn.dtr = True
+                                time.sleep(0.10)
+                                conn.dtr = False
+                                time.sleep(0.05)
+                            elif is_arm:
+                                conn.dtr = False
+                                conn.rts = False
+                                time.sleep(0.05)
+                                conn.dtr = True
+                                time.sleep(0.05)
+                                conn.dtr = False
+                                time.sleep(0.05)
+                            else:
+                                conn.dtr = False
+                                conn.rts = True
+                                time.sleep(0.15)
+                                conn.rts = False
+                                conn.dtr = False
+                                time.sleep(0.05)
 
-                    self.emit("serial:log", {
-                        "text": "--- Pin reset (DTR/RTS) completed successfully ---",
-                        "tag": "success",
-                        "newline": True,
-                    })
+                        self.emit("serial:log", {
+                            "text": "--- Pin reset (DTR/RTS) completed successfully ---",
+                            "tag": "success",
+                            "newline": True,
+                        })
                 except Exception as e:
                     self.emit("serial:log", {
                         "text": f"--- Could not complete Reset(DTR/RTS): {e} ---",
@@ -8770,7 +8799,8 @@ class MCUWebBackendAPI:
                         "newline": True,
                     })
                 finally:
-                    self._start_serial_monitor()
+                    if target_unchanged():
+                        self._start_serial_monitor()
             finally:
                 self.emit("console:progress", {"action": "Completed"})
 

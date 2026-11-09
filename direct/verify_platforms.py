@@ -244,6 +244,7 @@ class PlatformChecks(unittest.TestCase):
                 patch("src.modules.offline_bootstrap.ready", return_value=False), \
                 patch("direct.ubuntu.arduino_cli.ensure_arduino_cli", return_value="fixture-arduino"), \
                 patch("direct.ubuntu.opencode_setup.ensure_opencode_cli", return_value="fixture-opencode"), \
+                patch("src.modules.default_board_folders.prepare_default_board_folders") as default_folders, \
                 patch.object(setup.venv, "EnvBuilder") as builder, \
                 patch.object(setup.subprocess, "run") as run, patch.object(setup.subprocess, "call", return_value=0) as launch:
             # A cold Windows platform probe may itself use subprocess.run.
@@ -251,6 +252,7 @@ class PlatformChecks(unittest.TestCase):
             self.assertEqual(setup.main(["--launch", "--project", "/fixture/Sketch With Spaces", "--new-window"]), 0)
         builder.assert_called_once_with(with_pip=True, symlinks=True)
         builder.return_value.create.assert_called_once_with(setup.ENV_DIR)
+        default_folders.assert_called_once()
         self.assertEqual(run.call_count, 3)
         self.assertTrue(run.call_args_list[-1].args[0][2].endswith("offline_bootstrap.py"))
         architecture.assert_called_with()

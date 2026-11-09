@@ -269,10 +269,7 @@ class ActionChecks(unittest.TestCase):
                     if isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Attribute)
                     and node.func.attr == "_release_port_lines"]
-        self.assertEqual(len(releases), 1)
-        reset = next((kw.value for kw in releases[0].keywords if kw.arg == "pulse_reset"), None)
-        self.assertIsInstance(reset, ast.Constant)
-        self.assertFalse(reset.value)
+        self.assertEqual(releases, [], "Failure cleanup must not reopen the serial port")
 
     def test_clean_preserves_sources_settings_and_journal(self):
         cache = self.root / ".mcu_flasher_build_cache"

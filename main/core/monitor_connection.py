@@ -7,7 +7,28 @@ baud changes. This cannot suppress a USB driver's own transient at os.open().
 from __future__ import annotations
 
 from functools import lru_cache
+from contextlib import contextmanager
 import os
+
+
+@contextmanager
+def idle_after_reset(conn):
+    """Always attempt both idle lines, keeping an original waveform failure."""
+    original = None
+    try:
+        yield conn
+    except BaseException as exc:
+        original = exc
+        raise
+    finally:
+        cleanup = None
+        for line in ("dtr", "rts"):
+            try:
+                setattr(conn, line, False)
+            except Exception as exc:
+                cleanup = cleanup or exc
+        if cleanup is not None and original is None:
+            raise cleanup
 
 
 @lru_cache(maxsize=4)
