@@ -6,6 +6,7 @@ on:
       - .github/workflows/repair-native.yml
       - main/qt/combo_popup.py
       - main/qt/toolbar.py
+      - main/qt/main_window.py
       - direct/verify_responsive.py
       - direct/verify_monitor_matrix.py
   workflow_dispatch:
@@ -49,7 +50,8 @@ jobs:
                   (f'labels-{scale}', scale, ['direct/verify_responsive.py', '--only', 'selecting_a_tool_tab']),
                   (f'combined-{scale}', scale, ['direct/verify_responsive.py', '--only', 'control_rows_and_serial_reflow', '--only', 'selecting_a_tool_tab']),
               ]
-          cases += [('compact-matrix', '1', ['direct/verify_monitor_matrix.py', '--only', '1024x768@100', '--only', '1280x720@150']),
+          cases += [('full-responsive-1.25', '1.25', ['direct/verify_responsive.py', '--render-dir', str(output / 'responsive-1.25')]),
+                    ('compact-matrix', '1', ['direct/verify_monitor_matrix.py', '--only', '1024x768@100', '--only', '1280x720@150']),
                     ('terminal', '1', ['direct/verify_terminal.py']),
                     ('performance', '1', ['direct/verify_performance.py'])]
           for name, scale, arguments in cases:

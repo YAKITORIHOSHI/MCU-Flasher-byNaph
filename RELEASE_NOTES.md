@@ -6,12 +6,12 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 9, 2026<br>
+> **Notes Updated:** November 10, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
 
-## November 9 Update: Modal Disconnect, Developer Tools Polish, Compiler Hints, Steadier AI
+## November 10 Repair: Passive Monitoring, Deliberate Resets and Steady Workspace Columns
 
 **Passive monitoring and deliberate restart.** Normal serial open, reconnect and
 disconnect request no DTR/RTS pulse. POSIX monitoring clears HUPCL during initial
@@ -40,7 +40,10 @@ CMD starts from a local supervisor and enters local/UNC projects through quoted
 drive after forced close. Windows terminal and assistant child titles include
 their PID to prevent attachment across projects. Project switches leave hidden
 assistants idle. The attached editor/monitor column always stays to the left of
-OpenCode, including compact and portrait windows.
+OpenCode, including compact and portrait windows. Showing a tool for the first
+time also preserves the column widths on Windows.
+
+## November 9 Update: Modal Disconnect, Developer Tools Polish, Compiler Hints, Steadier AI
 
 **Serial Monitor disconnect confirmation.** Clicking the **CONNECTED** badge in the Serial
 Monitor header now opens a glass confirmation dialog asking whether to disconnect from the

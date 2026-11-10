@@ -47,7 +47,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QSplitter,
     QTabWidget, QStatusBar, QLabel, QProgressBar, QApplication,
-    QMessageBox,
+    QMessageBox, QSizePolicy,
 )
 
 from main.qt.signals import signals as sig_bus
@@ -618,6 +618,10 @@ class MCUMainWindow(QMainWindow):
 
         # ── Main vertical splitter: Editor | Bottom tabs ──────────────────────
         self._v_splitter = QSplitter(Qt.Orientation.Vertical)
+        # Tool size hints change on first reveal. Column sizing belongs to the
+        # user's splitter position and these explicit, compact minima.
+        self._v_splitter.setMinimumWidth(180)
+        self._v_splitter.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self._v_splitter.setHandleWidth(8)
         self._v_splitter.setChildrenCollapsible(False)
         self._v_splitter.setOpaqueResize(g_accel)
@@ -730,6 +734,7 @@ class MCUMainWindow(QMainWindow):
             from main.qt.ai_panel import AIPanel
         self._ai_panel = AIPanel(self._backend, self)
         self._ai_panel.setMinimumWidth(120)
+        self._ai_panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self._ai_panel.setMinimumHeight(_STACKED_ASSISTANT_MINIMUM)
         # No setMaximumWidth — user can freely resize via splitter handle
         self._ai_panel.setVisible(False)

@@ -43,6 +43,9 @@ readable native selection and bounded work-area geometry. This includes portal
 combos while retaining the portal's surrounding identity. Do not install global
 Python event filters. Verify `verify_combo_popups` and native layout scales.
 Keep terminal loader/empty frame selectors scoped to their object names.
+The outer horizontal splitter uses explicit compact column minima and ignores
+intrinsic horizontal hints. Revealing a tool must not redistribute the editor
+and assistant widths, including Windows' first native layout of that tool.
 
 CMD starts through `main/platforms/windows_terminal.py` from local temporary
 storage. Keep paths in environment data, delayed expansion off, quoted pushd,

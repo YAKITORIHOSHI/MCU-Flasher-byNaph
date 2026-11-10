@@ -11,19 +11,20 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
-The November 9 repair makes normal monitoring passive: opening, reconnecting and
+The November 10 repair makes normal monitoring passive: opening, reconnecting and
 disconnecting request no DTR/RTS reset. POSIX monitoring disables hang-up-on-close,
 reuses healthy connections and changes baud without reopening.
 POSIX idle transitions clear DTR/RTS together to avoid an intermediate one-line
 reset state. Automatic project baud detection never invokes Reset on Baud Change.
 Upload and recovery workers complete their declared restart before reporting
-success; GUI timers only focus
-the monitor. USB-driver transients still require physical-device verification.
+success; GUI timers only focus the monitor. USB-driver transients still require
+physical-device verification.
 All native combo dropdowns now paint cached frosted scenes with rounded rims,
 readable selection and bounded popup geometry. The standalone Library & Board
-Browser uses the workspace's controlled Qt garbage collection policy. OpenCode stays to the right of
-the attached editor/monitor column at compact and portrait sizes, and opening
-projects leaves hidden assistants idle. Windows child windows have per-process
+Browser uses the workspace's controlled Qt garbage collection policy. OpenCode
+stays to the right of the attached editor/monitor column at compact and portrait
+sizes. Switching tool tabs keeps both columns steady. Opening projects leaves
+hidden assistants idle. Windows child windows have per-process
 titles so projects cannot attach one another's terminal or assistant.
 CMD opens local and UNC projects through a local supervisor with quoted `pushd`;
 normal exit releases its drive, and forced close cleans only a recorded new
