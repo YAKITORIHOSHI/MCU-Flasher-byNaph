@@ -182,7 +182,24 @@ class RealInputQueueChecks(unittest.TestCase):
                 click(source)
                 info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
                 self.assertTrue(user.GetGUIThreadInfo(0, ctypes.byref(info)))
-                self.assertEqual(info.hwndFocus, source, 'Fixture did not establish foreign keyboard ownership')
+                focus_pid=wintypes.DWORD()
+                user.GetWindowThreadProcessId(info.hwndFocus,ctypes.byref(focus_pid))
+                print('Owned input fixture:',dict(root=root,input=source,focus=info.hwndFocus,
+                      focus_pid=focus_pid.value,child_pid=child.pid,target=destination),flush=True)
+                self.assertTrue(info.hwndFocus==root or user.IsChild(root,info.hwndFocus),
+                                'Fixture did not establish focus inside the owned foreign window')
+                self.assertEqual(focus_pid.value,child.pid)
+                # Qt may keep native focus on its foreign top-level while its
+                # logical line edit has focus. Prove actual key delivery rather
+                # than requiring one particular Qt HWND arrangement.
+                calibration=(Input*2)(Input(type=1,data=Data(keyboard=Keyboard(scan=ord('z'),flags=4))),
+                                      Input(type=1,data=Data(keyboard=Keyboard(scan=ord('z'),flags=6))))
+                self.assertEqual(user.SendInput(2,calibration,ctypes.sizeof(Input)),2)
+                self.assertEqual(json.loads(startup.get(timeout=2)),{'text':'z'})
+                erase=(Input*2)(Input(type=1,data=Data(keyboard=Keyboard(vk=8))),
+                                Input(type=1,data=Data(keyboard=Keyboard(vk=8,flags=2))))
+                self.assertEqual(user.SendInput(2,erase,ctypes.sizeof(Input)),2)
+                self.assertEqual(json.loads(startup.get(timeout=2)),{'text':''})
                 click(destination)
                 window.resize(window.width() + 1, window.height())
                 QTest.qWait(400)

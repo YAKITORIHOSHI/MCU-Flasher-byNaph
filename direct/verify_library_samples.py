@@ -191,6 +191,8 @@ class SampleViewerChecks(unittest.TestCase):
                                          theme_mode=theme, font_size=font)
         self.windows.append(window)
         window.show()
+        window.activateWindow()
+        APP.setActiveWindow(window)
         APP.processEvents()
         return window
 

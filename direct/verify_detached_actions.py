@@ -177,9 +177,9 @@ class DetachedActionChecks(unittest.TestCase):
         self.assertFalse(hasattr(toolbar, "btn_modify"))
         self.assertEqual((self.window.saved, self.window.saved_all, self.window.reloaded,
                           self.window.modified), (1, 1, 1, 0))
-        self.window._active_operation = "compile"
+        self.window._backend.active_operation = "compile"
         self.assertTrue(toolbar._is_busy(), "Workspace busy state must survive toolbar transfer")
-        self.window._active_operation = None
+        self.window._backend.active_operation = None
         with patch("main.qt.project_dialog.ProjectDialog") as dialog:
             toolbar._on_new_project()
             self.assertIs(dialog.call_args.kwargs["parent"], self.window)
@@ -211,7 +211,7 @@ class DetachedActionChecks(unittest.TestCase):
         self.window._editor_panel.save_all_callback()
         backend.compile_sketch.assert_called_once()
         toolbar._do_compile()
-        self.window._active_operation = "compile"
+        self.window._backend.active_operation = "compile"
         self.window._editor_panel.save_all_callback()
         backend.compile_sketch.assert_called_once()
 

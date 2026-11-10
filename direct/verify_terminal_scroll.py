@@ -211,7 +211,13 @@ class TerminalScrollChecks(unittest.TestCase):
                 self.view.resize(width,height)
                 self.wait_for(lambda: abs(self.js('innerWidth') - self.view.contentsRect().width()/zoom) <= 1,
                               'Renderer viewport did not match actual host bounds')
-                QTest.qWait(80)
+                self.wait_for(lambda: self.js(r'''(() => {
+                  const host=auditTerm.element.parentElement.getBoundingClientRect(),
+                    screen=auditTerm.element.querySelector('.xterm-screen').getBoundingClientRect();
+                  return screen.right <= host.right+1 && screen.bottom <= host.bottom+1 &&
+                    host.right-screen.right <= screen.width/auditTerm.cols+16 &&
+                    host.bottom-screen.bottom <= screen.height/auditTerm.rows+16;
+                })()'''), 'The running terminal did not finish fitting its resized native viewport')
                 geometry = json.loads(self.js(r'''JSON.stringify((() => {
                   const term=auditTerm, host=term.element.parentElement,
                     screen=term.element.querySelector('.xterm-screen');
