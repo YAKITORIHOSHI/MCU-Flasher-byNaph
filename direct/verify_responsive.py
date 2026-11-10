@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 import time
+import traceback
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -1265,7 +1266,14 @@ def main():
     for name in QtResponsiveChecks.__dict__:
         if name.startswith('test_') and (not args.only or any(fragment in name for fragment in args.only)):
             suite.addTest(QtResponsiveChecks(name))
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    class ImmediateErrors(unittest.TextTestResult):
+        def addError(self, test, error):
+            # A native cleanup failure must not hide the Python exception that
+            # preceded it until unittest's final summary.
+            traceback.print_exception(*error, file=self.stream)
+            super().addError(test, error)
+
+    result = unittest.TextTestRunner(verbosity=2, resultclass=ImmediateErrors).run(suite)
     print(f'Qt display scale: {APP.primaryScreen().devicePixelRatio():g}')
     return 0 if result.wasSuccessful() else 1
 
