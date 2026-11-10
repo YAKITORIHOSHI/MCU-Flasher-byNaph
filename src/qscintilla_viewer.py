@@ -396,8 +396,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.Find, self, self.open_find)
         QShortcut(QKeySequence("F3"), self, self.find_text)
         QShortcut(QKeySequence("Shift+F3"), self, lambda: self.find_text(False))
-        escape = QShortcut(QKeySequence("Escape"), self.find_bar, self.close_find)
-        escape.setContext(Qt.WidgetWithChildrenShortcut)
+        QShortcut(QKeySequence("Escape"), self, self.close_find)
         QShortcut(QKeySequence("F12"), self, self.definition_at_cursor)
         if files:
             self.tabs.setCurrentIndex(focus_index)
@@ -511,6 +510,14 @@ class MainWindow(QMainWindow):
             menu = QMenu(self)
             self._definition_menu = menu
             menu.setAttribute(Qt.WA_DeleteOnClose)
+            menu.setAttribute(Qt.WA_TranslucentBackground)
+            menu.setWindowFlags(menu.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+            menu.setStyleSheet(f"""
+                QMenu {{ background: {self.colors['margin_bg']}; color: {self.colors['foreground']};
+                    border: 1px solid {self.colors['border']}; border-radius: 8px; padding: 5px; }}
+                QMenu::item {{ padding: 5px 10px; border-radius: 4px; }}
+                QMenu::item:selected {{ background: {self.colors['selection']}; color: {self.colors['selection_foreground']}; }}
+            """)
             for definition in definitions:
                 label = f"{Path(definition.path).name}:{definition.line + 1} — {definition.label}"
                 menu.addAction(label, lambda target=definition: self._jump_to_definition(target))

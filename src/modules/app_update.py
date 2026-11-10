@@ -718,7 +718,8 @@ def _managed_paths(state: dict[str, Any]) -> set[PurePosixPath]:
 def install_staged_source(root: Path | str, source_root: Path | str, source_names: Iterable[str],
                           candidate: SourceCandidate, *, strategy: str,
                           report: Callable[[str], None] | None = None,
-                          state_base: Path | str | None = None) -> InstalledUpdate:
+                          state_base: Path | str | None = None,
+                          cancelled: Callable[[], bool] | None = None) -> InstalledUpdate:
     """Apply a pre-validated staged source tree; public for isolated verification."""
     reason = update_skip_reason(root)
     if reason:
@@ -745,6 +746,8 @@ def install_staged_source(root: Path | str, source_root: Path | str, source_name
     operations: list[_Operation] = []
     changed = 0
     try:
+        if cancelled is not None and cancelled():
+            raise ApplicationUpdateError("Application update skipped before installation.")
         report("Verifying and refreshing application source files…")
         for relative in selected:
             source = _safe_file_below(staged_root, relative)
@@ -984,11 +987,14 @@ def _extract_source_archive(archive: Path, destination: Path) -> tuple[Path, lis
 def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
                         report: Callable[[str], None] | None = None,
                         state_base: Path | str | None = None,
-                        opener: Callable[..., Any] = urlopen) -> InstalledUpdate:
+                        opener: Callable[..., Any] = urlopen,
+                        cancelled: Callable[[], bool] | None = None) -> InstalledUpdate:
     """Stage a clone (or immutable archive fallback), verify it and refresh the app."""
     reason = update_skip_reason(root)
     if reason:
         raise ApplicationUpdateError(f"Automatic application update skipped: {reason}.")
+    if cancelled is not None and cancelled():
+        raise ApplicationUpdateError("Application update skipped before staging.")
     install_root = _installation_root(root)
     report = report or (lambda _message: None)
     state_file = update_state_path(install_root, state_base=state_base)
@@ -1014,7 +1020,7 @@ def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
             source_root, names = _extract_source_archive(archive, stage)
             strategy = "github-source-archive"
         return install_staged_source(install_root, source_root, names, candidate, strategy=strategy,
-                                     report=report, state_base=state_base)
+                                     report=report, state_base=state_base, cancelled=cancelled)
     finally:
         try:
             shutil.rmtree(stage)

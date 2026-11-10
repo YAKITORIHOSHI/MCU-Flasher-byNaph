@@ -903,6 +903,9 @@ class ControlChecks(unittest.TestCase):
         for number in range(180):
             dialog._on_log(f"Drag row {number:03d}", "normal")
         APP.processEvents()
+        # Native fractional-scale text layout can publish a second scroll
+        # range. Let queued layout/follow timers finish before starting a drag.
+        QTest.qWait(50)
         bar = view.verticalScrollBar()
         observations = []
 
@@ -947,6 +950,7 @@ class ControlChecks(unittest.TestCase):
         record("held-after-output")
         QTest.mouseRelease(bar, Qt.MouseButton.LeftButton, pos=point)
         APP.processEvents()
+        QTest.qWait(30)
         self.assertFalse(dialog._follow.scrollbar_held)
         self.assertEqual(bar.value(), bar.maximum())
         self.assertEqual(view.textCursor().selectedText(), "Drag row 090")

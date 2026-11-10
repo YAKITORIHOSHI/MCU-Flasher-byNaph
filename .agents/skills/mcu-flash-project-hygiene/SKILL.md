@@ -236,6 +236,11 @@ retain the old asset until the staged upload verifies, and verify the published
 size and SHA-256. Do not clean live state to prepare a ZIP. CMD's local supervisor
 storage is owned per terminal session; cleanup never touches project sources or
 pre-existing/reassigned network drives.
+Skip Updates covers optional component and source refreshes. A failed preference
+write leaves the current-run checkbox choice effective and reports that the next
+launch may differ. Check the live choice before optional mutations; required
+dependency repair remains independent. Never use a skipped update as grounds for
+Fresh cleanup or replacing an unidentified/newer source copy.
 
 For a public Fresh request, run the needed private-runtime integrity verifiers
 before applying cleanup: Ubuntu Fresh removes `.venv-linux`. Review the native

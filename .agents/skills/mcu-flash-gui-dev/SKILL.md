@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, passive serial monitoring and intentional resets, glass dropdowns, compact OpenCode columns, Windows UNC terminals, editor/browser surfaces, incremental builds, Ghost Sketch saves, safe shutdown, Bootstrap and native host adapters. Use for app changes and platform verification; firmware work follows sketch skills."
+description: "Develop MCU Flasher's shipping PySide6 GUI, passive serial monitoring and intentional resets, rounded glass combos/compact menus, responsive Settings, package-source find/navigation, update choices, compact OpenCode columns, Windows UNC terminals and native host adapters. Use for app changes and platform verification; firmware work follows sketch skills."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -42,6 +42,25 @@ one cached frosted scene in its own clipped popup, with transparent view/viewpor
 readable native selection and bounded work-area geometry. This includes portal
 combos while retaining the portal's surrounding identity. Do not install global
 Python event filters. Verify `verify_combo_popups` and native layout scales.
+Compact Actions/Options share that material and transparent scroll surfaces.
+Use translucent/frameless flags before first native show, antialiased alpha
+corners and no native square shadow or binary mask. Dispatch compact actions
+only after popup deletion, against a surviving owner, retaining live source
+button gating. Settings keeps one owned window-modal `open()`, deletes on close
+and keeps Auto-Save delay editable with `NoButtons`. Verify repeated open/close,
+Qt heartbeat, focus and popup release in `verify_controls` on native Windows.
+Installed-package Ctrl+F focuses its filter. The separate PyQt5/QScintilla sample
+viewer owns Ctrl+F/F3/Shift+F3/Escape and Ctrl+Click/F12. Never mix its toolkit with
+PySide6. Declaration scans use immutable open-file snapshots on one worker,
+discard stale results, preserve read-only source and offer ambiguous locations.
+Do not infer external headers or compiler-level resolution. Verify
+`verify_library_samples` and `verify_package_browser`.
+Update questions remain topmost until dismissed (including native Windows
+fallback). Skip Updates covers optional source/component updates; recheck live
+choice during probes, after prompts and before each optional install. Keep the
+current-run choice after preference-write failure and report next-launch limits.
+Required repair is independent. Verify `verify_bootstrap_updates`,
+`verify_app_update` and native prompt ownership in `verify_controls`.
 Keep terminal loader/empty frame selectors scoped to their object names.
 The outer horizontal splitter uses explicit compact column minima and ignores
 intrinsic horizontal hints. Revealing a tool must not redistribute the editor

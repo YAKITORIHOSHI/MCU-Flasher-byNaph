@@ -11,6 +11,32 @@
 
 ---
 
+## November 10 Follow-up: Compact Menus, Settings, Package Search and Update Choices
+
+- **Compact glass menus:** Actions and Options now share the cached frosted
+  popup material. Native combo lists use per-pixel transparent rounded corners
+  rather than an opaque frame cut by a coarse mask, removing the dark fringe.
+  Native selection, scrolling and work-area fitting remain in place.
+- **Settings responsiveness:** Compact actions finish destroying their native
+  popup before dispatching a dialog action. Settings uses an owned, window-modal
+  `open()` instead of nesting `exec()` in the popup event. Closing it deletes
+  its controls and signal connections; reopening focuses an existing dialog.
+  This removes retained hidden dialogs and the popup/modal handoff risk on
+  Windows. Auto-Save retains its validated editable delay without arrow boxes.
+- **Installed sample search:** Ctrl+F focuses the installed-package filter in
+  the browser and opens a find bar in the read-only sample viewer. Enter/F3 and
+  Shift+F3 find next/previous, including Unicode text and wraparound; Escape
+  returns focus to the source. Ctrl+Click/F12 looks for recognized declarations
+  in already-open sample files on a worker. Multiple destinations offer a chooser;
+  comments, strings and out-of-scope local variables are excluded. This bounded
+  source lookup does not resolve external includes or every C++ language feature.
+- **Updates:** Update questions remain topmost through dismissal, including the
+  Windows native fallback. Skip Updates is rechecked while network probes run,
+  before prompting and before optional installations. It also covers automatic
+  application source updates. A settings-write failure reports that the choice
+  applies only to this run instead of silently reverting it. Required setup
+  repairs remain independent of this optional-update preference.
+
 ## November 10 Repair: Passive Monitoring, Deliberate Resets and Steady Workspace Columns
 
 **Passive monitoring and deliberate restart.** Normal serial open, reconnect and

@@ -118,6 +118,20 @@ class SourceUpdateChecks(unittest.TestCase):
         for relative in app_update.REQUIRED_SOURCE_FILES:
             self.assertEqual((root / relative).read_bytes(), f"{marker}:{relative}\n".encode("utf-8"))
 
+    def test_skip_selected_after_source_staging_leaves_installation_untouched(self):
+        skipped = [False]
+
+        def prepare(*_args):
+            skipped[0] = True
+            return self.source, self._source_names()
+
+        with patch.object(app_update, "_prepare_git_source", side_effect=prepare), \
+                self.assertRaisesRegex(app_update.ApplicationUpdateError, "skipped before installation"):
+            app_update.apply_source_update(self.install, self.candidate, state_base=self.state,
+                                           cancelled=lambda: skipped[0])
+        self._assert_required_marker(self.install, "installed")
+        self.assertFalse((self.install / app_update.BUNDLED_REVISION_FILE).exists())
+
     def test_staged_source_replaces_application_files_and_preserves_local_state(self):
         result = app_update.install_staged_source(
             self.install, self.source, self._source_names(), self.candidate,

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QComboBox, QCheckBox, QSpinBox, QGroupBox, QScrollArea,
     QMessageBox, QBoxLayout,
 )
@@ -38,10 +38,9 @@ from main.core.target_profile import target_problem
 from main.core.board_catalog import SUPPORTED_BOARDS
 from main.core.config import (
     _load_raw_config, _save_raw_config,
-    get_theme_settings, set_theme_mode, _detect_system_theme,
-    get_monitor_font_size, get_hide_build_console_warnings, set_hide_build_console_warnings,
-    get_autosave_settings, set_autosave_settings,
-    get_reset_on_baud_change, set_reset_on_baud_change,
+    get_theme_settings, _detect_system_theme,
+    get_monitor_font_size, get_hide_build_console_warnings,
+    get_autosave_settings, get_reset_on_baud_change,
 )
 from main.core.toolchain import _resource_safe_worker_count, _system_reserved_cpu_count
 from main.qt.signals import signals

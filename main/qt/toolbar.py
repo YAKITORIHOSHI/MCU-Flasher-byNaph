@@ -223,7 +223,7 @@ class CompactDropdownPopup(QWidget):
             self._dispatching = True
             # Let the native popup release its input grab and finish deletion
             # before an action opens a modal dialog (notably Settings on Windows).
-            owner = self.parentWidget()
+            owner = self.parentWidget() or QApplication.instance()
             self.destroyed.connect(lambda: QTimer.singleShot(0, owner, callback))
             self.close()
 

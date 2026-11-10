@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """Isolated update-environment checks; no setup imports, installs or network."""
 import ast
-import json
 from pathlib import Path
 import sys
 import tempfile
 import threading
-import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.modules.bootstrap_updates import installed_version, site_packages
+from src.modules.bootstrap_updates import installed_version
 
 
 def update_functions(**values):
@@ -249,6 +247,31 @@ class UpdateChecks(unittest.TestCase):
         gui.ask_update = ask
         self.assertEqual(namespace["run_update_checks"](), "skipped")
         namespace["_pip_upgrade"].assert_not_called()
+
+    def test_skip_before_queued_prompt_prevents_a_stale_question(self):
+        source = ROOT / "src/modules/bootstrap.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        gui_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "BootstrapGUI")
+        method = next(node for node in gui_class.body if isinstance(node, ast.FunctionDef) and node.name == "ask_update")
+        namespace = dict(threading=threading, sys=sys)
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
+        callbacks, answers = [], []
+        queued = threading.Event()
+
+        def after(_delay, callback):
+            callbacks.append(callback)
+            queued.set()
+
+        gui = SimpleNamespace(_app=object(), _window=Mock(), _closed=False, _skip_updates=False,
+                              root=SimpleNamespace(after=after))
+        worker = threading.Thread(target=lambda: answers.append(namespace["ask_update"](gui, 2)))
+        worker.start()
+        self.assertTrue(queued.wait(1))
+        gui._skip_updates = True
+        worker.join(1)
+        self.assertEqual(answers, [False])
+        callbacks[0]()
+        gui._window.ask_update.assert_not_called()
 
     def test_update_target_display_expands_alias_without_changing_installer_target(self):
         namespace, _reachable, checks, _summary = self.update_stage_fixture(None, online=False)

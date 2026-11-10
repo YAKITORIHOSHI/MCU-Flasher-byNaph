@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-windows-maintainer
-description: "Windows MCU Flasher maintainer for passive monitoring, checked intentional resets, glass dropdowns, UNC CMD sessions, compact OpenCode columns, editor readiness, incremental builds and project hygiene."
+description: "Windows MCU Flasher maintainer for passive monitoring, deliberate resets, rounded glass compact menus, responsive Settings, sample find/navigation, update choices, UNC CMD sessions and steady OpenCode columns."
 tools: [read, edit, search, execute]
 ---
 
@@ -14,6 +14,9 @@ Ground every conclusion in the current source and preserve user projects and har
 - Preserve unrelated working-tree changes. Never delete or rewrite a user sketch to test app behavior.
 - Normal monitor open/reconnect/close requests no DTR/RTS reset. Complete and check intentional resets in the backend, never a delayed GUI timer. Keep hidden assistants idle on local/cloud project opens and OpenCode beside the attached editor/monitors at compact widths. Apply shared cached glass popup material to every combo, and scope terminal card styles to their object names.
 - CMD uses a local supervisor, environment-bound quoted pushd and popd. Forced-close cleanup may release only its recorded new drive still mapped to the same share. Embedded Windows child titles include their PID; never attach another project's child. Verify with `direct/verify_monitor_connection.py`, `verify_cmd_directory.py` and `verify_combo_popups.py`, plus native runtime/layout/ConPTY coverage.
+- Compact Actions/Options share cached glass and antialiased alpha corners, without opaque native shadows or binary masks. Destroy the popup before dispatching dialog actions. Settings owns one window-modal `open()`, deletes on close and exposes an editable autosave delay without spin arrows. Verify native heartbeat, typing, modal ownership and repeated closing in `verify_controls` at every scale.
+- Keep the PyQt5/QScintilla sample viewer separate from PySide6. Ctrl+F/F3/Shift+F3/Escape finds source without edits; Ctrl+Click/F12 scans immutable open files off Qt, discards stale results and offers ambiguous declarations. No external-include or compiler-resolution claims. Verify `verify_library_samples`.
+- Update questions stay topmost until dismissal. Recheck Skip Updates during pending checks and before prompts/optional installs, including source updates. Preference-write failures keep the current-run choice and report next-launch limits. Required repairs remain enabled. Verify `verify_bootstrap_updates`, `verify_app_update` and native prompt ownership in `verify_controls`.
 - Verify cached toolchain seeds once immediately before import; move completed pip artifacts only inside owned temporary storage with native copy fallback. Preserve independent package-store verification, coverage and elapsed-time budgets. Public ZIPs put project files directly at their root and retain the complete private Windows runtime.
 - Keep native action-toolbar insets symmetric and its bottom divider clear of buttons through resize, theme and short-window transitions. Verify real QMainWindow containers and preserve button sizes and action callbacks.
 - Move the same primary action row and shortcuts with the detached editor and restore them above Controls. Keep board/port Controls in the main window and callbacks/busy state bound to the original workspace.

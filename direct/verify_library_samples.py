@@ -59,9 +59,13 @@ class SampleViewerChecks(unittest.TestCase):
         self.assertGreater(editor.getSelection()[0], first[0])
         QTest.keyClick(window.find_entry, Qt.Key_F3, Qt.ShiftModifier)
         self.assertEqual(editor.getSelection(), first)
+        editor.setCursorPosition(editor.lines()-1, 0)
+        QTest.keyClick(window.find_entry, Qt.Key_F3)
+        self.assertEqual(editor.getSelection(), first, "Search did not wrap")
         window.find_entry.setText("ABSENT SYMBOL")
         self.assertEqual(window.find_status.text(), "No matches")
-        QTest.keyClick(window.find_entry, Qt.Key_Escape)
+        editor.setFocus()
+        QTest.keyClick(editor, Qt.Key_Escape)
         self.assertFalse(window.find_bar.isVisible())
         self.assertTrue(editor.hasFocus())
         self.assertEqual(editor.text(), self.texts[0])
@@ -99,6 +103,27 @@ class SampleViewerChecks(unittest.TestCase):
         self.assertEqual(identifier_at(text, text.index('fake')), '')
         choices = find_definitions((("a.ino", 'void blink() {}'), ("b.cpp", 'void blink(int n) {}')), 'blink', 'a.ino', 0)
         self.assertEqual(len(choices), 2)
+
+    def test_ambiguous_f12_offers_locations_and_navigates_only_after_choice(self):
+        self.files[0].write_text('void blink() {}\nvoid run() { blink(); }\n', encoding="utf-8")
+        self.files[1].write_text('void blink(int n) {}\n', encoding="utf-8")
+        window = self.window()
+        editor = window.tabs.currentWidget()
+        editor.setCursorPosition(1, 15)
+        editor.setFocus()
+        QTest.keyClick(editor, Qt.Key_F12)
+        deadline = time.monotonic() + 3
+        while window._definition_menu is None and time.monotonic() < deadline:
+            QTest.qWait(10)
+        menu = window._definition_menu
+        self.assertIsNotNone(menu)
+        self.assertEqual(len(menu.actions()), 2)
+        self.assertEqual(window.tabs.currentIndex(), 0)
+        menu.actions()[1].trigger()
+        menu.close()
+        self.assertEqual(window.tabs.currentIndex(), 1)
+        self.assertEqual(window.tabs.currentWidget().selectedText(), "blink")
+        self.assertTrue(window.tabs.currentWidget().isReadOnly())
 
     def test_sample_process_never_imports_workspace_qt_toolkit(self):
         self.assertFalse(any(name == "PySide6" or name.startswith("PySide6.")

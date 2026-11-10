@@ -1678,9 +1678,14 @@ class BootstrapGUI:
                 answer[0] = bool(accepted)
                 completed.set()
 
-            self.root.after(0, lambda: self._window.ask_update(count, finish))
+            def show_prompt():
+                if not completed.is_set():
+                    self._window.ask_update(count, finish)
+
+            self.root.after(0, show_prompt)
             while not completed.wait(0.1):
                 if self._closed or self._skip_updates:
+                    completed.set()
                     return False
             return answer[0]
         if sys.platform == "win32":
@@ -9937,7 +9942,9 @@ def _install_application_update(candidate) -> bool:
         post(lambda: gui.log_status("Checking the GitHub source revision before changing this installation…"))
         try:
             try:
-                installed = app_update.apply_source_update(SCRIPT_DIR, candidate, report=report)
+                installed = app_update.apply_source_update(
+                    SCRIPT_DIR, candidate, report=report,
+                    cancelled=lambda: gui._closed or bool(_update_check_skip_reason(gui)))
                 outcome["installed"] = True
                 outcome["result"] = installed
                 _record_bootstrap_log(

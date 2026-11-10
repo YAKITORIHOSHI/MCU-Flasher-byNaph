@@ -1,7 +1,7 @@
 """Window-owned, cached frosted material for every native combo popup."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, Qt, QTimer
 from PySide6.QtGui import QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QStyledItemDelegate, QWidget
 
@@ -73,8 +73,9 @@ class _PopupMaterial(QObject):
         self.view.setAutoFillBackground(False)
         self.view.viewport().setAutoFillBackground(False)
         self.popup.installEventFilter(self)
+        self._style_rows()
 
-    def _refresh(self):
+    def _style_rows(self):
         mode = _theme_name()
         if self._mode != mode:
             self._mode = mode
@@ -91,6 +92,11 @@ class _PopupMaterial(QObject):
                 QAbstractItemView::item:selected {{ background: {glass['chip']}; color: {glass['chip_ink']}; }}
                 QAbstractItemView::item:disabled {{ color: {glass['disabled_ink']}; }}
             """)
+
+    def _refresh(self):
+        self._style_rows()
+        if not self.popup.isVisible():
+            return
         if self._fitting:
             return
         self._fitting = True
@@ -102,6 +108,14 @@ class _PopupMaterial(QObject):
             rect = self.popup.geometry()
             rect.setWidth(min(rect.width(), area.width()))
             rect.setHeight(min(rect.height(), area.height()))
+            # Native Windows may reposition a translucent private container
+            # over the selected row at fractional scales. Anchor the list to
+            # its field explicitly, in the same Qt logical coordinate space.
+            field = self.combo.mapToGlobal(QPoint(0, 0))
+            below = field.y() + self.combo.height()
+            above = field.y() - rect.height()
+            rect.moveLeft(field.x())
+            rect.moveTop(below if below + rect.height() <= area.bottom() + 1 else above)
             rect.moveLeft(max(area.left(), min(rect.left(), area.right() - rect.width() + 1)))
             rect.moveTop(max(area.top(), min(rect.top(), area.bottom() - rect.height() + 1)))
             if rect != self.popup.geometry():

@@ -11,6 +11,21 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
+The November 10 follow-up gives compact **Actions** and **Options** the same
+cached glass as combo lists, with transparent, smoothly rounded popup corners.
+Settings opens through the main Qt event loop and releases its dialog on close;
+repeated openings no longer retain hidden settings pages. Auto-Save's delay is
+typed directly without spin arrows. In Resources → Installed Packages, Ctrl+F
+focuses the package filter; in an opened sample, it finds source text, with
+F3/Shift+F3 for next/previous and Escape to return to reading. Ctrl+Click or F12
+offers recognized function, variable, type and macro declarations in the open
+sample files. Ambiguous names offer a location chooser; external headers and
+unsupported C++ constructs require the project editor's full context.
+Update questions stay on top until dismissed. **Skip Updates** covers optional
+component and application source updates, takes effect during pending checks,
+and remains effective for the current run if its preference cannot be saved.
+Required dependency repair still runs.
+
 The November 10 repair makes normal monitoring passive: opening, reconnecting and
 disconnecting request no DTR/RTS reset. POSIX monitoring disables hang-up-on-close,
 reuses healthy connections and changes baud without reopening.

@@ -8,6 +8,7 @@ on:
       - main/qt/toolbar.py
       - main/qt/main_window.py
       - main/qt/settings_dialog.py
+      - main/qt/package_browser.py
       - src/qscintilla_viewer.py
       - src/modules/sample_symbols.py
       - src/modules/bootstrap.py
@@ -85,6 +86,30 @@ jobs:
                   print(log.read_text(encoding='utf-8', errors='replace')[-6000:], flush=True)
           (output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
           raise SystemExit(any(row['code'] for row in results))
+          '@ | & env/Scripts/python.exe -B -
+          exit $LASTEXITCODE
+      - name: Compare fractional-scale scroll behavior with previous release
+        if: always()
+        shell: pwsh
+        run: |
+          @'
+          import json, os, pathlib, subprocess
+          from direct.run_verifiers import export_baseline, run_one
+          output = pathlib.Path('temp/audit/native-repair')
+          output.mkdir(parents=True, exist_ok=True)
+          reference = '3ee262375e619ab4f26dc255bf5c8cc6f42b9cc4'
+          subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', reference], check=True)
+          source = output / 'baseline-source'
+          source.mkdir(exist_ok=True)
+          export_baseline(reference, source)
+          results = []
+          for scale in ('1.75', '2'):
+              os.environ['QT_SCALE_FACTOR'] = scale
+              result = run_one('verify_controls', source.resolve(), 240, output / ('baseline-controls-' + scale + '.log'), True)
+              result['failures'] = sorted(result['failures'])
+              results.append(dict(scale=scale, **result))
+          (output / 'baseline-controls.json').write_text(json.dumps(results, indent=2) + '\n')
+          print(json.dumps(results, indent=2))
           '@ | & env/Scripts/python.exe -B -
           exit $LASTEXITCODE
       - name: Native repair evidence

@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: Guidance for intentional visual design, native glass dropdowns, steady compact OpenCode columns, theme-matched editor/terminal surfaces and restrained loading feedback. Helps with typography and choices specific to the application.
+description: Guidance for intentional visual design, rounded alpha glass combos and compact menus, steady OpenCode columns, theme-matched editor/terminal surfaces and restrained loading feedback. Helps with typography and choices specific to the application.
 license: Complete terms in LICENSE.txt
 ---
 
@@ -85,6 +85,15 @@ All application-owned combo dropdowns use the shared cached frosted popup scene,
 rounded clipping and readable native hover/selection. Preserve keyboard selection,
 scrolling, long-label access and monitor-edge bounds at 100–200% scale; include
 Developer Access dropdowns while preserving its surrounding portal identity.
+Compact Actions and Options use that same material with transparent body and
+scroll viewport. Set translucent/frameless native flags before first show and
+paint antialiased alpha corners; do not cut an opaque rectangle with a binary
+mask or retain a native square shadow. Verify corner pixels as well as native
+captures. Finish popup deletion before dispatching dialog actions. Settings
+uses one owned window-modal `open()` and deletes on close; never retain hidden
+settings pages or enter `exec()` from a popup click. Auto-Save delay has no spin
+buttons. Sample-viewer find controls must remain readable in all themes and
+return focus without changing read-only source or its selected tab.
 
 Measure toolbar candidates with their actual font, native margins, spacing and
 mandatory action widths. In a real QMainWindow, require Project and Resources to

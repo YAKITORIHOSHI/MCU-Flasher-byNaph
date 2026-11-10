@@ -37,6 +37,12 @@ failure pre-existing. Name fragments select verifiers by file name.
   interface_size taskbar_identity renderer_color_depth`.
 - Assistant changes: `assistant_startup ubuntu_ai_panel embedded_viewports`.
 - Dropdowns: `combo_popups`, plus native `verify_ui_layout.py` at every scale.
+  Include compact Actions/Options, alpha corner pixels, cached repaint and native
+  Windows Settings open/close/heartbeat in `controls`. Sample source find and
+  declaration navigation use `library_samples` in a separate PyQt5 process;
+  `package_browser` covers the installed filter. Update prompt ownership and
+  failed Skip preference persistence use `controls`, while mid-check cancellation
+  and post-prompt revalidation use `bootstrap_updates` and source policy `app_update`.
   CMD/UNC changes: `cmd_directory` on native Windows and `terminal` for ConPTY.
   The SMB fixture owns its share and skips explicitly if the runner cannot create it.
 - Host admission or setup: `ubuntu_release linux_distributions macos_adapter launcher_folder`.
