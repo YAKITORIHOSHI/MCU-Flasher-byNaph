@@ -136,6 +136,7 @@ class RealInputQueueChecks(unittest.TestCase):
         user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         user.GetWindowRect.argtypes = [wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
         user.GetClientRect.argtypes = [wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
+        user.ClientToScreen.argtypes = [wintypes.HWND,ctypes.POINTER(wintypes.POINT)]
         user.SetWindowPos.argtypes = [wintypes.HWND,wintypes.HWND,ctypes.c_int,ctypes.c_int,
                                      ctypes.c_int,ctypes.c_int,wintypes.UINT]
         user.IsWindowVisible.argtypes = [wintypes.HWND]
@@ -160,6 +161,20 @@ class RealInputQueueChecks(unittest.TestCase):
             self.assertTrue(user.IsWindowVisible(hwnd),'The owned fixture input is not visible')
             rect=wintypes.RECT(); self.assertTrue(user.GetWindowRect(hwnd,ctypes.byref(rect)))
             self.assertTrue(user.SetCursorPos((rect.left+rect.right)//2,(rect.top+rect.bottom)//2))
+            press()
+        def click_qt(widget):
+            # Match the shipping controls: ordinary Qt fields do not create
+            # their own HWND. Forcing winId() here changes the geometry and
+            # input routing that this click is meant to verify.
+            host = widget.window()
+            origin = wintypes.POINT()
+            self.assertTrue(user.ClientToScreen(int(host.effectiveWinId()), ctypes.byref(origin)))
+            point = widget.mapTo(host, widget.rect().center())
+            ratio = host.devicePixelRatioF()
+            self.assertTrue(user.SetCursorPos(origin.x+round(point.x()*ratio),
+                                              origin.y+round(point.y()*ratio)))
+            press()
+        def press():
             events=(Input*2)(Input(type=0,data=Data(mouse=Data.Mouse(flags=2))),
                              Input(type=0,data=Data(mouse=Data.Mouse(flags=4))))
             self.assertEqual(user.SendInput(2,events,ctypes.sizeof(Input)),2)
@@ -235,7 +250,7 @@ class RealInputQueueChecks(unittest.TestCase):
                     # covering the foreign field used for calibration.
                     dialog.move(window.x()+window.width()-dialog.width(),
                                 window.y()+window.height()-dialog.height())
-                destination=int(target.winId())
+                destination=int(target.effectiveWinId())
                 window.activateWindow(); user.SetForegroundWindow(int(window.winId()))
                 QTest.qWait(100)
                 click(source)
@@ -259,7 +274,7 @@ class RealInputQueueChecks(unittest.TestCase):
                                 Input(type=1,data=Data(keyboard=Keyboard(vk=8,flags=2))))
                 self.assertEqual(user.SendInput(2,erase,ctypes.sizeof(Input)),2)
                 self.assertEqual(next_child_message(),{'text':''})
-                click(destination)
+                click_qt(target)
                 window.resize(window.width() + 1, window.height())
                 QTest.qWait(400)
                 info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
