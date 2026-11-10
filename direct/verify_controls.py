@@ -209,6 +209,13 @@ class ControlChecks(unittest.TestCase):
                 for combo in host.findChildren(QComboBox):
                     if not combo.isVisible() or combo.count() < 2:
                         continue
+                    if host is dialog:
+                        # isVisible() is true for fields clipped below a scroll
+                        # viewport too. Exercise the reachable control a user
+                        # can click before checking its popup's screen anchoring.
+                        dialog.scroll.ensureWidgetVisible(combo, 8, 8)
+                        pump()
+                        self.assertFalse(combo.visibleRegion().isEmpty())
                     option = QStyleOptionComboBox()
                     combo.initStyleOption(option)
                     self.assertFalse(combo.style().styleHint(QStyle.StyleHint.SH_ComboBox_Popup, option, combo),

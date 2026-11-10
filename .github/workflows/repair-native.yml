@@ -21,6 +21,11 @@ on:
       - direct/verify_responsive.py
       - direct/verify_monitor_matrix.py
   workflow_dispatch:
+    inputs:
+      focused:
+        description: Run popup, Settings, sample and update checks; reuse prior layout qualification
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,23 +60,26 @@ jobs:
           output.mkdir(parents=True, exist_ok=True)
           results = []
           cases = []
+          event = json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          focused = str(event.get('inputs', {}).get('focused', False)).lower() == 'true'
           for scale in ('1', '1.25', '1.5', '1.75', '2'):
               cases += [
                   (f'popups-{scale}', scale, ['direct/verify_combo_popups.py', '--render-dir', str(output / ('popups-' + scale))]),
                   (f'controls-{scale}', scale, ['direct/verify_controls.py']),
                   (f'samples-{scale}', scale, ['direct/verify_library_samples.py', '--scale', scale, '--render-dir', str(output / ('samples-' + scale))]),
               ]
-          for scale in ('1', '1.25', '1.5', '1.75', '2'):
+          for scale in (() if focused else ('1', '1.25', '1.5', '1.75', '2')):
               cases += [
                   (f'rows-{scale}', scale, ['direct/verify_responsive.py', '--only', 'control_rows_and_serial_reflow']),
                   (f'labels-{scale}', scale, ['direct/verify_responsive.py', '--only', 'selecting_a_tool_tab']),
                   (f'combined-{scale}', scale, ['direct/verify_responsive.py', '--only', 'control_rows_and_serial_reflow', '--only', 'selecting_a_tool_tab']),
               ]
-          cases += [('full-responsive-1.25', '1.25', ['direct/verify_responsive.py', '--render-dir', str(output / 'responsive-1.25')]),
+          if not focused:
+              cases += [('full-responsive-1.25', '1.25', ['direct/verify_responsive.py', '--render-dir', str(output / 'responsive-1.25')]),
                     ('compact-matrix', '1', ['direct/verify_monitor_matrix.py', '--only', '1024x768@100', '--only', '1280x720@150']),
                     ('terminal', '1', ['direct/verify_terminal.py']),
-                    ('performance', '1', ['direct/verify_performance.py']),
-                    ('bootstrap-updates', '1', ['direct/verify_bootstrap_updates.py']),
+                    ('performance', '1', ['direct/verify_performance.py'])]
+          cases += [('bootstrap-updates', '1', ['direct/verify_bootstrap_updates.py']),
                     ('source-updates', '1', ['direct/verify_app_update.py'])]
           for name, scale, arguments in cases:
               log = output / (name + '.log')
