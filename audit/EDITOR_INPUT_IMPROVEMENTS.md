@@ -8,7 +8,7 @@ mixed-monitor behavior, physical USB or every backup application's integration.
 
 | Approved item | Implementation | Verification |
 | --- | --- | --- |
-| Windows assistant/coding CLI keeps keyboard input | Owned native queue handoff on explicit Qt input events; no delayed show/resize focus grab | `verify_native_input`, isolated native Windows CI; Windows 11 pending |
+| Windows assistant/coding CLI keeps keyboard input | Owned native queue handoff on input clicks/keyboard moves; activation and containers cannot take focus | `verify_native_input`, isolated native Windows CI; Windows 11 pending |
 | Assistant right-side gap | Actual client bounds and xterm's measured scrollbar width | `verify_embedded_viewports`, `verify_assistant_startup`, `verify_responsive` |
 | Create/edit ticket spinner | Retained hidden size; footer vertical alignment | `verify_owner_tickets`, captured create/edit busy states |
 | Overloads in Monaco and sample viewer | Shared disposable LLVM parser; real includes/defines/flags from selected build hook | `verify_source_navigation` with real libclang; `verify_editor_features`, `verify_library_samples` |
@@ -31,9 +31,10 @@ DISPLAY/WAYLAND_DISPLAY and run offscreen, with isolated storage, mocked account
 hardware and installers. Real semantic tests use a separate disposable runtime
 with the pinned libclang 18.1.1 wheel; no live runtime repair is used as a test.
 
-- Nine real LLVM/conservative parser checks pass, covering overload argument
+- Ten real LLVM/conservative parser checks pass, covering overload argument
   types, scope, namespaces, members, templates, defaults, nested arguments,
-  unsaved headers, Unicode ranges, actual defines and unsupported target fallback.
+  unsaved headers, Unicode ranges, actual defines, unsupported target fallback
+  and retirement of owned parser processes at their deadline.
 - Seven real offline Monaco checks pass for pairing, quoting, indentation,
   read-only previews, navigation history, stale replies and save races/off-Qt I/O.
 - Eight installation checks pass, including no menu before complete validation,

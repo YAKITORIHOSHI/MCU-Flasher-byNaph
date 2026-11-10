@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QFocusEvent
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QLineEdit, QVBoxLayout
 from main.qt import cursor_visibility
 from main.qt.cursor_visibility import WorkspacePointerGuard
@@ -57,6 +59,21 @@ class CursorChecks(unittest.TestCase):
             self.proxy.setCursor(shape)
             self.assertEqual(self.proxy.cursor().shape(), shape)
         self.assertIsNone(APP.overrideCursor())
+
+    def test_activation_never_hands_off_input_but_deliberate_focus_moves_do(self):
+        with patch('main.qt.native_input.return_input_to_qt') as handoff:
+            for reason in (Qt.FocusReason.ActiveWindowFocusReason,
+                           Qt.FocusReason.OtherFocusReason, Qt.FocusReason.PopupFocusReason):
+                APP.sendEvent(self.text, QFocusEvent(QEvent.Type.FocusIn, reason))
+            handoff.assert_not_called()
+            for reason in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                           Qt.FocusReason.ShortcutFocusReason, Qt.FocusReason.MouseFocusReason):
+                handoff.reset_mock()
+                APP.sendEvent(self.text, QFocusEvent(QEvent.Type.FocusIn, reason))
+                handoff.assert_called_once_with(self.owner, self.text)
+            handoff.reset_mock()
+            QTest.mouseClick(self.text, Qt.MouseButton.LeftButton)
+            handoff.assert_called_once_with(self.owner, self.text)
 
     def test_other_windows_unchanged_but_owned_detached_window_covered(self):
         unrelated = QWidget()

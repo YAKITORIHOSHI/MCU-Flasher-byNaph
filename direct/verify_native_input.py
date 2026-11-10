@@ -11,11 +11,11 @@ import sys
 import subprocess
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from main.qt.native_input import _GuiThreadInfo, handoff_owned_input
+from main.qt.native_input import _GuiThreadInfo, handoff_owned_input, return_input_to_qt
 
 NATIVE = '--native' in sys.argv
 if NATIVE:
@@ -98,6 +98,23 @@ class NativeInputChecks(unittest.TestCase):
         self.user.SetFocus.side_effect = OSError('fixture failure')
         self.assertFalse(self.run_handoff())
         self.assertEqual(self.user.AttachThreadInput.call_args.args, (11, 22, False))
+
+    def test_containers_cannot_take_input_and_explicit_text_surfaces_can(self):
+        from types import SimpleNamespace
+        def widget(kind='',foreign=False,parent=None):
+            return SimpleNamespace(property=lambda name: foreign if name=='mcuForeignInput' else False,
+                inherits=lambda name:name==kind,parentWidget=lambda:parent,
+                focusProxy=lambda:None,effectiveWinId=lambda:200)
+        owner=SimpleNamespace(_ai_panel=SimpleNamespace(_ai_hwnd=100,_proc=SimpleNamespace(pid=300)))
+        with patch('main.qt.native_input.sys.platform','win32'), \
+             patch('main.qt.native_input.handoff_owned_input',return_value=True) as move:
+            self.assertFalse(return_input_to_qt(owner,widget()))
+            move.assert_not_called()
+            self.assertTrue(return_input_to_qt(owner,widget('QLineEdit')))
+            self.assertEqual(move.call_args.args,(200,[(100,300)]))
+            move.reset_mock()
+            self.assertFalse(return_input_to_qt(owner,widget('QWebEngineView',parent=widget(foreign=True))))
+            move.assert_not_called()
 
 
 @unittest.skipUnless(NATIVE and sys.platform == 'win32', 'Explicit native Windows fixture only')

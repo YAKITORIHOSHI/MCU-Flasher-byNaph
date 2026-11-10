@@ -7,13 +7,17 @@ description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard owners
 
 ## Input, navigation, saves and installation
 
-Use native_input.py only for explicit owned input events. Verify the destination
+Use native_input.py only for owned input clicks or deliberate keyboard focus
+moves. Activation/restoration focus events and layout containers never request
+a handoff. Verify the destination
 process, the exact embedded HWND/child, balanced thread attachments and resulting
 native focus. Show/resize/readiness never requests keyboard focus. Give Windows
 and POSIX terminal tabs explicit painted close marks and preserve header spacing.
 The native Windows fixture runs only in isolated Actions; Windows Server results
 leave native Windows 11 verification pending.
 
+Windows parser workers enter an owned job before execution, so venv redirectors
+and their descendants retire on timeout; never terminate unrelated applications.
 Both editors use the pinned libclang parser in a bounded child process; Qt5 and
 Qt6 never share a process. Compile records actual parsing context in the normal
 build hook. No target inference, compiler execution or package installation is

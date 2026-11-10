@@ -89,10 +89,16 @@ def return_input_to_qt(owner, widget):
     if sys.platform != "win32":
         return False
     ancestor = widget
+    input_surface = False
     while ancestor is not None:
         if ancestor.property("mcuForeignInput"):
             return False
+        input_surface = input_surface or bool(ancestor.property("mcuTextPointer")) or any(
+            ancestor.inherits(name) for name in
+            ("QLineEdit", "QTextEdit", "QPlainTextEdit", "QAbstractItemView", "QWebEngineView"))
         ancestor = ancestor.parentWidget()
+    if not input_surface:
+        return False
     roots = []
     for name, attribute in (("_ai_panel", "_ai_hwnd"), ("_terminal_panel", "_term_hwnd")):
         panel = getattr(owner, name, None)

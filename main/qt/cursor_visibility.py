@@ -60,8 +60,11 @@ class WorkspacePointerGuard(QObject):
         if not isValid(watched) or not isinstance(watched, QWidget):
             return False
         kind = event.type()
-        if (not self._handing_input and self.owns(watched)
-                and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn)):
+        explicit_input = (kind == QEvent.Type.MouseButtonPress or
+                          (kind == QEvent.Type.FocusIn and event.reason() in (
+                              Qt.FocusReason.MouseFocusReason, Qt.FocusReason.TabFocusReason,
+                              Qt.FocusReason.BacktabFocusReason, Qt.FocusReason.ShortcutFocusReason)))
+        if not self._handing_input and self.owns(watched) and explicit_input:
             from main.qt.native_input import return_input_to_qt
             self._handing_input = True
             try:

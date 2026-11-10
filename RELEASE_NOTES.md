@@ -15,7 +15,8 @@
 
 - **Keyboard ownership:** An explicit input click returns the native Windows
   keyboard queue from this workspace's embedded assistant/terminal. Resize,
-  show and readiness callbacks no longer request focus. Assistant content fills
+  show, readiness and window-activation callbacks no longer request focus.
+  Layout containers cannot take input. Assistant content fills
   its existing viewport. Terminal headers reserve their controls' height, and
   explicit painted close buttons keep selected and unselected tabs readable.
   Floating Notifications uses an application-owned close icon.
@@ -31,6 +32,8 @@
   in one temporary locked preview; source buffers, dirty state and back/forward
   history are preserved. Navigation neither compiles nor installs dependencies.
   Bootstrap prepares the pinned `libclang==18.1.1` dependency.
+  Windows parser children run inside an owned job assigned before execution,
+  preserving deadlines through virtual-environment launcher processes.
 - **Pairing:** Settings controls Monaco's language-defined brackets and quotes,
   including selection wrapping, overtype, paired deletion, escaped quotes,
   block indentation, undo and multiple cursors. The preference applies live.

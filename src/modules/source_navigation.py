@@ -340,25 +340,58 @@ class NavigationResolver:
         data = json.dumps(request, ensure_ascii=True)
         if len(data) > MAX_INPUT * 6:
             return {"success": False, "error": "The source snapshot is too large."}
+        job, process = None, None
         with self._lock:
             if self._closed:
                 return {"success": False, "cancelled": True}
-            process = subprocess.Popen([self.python, "-I", "-B", str(Path(__file__).absolute()), "--worker"],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
-            self._process = process
+            try:
+                flags = 0
+                if sys.platform == 'win32':
+                    from src.modules.bootstrap_pip_monitor import _WindowsJob
+                    job = _WindowsJob()
+                    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_SUSPENDED
+                process = subprocess.Popen([self.python, "-I", "-B", str(Path(__file__).absolute()), "--worker"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
+                self._process = process
+                if job is not None:
+                    job.assign_and_resume(process)
+            except OSError:
+                if job is not None:
+                    job.close()
+                if process is not None:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    try:
+                        process.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                self._process = None
+                return {"success": False, "error": "Source navigation could not start its owned parser."}
         try:
             output, _errors = process.communicate(data.encode('utf-8'), timeout=self.timeout)
             if process.returncode or len(output) > MAX_INPUT * 6:
                 return {"success": False, "error": "Source navigation could not parse this target."}
             return json.loads(output)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.communicate()
+            # Windows venv launchers can create a second Python process. The
+            # job was assigned before resume, so closing it cancels only this
+            # parser and its descendants, including inherited output pipes.
+            if job is not None:
+                job.close()
+            else:
+                process.kill()
+            try:
+                process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass  # The worker still has a finite cleanup budget.
             return {"success": False, "error": "Source navigation reached its time limit. Try a smaller source selection."}
         except (OSError, ValueError):
             return {"success": False, "error": "Source navigation is unavailable for this request."}
         finally:
+            if job is not None:
+                job.close()
             with self._lock:
                 if self._process is process:
                     self._process = None

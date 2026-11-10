@@ -6,7 +6,9 @@ import importlib.util
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -99,6 +101,30 @@ class NavigationChecks(unittest.TestCase):
         self.assertEqual((self.root / 'sketch.cpp').read_text(), text)
         resolver.close()
         self.assertTrue(resolver.resolve(request)['cancelled'])
+
+    def test_parser_deadline_retires_the_owned_process_including_windows_venv_children(self):
+        import json
+        import psutil
+        from src.modules import source_navigation as navigation
+        record=self.root/'parser-pid.json'
+        worker=self.root/'slow-parser.py'
+        worker.write_text('import json,os,time\nfrom pathlib import Path\n'
+            f'Path({str(record)!r}).write_text(json.dumps({{"pid":os.getpid()}}))\n'
+            'time.sleep(60)\n',encoding='utf-8')
+        resolver=NavigationResolver(timeout=2)
+        self.addCleanup(resolver.close)
+        started=time.monotonic()
+        with patch.object(navigation,'__file__',str(worker)):
+            result=resolver.resolve({})
+        self.assertFalse(result['success'])
+        self.assertIn('time limit',result['error'])
+        self.assertLess(time.monotonic()-started,8)
+        self.assertTrue(record.is_file(),'The owned parser did not reach its controlled slow phase')
+        pid=json.loads(record.read_text())['pid']
+        deadline=time.monotonic()+2
+        while psutil.pid_exists(pid) and time.monotonic()<deadline:
+            time.sleep(.02)
+        self.assertFalse(psutil.pid_exists(pid),'An owned parser process survived its deadline')
 
     @unittest.skipUnless(importlib.util.find_spec('clang'), 'LLVM wheel is unavailable in this verifier runtime')
     def test_real_llvm_resolves_types_namespaces_members_and_templates(self):
