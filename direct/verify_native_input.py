@@ -118,6 +118,9 @@ class RealInputQueueChecks(unittest.TestCase):
         user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
         user.GetWindowRect.argtypes = [wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
+        user.GetClientRect.argtypes = [wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
+        user.SetWindowPos.argtypes = [wintypes.HWND,wintypes.HWND,ctypes.c_int,ctypes.c_int,
+                                     ctypes.c_int,ctypes.c_int,wintypes.UINT]
         user.IsWindowVisible.argtypes = [wintypes.HWND]
         user.SetCursorPos.argtypes = [ctypes.c_int,ctypes.c_int]
         user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
@@ -167,8 +170,16 @@ class RealInputQueueChecks(unittest.TestCase):
             threading.Thread(target=read_child, daemon=True).start()
             handles = json.loads(startup.get(timeout=10))
             root, source = handles['root'], handles['input']
-            user.SetParent(root, int(embed.winId()))
+            embed_hwnd=int(embed.winId())
+            user.SetParent(root,embed_hwnd)
             user.SetWindowLongW(root, -16, 0x50000000)  # WS_CHILD | WS_VISIBLE
+            client=wintypes.RECT(); self.assertTrue(user.GetClientRect(embed_hwnd,ctypes.byref(client)))
+            # SetParent retains the old screen position as client coordinates.
+            # Match the shipping embedder: explicitly fill the parent's client
+            # area so a physical click is inside the visible child, not clipped.
+            self.assertTrue(user.SetWindowPos(root,None,0,0,client.right,client.bottom,0x70))
+            self.assertTrue(user.IsChild(embed_hwnd,root))
+            QTest.qWait(150)
             window._ai_panel = SimpleNamespace(_ai_hwnd=root, _proc=child)
             guard = WorkspacePointerGuard(window)
             guard._scan_owned_widgets()
