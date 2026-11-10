@@ -1,5 +1,18 @@
 # Current application platform verification
 
+## November 11 editor/input and Ubuntu installation continuation
+
+The [editor/input verification record](EDITOR_INPUT_IMPROVEMENTS.md) maps each
+approved change to its checks. [Native Ubuntu ARM64 CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/42874900026)
+passes on 24.04 and 26.04: isolated host/workspace/sample/terminal checks, a real
+cold Bootstrap into the final per-user installation, All Apps registration,
+actual Monaco startup and an ESP32 Compile-button build. No physical USB device
+is used. Windows native input and terminal gates are in
+[Editor and input improvements](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/workflows/editor-improvements.yml).
+Native Windows 11 verification remains pending by the user's selected plan;
+hosted Server input evidence does not establish Windows 11 desktop behavior.
+The historical platform records below retain their original dates and limits.
+
 23 October 2026, Asia/Manila. This records the shipping Python application;
 the [native Rust replacement requirements](migration/PLATFORM_SUPPORT.md) are
 tracked separately. AMD means x86-64, including compatible Intel processors;

@@ -53,6 +53,22 @@ root `MCU_Flasher` executable entries. A clean HEAD export reproduces all three;
 the public executable entries remain under `LAUNCHER/`. They are not attributed
 to this update. The new persistent-install/setup fixtures pass independently.
 
+## Hosted setup continuation
+
+The corrected Ubuntu first-run fixture preserves terminal versus desktop launch
+mode through the persistent-install handoff, observes the final installed runtime,
+and verifies the All Apps entry. The available native ARM64 run completed real
+Bootstrap, actual Monaco/workspace startup and an ESP32 Compile-button build
+(291,504 firmware bytes). This uses an owned disposable application/store and no
+physical device. The subsequent [native ARM64 run on both Ubuntu LTS releases](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/42874900026)
+passes all host, workspace, sample-viewer, terminal, cold-setup and real compile
+gates. Keyboard-oriented sample fixtures explicitly activate their owned window
+before injecting shortcuts.
+
+The older Windows Python 3.11/Qt readability fixture reproduces a native access
+violation on the baseline as well as this branch. Preserve that platform result
+separately from the new close-glyph and keyboard-queue checks.
+
 ## Release gates
 
 Use `.github/workflows/editor-improvements.yml` for Windows Python 3.11/3.14 and
@@ -66,7 +82,8 @@ The private Windows runtime includes the verified AMD64 libclang wheel and its
 license. Its wheel SHA-256 is
 `4dd2d3b82fab35e2bf9ca717d7b63ac990a3519c7e312f19fa8e86dcc712f7fb`.
 Package committed defaults through `direct/build_release.py`, retain the complete
-private runtime, validate all LFS installer receipts and every archived file,
+private runtime, validate all seven LFS installer receipts directly from committed Git blobs
+(even when git archive expands their data) and every archived file,
 and preserve the existing public asset until its staged replacement is verified.
 The source commit, final archive manifest and published size/SHA-256 form the
 release receipt; none of these checks qualifies native Windows 11 by inference.

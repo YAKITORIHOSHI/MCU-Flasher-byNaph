@@ -9,6 +9,8 @@ description: "Run MCU Flasher hardware-free and isolated native CI checks, inclu
 
 Run native_input, source_navigation, editor_features, file_access, user_install,
 owner_ticket_service, owner_tickets, library_samples, controls and svg_icons.
+Include detached_actions, terminal_scroll and release_sources for backend action
+ownership, completed native viewport fitting and committed installer identities.
 Real semantic coverage requires libclang==18.1.1 in the isolated runtime; an
 LLVM-unavailable skip does not qualify semantic resolution. editor_features
 loads the real offline Monaco assets for pairing/escaping/indentation/history,

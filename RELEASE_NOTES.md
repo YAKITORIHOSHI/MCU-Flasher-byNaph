@@ -6,12 +6,12 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 10, 2026<br>
+> **Notes Updated:** November 11, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
 
-## November 10 Editor, Input, Tickets and Ubuntu Installation
+## November 11 Editor, Input, Tickets and Ubuntu Installation
 
 - **Keyboard ownership:** An explicit input click returns the native Windows
   keyboard queue from this workspace's embedded assistant/terminal. Resize,
@@ -58,6 +58,10 @@ the existing runtime/build/layout contracts. Hosted Windows CI validates native
 queues separately from mocks. **Native Windows 11 verification remains pending**
 by the user's selected verification plan; hosted Windows Server results do not
 qualify Windows 11 input, physical USB or third-party backup integrations.
+The [verification record](audit/EDITOR_INPUT_IMPROVEMENTS.md) links native Ubuntu
+cold-install/compile evidence and identifies pre-existing fixture limitations.
+Release packaging validates installer identities from committed Git blobs even
+when Git expands LFS data while creating an archive.
 
 ## November 10 Follow-up: Compact Menus, Settings, Package Search and Update Choices
 

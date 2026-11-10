@@ -11,7 +11,7 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
-The November 10 editor and input update returns Windows keyboard ownership when
+The November 11 editor and input update returns Windows keyboard ownership when
 you click another workspace input, fills the assistant's existing viewport, and
 gives terminal tabs explicit themed close buttons. Upload explains its current
 blocking reason and recovers from stale display state while retaining active
