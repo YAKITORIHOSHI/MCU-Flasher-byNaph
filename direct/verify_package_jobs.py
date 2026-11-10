@@ -479,6 +479,9 @@ class PackageJobChecks(unittest.TestCase):
                 patch.object(setup.os, 'geteuid', return_value=1000, create=True), \
                 patch('src.modules.runtime_resources.enforce_minimum_cpu_requirement', return_value=True), \
                 patch('direct.ubuntu.preflight.host_preflight'), \
+                patch('direct.ubuntu.user_install.persistent_setup_root', return_value=self.folder), \
+                patch('direct.ubuntu.user_install.register_completed_installation'), \
+                patch('src.modules.default_board_folders.prepare_default_board_folders'), \
                 patch('src.modules.platform_runtime.native_platformio_dir', return_value=self.core), \
                 patch('src.modules.offline_bootstrap.clean_bootstrap_environment', return_value={}), \
                 patch('src.modules.offline_mode.offline_enabled', return_value=False), \

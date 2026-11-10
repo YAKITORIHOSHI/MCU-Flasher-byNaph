@@ -59,7 +59,8 @@ class UserInstallChecks(unittest.TestCase):
         entry = self.data / 'applications/mcu-flasher.desktop'
         before = entry.stat().st_mtime_ns
         text = entry.read_text()
-        self.assertIn(str(destination / 'direct/ubuntu/run.sh'), text)
+        from direct.ubuntu.install_desktop import exec_argument
+        self.assertIn(exec_argument(str(destination / 'direct/ubuntu/run.sh')), text)
         self.assertNotIn(str(self.source), text)
         self.assertEqual((self.data / 'icons/hicolor/256x256/apps/mcu-flasher.png').read_bytes(),
                          (self.source / 'src/assets/mcu_icon.png').read_bytes())
@@ -121,6 +122,7 @@ class UserInstallChecks(unittest.TestCase):
                          {'skip_updates':False, 'source_updates':{'enabled':False}})
         self.assertFalse((destination / 'src/dbs/.owner_tickets.json').exists())
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Native Linux setup policy; staging checks run on every host')
     def test_setup_registers_the_menu_only_after_all_runtime_and_board_checks_succeed(self):
         from direct.ubuntu import setup
         for failure in (True, False):

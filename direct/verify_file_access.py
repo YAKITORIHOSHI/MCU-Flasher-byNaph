@@ -40,7 +40,7 @@ class FileAccessChecks(unittest.TestCase):
         with patch.object(file_utils.sys, 'platform', 'win32'), \
                 patch.object(file_utils.time, 'sleep'), patch.object(file_utils.os, 'replace', side_effect=replace):
             file_utils.write_source_text(self.path, after, expected=self.before)
-        self.assertEqual(self.path.read_text(), after)
+        self.assertEqual(self.path.read_bytes(), after.encode('utf-8'))
         self.assertEqual(len(calls), 3)
         self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
 

@@ -303,6 +303,8 @@ class ArchitectureRepairChecks(IsolatedChecks):
                 if foreign:
                     (site / "extension.so").write_bytes(elf(62 if architecture == "arm64" else 183))
                 stack.enter_context(patch.object(setup, "ROOT", directory.parent))
+                stack.enter_context(patch("direct.ubuntu.user_install.persistent_setup_root", return_value=directory.parent))
+                stack.enter_context(patch("direct.ubuntu.user_install.register_completed_installation"))
                 stack.enter_context(patch.object(setup, "ENV_DIR", directory))
                 stack.enter_context(patch("src.modules.ubuntu_release.enforce_supported_ubuntu", return_value=True))
                 stack.enter_context(patch.object(setup, "sys", SimpleNamespace(platform="linux", version_info=sys.version_info, _base_executable=sys._base_executable)))

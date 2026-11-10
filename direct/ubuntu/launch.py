@@ -270,8 +270,9 @@ def main(argv=None) -> int:
                     forwarded.insert(0, "--repair")
                 # The installed launcher prepares its runtime at this final
                 # location; a copied venv's absolute scripts are never reused.
+                mode = ["--bootstrap-window"] if desktop else []
                 return subprocess.call([sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"),
-                                        "--bootstrap-window", *forwarded], cwd=installed, env=env)
+                                        *mode, *forwarded], cwd=installed, env=env)
             result = subprocess.call(["/usr/bin/python3", "-B", str(ROOT / "direct/ubuntu/setup.py")],
                                      cwd=ROOT, env=env)
             if result:

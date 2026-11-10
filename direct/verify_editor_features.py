@@ -107,7 +107,7 @@ class EditorFeatures(unittest.TestCase):
           return {{escaped, block:model.getValue(), column:ed.getPosition().column}};
         """)
         self.assertEqual(result['escaped'], prefix + '"')
-        self.assertRegex(result['block'], r'^\{\n[ \t]+\n\}$')
+        self.assertRegex(result['block'], r'^\{\r?\n[ \t]+\r?\n\}$')
         self.assertGreater(result['column'], 1)
 
     def preview(self):

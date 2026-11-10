@@ -237,6 +237,8 @@ class PlatformChecks(unittest.TestCase):
                 patch.object(setup.os, "geteuid", return_value=1000, create=True), \
                 patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \
                 patch("direct.ubuntu.preflight.host_preflight"), \
+                patch("direct.ubuntu.user_install.persistent_setup_root", return_value=self.root), \
+                patch("direct.ubuntu.user_install.register_completed_installation"), \
                 patch.object(platform, "_uname_cache", None), \
                 patch.object(platform, "machine", return_value="x86_64") as architecture, \
                 patch("src.modules.offline_mode.offline_enabled", return_value=False), \

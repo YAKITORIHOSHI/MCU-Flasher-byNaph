@@ -142,6 +142,8 @@ class SystemSetupChecks(unittest.TestCase):
             root = Path(folder)
             missing = preflight.MissingSystemDependencies(["libxcb-cursor0", "libxcb-xinerama0"])
             with patch.object(preflight, "host_preflight", side_effect=[missing, None]), \
+                    patch("direct.ubuntu.user_install.persistent_setup_root", return_value=root), \
+                    patch("direct.ubuntu.user_install.register_completed_installation"), \
                     patch.object(setup, "ROOT", root), patch.object(setup, "ENV_DIR", root / ".venv-linux"), \
                     patch.object(setup.venv, "EnvBuilder") as builder, \
                     patch("direct.ubuntu.arduino_cli.ensure_arduino_cli", return_value="fixture-arduino") as arduino, \
@@ -180,6 +182,8 @@ class SystemSetupChecks(unittest.TestCase):
                 root = Path(folder)
                 error = io.StringIO()
                 with patch.object(preflight, "host_preflight"), \
+                        patch("direct.ubuntu.user_install.persistent_setup_root", return_value=root), \
+                        patch("direct.ubuntu.user_install.register_completed_installation"), \
                         patch.object(setup, "ROOT", root), patch.object(setup, "ENV_DIR", root / ".venv-linux"), \
                         patch.object(setup.venv, "EnvBuilder"), \
                         patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \

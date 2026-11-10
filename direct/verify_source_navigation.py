@@ -54,9 +54,9 @@ class NavigationChecks(unittest.TestCase):
         item = result['destinations'][0]
         self.assertEqual(item['path'], str(header))
         self.assertTrue(item['read_only'])
-        self.assertEqual(item['content'], header.read_text(encoding='utf-8'))
+        self.assertEqual(item['content'].encode('utf-8'), header.read_bytes())
         self.assertEqual(item['content'].splitlines()[item['line']][item['column']:item['end_column']], 'stepRun')
-        self.assertEqual(header.read_text(encoding='utf-8'), item['content'])
+        self.assertEqual(header.read_bytes(), item['content'].encode('utf-8'))
 
     def test_comments_and_strings_do_not_navigate(self):
         for text, marker in [('void fake() {}\n// fake();', 'fake();'),

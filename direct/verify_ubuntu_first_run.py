@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HOME_ISOLATION = '''"""Fixture-only home path redirection; no environment home variables change."""
 import os
 from pathlib import Path
-_fixture_home = Path(__file__).resolve().parents[2] / "sandbox-home"
+_fixture_home = Path(os.environ["MCU_FIRST_RUN_FIXTURE"]) / "sandbox-home"
 _fixture_home.mkdir(parents=True, exist_ok=True)
 Path.home = classmethod(lambda cls: _fixture_home)
 _original_expanduser = os.path.expanduser
@@ -62,7 +62,7 @@ GUI_SMOKE = '''
         _first_run_finished = [False]
         _first_run_editor = [{}]
         _first_run_source = Path(api.sketch_dir_path) / "probe.ino"
-        _first_run_result = SCRIPT_DIR.parent / "gui-result.json"
+        _first_run_result = Path(os.environ["MCU_FIRST_RUN_FIXTURE"]) / "gui-result.json"
         def _first_run_finish(success, detail):
             if _first_run_finished[0]:
                 return
@@ -89,7 +89,7 @@ GUI_SMOKE = '''
                       "project": str(api.sketch_dir_path),
                       "private_prefix": sys.prefix, "upload": False}
             if success:
-                report["screenshot"] = str(SCRIPT_DIR.parent / "workspace.png")
+                report["screenshot"] = str(Path(os.environ["MCU_FIRST_RUN_FIXTURE"]) / "workspace.png")
                 report["capture_saved"] = window.grab().save(report["screenshot"])
             _first_run_result.write_text(_first_run_json.dumps(report, indent=2) + "\\n", encoding="utf-8")
             print("Ubuntu first-launch real workspace: " + ("OK" if success else "FAILED") + ": " + detail, flush=True)
@@ -187,6 +187,7 @@ def _environment(fixture: Path) -> dict[str, str]:
         env[name] = str(path)
     (fixture / "runtime").chmod(0o700)
     env["PYTHONNOUSERSITE"] = "1"
+    env["MCU_FIRST_RUN_FIXTURE"] = str(fixture)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     # This copy has no update record, so it would replace the source under test.
     env["MCU_FLASHER_DISABLE_APP_UPDATE"] = "1"
@@ -295,6 +296,7 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
 
     fixture.mkdir(parents=True, exist_ok=False)
     app = fixture / "app"
+    portable_app = app
     app.mkdir()
     _copy_source(app)
     architecture = host_architecture()
@@ -308,7 +310,12 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     sketch.mkdir()
     (sketch / "probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
     core = fixture / "data/mcu-flasher/platformio" / platform.machine()
-    runtime = app / (".venv-macos" if sys.platform == "darwin" else ".venv-linux")
+    installed = app
+    if sys.platform.startswith('linux'):
+        from src.modules.ubuntu_release import linux_distribution
+        if linux_distribution().family == 'ubuntu':
+            installed = fixture / 'data/mcu-flasher/application'
+    runtime = installed / (".venv-macos" if sys.platform == "darwin" else ".venv-linux")
     if core.exists() or runtime.exists():
         raise RuntimeError("First run must start without native packages or a private runtime")
     report = {"success": False, "fixture": str(fixture), "host_machine": platform.machine(),
@@ -333,6 +340,17 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if cold:
         raise RuntimeError(f"Automatic first-launch Bootstrap failed with exit {cold}; see {cold_log}")
+    if installed != portable_app:
+        from direct.ubuntu.user_install import is_owned_installation
+        menu = fixture / 'data/applications/mcu-flasher.desktop'
+        if not is_owned_installation(installed) or not menu.is_file() or str(installed) not in menu.read_text():
+            raise RuntimeError('Successful Ubuntu Bootstrap did not publish the owned per-user installation and menu entry')
+        if (portable_app / '.venv-linux').exists():
+            raise RuntimeError('Ubuntu Bootstrap created its runtime in the portable source instead of the final installation')
+        report.update(installation_root=str(installed), applications_entry=str(menu),
+                      portable_source_preserved=portable_app.is_dir())
+        app = installed
+        launcher = _host_launcher(app, architecture)
     _detached_gui_result(fixture, 90)
     gui_result = _gui_result(fixture, sketch, runtime)
     shutil.copy2(fixture / "gui-result.json", fixture / "cold-gui-result.json")

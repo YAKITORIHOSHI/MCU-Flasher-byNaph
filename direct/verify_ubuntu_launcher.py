@@ -602,6 +602,24 @@ class LauncherChecks(unittest.TestCase):
         self.assertEqual(setup.call_args.args[0][-1], str(self.root / "direct/ubuntu/setup.py"))
         self.assertEqual(gui.call_args.args[0], ["--project", "Sketch With Spaces", "--new-window"])
 
+    def test_persistent_install_forwarding_preserves_terminal_and_desktop_modes_and_literal_projects(self):
+        installed = self.root / 'Installed application Ω'
+        project = self.root / 'Sketch % literal $name'
+        for desktop in (False,True):
+            arguments = ['--project',str(project),'--new-window']
+            if desktop:
+                arguments.insert(0,'--bootstrap-window')
+            with patch.object(launch,'runtime_problem',return_value='Missing runtime'), \
+                 patch.object(launch,'persistent_setup_root',return_value=installed), \
+                 patch.object(launch.subprocess,'call',return_value=0) as forwarded, \
+                 patch.object(launch,'launch_workspace',side_effect=AssertionError('Portable source launched a workspace')):
+                self.assertEqual(launch.main(arguments),0)
+            command = forwarded.call_args.args[0]
+            self.assertEqual(command[2],str(installed/'direct/ubuntu/launch.py'))
+            self.assertEqual('--bootstrap-window' in command,desktop)
+            self.assertEqual(command[-3:],['--project',str(project),'--new-window'])
+            self.assertEqual(forwarded.call_args.kwargs['cwd'],installed)
+
     def test_post_setup_check_sees_new_prerequisites_without_restart(self):
         from importlib.machinery import PathFinder
         site = self.root / "system-packages"
