@@ -448,7 +448,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         <div id="fallback-output">MCU Flash GUI — OpenCode AI Terminal\n---------------------------------------\nConnecting to PTY Session...\n</div>
         <div id="fallback-input-row">
             <span id="fallback-prompt">&gt;</span>
-            <input type="text" id="fallback-input" autofocus placeholder="Type command here and press Enter..." />
+            <input type="text" id="fallback-input" placeholder="Type command here and press Enter..." />
         </div>
     </div>
     <script>
@@ -478,7 +478,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             useFallback = true;
             container.style.display = 'none';
             fallbackContainer.style.display = 'flex';
-            fallbackInput.focus();
+            if (document.hasFocus()) fallbackInput.focus();
         }
 
         if (window.xtermErr || typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
@@ -502,6 +502,12 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 const fitAddon = new FitAddon.FitAddon();
                 term.loadAddon(fitAddon);
                 term.open(container);
+                // A hidden scrollbar measures zero; xterm otherwise reserves
+                // its 15px fallback, leaving an unused strip beside the CLI.
+                const viewport = term.element.querySelector('.xterm-viewport');
+                if (term._core?.viewport && viewport) {
+                    term._core.viewport.scrollBarWidth = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+                }
                 window.fitAddon = fitAddon;
                 setTimeout(() => { fitAddon.fit(); }, 100);
             } catch (e) {
@@ -529,7 +535,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         function liftStartupCover(reason) {
             clearTimeout(startupTimer);
             startupCover.hidden = true;
-            if (term) term.focus();
+            if (term && document.hasFocus()) term.focus();
             if (socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ type: 'interface_ready', reason: reason }));
             }

@@ -686,6 +686,7 @@ class InstalledTab(QWidget):
             self.show_item(self.filtered_items[current.row()])
 
     def show_item(self, item):
+        self._package_root = str(item["path"])
         self._select_id += 1
         request = self._select_id
         self._stack.setCurrentIndex(1)
@@ -762,7 +763,9 @@ class InstalledTab(QWidget):
             current = self.examples_list.currentIndex()
             return (tuple(self._current_examples) == paths and current.isValid()
                     and current.row() < len(paths) and paths[current.row()] == path)
-        self.app.open_code_viewer(path, paths, is_current)
+        root = Path(self._package_root)
+        self.app.open_code_viewer(path, paths, is_current,
+                                 include_roots=(str(root / "src"), str(root / "include"), str(root)))
 
     def _open_folder(self):
         item = self.selected_item()
@@ -1687,7 +1690,7 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
     def _probe_code_viewer(_request, cancel):
         return engine._find_code_viewer_python(cancel), get_monitor_font_size()
 
-    def open_code_viewer(self, path, paths, is_current):
+    def open_code_viewer(self, path, paths, is_current, *, include_roots=()):
         self._viewer_request += 1
         request = self._viewer_request
 
@@ -1706,7 +1709,8 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
                                         "Prepare the code viewer dependencies in Bootstrap, then reopen this sample.")
                 return
             engine._launch_code_viewer(path, paths, lambda title, text: QMessageBox.critical(self, title, text),
-                                       python_exe=interpreter, theme_mode=Theme.active_theme, font_size=font_size)
+                                       python_exe=interpreter, theme_mode=Theme.active_theme, font_size=font_size,
+                                       include_roots=include_roots)
         self._viewer_scan.submit((path, paths), completed)
 
     # ── Catalog loading ──────────────────────────────────────────────────

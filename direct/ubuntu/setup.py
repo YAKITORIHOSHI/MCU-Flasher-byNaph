@@ -99,6 +99,21 @@ def main(argv=None) -> int:
     try:
         from direct.ubuntu.system_setup import ensure_system_dependencies
         ensure_system_dependencies(require_display=args.launch, env=env)
+        stage = "persistent Ubuntu installation"
+        from direct.ubuntu.user_install import persistent_setup_root, register_completed_installation
+        installed = persistent_setup_root(ROOT)
+        if installed != ROOT:
+            forwarded = ["--launch"] if args.launch else []
+            if args.project:
+                forwarded += ["--project", str(Path(args.project).absolute())]
+            if args.new_window:
+                forwarded.append("--new-window")
+            if args.plan:
+                forwarded += ["--plan", str(args.plan.absolute())]
+            for source in args.board_source or ():
+                forwarded += ["--board-source", str(source.absolute())]
+            return subprocess.call([sys.executable, "-B", str(installed / "direct/ubuntu/setup.py"),
+                                    *forwarded], cwd=installed, env=env)
         from src.modules.ubuntu_architecture import host_architecture
         from direct.ubuntu.runtime_architecture import (needs_architecture_repair,
                                                        private_site_packages,
@@ -155,6 +170,9 @@ def main(argv=None) -> int:
             finish_bootstrap(core)
         from src.modules.default_board_folders import prepare_default_board_folders
         prepare_default_board_folders(python, env=env)
+        if label == "Ubuntu":
+            stage = "Applications registration"
+            register_completed_installation(ROOT)
         print(f"{label} runtime ready. Launch with: bash direct/ubuntu/run.sh")
         if args.launch:
             command = [str(python), str(ROOT / "mcu_flash_gui.py")]
@@ -175,7 +193,7 @@ def main(argv=None) -> int:
             "OpenCode AI Assistant": "Check network access and the native CLI error above, then rerun Bootstrap; existing files are preserved.",
             "native board toolchains": "Check the toolchain output above and network access, then rerun Bootstrap; prepared packages are preserved.",
         }
-        print(f"{label} Bootstrap failed during {stage}: {exc}\n{recovery[stage]}", file=sys.stderr)
+        print(f"{label} Bootstrap failed during {stage}: {exc}\n{recovery.get(stage, 'Existing files are preserved. Correct the error and rerun Bootstrap.')}", file=sys.stderr)
         return 1
 
 

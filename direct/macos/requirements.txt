@@ -13,6 +13,7 @@ setuptools==80.9.0
 future==1.0.0
 ptyprocess>=0.7,<1
 requests>=2.31,<3
+libclang==18.1.1
 # The library sample viewer's separate Qt5 process.
 PyQt5>=5.15,<6
 QScintilla>=2.14,<3

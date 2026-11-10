@@ -15,6 +15,7 @@ class WorkspacePointerGuard(QObject):
         super().__init__(owner)
         self._owner = owner
         self._restoring = False
+        self._handing_input = False
         # Global Python filters wrap private WebEngine objects even when their
         # events are rejected. Only watch the constructed, owned QWidget tree
         # on every host, including during native renderer shutdown on Windows.
@@ -59,6 +60,14 @@ class WorkspacePointerGuard(QObject):
         if not isValid(watched) or not isinstance(watched, QWidget):
             return False
         kind = event.type()
+        if (not self._handing_input and self.owns(watched)
+                and kind in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn)):
+            from main.qt.native_input import return_input_to_qt
+            self._handing_input = True
+            try:
+                return_input_to_qt(self._owner, watched)
+            finally:
+                self._handing_input = False
         if kind in (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved,
                     QEvent.Type.ChildPolished, QEvent.Type.ParentChange):
             # Defer until widget construction has returned; never inspect

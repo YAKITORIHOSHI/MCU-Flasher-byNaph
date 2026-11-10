@@ -606,18 +606,26 @@ class PrimaryToolbar(QToolBar):
             mw._editor_panel.trigger_reload()
 
     def _is_busy(self) -> bool:
+        return bool(self._action_block_reason())
+
+    def _action_block_reason(self) -> str:
         if self._backend and (self._backend.is_busy
                               or getattr(self._backend, "active_operation", None) is not None
                               or getattr(self._backend, "_current_op_phase", None) is not None):
-            return True
+            phase = (getattr(self._backend, "_current_op_phase", None)
+                     or getattr(self._backend, "active_operation", None) or "current action")
+            return f"Wait for {str(phase).replace('_', ' ')} to finish."
         if self._operation_worker_alive():
-            return True
+            return "Finishing the previous action. Compile and upload will be ready shortly."
         mw = self._workspace()
-        if mw and (getattr(mw, "_active_operation", None) is not None
-                   or getattr(mw, "_ghost_save_in_progress", False) is True
-                   or getattr(getattr(mw, "_ghost_sketch", None), "needs_recovery", False) is True):
-            return True
-        return False
+        if mw and getattr(mw, "_ghost_save_in_progress", False) is True:
+            return "Finish saving the Ghost Sketch before compiling or uploading."
+        if mw and getattr(getattr(mw, "_ghost_sketch", None), "needs_recovery", False) is True:
+            return "Finish Ghost Sketch recovery before compiling or uploading."
+        # The workspace's _active_operation is a display latch fed by queued
+        # signals. The backend reservation and live worker own action safety;
+        # a stale label must not indefinitely disable an otherwise idle target.
+        return ""
 
     def _operation_worker_alive(self) -> bool:
         worker = getattr(self._backend, "_operation_worker", None) if self._backend else None
@@ -881,7 +889,8 @@ class PrimaryToolbar(QToolBar):
 
     def _update_action_button_states(self) -> None:
         """Serial uploads require a port; verified native programmers use USB."""
-        if self._is_busy():
+        reason = self._action_block_reason()
+        if reason:
             # Selection updates and a stale idle event cannot make a running
             # operation clickable. Conversely, a live thread finishing after
             # idle needs one scheduled refresh once it really exits.
@@ -889,8 +898,6 @@ class PrimaryToolbar(QToolBar):
                 self._backend.is_busy
                 or getattr(self._backend, "active_operation", None) is not None
                 or getattr(self._backend, "_current_op_phase", None) is not None))
-            reason = ("Finishing the previous action. Compile and upload will be ready shortly."
-                      if finishing else "Wait for the current action to finish.")
             for button in (self.btn_compile, self.btn_upload):
                 button.setEnabled(False)
                 button.setCursor(Qt.CursorShape.ArrowCursor)

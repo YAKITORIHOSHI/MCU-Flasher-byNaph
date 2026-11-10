@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt, QPoint, QRect
-from PySide6.QtGui import QScreen
+from PySide6.QtGui import QPalette, QScreen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QVBoxLayout, QWidget
 from main.core.theme import Theme
@@ -85,8 +85,16 @@ class ComboPopups(unittest.TestCase):
                         combo.showPopup()
                         APP.processEvents()
                         self.assertTrue(material.popup.grab().save(str(OUTPUT / f"{mode}-{kind.__name__}.png")))
-                        self.assertIn("background: transparent", combo.view().styleSheet())
-                        self.check_alpha_corners(material.popup)
+                        if kind is PortalComboBox:
+                            self.assertTrue(material.backdrop.paper)
+                            self.assertIn("background: #ffffff", combo.view().styleSheet())
+                            self.assertIn("border: 2px solid #141414", combo.view().styleSheet())
+                            self.assertIn("selection-background-color: #ffe85b", combo.view().styleSheet())
+                            self.assertEqual(combo.view().palette().color(QPalette.ColorRole.Text).name(), "#141414")
+                        else:
+                            self.assertFalse(material.backdrop.paper)
+                            self.assertIn("background: transparent", combo.view().styleSheet())
+                            self.check_alpha_corners(material.popup)
                     finally:
                         combo.hidePopup()
                         host.close()

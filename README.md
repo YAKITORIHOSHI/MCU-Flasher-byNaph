@@ -11,6 +11,32 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
+The November 10 editor and input update returns Windows keyboard ownership when
+you click another workspace input, fills the assistant's existing viewport, and
+gives terminal tabs explicit themed close buttons. Upload explains its current
+blocking reason and recovers from stale display state while retaining active
+worker, save and recovery guards.
+
+Ctrl+Click/F12 in Monaco and the separate Installed Packages sample viewer share
+LLVM source navigation. Calls distinguish overloads, scopes and argument types
+where the selected compiler context is compatible. A successful PlatformIO build
+records its real include paths, defines and parsing flags. Explicitly included
+headers open in a temporary **Read only** tab; Alt+Left/Right returns through
+navigation history. Unsupported targets, missing context or ambiguous calls use
+a conservative declaration chooser. No compiler or package installer runs for
+navigation. Settings → Editor → **Automatically close brackets and quotes**
+controls language-aware pairing, wrapping, overtyping and paired deletion.
+
+Developer Access keeps paper dropdowns, aligned loading indicators and centered
+severity badges. Tickets default to newest created first, with Oldest first and
+Recently updated options. Custom categories can be removed after all their
+tickets have been reassigned. Windows sync-managed sketches use local owned
+build storage; bounded file-lock handling and atomic saves retain unsaved text
+and report blockers without terminating backup programs. Ubuntu Bootstrap stages
+a persistent per-user application and registers one All Apps entry only after
+setup completes. Native Windows 11 keyboard-routing verification remains pending;
+hosted Windows CI is recorded separately.
+
 The November 10 follow-up gives compact **Actions** and **Options** the same
 cached glass as combo lists, with transparent, smoothly rounded popup corners.
 Settings opens through the main Qt event loop and releases its dialog on close;
@@ -19,8 +45,8 @@ typed directly without spin arrows. In Resources → Installed Packages, Ctrl+F
 focuses the package filter; in an opened sample, it finds source text, with
 F3/Shift+F3 for next/previous and Escape to return to reading. Ctrl+Click or F12
 offers recognized function, variable, type and macro declarations in the open
-sample files. Ambiguous names offer a location chooser; external headers and
-unsupported C++ constructs require the project editor's full context.
+sample files. Both editors now use the shared navigation backend described above;
+unsupported C++ constructs remain explicit choices rather than guessed targets.
 Update questions stay on top until dismissed. **Skip Updates** covers optional
 component and application source updates, takes effect during pending checks,
 and remains effective for the current run if its preference cannot be saved.
@@ -1335,15 +1361,16 @@ Both host entry points apply the saved board/library preparation mode before
 installing the package guard. Cloud and Developer Access remain independent
 of that setting.
 
-Rebuild the matching host’s public executable entries with `python3 direct/build_launcher_folder.py`; outputs stay inside `LAUNCHER`. The supplied binaries need no compiler. Generate the optional local shortcut and Applications menu entry with `bash direct/ubuntu/run.sh --install-shortcut`. The local `MCU Flasher.desktop` resolves the application beside itself and invokes Bash, so it can travel with the folder. Regenerate the Applications menu entry after moving the folder. Ubuntu uses its installed Python 3.10+ only for setup and the isolated native environment for the workspace. Keep `main/`, `src/` and `direct/` together.
+Rebuild the matching host’s public executable entries with `python3 direct/build_launcher_folder.py`; outputs stay inside `LAUNCHER`. The supplied binaries need no compiler. Ubuntu Bootstrap installs application sources under `$XDG_DATA_HOME/mcu-flasher/application` (normally `~/.local/share/mcu-flasher/application`), creates its runtime at that final path and registers **MCU Flasher** in All Apps after complete validation. Existing owned installations are reused; the forward-only source updater controls later source refreshes. Projects, prior caches and recovery journals remain at their original locations. Failed setup preserves its staged/installed source and does not publish a new menu entry. `--check` remains read-only. The optional `bash direct/ubuntu/run.sh --install-shortcut` still creates a movable folder shortcut and explicitly registers that folder. Keep `main/`, `src/` and `direct/` together.
 
 Ubuntu Files can show a generic gear icon for the raw Linux executables. For the
-actual MCU Flasher icon, run `bash direct/ubuntu/run.sh --install-shortcut` once
-and launch **MCU Flasher** from Applications or the generated folder shortcut.
+actual MCU Flasher icon, launch **MCU Flasher** from All Apps after Bootstrap,
+or generate an optional folder shortcut with `bash direct/ubuntu/run.sh --install-shortcut`.
 This registers the existing app artwork for your account; choose **Allow
 Launching** if Ubuntu asks. The folder shortcut's icon survives moves on that
 account. Generate shortcuts again on another computer/account, and refresh the
-Applications entry after moving the folder. Icon and Python app updates do not
+explicit folder registration after moving that folder. The automatic per-user
+installation keeps its fixed location. Icon and Python app updates do not
 require rebuilding the native launchers; rebuild them only when their native
 launcher source changes. The Rust/Tauri prototype is not a replacement release.
 

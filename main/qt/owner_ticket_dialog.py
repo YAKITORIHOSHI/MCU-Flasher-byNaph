@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QMenu, QPushButton, QCheckBox, QScrollArea,
 )
 
-from main.core.owner_tickets import OwnerTicketService, TicketChangeWatcher
+from main.core.owner_tickets import OwnerTicketService, TicketChangeWatcher, sort_tickets
 from main.qt.owner_ticket_style import (
     CircularSpinner, FloatingCopyButton, NeoCard, PortalDialog, ResponsiveGrid, ResponsiveRow,
     button, combo, copy_button, field, heading, label, refresh_portal_children, retone, scroll_body,
@@ -119,6 +119,9 @@ class _TaskPortal(PortalDialog):
         self._task_callback = None
         self._task_queue = []
         self.spinner = CircularSpinner(self.backdrop, size=24, color="#135f73")
+        policy = self.spinner.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.spinner.setSizePolicy(policy)
         self.spinner.hide()
 
     def _start_task(self, operation, function, callback):
@@ -163,6 +166,31 @@ class _TaskPortal(PortalDialog):
     def _set_busy(self, busy):
         if hasattr(self, "spinner") and self.spinner is not None:
             self.spinner.set_busy(busy)
+
+    def _remove_ticket_category(self, category):
+        if self._task_name or self.service is None:
+            return
+        self._run_task("remove-category", lambda: self.service.remove_ticket_category(category),
+                       self._category_removed)
+
+    def _category_removed(self, result, error):
+        fields = getattr(self, "fields", None) or getattr(self, "new_fields", None)
+        if fields is None:
+            return
+        if error or not result:
+            fields.show_category_feedback(error or "The category could not be removed.", "fail")
+            return
+        ok, message, categories = result
+        if ok:
+            if hasattr(self, "categories"):
+                self.categories = list(categories)
+            if hasattr(self, "_config"):
+                self._config["ticket_categories"] = list(categories)
+                self._sync_category_options()
+            fields.set_categories(categories, current=categories[0] if categories else "")
+            if hasattr(self, "categories_updated"):
+                self.categories_updated.emit(list(categories))
+        fields.show_category_feedback(message, "ok" if ok else "warn")
 
 
 class DeveloperLiveWallpaper(QWidget):
@@ -282,6 +310,7 @@ class TicketFields(QWidget):
     """Shared create/edit fields; narrow windows stack classifications."""
 
     category_add_requested = Signal(str)
+    category_remove_requested = Signal(str)
 
     def __init__(self, parent, ticket=None, categories=None):
         super().__init__(parent)
@@ -294,6 +323,19 @@ class TicketFields(QWidget):
         layout.addWidget(field("Title", self.title, self))
         self.category = combo(list(categories or CATEGORIES), self, ticket.get("category", CATEGORIES[0]))
         category_field = field("Category", self.category, self)
+        category_field.layout().removeWidget(self.category)
+        category_controls = QWidget(category_field)
+        category_controls_layout = QHBoxLayout(category_controls)
+        category_controls_layout.setContentsMargins(0, 0, 0, 0)
+        category_controls_layout.setSpacing(6)
+        category_controls_layout.addWidget(self.category, 1)
+        self.btn_remove_category = button("", category_controls,
+            lambda: self.category_remove_requested.emit(self.category.currentText()), role="icon", vector="clear")
+        self.btn_remove_category.setFixedWidth(36)
+        self.btn_remove_category.setAccessibleName("Remove selected category")
+        self.btn_remove_category.setToolTip("Remove this custom category after reassigning its tickets")
+        category_controls_layout.addWidget(self.btn_remove_category)
+        category_field.layout().addWidget(category_controls)
         category_entry = QWidget(category_field)
         category_row = QHBoxLayout(category_entry)
         category_row.setContentsMargins(0, 0, 0, 0)
@@ -417,8 +459,9 @@ class TicketCard(NeoCard):
         self.severity_label = label(severity, self, "severity", wrap=True)
         self.severity_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.severity_label.setReadingHeightLimit(80)
+        self.severity_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         retone(self.severity_label, SEVERITY_TONES.get(severity, "muted"))
-        controls.addWidget(self.severity_label, 1)
+        controls.addWidget(self.severity_label, 1, Qt.AlignmentFlag.AlignVCenter)
         self.status_cb = combo(STATUSES, self, ticket.get("status", "Open"))
         self.status_cb.setAccessibleName("Ticket status")
         self.status_cb.setMaximumWidth(155)
@@ -537,6 +580,7 @@ class CreateTicketDialog(_TaskPortal):
         fields_layout.setSpacing(16)
         self.fields = TicketFields(card, categories=self.categories)
         self.fields.category_add_requested.connect(self._add_ticket_category)
+        self.fields.category_remove_requested.connect(self._remove_ticket_category)
         fields_layout.addWidget(self.fields)
 
         self.txt_title = self.fields.title
@@ -553,7 +597,7 @@ class CreateTicketDialog(_TaskPortal):
         footer.addStretch(1)
         self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.btn_cancel)
-        footer.addWidget(self.spinner)
+        footer.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_save = button("Create ticket", self.backdrop, self._do_save, role="primary", vector="save")
         footer.addWidget(self.btn_save)
         self.content.addLayout(footer)
@@ -669,6 +713,7 @@ class EditTicketDialog(_TaskPortal):
         fields_layout.setContentsMargins(20, 20, 20, 20)
         self.fields = TicketFields(card, ticket, self.categories)
         self.fields.category_add_requested.connect(self._add_ticket_category)
+        self.fields.category_remove_requested.connect(self._remove_ticket_category)
         fields_layout.addWidget(self.fields)
         self.txt_title = self.fields.title
         self.cb_category = self.fields.category
@@ -682,7 +727,7 @@ class EditTicketDialog(_TaskPortal):
         footer.addStretch(1)
         self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.btn_cancel)
-        footer.addWidget(self.spinner)
+        footer.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_save = button("Save changes", self.backdrop, self._do_save, role="primary", vector="save")
         footer.addWidget(self.btn_save)
         self.content.addLayout(footer)
@@ -1371,8 +1416,12 @@ class OwnerTicketDialog(_TaskPortal):
         self.category_filter.setAccessibleName("Filter tickets by category")
         self.category_filter.setMaximumWidth(190)
         self.category_filter.currentTextChanged.connect(self._on_category_filter_changed)
+        self.sort_cb = combo(["Newest first", "Oldest first", "Recently updated"], page)
+        self.sort_cb.setAccessibleName("Sort tickets")
+        self.sort_cb.setMaximumWidth(180)
+        self.sort_cb.currentTextChanged.connect(lambda _text: self._render_tickets_list())
         self.search_row = ResponsiveRow(
-            [(self.search_input, 1), (self.filter_cb, 0), (self.category_filter, 0)],
+            [(self.search_input, 1), (self.filter_cb, 0), (self.category_filter, 0), (self.sort_cb, 0)],
             page, compact_width=720)
         outer.addWidget(self.search_row)
 
@@ -1409,6 +1458,7 @@ class OwnerTicketDialog(_TaskPortal):
         form.addWidget(label("New ticket", self.form_card, "title"))
         self._cached_new_fields = TicketFields(self.form_card, categories=self._category_options())
         self._cached_new_fields.category_add_requested.connect(self._add_ticket_category)
+        self._cached_new_fields.category_remove_requested.connect(self._remove_ticket_category)
         form.addWidget(self._cached_new_fields)
         self._cached_new_title = self._cached_new_fields.title
         self._cached_new_category = self._cached_new_fields.category
@@ -1646,6 +1696,7 @@ class OwnerTicketDialog(_TaskPortal):
                     and (self._active_category_filter in ("All", "All categories")
                          or str(ticket.get("category", "")).casefold() == self._active_category_filter.casefold())
                     and (not query or query in " ".join(str(ticket.get(key, "")) for key in ("title", "description", "category")).lower())]
+        filtered = sort_tickets(filtered, self.sort_cb.currentText())
         if not filtered:
             empty = NeoCard(self.cards_container)
             box = QVBoxLayout(empty)

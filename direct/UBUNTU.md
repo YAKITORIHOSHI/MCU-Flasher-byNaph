@@ -1,5 +1,24 @@
 # Ubuntu setup and platform behavior
 
+## Persistent per-user installation
+
+Ubuntu Bootstrap copies verified application sources to
+`$XDG_DATA_HOME/mcu-flasher/application` (default
+`~/.local/share/mcu-flasher/application`) before preparing `.venv-linux` there.
+The All Apps entry and icon are published only after runtime, native tools,
+board toolchains and default-folder validation succeed. Repeated setup reuses
+the same owned installation, preserving its runtime and using the existing
+forward-only updater for later application sources. A portable copy never
+overwrites a newer installed source copy. Valid private preferences are seeded
+into a new installation; accounts, sketches, protected caches and AI journals
+are not copied or removed. Interrupted staging is retained for recovery and an
+unknown destination is refused. `--check` remains read-only.
+
+Launch **MCU Flasher** from All Apps after setup. The optional
+`--install-shortcut` command explicitly registers the folder it is run from;
+that movable-folder feature remains separate from automatic installation.
+Mint, Fedora and macOS keep their own existing setup policies.
+
 Windows 10/11 keeps its downloaded Python in `src/_python` and its dependencies
 in `env`. Ubuntu 24.04/26.04 uses native Linux launchers and its separately
 prepared `.venv-linux`. Preserve both Windows directories when cleaning Ubuntu

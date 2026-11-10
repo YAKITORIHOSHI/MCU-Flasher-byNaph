@@ -17,6 +17,36 @@ from SCons.Script import COMMAND_LINE_TARGETS  # noqa: E402
 _RECORD = "mcu-used-libraries.json"
 
 
+def _record_navigation_context():
+    includes = [env.Dir(env.subst(str(path))).get_abspath() for path in env.get("CPPPATH", [])]  # noqa: F821
+    for builder in env.GetLibBuilders():  # noqa: F821
+        if builder.is_dependent:
+            includes.extend(builder.env.Dir(builder.env.subst(str(path))).get_abspath()
+                            for path in builder.env.get("CPPPATH", []))
+    defines = env.get("CPPDEFINES", [])  # noqa: F821
+    flags = []
+    for define in defines:
+        if isinstance(define, (tuple, list)):
+            flags.append("-D" + str(define[0]) + ("=" + str(define[1]) if len(define) > 1 else ""))
+        else:
+            flags.append("-D" + str(define))
+    flags += [str(flag) for key in ("CCFLAGS", "CXXFLAGS") for flag in env.get(key, [])]  # noqa: F821
+    value = {"schema": 1, "includes": list(dict.fromkeys(os.path.abspath(path) for path in includes)),
+             "flags": flags, "compiler": env.subst("$CXX")}  # noqa: F821
+    path = os.path.join(env.subst("$BUILD_DIR"), "mcu-navigation.json")  # noqa: F821
+    content = json.dumps(value, sort_keys=True, indent=0)
+    try:
+        with open(path, encoding="utf-8") as stream:
+            if stream.read() == content:
+                return
+    except OSError:
+        pass
+    temporary = path + f".{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as stream:
+        stream.write(content)
+    os.replace(temporary, path)
+
+
 def _enable_object_cache():
     directory = os.environ.get("MCU_FLASHER_OBJECT_CACHE")
     if directory and not env.get("MCU_FLASHER_OBJECT_CACHE_READY"):  # noqa: F821
@@ -49,6 +79,7 @@ def _record_used_libraries():
 try:
     if env.get("MCU_FLASHER_HOOK_PRE_DONE"):  # noqa: F821
         _record_used_libraries()
+        _record_navigation_context()
     else:
         env["MCU_FLASHER_HOOK_PRE_DONE"] = True  # noqa: F821
         _enable_object_cache()

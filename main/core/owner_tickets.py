@@ -24,6 +24,8 @@ from threading import Thread
 import urllib.request
 import urllib.error
 import unicodedata
+import math
+from functools import wraps
 from urllib.parse import quote, urlencode, urlsplit
 from pathlib import Path
 from datetime import datetime, timezone
@@ -60,6 +62,37 @@ _KEPT_SESSION_RECORD = "developer-session:"
 _STREAM_READ_TIMEOUT = 75.0
 _STREAM_LINE_LIMIT = 64 * 1024
 _POLL_INTERVAL = 30.0
+_TICKET_CHANGE_LOCK = threading.RLock()
+
+
+def _serialized_ticket_change(function):
+    @wraps(function)
+    def change(*args, **kwargs):
+        with _TICKET_CHANGE_LOCK:
+            return function(*args, **kwargs)
+    return change
+
+
+def sort_tickets(tickets, order="Newest first"):
+    """Chronological ordering independent of severity, status and server order."""
+    def timestamp(value):
+        try:
+            if isinstance(value, (int, float)):
+                number = float(value)
+            else:
+                date = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+                number = date.replace(tzinfo=date.tzinfo or timezone.utc).timestamp()
+            return number if math.isfinite(number) else 0.0
+        except (ValueError, TypeError, OverflowError, OSError):
+            return 0.0
+
+    def key(ticket):
+        created = timestamp(ticket.get("created_at"))
+        value = ((timestamp(ticket.get("updated_at")) or created)
+                 if order == "Recently updated" else created)
+        return (value == 0, value if order == "Oldest first" else -value,
+                str(ticket.get("id", "")))
+    return sorted(tickets, key=key)
 
 
 def _clean_ticket_category(value: Any) -> str:
@@ -305,6 +338,7 @@ class OwnerTicketService:
         """Return the built-in starting set plus saved user-defined categories."""
         return _normalize_ticket_categories(self._read_config().get("ticket_categories"))
 
+    @_serialized_ticket_change
     def add_ticket_category(self, value: str) -> tuple[bool, str, list[str]]:
         """Add a bounded category to the per-user developer portal settings."""
         if not isinstance(value, str) or any(unicodedata.category(char) == "Cc" for char in value):
@@ -323,6 +357,48 @@ class OwnerTicketService:
         if not self.save_config({"ticket_categories": categories}):
             return False, "The category could not be saved. Try again.", self.get_ticket_categories()
         return True, f"Added {category}.", categories
+
+    @_serialized_ticket_change
+    def remove_ticket_category(self, value: str) -> tuple[bool, str, list[str]]:
+        """Remove only unused custom choices after a fresh local/cloud use check.
+
+        Ticket mutations in this process share the same lock. Cloud access must
+        succeed when signed in; a cached offline snapshot cannot prove non-use.
+        Existing ticket records are never deleted or rewritten by this action.
+        """
+        categories = self.get_ticket_categories()
+        category = next((item for item in categories
+                         if isinstance(value, str) and item.casefold() == value.casefold()), None)
+        if category is None:
+            return False, "That category is no longer available.", categories
+        if category in _DEFAULT_TICKET_CATEGORIES:
+            return False, "Built-in categories cannot be removed.", categories
+        try:
+            tickets = list(self._read_local_tickets())
+            if self.is_cloud_authenticated:
+                url = self._get_firebase_tickets_url(root_collection=self._active_root_collection)
+                if not url:
+                    raise ValueError("Cloud ticket location is unavailable")
+                request = urllib.request.Request(url, headers={"User-Agent": "MCUFlasher-OwnerApp/1.0"})
+                with _open_firebase_request(request, timeout=4.0) as response:
+                    remote = _read_firebase_json(response, _TICKET_RESPONSE_BYTES)
+                if remote is not None and not isinstance(remote, dict):
+                    raise ValueError("Invalid cloud ticket snapshot")
+                tickets.extend(item for item in (remote or {}).values() if isinstance(item, dict))
+            tickets.extend(self._read_local_tickets())
+            used = {str(ticket.get("id", index)) for index, ticket in enumerate(tickets)
+                    if str(ticket.get("category", "")).casefold() == category.casefold()}
+            if used:
+                return False, f"Reassign {len(used)} ticket(s) to another category before removing {category}.", categories
+            # Re-read settings immediately before publishing; retain categories
+            # added while the remote snapshot was being fetched.
+            categories = self.get_ticket_categories()
+            remaining = [item for item in categories if item.casefold() != category.casefold()]
+            if not self.save_config({"ticket_categories": remaining}):
+                return False, "The category could not be removed. Try again.", self.get_ticket_categories()
+            return True, f"Removed {category}.", remaining
+        except Exception:
+            return False, "Could not verify current ticket usage. Refresh the connection and try again.", categories
 
     def update_vault(self, updates: Dict[str, Any]) -> bool:
         """Compatibility entry point: save to the current user's OS vault."""
@@ -863,6 +939,7 @@ class OwnerTicketService:
             except Exception:
                 return []
 
+    @_serialized_ticket_change
     def create_ticket(
         self,
         title: str,
@@ -909,6 +986,7 @@ class OwnerTicketService:
         except Exception:
             return {}
 
+    @_serialized_ticket_change
     def update_ticket(self, ticket_id: str, updates: Dict[str, Any]) -> bool:
         """Update existing issue ticket fields (status, severity, notes)."""
         try:
@@ -1009,21 +1087,7 @@ class OwnerTicketService:
                     pass
 
     def _sort_tickets(self, tickets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Sort tickets with Open & Critical tickets at the top."""
-        try:
-            status_weight = {"Open": 0, "In Progress": 1, "Resolved": 2, "Closed": 3}
-            severity_weight = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
-
-            def _key(t: Dict[str, Any]):
-                st = status_weight.get(t.get("status", "Open"), 1)
-                sev = severity_weight.get(t.get("severity", "Medium"), 2)
-                created = t.get("created_at", "")
-                created_ts = self._parse_timestamp(created) if created else 0.0
-                return (st, sev, -created_ts)
-
-            return sorted(tickets, key=_key)
-        except Exception:
-            return tickets
+        return sort_tickets(tickets)
 
     def _push_to_firebase(self, ticket: Dict[str, Any]) -> None:
         try:

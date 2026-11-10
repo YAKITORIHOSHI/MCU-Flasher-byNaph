@@ -226,7 +226,7 @@ class QtResponsiveChecks(ControlChecks):
         from main.qt import terminal_panel, ai_panel
         constants = SimpleNamespace(**{name: 1 << index for index, name in enumerate((
             'SWP_FRAMECHANGED', 'SWP_NOZORDER', 'SWP_NOACTIVATE',
-            'SWP_SHOWWINDOW', 'SWP_HIDEWINDOW', 'SW_SHOW', 'SW_HIDE'))})
+            'SWP_SHOWWINDOW', 'SWP_HIDEWINDOW', 'SW_SHOW', 'SW_SHOWNA', 'SW_HIDE'))})
         container = SimpleNamespace(winId=lambda: 44)
         for module, method, field in ((terminal_panel, terminal_panel.TerminalPanel._resize_embedded_terminal, '_term_hwnd'),
                                       (ai_panel, ai_panel.AIPanel._resize_embedded_ai, '_ai_hwnd')):

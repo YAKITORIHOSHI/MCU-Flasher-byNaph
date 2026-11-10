@@ -492,6 +492,7 @@ class LauncherChecks(unittest.TestCase):
         audit.mkdir(parents=True, exist_ok=True)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit)))
         self.stack.enter_context(patch.object(launch, "ROOT", self.root))
+        self.stack.enter_context(patch.object(launch, "persistent_setup_root", return_value=self.root))
         self.stack.enter_context(patch("direct.ubuntu.preflight.host_preflight"))
         self.stack.enter_context(patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True))
         self.stack.enter_context(patch.object(launch.os, "geteuid", return_value=1000))

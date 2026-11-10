@@ -89,6 +89,7 @@ class ControlChecks(unittest.TestCase):
                             ("get_autosave_settings", (False, 1200)), ("get_reset_on_baud_change", False)):
             self.stack.enter_context(patch.object(settings_module, name, return_value=value))
         self.save = self.stack.enter_context(patch.object(settings_module, "_save_raw_config", return_value=True))
+        self.stack.enter_context(patch.object(settings_module, "get_editor_auto_pairs", return_value=True))
         self.stack.enter_context(patch("src.dbs.dbs_create.add_notification"))
         self.stack.enter_context(patch.object(QMessageBox, "warning"))
         self.stack.enter_context(patch.object(QMessageBox, "critical"))
@@ -653,6 +654,30 @@ class ControlChecks(unittest.TestCase):
         toolbar._do_compile()
         window._editor_panel.trigger_save_all.call_args.kwargs["callback"]()
         self.backend.compile_sketch.assert_called_once()
+
+    def test_stale_workspace_display_operation_does_not_disable_a_ready_target(self):
+        window = self.own(QMainWindow())
+        window._active_operation = "upload"
+        toolbar = PrimaryToolbar(self.backend, window)
+        window.addToolBar(toolbar)
+        self.backend.current_board, self.backend.current_port = "Demo", "COM99"
+        toolbar._update_action_button_states()
+        self.assertTrue(toolbar.btn_upload.isEnabled())
+        self.backend.active_operation = "upload"
+        self.backend._current_op_phase = "flashing"
+        toolbar._update_action_button_states()
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.assertIn("flashing", toolbar.btn_upload.toolTip())
+        self.backend.active_operation = self.backend._current_op_phase = None
+        window._ghost_save_in_progress = True
+        toolbar._update_action_button_states()
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.assertIn("saving the Ghost Sketch", toolbar.btn_upload.toolTip())
+        window._ghost_save_in_progress = False
+        window._ghost_sketch = SimpleNamespace(needs_recovery=True)
+        toolbar._update_action_button_states()
+        self.assertFalse(toolbar.btn_upload.isEnabled())
+        self.assertIn("recovery", toolbar.btn_upload.toolTip())
 
     def test_failed_or_timed_out_save_allows_a_fresh_build_request(self):
         from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel

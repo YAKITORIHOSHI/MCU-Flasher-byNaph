@@ -105,8 +105,8 @@ class SampleViewerChecks(unittest.TestCase):
         self.assertEqual(len(choices), 2)
 
     def test_ambiguous_f12_offers_locations_and_navigates_only_after_choice(self):
-        self.files[0].write_text('void blink() {}\nvoid run() { blink(); }\n', encoding="utf-8")
-        self.files[1].write_text('void blink(int n) {}\n', encoding="utf-8")
+        self.files[0].write_text('void blink(int n) {}\nvoid run() { blink(unknown); }\n', encoding="utf-8")
+        self.files[1].write_text('void blink(float n) {}\n', encoding="utf-8")
         window = self.window()
         editor = window.tabs.currentWidget()
         editor.setCursorPosition(1, 15)
@@ -124,6 +124,39 @@ class SampleViewerChecks(unittest.TestCase):
         self.assertEqual(window.tabs.currentIndex(), 1)
         self.assertEqual(window.tabs.currentWidget().selectedText(), "blink")
         self.assertTrue(window.tabs.currentWidget().isReadOnly())
+
+    def test_overloads_use_call_arity_and_library_header_opens_a_locked_preview(self):
+        library = self.folder / 'library/src'
+        library.mkdir(parents=True)
+        header = library / 'motor.h'
+        header.write_text('void stepRun();\nvoid stepRun(int value);\n', encoding='utf-8')
+        source = '#include <motor.h>\nvoid run() { stepRun(4); }\n'
+        self.files[0].write_text(source, encoding='utf-8')
+        window = self.window()
+        window._include_roots = (str(library),)
+        original = window.tabs.currentWidget()
+        original.setCursorPosition(1, 16)
+        window.definition_at_cursor()
+        deadline = time.monotonic() + 5
+        while window._preview_editor is None and time.monotonic() < deadline:
+            QTest.qWait(10)
+        preview = window._preview_editor
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.file_path, str(header))
+        self.assertEqual(preview.getSelection()[0], 1)
+        self.assertEqual(preview.selectedText(), 'stepRun')
+        self.assertTrue(preview.isReadOnly())
+        preview.setFocus()
+        QTest.keyClicks(preview, 'UNWANTED')
+        self.assertEqual(header.read_text(), 'void stepRun();\nvoid stepRun(int value);\n')
+        window._history_move(-1)
+        self.assertIs(window.tabs.currentWidget(), original)
+        self.assertEqual(original.getCursorPosition(), (1, 16))
+        window._history_move(1)
+        self.assertIs(window.tabs.currentWidget(), preview)
+        window._close_preview()
+        self.assertEqual(window.tabs.count(), len(self.files))
+        self.assertEqual(original.text(), source)
 
     def test_sample_process_never_imports_workspace_qt_toolkit(self):
         self.assertFalse(any(name == "PySide6" or name.startswith("PySide6.")

@@ -56,6 +56,7 @@ class _AIEmbedContainer(QWidget):
     def __init__(self, panel: "AIPanel", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._panel = panel
+        self.setProperty("mcuForeignInput", True)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setMinimumWidth(80)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -396,7 +397,7 @@ class AIPanel(QWidget):
                 self._resize_embedded_ai(show=False)
                 self._stack.setCurrentWidget(self._loader_card)
             else:
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNA)
                 self._resize_embedded_ai(show=True)
                 self._stack.setCurrentWidget(self._embed_container)
                 self._loader_card.finish()
@@ -445,7 +446,7 @@ class AIPanel(QWidget):
         self._is_ready = True
         self._loader_card.finish()
         if self._ai_hwnd and win32gui and win32con and win32gui.IsWindow(int(self._ai_hwnd)):
-            win32gui.ShowWindow(int(self._ai_hwnd), win32con.SW_SHOW)
+            win32gui.ShowWindow(int(self._ai_hwnd), win32con.SW_SHOWNA)
             self._resize_embedded_ai(show=True)
         self._stack.setCurrentWidget(self._embed_container)
 
@@ -464,12 +465,12 @@ class AIPanel(QWidget):
             from main.qt.responsive import native_client_size
             w, h = native_client_size(self._embed_container, win32gui)
 
-            should_show = self._is_ready if show is None else show
-            flags = win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER
+            should_show = self.isVisible() and self._is_ready and show is not False
+            flags = win32con.SWP_FRAMECHANGED | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
             if should_show:
                 flags |= win32con.SWP_SHOWWINDOW
             else:
-                flags |= win32con.SWP_NOACTIVATE
+                flags |= win32con.SWP_HIDEWINDOW
 
             hwnd = int(self._ai_hwnd)
             win32gui.SetWindowPos(hwnd, 0, 0, 0, w, h, flags)

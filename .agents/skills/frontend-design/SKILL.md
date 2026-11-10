@@ -1,10 +1,27 @@
 ---
 name: frontend-design
-description: Guidance for intentional visual design, rounded alpha glass combos and compact menus, steady OpenCode columns, theme-matched editor/terminal surfaces and restrained loading feedback. Helps with typography and choices specific to the application.
+description: "Design MCU Flasher glass workspaces and explicit terminal close controls, paper Developer Access dropdowns, stable spinner/badge layouts, responsive editor/terminal surfaces and restrained loading feedback."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+## Terminal close controls and portal details
+
+Terminal tabs use explicit TabCloseButton painting; native stylesheet close
+primitives can disappear. Paint the mark with selected-chip or ordinary tab ink,
+preserve an 18px target and stable label geometry, and keep all controls within
+the header. Both Windows and POSIX terminal tab bars share this implementation.
+Floating Notifications uses the shared close icon. Verify rendering and clicks
+across themes with svg_icons, plus responsive and native layout scales.
+
+Developer Access dropdowns explicitly select paper popup mode in combo_popup.py:
+cream/white paper, black border, yellow selection and native list behavior.
+Workspace combos keep glass. Center severity inside its card row and reserve
+new/edit spinner space while hidden, aligning it vertically with footer actions.
+Keep category removal feedback wrapped, drafts intact and sort/filter controls
+reachable in narrow windows.
+
 
 ## Short native window budgets
 

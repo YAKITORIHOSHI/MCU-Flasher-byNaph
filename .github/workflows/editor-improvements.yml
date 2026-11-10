@@ -1,0 +1,78 @@
+name: Editor and input improvements
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: '3.11'
+            qt: 'PySide6>=6.7,<6.12'
+          - os: windows-latest
+            python: '3.14'
+            qt: 'PySide6>=6.12,<7'
+          - os: ubuntu-24.04
+            python: '3.12'
+            qt: 'PySide6>=6.12,<7'
+          - os: ubuntu-26.04
+            python: '3.14'
+            qt: 'PySide6>=6.12,<7'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONFAULTHANDLER: '1'
+      QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Private Windows fixture runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv env
+          & env/Scripts/python.exe -m pip install '${{ matrix.qt }}' 'PyQt5>=5.15,<6' 'QScintilla>=2.14,<3' 'libclang==18.1.1' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets pywinpty pywin32
+          exit $LASTEXITCODE
+      - name: Private Ubuntu fixture runtime
+        if: runner.os == 'Linux'
+        run: |
+          python -m venv .venv-linux
+          .venv-linux/bin/python -m pip install '${{ matrix.qt }}' 'PyQt5>=5.15,<6' 'QScintilla>=2.14,<3' 'libclang==18.1.1' 'psutil>=5.9,<8' 'requests>=2.31,<3' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libnss3 libnspr4 libgbm1 libdbus-1-3 libfontconfig1 libxkbcommon0
+      - name: Windows isolated regression checks
+        if: runner.os == 'Windows'
+        run: env/Scripts/python.exe -B direct/run_verifiers.py --jobs 2 editor_features source_navigation native_input file_access user_install owner_tickets owner_ticket_service library_samples controls svg_icons
+      - name: Real Windows foreign-process keyboard queues
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: env/Scripts/python.exe -B direct/verify_native_input.py --native
+      - name: Windows terminal protocol and input
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: windows
+        run: env/Scripts/python.exe -B direct/verify_terminal.py
+      - name: Ubuntu isolated regression checks
+        if: runner.os == 'Linux'
+        run: .venv-linux/bin/python -B direct/run_verifiers.py --jobs 2 editor_features source_navigation native_input file_access user_install owner_tickets owner_ticket_service library_samples controls svg_icons ubuntu_bootstrap
+      - name: Verification logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: editor-input-${{ matrix.os }}-python-${{ matrix.python }}
+          path: |
+            temp/audit/verifier-runs/*.log
+            temp/audit/terminal
+          if-no-files-found: warn

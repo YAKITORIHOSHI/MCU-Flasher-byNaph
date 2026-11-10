@@ -40,6 +40,57 @@ class Response:
 
 
 class OwnerTicketServiceChecks(unittest.TestCase):
+    def test_unused_custom_category_removal_preserves_defaults_and_used_ticket_history(self):
+        saved = {"ticket_categories": ["Custom fixture"]}
+        def save(updates):
+            saved.update(updates)
+            return True
+        with patch.object(self.service, "_read_config", side_effect=lambda: dict(saved)):
+            self.service.save_config.side_effect = save
+            self.service._read_local_tickets.return_value = [{"id":"used", "category":"Custom fixture"}]
+            ok, message, _ = self.service.remove_ticket_category("Custom fixture")
+            self.assertFalse(ok)
+            self.assertIn("Reassign", message)
+            self.service.save_config.assert_not_called()
+            self.assertFalse(self.service.remove_ticket_category(owner._DEFAULT_TICKET_CATEGORIES[0])[0])
+            self.service._read_local_tickets.return_value = [{"id":"used", "category":"General Defect"}]
+            ok, _, categories = self.service.remove_ticket_category("Custom fixture")
+            self.assertTrue(ok)
+            self.assertNotIn("Custom fixture", categories)
+            self.assertEqual(categories, list(owner._DEFAULT_TICKET_CATEGORIES))
+            self.service._save_local_tickets.assert_not_called()
+
+    def test_category_removal_rechecks_cloud_and_local_usage_and_refuses_unverified_snapshots(self):
+        self.service._is_authenticated = True
+        self.service._uid, self.service._id_token = "fixture-uid", "fixture-token"
+        saved = {"ticket_categories": ["Custom fixture"]}
+        with patch.object(self.service, "_read_config", return_value=saved), \
+                patch.object(self.service, "_get_firebase_tickets_url", return_value=self.config["firebase_database_url"] + "/fixture.json"):
+            self.http.side_effect = None
+            self.http.return_value = Response({"remote":{"id":"remote", "category":"Custom fixture"}})
+            self.assertFalse(self.service.remove_ticket_category("Custom fixture")[0])
+            self.service.save_config.assert_not_called()
+            self.http.return_value = Response(None)
+            self.service._read_local_tickets.side_effect = [[], [{"id":"new", "category":"Custom fixture"}]]
+            self.assertFalse(self.service.remove_ticket_category("Custom fixture")[0])
+            self.service.save_config.assert_not_called()
+            self.service._read_local_tickets.side_effect = None
+            self.http.side_effect = TimeoutError("fixture offline")
+            ok, message, _ = self.service.remove_ticket_category("Custom fixture")
+            self.assertFalse(ok)
+            self.assertIn("Could not verify", message)
+            self.service.save_config.assert_not_called()
+
+    def test_ticket_sorting_uses_dates_before_status_or_severity_and_handles_missing_dates(self):
+        tickets = [
+            {"id":"old", "created_at":"2026-01-01T00:00:00Z", "updated_at":"2026-11-10T00:00:00Z", "status":"Open", "severity":"Critical"},
+            {"id":"new", "created_at":"2026-11-09T08:00:00+08:00", "status":"Closed", "severity":"Low"},
+            {"id":"missing", "created_at":"invalid"},
+        ]
+        self.assertEqual([item["id"] for item in owner.sort_tickets(tickets)], ["new", "old", "missing"])
+        self.assertEqual([item["id"] for item in owner.sort_tickets(tickets, "Oldest first")], ["old", "new", "missing"])
+        self.assertEqual([item["id"] for item in owner.sort_tickets(tickets, "Recently updated")], ["old", "new", "missing"])
+
     def test_custom_categories_persist_with_defaults_and_reject_invalid_or_duplicate_names(self):
         saved = {}
         def save(updates):

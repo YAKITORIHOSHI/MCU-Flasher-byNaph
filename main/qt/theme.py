@@ -40,6 +40,16 @@ def install_no_focus_lines(app=None) -> bool:
         return False
 
     class NoFocusLineStyle(QProxyStyle):
+        def standardIcon(self, standard, option=None, widget=None):
+            if standard in (self.StandardPixmap.SP_TitleBarCloseButton,
+                            self.StandardPixmap.SP_DockWidgetCloseButton):
+                from main.qt.icons import icon
+                from PySide6.QtGui import QPalette
+                ink = (widget.palette().color(QPalette.ColorRole.WindowText).name()
+                       if widget is not None else None)
+                return icon("close", ink, size=16)
+            return super().standardIcon(standard, option, widget)
+
         def polish(self, target):
             if (isinstance(target, (QAbstractButton, QAbstractSlider, QTabBar, QTabWidget))
                     or (isinstance(target, QComboBox) and not target.isEditable())):

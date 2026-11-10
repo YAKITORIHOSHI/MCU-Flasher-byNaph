@@ -287,7 +287,9 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             Object.keys(hosts).forEach(k => {
                 if (hosts[k]) hosts[k].classList.toggle("active", k === activeShell);
             });
+            const selectedShell = activeShell;
             window.requestAnimationFrame(() => {
+                if (selectedShell !== activeShell) return;
                 const host = hosts[activeShell];
                 if (host && host.offsetWidth > 40 && host.offsetHeight > 40) {
                     if (fitAddons[activeShell]) {
@@ -296,7 +298,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     if (terminals[activeShell]) {
                         try {
                             terminals[activeShell].refresh(0, terminals[activeShell].rows - 1);
-                            terminals[activeShell].focus();
+                            if (document.hasFocus()) terminals[activeShell].focus();
                         } catch (e) {}
                     }
                     sendResize(activeShell);

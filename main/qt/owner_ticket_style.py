@@ -446,6 +446,10 @@ def copy_button(target=None, parent=None) -> FloatingCopyButton:
 
 
 class PortalComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setProperty("mcuPopupStyle", "paper")
+
     def wheelEvent(self, event):
         # Ignore mouse wheel changes when dropdown view is not open to avoid accidental status changes during scrolling
         if not self.view().isVisible():

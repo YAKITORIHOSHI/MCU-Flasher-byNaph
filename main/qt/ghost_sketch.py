@@ -206,7 +206,7 @@ class GhostSketchController(QObject):
             for window, _ in self._locked_windows:
                 window.setEnabled(False)
             script = ("if (window.editorInstance) { if (!Object.hasOwn(window, '__mcuGhostReadOnly')) { "
-                      "window.__mcuGhostReadOnly = window.editorInstance.getRawOptions().readOnly; } "
+                      "window.__mcuGhostReadOnly = window.getRequestedEditorReadOnly?.() ?? window.editorInstance.getRawOptions().readOnly; } "
                       "window.editorInstance.updateOptions({readOnly:true}); }")
         else:
             for window, enabled in self._locked_windows:
@@ -340,5 +340,8 @@ class GhostSketchController(QObject):
         self._lock(False, keep_editor_locked=keep_editor_locked)
         self.is_saving = False
         self.workspace._ghost_save_in_progress = False
+        toolbar = getattr(self.workspace, "_primary_toolbar", None)
+        if toolbar is not None:
+            toolbar._update_action_button_states()
         if callback:
             callback()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -82,9 +83,20 @@ def desktop_entry(root: Path, *, portable: bool = False) -> str:
 
 def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
     """Keep icon/theme directory timestamps stable on repeated registration."""
+    if path.is_symlink():
+        raise OSError("A registered application file must not be a symbolic link")
     if not path.is_file() or path.read_bytes() != contents:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(contents)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".mcu-registration-", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(contents)
+            temporary.chmod(mode)
+            temporary.replace(path)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
     if path.stat().st_mode & 0o777 != mode:
         path.chmod(mode)
 

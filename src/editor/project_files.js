@@ -131,8 +131,8 @@
     // Invalidate earlier listings before publishing or awaiting persistence:
     // their replies may still arrive within this same project generation.
     window.__mcuProjectFileListRevision = (window.__mcuProjectFileListRevision || 0) + 1;
-    window.projectFileList = store.list().map(file => ({name:file.name, path:file.path}));
-    const paths = Array.from(document.querySelectorAll('#tab-bar .tab'), tab => tab._filePath)
+    window.projectFileList = store.list().filter(file => !file.preview).map(file => ({name:file.name, path:file.path}));
+    const paths = Array.from(document.querySelectorAll('#tab-bar .tab:not([data-preview])'), tab => tab._filePath)
       .filter(Boolean);
     if (api.save_project_tab_order) {
       await api.save_project_tab_order(renderer, change.path, paths);
@@ -168,7 +168,8 @@
     const paths = new Map(Object.entries(mapping).map(([oldPath, newPath]) => [key(oldPath), newPath]));
     const destinations = new Set(Array.from(paths.values(), key));
     if (destinations.size !== paths.size) return false;
-    const files = store.list();
+    window.closeAllSourcePreviews?.();
+    const files = store.list().filter(file => !file.preview);
     const moves = files.map(file => ({file, tab:tabFor(store, file), oldPath:file.path,
       newPath:paths.get(key(file.path)) || (destinations.has(key(file.path)) ? file.path : '')}));
     // Validate the whole loaded set before changing any path. An incomplete

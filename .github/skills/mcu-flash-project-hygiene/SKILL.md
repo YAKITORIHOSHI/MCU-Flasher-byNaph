@@ -1,9 +1,15 @@
 ---
 name: mcu-flash-project-hygiene
-description: Audit and improve MCU Flasher project hygiene, including generated-file visibility, safe writable metadata, native board caches, independent shared reset storage, project Clean targets and protection of user sketch files.
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, package publication and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+Current input/navigation/pairing/save, ticket and per-user installation rules
+are in the canonical [.agents skill](../../../.agents/skills/mcu-flash-project-hygiene/SKILL.md).
+Follow that current contract when historical notes below differ. Developer Access
+uses explicit paper dropdowns; workspace dropdowns retain cached glass. Native
+Windows 11 keyboard-routing verification remains pending until tested there.
 
 Work on the Windows main app (`main/mcu_flash_gui.py` and `main/core/file_utils.py`), Windows launchers, and supporting utilities.
 

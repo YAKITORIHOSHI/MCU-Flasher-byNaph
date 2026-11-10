@@ -5,7 +5,7 @@ from functools import lru_cache
 from PySide6.QtCore import QByteArray, QEvent, QSize, Qt, QRectF
 from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QWidget, QAbstractButton, QTabBar
 from main.core.theme import Theme
 from src.modules.svg_icons import NAMES, svg_source, action_name
 from src.modules.ui_palette import contrast_ratio, readable_foreground
@@ -47,6 +47,55 @@ def tab_icon_inks(theme_mode: str | None = None) -> tuple[str, str]:
     if contrast_ratio(chip_ink, chip) < 4.5:
         chip_ink = readable_foreground(chip)
     return get_palette(mode).get("TEXT", Theme.TEXT), chip_ink
+
+
+class TabCloseButton(QAbstractButton):
+    """Paint the close mark ourselves: styled native tab primitives can be blank."""
+    def __init__(self, tabbar):
+        super().__init__(tabbar)
+        self.setFixedSize(18, 18)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setToolTip("Close terminal tab")
+        self.setAccessibleName("Close terminal tab")
+        self.clicked.connect(self._close_tab)
+
+    def _close_tab(self):
+        bar = self.parentWidget()
+        index = bar.tabAt(self.mapTo(bar, self.rect().center()))
+        if index >= 0:
+            bar.tabCloseRequested.emit(index)
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QColor
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.underMouse():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(231, 76, 60, 100))
+            painter.drawRoundedRect(QRectF(self.rect()), 4, 4)
+        bar = self.parentWidget()
+        selected = bar.tabAt(self.mapTo(bar, self.rect().center())) == bar.currentIndex()
+        icon("close", tab_icon_inks()[selected], size=12).paint(painter, self.rect().adjusted(3, 3, -3, -3))
+
+
+class ClosableTerminalTabs(QTabBar):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._refresh_close_buttons)
+
+    def _refresh_close_buttons(self, _index):
+        for index in range(self.count()):
+            button = self.tabButton(index, QTabBar.ButtonPosition.RightSide)
+            if button is not None:
+                button.update()
+
+    def tabInserted(self, index):
+        super().tabInserted(index)
+        old = self.tabButton(index, QTabBar.ButtonPosition.RightSide)
+        self.setTabButton(index, QTabBar.ButtonPosition.RightSide, TabCloseButton(self))
+        if old is not None:
+            old.deleteLater()
 
 
 def tab_icon(name: str, size: int = 20) -> QIcon:

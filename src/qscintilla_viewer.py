@@ -6,6 +6,7 @@ Specialized for viewing Arduino/C++ code (.ino / .cpp / .h) in read-only mode.
 """
 
 import os
+import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 import weakref
@@ -33,7 +34,7 @@ try:
     # pyrefly: ignore [missing-import]
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QVBoxLayout, QWidget, QTabBar, QTabWidget,
-        QGridLayout, QLineEdit, QLabel, QPushButton, QShortcut, QMenu
+        QGridLayout, QLineEdit, QLabel, QPushButton, QShortcut, QMenu, QToolButton
     )
 except ImportError:
     sys.exit("PyQt5 is required. Prepare the sample viewer in MCU Flasher Bootstrap.")
@@ -287,7 +288,7 @@ class CodeViewer(QsciScintilla):
 class MainWindow(QMainWindow):
     definitionsReady = pyqtSignal(int, object)
 
-    def __init__(self, focus_file, files, *, theme_mode=None, font_size=None):
+    def __init__(self, focus_file, files, *, theme_mode=None, font_size=None, include_roots=()):
         super().__init__()
         if theme_mode is None or font_size is None:
             saved_theme, saved_font = load_viewer_preferences()
@@ -301,6 +302,14 @@ class MainWindow(QMainWindow):
         self._definition_pool = None
         self._definition_future = None
         self._definition_menu = None
+        from src.modules.source_navigation import NavigationResolver
+        self._navigator = NavigationResolver()
+        self._include_roots = tuple(str(Path(path).absolute()) for path in include_roots)
+        self._definition_running = False
+        self._definition_pending = None
+        self._preview_editor = None
+        self._navigation_history = []
+        self._history_index = -1
         self.definitionsReady.connect(self._show_definitions)
         self.setWindowTitle("MCU Flasher — Code Viewer")
         self.resize(1000, 700)
@@ -398,6 +407,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Shift+F3"), self, lambda: self.find_text(False))
         QShortcut(QKeySequence("Escape"), self, self.close_find)
         QShortcut(QKeySequence("F12"), self, self.definition_at_cursor)
+        QShortcut(QKeySequence("Alt+Left"), self, lambda: self._history_move(-1))
+        QShortcut(QKeySequence("Alt+Right"), self, lambda: self._history_move(1))
         if files:
             self.tabs.setCurrentIndex(focus_index)
             self._on_tab_changed(focus_index)
@@ -461,7 +472,6 @@ class MainWindow(QMainWindow):
             self.request_definition(editor, editor.positionFromLineIndex(line, index))
 
     def request_definition(self, editor, byte_position):
-        from src.modules.sample_symbols import identifier_at, find_definitions
         source = editor.text()
         offset = len(source.encode("utf-8")[:byte_position].decode("utf-8", errors="ignore"))
         snapshots = tuple((self.tabs.widget(i).file_path, self.tabs.widget(i).text())
@@ -469,20 +479,29 @@ class MainWindow(QMainWindow):
         self._definition_request += 1
         request = self._definition_request
         active_path = editor.file_path
-        self.statusBar().showMessage("Finding declaration in open sample files…")
+        self.statusBar().showMessage("Resolving source declaration…")
+        work = (request, active_path, offset, snapshots)
+        if self._definition_running:
+            self._definition_pending = work
+        else:
+            self._start_definition(work)
+
+    def _start_definition(self, work):
+        request, active_path, offset, snapshots = work
+        self._definition_running = True
         owner = weakref.ref(self)
+        navigator, roots = self._navigator, self._include_roots
 
         def resolve():
-            word = ''
             try:
-                word = identifier_at(source, offset)
-                result = find_definitions(snapshots, word, active_path, offset) if word else []
-            except Exception:
-                result = []
+                result = navigator.resolve({"path":active_path, "offset":offset,
+                    "snapshots":snapshots, "include_roots":roots})
+            except Exception as error:
+                result = {"success":False, "error":str(error)}
             window = owner()
             if window is not None and not window._navigation_closed:
                 try:
-                    window.definitionsReady.emit(request, (word, result))
+                    window.definitionsReady.emit(request, result)
                 except RuntimeError:
                     pass  # The native owner closed while this read-only scan finished.
 
@@ -490,19 +509,26 @@ class MainWindow(QMainWindow):
         # installed samples off the UI thread and discard superseded responses.
         if self._definition_pool is None:
             self._definition_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Sample definitions")
-        if self._definition_future is not None:
-            self._definition_future.cancel()
         self._definition_future = self._definition_pool.submit(resolve)
 
     def _show_definitions(self, request, payload):
+        self._definition_running = False
+        pending, self._definition_pending = self._definition_pending, None
+        if pending is not None and pending[0] == self._definition_request and not self._navigation_closed:
+            self._start_definition(pending)
         if request != self._definition_request or self._navigation_closed:
             return
-        word, definitions = payload
+        from types import SimpleNamespace
+        word = payload.get("word", "")
+        definitions = [SimpleNamespace(**value) for value in payload.get("destinations", [])]
+        if not payload.get("success"):
+            self.statusBar().showMessage(payload.get("error", "Source navigation is unavailable."), 8000)
+            return
         if not word:
             self.statusBar().clearMessage()
         elif not definitions:
-            self.statusBar().showMessage(f"No declaration for {word} in the open sample files.", 6000)
-        elif len(definitions) == 1:
+            self.statusBar().showMessage(f"No declaration for {word} in the current source/include context.", 6000)
+        elif len(definitions) == 1 and not payload.get("requires_choice"):
             self._jump_to_definition(definitions[0])
         else:
             if self._definition_menu is not None:
@@ -519,12 +545,31 @@ class MainWindow(QMainWindow):
                 QMenu::item:selected {{ background: {self.colors['selection']}; color: {self.colors['selection_foreground']}; }}
             """)
             for definition in definitions:
-                label = f"{Path(definition.path).name}:{definition.line + 1} — {definition.label}"
+                label = f"{definition.signature or definition.label} — {Path(definition.path).name}:{definition.line + 1}"
                 menu.addAction(label, lambda target=definition: self._jump_to_definition(target))
             menu.aboutToHide.connect(lambda: setattr(self, "_definition_menu", None))
             menu.popup(self.tabs.currentWidget().mapToGlobal(self.tabs.currentWidget().rect().center()))
 
     def _jump_to_definition(self, definition):
+        self._remember_position()
+        target = next((self.tabs.widget(index) for index in range(self.tabs.count())
+                       if self.tabs.widget(index).file_path == definition.path), None)
+        if target is None:
+            self._close_preview()
+            target = CodeViewer(self.tabs, theme_mode=self.theme_mode, font_size=self.font_size)
+            target.setText(definition.content)
+            target.file_path = definition.path
+            target.setReadOnly(True)
+            target.definitionRequested.connect(self.request_definition)
+            index = self.tabs.addTab(target, Path(definition.path).name + " [read only]")
+            self.tabs.setTabToolTip(index, "Read-only library preview\n" + definition.path)
+            self._preview_editor = target
+            close = QToolButton(self.tabs.tabBar())
+            close.setText("Close")
+            close.setToolTip("Close library preview")
+            close.setAccessibleName("Close library preview")
+            close.clicked.connect(self._close_preview)
+            self.tabs.tabBar().setTabButton(index, QTabBar.RightSide, close)
         for index in range(self.tabs.count()):
             editor = self.tabs.widget(index)
             if editor.file_path == definition.path:
@@ -534,10 +579,56 @@ class MainWindow(QMainWindow):
                 editor.ensureLineVisible(definition.line)
                 editor.setFocus()
                 self.statusBar().showMessage(f"{Path(definition.path).name}:{definition.line + 1}", 6000)
+                self._navigation_history = self._navigation_history[:self._history_index + 1]
+                self._navigation_history.append(self._position_snapshot())
+                self._navigation_history = self._navigation_history[-64:]
+                self._history_index = len(self._navigation_history) - 1
                 return
+
+    def _position_snapshot(self):
+        editor = self.tabs.currentWidget()
+        return (editor.file_path, editor.getSelection(), editor.getCursorPosition(),
+                editor.verticalScrollBar().value(), editor.horizontalScrollBar().value())
+
+    def _remember_position(self):
+        entry = self._position_snapshot()
+        if self._history_index >= 0:
+            self._navigation_history[self._history_index] = entry
+        else:
+            self._navigation_history.append(entry)
+            self._history_index = 0
+
+    def _history_move(self, direction):
+        index = self._history_index + direction
+        if not 0 <= index < len(self._navigation_history):
+            return
+        path, selection, cursor, vertical, horizontal = self._navigation_history[index]
+        for tab in range(self.tabs.count()):
+            editor = self.tabs.widget(tab)
+            if editor.file_path == path:
+                self.tabs.setCurrentIndex(tab)
+                if selection[0] >= 0:
+                    editor.setSelection(*selection)
+                else:
+                    editor.setCursorPosition(*cursor)
+                editor.verticalScrollBar().setValue(vertical)
+                editor.horizontalScrollBar().setValue(horizontal)
+                editor.setFocus()
+                self._history_index = index
+                return
+
+    def _close_preview(self):
+        editor, self._preview_editor = self._preview_editor, None
+        if editor is not None:
+            path = editor.file_path
+            self.tabs.removeTab(self.tabs.indexOf(editor))
+            editor.deleteLater()
+            self._navigation_history = [entry for entry in self._navigation_history if entry[0] != path]
+            self._history_index = min(self._history_index, len(self._navigation_history) - 1)
 
     def closeEvent(self, event):
         self._navigation_closed = True
+        self._navigator.close()
         self._definition_request += 1
         if self._definition_pool is not None:
             self._definition_pool.shutdown(wait=False, cancel_futures=True)
@@ -665,6 +756,7 @@ class MainWindow(QMainWindow):
             self.setGeometry(fitted)
 
     def _on_tab_changed(self, index):
+        self._definition_request += 1
         widget = self.tabs.widget(index)
         if widget and hasattr(widget, 'file_path') and widget.file_path:
             self.setWindowTitle(f"MCU Flasher — Code Viewer: {os.path.basename(widget.file_path)}")
@@ -723,7 +815,14 @@ def main():
         font_size = int(os.environ["MCU_FLASHER_VIEWER_FONT_SIZE"])
     except (KeyError, ValueError):
         font_size = None
-    window = MainWindow(focus_file, files, theme_mode=theme_mode, font_size=font_size)
+    try:
+        raw_roots = os.environ.get("MCU_FLASHER_VIEWER_INCLUDE_ROOTS", "[]")
+        include_roots = json.loads(raw_roots) if len(raw_roots) <= 65536 else []
+        include_roots = [path for path in include_roots if isinstance(path, str) and Path(path).is_absolute()][:64]
+    except (ValueError, TypeError):
+        include_roots = []
+    window = MainWindow(focus_file, files, theme_mode=theme_mode, font_size=font_size,
+                        include_roots=include_roots)
     window.show()
     sys.exit(app.exec_())
 

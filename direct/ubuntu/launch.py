@@ -13,8 +13,11 @@ import sys
 import tempfile
 import time
 
+# Imported below ROOT initialization so this file also works as a direct script.
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from direct.ubuntu.user_install import persistent_setup_root
 
 
 def application_update_config() -> dict:
@@ -258,6 +261,17 @@ def main(argv=None) -> int:
                                    "Open a terminal in the application folder and run:\n"
                                    "bash direct/ubuntu/run.sh --repair")
             print(f"Preparing {label} system prerequisites and the native private runtime.", flush=True)
+            installed = persistent_setup_root(ROOT)
+            if installed != ROOT:
+                forwarded = list(arguments)
+                if args.project or args.sketch:
+                    forwarded[1] = str(Path(args.project or args.sketch).absolute())
+                if args.repair:
+                    forwarded.insert(0, "--repair")
+                # The installed launcher prepares its runtime at this final
+                # location; a copied venv's absolute scripts are never reused.
+                return subprocess.call([sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"),
+                                        "--bootstrap-window", *forwarded], cwd=installed, env=env)
             result = subprocess.call(["/usr/bin/python3", "-B", str(ROOT / "direct/ubuntu/setup.py")],
                                      cwd=ROOT, env=env)
             if result:

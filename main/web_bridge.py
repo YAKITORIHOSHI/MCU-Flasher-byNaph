@@ -253,7 +253,7 @@ from main.core.file_utils import (
     hide_internal_project_metadata,
     get_project_root_source_files, robust_rmtree,
     is_unc_or_network_path, _unc_share_root, classify_platformio_failure,
-    retry_transient_file_operation,
+    retry_transient_file_operation, write_source_text,
 )
 from main.core.toolchain import (
     find_pio_executable, ensure_platformio, _refresh_platformio_core_environment,
@@ -1155,17 +1155,16 @@ class MCUWebBackendAPI:
             return {"success": False, "error": "Wait for cloud synchronization to finish before saving."}
         try:
             p = Path(file_path).resolve()
+            if p.parent != Path(self.sketch_dir_path).resolve():
+                return {"success": False, "error": "Library previews are read-only. Save project source files only."}
             encoded = content.encode("utf-8")
             try:
-                unchanged = p.read_bytes() == encoded
-            except OSError:
-                unchanged = False
-            if not unchanged:
+                previous = retry_transient_file_operation(p.read_bytes, attempts=6, delay=0.08)
+            except FileNotFoundError:
+                previous = None
+            if previous != encoded:
                 ensure_file_writable(p)
-                def _write():
-                    with open(p, "w", encoding="utf-8", newline="") as f:
-                        f.write(content)
-                retry_transient_file_operation(_write, attempts=6, delay=0.08)
+                write_source_text(p, content, expected=previous)
             _sketch_ram_cache.set_content(p, content)
             self.modified_files[str(p)] = False
             self.update_skip_compile_availability()
@@ -1173,7 +1172,8 @@ class MCUWebBackendAPI:
                 self.ai_watcher.note_user_save(p, content)
             return {"success": True}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            from src.modules.file_access import file_access_message
+            return {"success": False, "error": file_access_message(file_path, e)}
 
     def save_all_files(self) -> dict[str, Any]:
         """Signal Monaco editor to commit all open buffers."""
@@ -1266,18 +1266,18 @@ class MCUWebBackendAPI:
 
     # ── Remote / UNC Network Path Support ─────────────────────────────────
     def _remote_workspace_root(self, project_dir: Optional[Path] = None) -> Optional[Path]:
-        """For a remote/UNC project (e.g. \\\\server\\share\\... or mapped network drives),
-        return the local fast workspace root on the local SSD.
+        """Use owned local working storage for configured sync roots and networks.
 
-        Building intermediate objects and SCons signature databases (.sconsign*.dblite)
-        directly over SMB/network shares causes file locking failures and network latency.
-        Routing remote project workspaces to local storage guarantees 100% reliable builds
-        and high-speed compilation while preserving the remote source files.
-
-        Returns None for local drive projects (which build in the hidden
-        project/.mcu_flasher_build_cache folder).
+        Sources and old caches remain in place. Local build objects avoid sync/SMB
+        locks; source saves still report actual access errors and retain buffers.
+        Ordinary local projects keep their hidden project build workspace.
         """
         target = Path(project_dir or self.sketch_dir_path)
+        from src.modules.file_access import is_sync_managed_path
+        if is_sync_managed_path(target):
+            from src.modules.platform_runtime import app_cache_dir
+            identity = hashlib.sha256(str(target).casefold().encode("utf-8")).hexdigest()[:24]
+            return app_cache_dir() / "sync_workspaces" / identity
         if not is_unc_or_network_path(target):
             return None
         proj_hash = hashlib.sha1(str(target).lower().encode("utf-8")).hexdigest()[:12]
@@ -5142,8 +5142,15 @@ class MCUWebBackendAPI:
                     self.emit("window:closable", {"closable": True})
                 return True
             else:
-                self._clean_temporary_compile_artifacts(cache_root)
                 failure_kind = classify_platformio_failure(output_lines)
+                if failure_kind == "lock":
+                    if not is_clean_retry:
+                        self.emit("console:log", {"text": "A file is temporarily in use. Retrying once with the existing build objects preserved.", "tag": "warning", "newline": True})
+                        time.sleep(0.3)
+                        return self._compile_worker(is_upload=is_upload, is_clean_retry=True)
+                    self.emit("console:log", {"text": "The build file remains unavailable. Release the file in the backup, preview or indexing application and try again. Existing build objects were preserved.", "tag": "warning", "newline": True})
+                else:
+                    self._clean_temporary_compile_artifacts(cache_root)
                 if failure_kind == "cache" and not is_clean_retry:
                     self.emit("console:log", {"text": "", "newline": True})
                     self.emit("console:log", {"text": "  Selected-board build cache inconsistency detected.", "tag": "warning", "newline": True})

@@ -613,6 +613,49 @@ class PortalChecks(unittest.TestCase):
                 box.deleteLater.assert_called_once()
         toolbar.restart_for_runtime_repair.assert_called_once()
 
+    def test_ticket_sort_choices_ignore_status_and_severity_and_keep_filters(self):
+        self.sign_in()
+        self.dialog._tickets = copy.deepcopy(TICKETS)
+        self.dialog._tickets[2]['updated_at'] = '2026-11-10 10:00'
+        for order, ids in (('Newest first',['fixture-1','fixture-2','fixture-3']),
+                           ('Oldest first',['fixture-3','fixture-2','fixture-1']),
+                           ('Recently updated',['fixture-3','fixture-1','fixture-2'])):
+            self.dialog.sort_cb.setCurrentText(order)
+            self.dialog._render_tickets_list(); pump()
+            cards=[self.dialog.cards_layout.itemAt(index).widget() for index in range(self.dialog.cards_layout.count())]
+            self.assertEqual([card.ticket['id'] for card in cards if isinstance(card,portal.TicketCard)],ids)
+        self.dialog.search_input.setText('monitor'); pump()
+        self.assertEqual(self.dialog.sort_cb.currentText(),'Recently updated')
+
+    def test_create_and_edit_spinner_geometry_severity_and_category_removal_keep_drafts(self):
+        self.sign_in()
+        custom='Fixture custom category'
+        for dialog in (portal.CreateTicketDialog(parent=self.dialog,service=self.service,categories=[*portal.CATEGORIES,custom]),
+                       portal.EditTicketDialog(ticket=TICKETS[0],service=self.service,parent=self.dialog,categories=[*portal.CATEGORIES,custom])):
+            self.addCleanup(dialog.deleteLater); self.addCleanup(dialog.close)
+            show(dialog)
+            fields=dialog.fields
+            fields.title.setText('Retained title'); fields.description.setPlainText('Retained notes')
+            fields.category.setCurrentText(custom)
+            self.assertTrue(dialog.spinner.sizePolicy().retainSizeWhenHidden())
+            for busy in (True,False,True,False):
+                dialog._set_busy(busy); pump()
+                if busy:
+                    self.assertLessEqual(abs(dialog.spinner.geometry().center().y()-dialog.btn_save.geometry().center().y()),1)
+                    capture(dialog,'input-update-'+dialog.objectName()+'-busy')
+            self.service.remove_ticket_category.return_value=(False,'Reassign existing tickets first',list(dialog.categories))
+            fields.btn_remove_category.click(); settle(dialog)
+            self.assertEqual(fields.category.currentText(),custom)
+            self.service.remove_ticket_category.return_value=(True,'Category removed',list(portal.CATEGORIES))
+            fields.btn_remove_category.click(); settle(dialog)
+            self.assertEqual(fields.category.findText(custom),-1)
+            self.assertEqual(fields.title.text(),'Retained title')
+            self.assertEqual(fields.description.toPlainText(),'Retained notes')
+            dialog.close()
+        card=self.dialog.cards_layout.itemAt(0).widget()
+        self.assertEqual(card.severity_label.alignment(),Qt.AlignmentFlag.AlignHCenter)
+        self.assertLessEqual(abs(card.severity_label.geometry().center().y()-card.status_cb.geometry().center().y()),2)
+
     def test_category_creation_preserves_draft_and_filters_snapshot_categories(self):
         self.sign_in()
         self.dialog.btn_new.click()
@@ -687,9 +730,10 @@ class PortalChecks(unittest.TestCase):
                                                  (name, mode, size, message, "captions"))
                             self.assertLessEqual(abs(control_y - positions.setdefault(row, control_y)), 1,
                                                  (name, mode, size, message, "controls"))
-                            gap = control.y() - (caption.y() + caption.height())
+                            control_pos = control.mapTo(box, QPoint())
+                            gap = control_pos.y() - (caption.y() + caption.height())
                             self.assertLessEqual(abs(gap - box.layout().spacing()), 1)
-                            self.assertTrue(box.rect().contains(QRect(control.pos(), control.size())))
+                            self.assertTrue(box.rect().contains(QRect(control_pos, control.size())))
                         if message:
                             self.assert_wrapped_text(fields.category_feedback)
                             self.assertGreaterEqual(fields.category_feedback.y(),
@@ -1095,8 +1139,9 @@ class PortalChecks(unittest.TestCase):
         from main.qt.theme import glass_tokens
         material = category._mcu_glass_popup
         self.assertTrue(material.backdrop.isVisible())
-        self.assertEqual(view.palette().color(QPalette.ColorRole.Text).name(), get_palette(material._mode)["TEXT"])
-        self.assertEqual(view.palette().color(QPalette.ColorRole.Highlight).name(), glass_tokens(material._mode)["chip"])
+        self.assertTrue(material.backdrop.paper)
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Text).name(), "#141414")
+        self.assertEqual(view.palette().color(QPalette.ColorRole.Highlight).name(), "#ffe85b")
         capture(view.window(), "category-popup")
         category.hidePopup()
 

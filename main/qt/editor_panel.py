@@ -99,6 +99,8 @@ class EditorBridgeAPI(QObject):
     _syntax_finished = Signal(dict)
     editor_storage_ready = Signal(str, str, dict)
     _editor_storage_finished = Signal(str, str, str, dict)
+    navigation_ready = Signal(str, str, dict)
+    _navigation_finished = Signal(str, str, str, str, dict)
     # Source-tab file actions: the + chip and a tab's context menu. The workspace answers.
     new_file_requested = Signal()
     file_menu_requested = Signal(str)
@@ -117,9 +119,16 @@ class EditorBridgeAPI(QObject):
         self._cloud_manifest_running = False
         self._editor_storage_running = False
         self._editor_storage_pending = None
+        from src.modules.source_navigation import NavigationResolver
+        self._navigator = NavigationResolver()
+        self._navigation_running = False
+        self._navigation_pending = None
+        self._navigation_previews = set()
+        self.destroyed.connect(self._navigator.close)
         self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
         self._cloud_manifest_finished.connect(self._finish_cloud_manifest, Qt.ConnectionType.QueuedConnection)
         self._editor_storage_finished.connect(self._finish_editor_storage, Qt.ConnectionType.QueuedConnection)
+        self._navigation_finished.connect(self._finish_navigation, Qt.ConnectionType.QueuedConnection)
 
     # ── Called FROM Monaco JS ─────────────────────────────────────────────
 
@@ -180,7 +189,8 @@ class EditorBridgeAPI(QObject):
     def request_editor_storage(self, renderer: str, request: str, operation: str, path: str = "") -> bool:
         """Keep cold directory/source IO off Qt, with one active and one pending read."""
         if (not renderer or renderer != self._renderer_token or not self._backend
-                or not request or len(request) > 160 or operation not in ("get_project_files", "read_file")):
+                or not request or len(request) > 160
+                or operation not in ("get_project_files", "read_file", "save_file") or len(path) > 24 * 1024**2):
             return False
         work = (renderer, request, operation, path, self._backend, str(self._backend.sketch_dir_path))
         if self._editor_storage_running:
@@ -213,6 +223,9 @@ class EditorBridgeAPI(QObject):
                                 or not isinstance(manifest.get("files"), list)):
                             raise OSError("The source folder could not be read. Reopen the project to try again.")
                         value = manifest["files"]
+                    elif operation == "save_file":
+                        payload = json.loads(path)
+                        value = backend.save_file(payload["path"], payload["content"])
                     else:
                         value = backend.read_file(path)
                     if str(backend.sketch_dir_path) == project:
@@ -242,6 +255,81 @@ class EditorBridgeAPI(QObject):
             # keeps the worker bound intact even across a reentrant callback.
             self._start_editor_storage(pending)
         self.editor_storage_ready.emit(renderer, request, result)
+
+    @Slot(str, str, str, result=bool)
+    def request_definition(self, renderer: str, request: str, payload: str) -> bool:
+        if (renderer != self._renderer_token or not self._backend or not request
+                or len(request) > 160 or len(payload) > 24 * 1024**2):
+            return False
+        work = (renderer, request, payload, str(self._backend.sketch_dir_path),
+                str(getattr(self._backend, "current_board", "") or ""))
+        if self._navigation_running:
+            if self._navigation_pending is not None:
+                old = self._navigation_pending
+                self.navigation_ready.emit(old[0], old[1], {"success": False, "cancelled": True})
+            self._navigation_pending = work
+        else:
+            self._start_navigation(work)
+        return True
+
+    def _start_navigation(self, work):
+        renderer, request, payload, project, board = work
+        if (renderer != self._renderer_token or not self._backend
+                or str(self._backend.sketch_dir_path) != project):
+            self.navigation_ready.emit(renderer, request, {"success": False, "cancelled": True})
+            return
+        self._navigation_running = True
+        backend, navigator = self._backend, self._navigator
+        allowed_previews = frozenset(self._navigation_previews)
+
+        def resolve():
+            try:
+                value = json.loads(payload)
+                root = Path(project).absolute()
+                path = str(Path(value["path"]).absolute())
+                if Path(path).parent != root and path not in allowed_previews:
+                    raise ValueError("This source is not an open project file or authorized library preview.")
+                snapshots = [(str(Path(name).absolute()), text) for name, text in value["snapshots"]
+                             if Path(name).absolute().parent == root or str(Path(name).absolute()) in allowed_previews]
+                source = dict(snapshots)[path]
+                lines = source.splitlines(keepends=True)
+                line = max(0, min(len(lines) - 1, int(value["line"]) - 1))
+                prefix = lines[line].encode("utf-16-le")[:max(0, int(value["column"]) - 1) * 2]
+                offset = sum(map(len, lines[:line])) + len(prefix.decode("utf-16-le", errors="ignore"))
+                workspace = None
+                if board and callable(getattr(backend, "_board_cache_key", None)):
+                    from main.core.compiled_cache import host_namespace
+                    from main.core.constants import PROJECT_BUILD_CACHE_DIR
+                    cache = backend._remote_workspace_root(root) or root / PROJECT_BUILD_CACHE_DIR
+                    workspace = str(cache / "boards" / host_namespace() / backend._board_cache_key(board))
+                result = navigator.resolve({"path": path, "offset": offset, "snapshots": snapshots,
+                    "project": project, "workspace": workspace})
+            except Exception as error:
+                result = {"success": False, "error": str(error)[:512]}
+            try:
+                self._navigation_finished.emit(renderer, request, project, board, result)
+            except RuntimeError:
+                pass
+        try:
+            threading.Thread(target=resolve, name="MCU_SourceNavigation", daemon=True).start()
+        except RuntimeError as error:
+            self._navigation_finished.emit(renderer, request, project, board,
+                                           {"success": False, "error": str(error)})
+
+    @Slot(str, str, str, str, dict)
+    def _finish_navigation(self, renderer, request, project, board, result):
+        self._navigation_running = False
+        if (renderer != self._renderer_token or not self._backend
+                or str(self._backend.sketch_dir_path) != project
+                or str(getattr(self._backend, "current_board", "") or "") != board):
+            result = {"success": False, "cancelled": True}
+        if result.get("success"):
+            self._navigation_previews.update(item["path"] for item in result.get("destinations", [])
+                                            if item.get("read_only"))
+        pending, self._navigation_pending = self._navigation_pending, None
+        if pending is not None:
+            self._start_navigation(pending)
+        self.navigation_ready.emit(renderer, request, result)
 
     @Slot(str, result=bool)
     def request_cloud_project_files(self, token: str) -> bool:
@@ -299,8 +387,6 @@ class EditorBridgeAPI(QObject):
                 self._buffer_snapshots.pop(str(Path(file_path).resolve()), None)
             else:
                 self._save_failure_count += 1
-            if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
-                self._backend.ai_watcher.note_user_save(file_path, content)
             return res
         return {"success": False, "error": "No backend"}
 
@@ -317,9 +403,6 @@ class EditorBridgeAPI(QObject):
             res = self._backend.save_all_files()
             if not res.get("success"):
                 self._save_failure_count += 1
-            if hasattr(self._backend, "ai_watcher") and self._backend.ai_watcher:
-                for fp in getattr(self._backend, "modified_files", {}):
-                    self._backend.ai_watcher.note_user_save(fp)
             return res
         return {"success": True}
 
@@ -434,7 +517,7 @@ class EditorBridgeAPI(QObject):
     @Slot(str)
     def set_active_file(self, file_path: str) -> None:
         """Monaco reports the active tab changed."""
-        if self._backend:
+        if self._backend and str(Path(file_path).absolute()) not in self._navigation_previews:
             self._backend.set_active_file(file_path)
 
     @Slot(str)
@@ -518,6 +601,7 @@ class EditorBridgeAPI(QObject):
     def begin_renderer_load(self) -> str:
         from uuid import uuid4
         self._renderer_token = uuid4().hex
+        self._navigation_previews.clear()
         return self._renderer_token
 
     @Slot(str, result="QVariant")
@@ -867,9 +951,10 @@ class MonacoEditorPanel(QWidget):
             # Seed the first paint and initial Monaco construction. Waiting for
             # loadFinished repaints the wrong theme/font before the workspace
             # can apply its preferences, especially on slower cold storage.
-            from main.core.config import get_theme_mode, get_editor_font_size
+            from main.core.config import get_theme_mode, get_editor_font_size, get_editor_auto_pairs
             query.addQueryItem("theme", get_theme_mode())
             query.addQueryItem("font", str(get_editor_font_size()))
+            query.addQueryItem("autopairs", "1" if get_editor_auto_pairs() else "0")
             query.addQueryItem("constrained", "1" if self._performance.constrained else "0")
             backdrop = page_backdrop_for(self._view)
             query.addQueryItem("backdrop", ",".join(str(backdrop[name]) for name in ("width", "height", "x", "y", "radius")))
@@ -1277,10 +1362,16 @@ class MonacoEditorPanel(QWidget):
             sig_bus.theme_changed.connect(self.set_theme)
         if hasattr(sig_bus, "autosave_settings_changed"):
             sig_bus.autosave_settings_changed.connect(self._on_autosave_settings_changed)
+        if hasattr(sig_bus, "editor_auto_pairs_changed"):
+            sig_bus.editor_auto_pairs_changed.connect(self.set_auto_pairs)
         if hasattr(sig_bus, "ai_review_requested"):
             sig_bus.ai_review_requested.connect(self.trigger_ai_review)
         if hasattr(sig_bus, "ai_review_resolved"):
             sig_bus.ai_review_resolved.connect(self._on_ai_review_resolved)
+
+    @Slot(bool)
+    def set_auto_pairs(self, enabled: bool) -> None:
+        self._view.page().runJavaScript(f"window.setEditorAutoPairs?.({json.dumps(enabled)})")
 
     @Slot(str)
     def _on_ai_review_resolved(self, _path: str) -> None:

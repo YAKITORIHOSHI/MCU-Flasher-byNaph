@@ -1,9 +1,30 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher's generated metadata, protected caches, independent shared reset storage, temporary Ghost Sketch ownership and saves, package publication, Fresh cleanup and public release integrity on Windows and Ubuntu. Preserve user sketches, settings and recovery journals."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, package publication and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+## Atomic source access and persistent Ubuntu installation
+
+Source saves stage a sibling, fsync, compare expected disk bytes and atomically
+replace; a sharing lock or concurrent external edit retains original bytes and
+the unsaved buffer. Never mark a newer model revision saved. A persistent lock
+does not justify cache cleaning, ACL changes or terminating a backup program.
+Configured Windows synchronization roots use local owned build workspaces;
+projects, existing caches and recovery journals remain untouched. Restart Manager
+diagnostics query blockers in a bounded child and never request shutdown.
+
+Ubuntu installation copies only allowlisted application sources to XDG data
+storage, uses native copy2 plus independent source/stage hashes and changed-source
+checks, retains interrupted stages and refuses unknown destinations. Runtime is
+prepared at the final location, never copied from a venv. Seed only valid bounded
+private preferences into a new install; omit accounts, sketches and journals.
+Reuse an existing owned installation without downgrading its source. Register
+one All Apps entry/icon after complete Bootstrap validation; failure leaves the
+old entry intact and --check makes no installation. Verify only in disposable
+user_install, file_access and ubuntu_bootstrap fixtures.
+
 
 Work on the main app (`main/mcu_flash_gui.py` and `main/core/file_utils.py`), native launchers and supporting utilities. Windows attribute helpers are best-effort; Linux uses dot-prefixed containers and must not invoke `attrib.exe` or Windows junctions.
 

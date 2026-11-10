@@ -73,7 +73,7 @@
       new QWebChannel(qt.webChannelTransport, channel => {
         bridge = channel.objects.terminalBridge;
         term.onData(data => bridge.write(data));
-        bridge.start(() => { window.fitTerminal(); term.focus(); });
+        bridge.start(() => { window.fitTerminal(); if (document.hasFocus()) term.focus(); });
       });
       new ResizeObserver(() => {
         if (fitPending) return;

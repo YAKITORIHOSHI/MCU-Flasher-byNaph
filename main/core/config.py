@@ -415,6 +415,11 @@ def set_theme_mode(mode: str, follow_system: bool = False):
 Theme.apply_theme(get_theme_mode())
 
 
+def get_editor_auto_pairs() -> bool:
+    value = _load_raw_config().get("shared", {}).get("editor_auto_pairs", True)
+    return value if isinstance(value, bool) else True
+
+
 def get_autosave_settings() -> tuple:
     """Return (enabled: bool, delay_ms: int) for the Default editor's
     auto-save feature. Defaults to disabled with a 1500ms delay."""
@@ -1190,6 +1195,7 @@ __all__ = [
     "folder_lock_owner",
     "get_auto_clear_serial_monitor",
     "get_autosave_settings",
+    "get_editor_auto_pairs",
     "get_clear_build_console_on_action",
     "get_clear_serial_on_upload",
     "get_hide_build_console_warnings",

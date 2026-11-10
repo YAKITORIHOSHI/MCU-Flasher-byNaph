@@ -240,6 +240,7 @@ class MCUSignals(QObject):
     theme_changed = Signal(str)
     hide_warnings_changed = Signal(bool)
     autosave_settings_changed = Signal(bool, int)
+    editor_auto_pairs_changed = Signal(bool)
     graphics_accel_changed = Signal(bool)
 
     # ── AI Review Signals ────────────────────────────────────────────────────

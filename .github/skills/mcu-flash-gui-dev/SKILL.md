@@ -1,9 +1,15 @@
 ---
 name: mcu-flash-gui-dev
-description: "Developer and troubleshooting guide for MCU Flasher's PySide6 editor loading/themes, selector and action readiness, incremental Compile/Upload, shared exact-board reset caches, passive monitoring, glass dropdowns, compact OpenCode columns, UNC CMD terminals and host launchers."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/header navigation, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, passive serial monitoring and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+Current input/navigation/pairing/save, ticket and per-user installation rules
+are in the canonical [.agents skill](../../../.agents/skills/mcu-flash-gui-dev/SKILL.md).
+Follow that current contract when historical notes below differ. Developer Access
+uses explicit paper dropdowns; workspace dropdowns retain cached glass. Native
+Windows 11 keyboard-routing verification remains pending until tested there.
 
 Use this skill when developing, debugging, or extending the **MCU Flash GUI** desktop application (`mcu_flash_gui.py`, `main/mcu_flash_gui.py`, `main/qt/`, `main/web_bridge.py`) and its supporting execution ecosystem on Windows 10/11.
 
@@ -51,7 +57,7 @@ refusal without changing Windows launchers or dependency ranges.
 
 Normal monitoring is passive; backend workers own checked intentional restarts.
 Keep attached OpenCode in the right column and hidden assistants idle on project
-changes. All combo popups use cached frosted material. CMD uses local startup
+changes. Workspace combo popups use cached frosted material; Developer Access uses paper mode. CMD uses local startup
 and environment-bound pushd with owned-drive cleanup. Embedded child titles
 include their PID. See the canonical skill and the monitor_connection,
 cmd_directory and combo_popups verifiers for the exact contracts.

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, Qt, QTimer
-from PySide6.QtGui import QPainter, QPainterPath, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QStyledItemDelegate, QWidget
 
 from main.core.theme import get_palette
@@ -28,23 +28,27 @@ class PopupBackdrop(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAutoFillBackground(False)
         self.mode = "default"
+        self.paper = False
         self._key = self._image = None
 
     def paintEvent(self, event):
         ratio = self.devicePixelRatioF()
-        key = (self.width(), self.height(), ratio, self.mode)
+        key = (self.width(), self.height(), ratio, self.mode, self.paper)
         if self._key != key:
-            scene = _render_scene(self.size(), ratio, self.mode, veiled=True)
-            self._image = QPixmap(scene.size())
+            self._image = QPixmap(round(self.width() * ratio), round(self.height() * ratio))
             self._image.setDevicePixelRatio(ratio)
             self._image.fill(Qt.GlobalColor.transparent)
             painter = QPainter(self._image)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(self.rect()), 9, 9)
-            painter.setClipPath(path)
-            painter.drawPixmap(0, 0, scene)
-            painter.drawImage(0, 0, _sheet_image(self.width(), self.height(), 9, ratio, self.mode == "light"))
+            if self.paper:
+                painter.fillRect(self.rect(), QColor("#ffffff"))
+            else:
+                scene = _render_scene(self.size(), ratio, self.mode, veiled=True)
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(self.rect()), 9, 9)
+                painter.setClipPath(path)
+                painter.drawPixmap(0, 0, scene)
+                painter.drawImage(0, 0, _sheet_image(self.width(), self.height(), 9, ratio, self.mode == "light"))
             painter.end()
             self._key = key
         painter = QPainter(self)
@@ -67,6 +71,7 @@ class _PopupMaterial(QObject):
         if isinstance(self.popup, QFrame):
             self.popup.setFrameShape(QFrame.Shape.NoFrame)
         self.backdrop = PopupBackdrop(self.popup)
+        self.backdrop.paper = combo.property("mcuPopupStyle") == "paper"
         self.backdrop.lower()
         self.backdrop.show()
         self.view.setItemDelegate(QStyledItemDelegate(self.view))
@@ -80,6 +85,19 @@ class _PopupMaterial(QObject):
         if self._mode != mode:
             self._mode = mode
             self.backdrop.mode = mode
+            if self.backdrop.paper:
+                self.view.setStyleSheet("""
+                    QAbstractItemView { background: #ffffff; color: #141414;
+                        border: 2px solid #141414; padding: 4px; outline: none;
+                        selection-background-color: #ffe85b; selection-color: #141414; }
+                    QAbstractItemView > QWidget { background: #ffffff; border: none; }
+                    QAbstractItemView::item { background: #ffffff; color: #141414;
+                        min-height: 22px; padding: 3px 8px; margin: 1px 0; border: none; border-radius: 0; }
+                    QAbstractItemView::item:hover { background: #fff5b8; }
+                    QAbstractItemView::item:selected { background: #ffe85b; color: #141414; }
+                    QAbstractItemView::item:disabled { color: #625d63; }
+                """)
+                return
             pal, glass = get_palette(mode), glass_tokens(mode)
             self.view.setStyleSheet(f"""
                 QAbstractItemView {{ background: transparent; color: {pal['TEXT']};

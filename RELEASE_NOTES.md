@@ -11,6 +11,54 @@
 
 ---
 
+## November 10 Editor, Input, Tickets and Ubuntu Installation
+
+- **Keyboard ownership:** An explicit input click returns the native Windows
+  keyboard queue from this workspace's embedded assistant/terminal. Resize,
+  show and readiness callbacks no longer request focus. Assistant content fills
+  its existing viewport. Terminal headers reserve their controls' height, and
+  explicit painted close buttons keep selected and unselected tabs readable.
+  Floating Notifications uses an application-owned close icon.
+- **Upload readiness:** The toolbar reads authoritative backend operation and
+  live-worker state, explains save/recovery/worker blocks and refreshes after
+  Ghost Sketch saves. An obsolete display label no longer disables idle Upload.
+- **Navigation:** Both Monaco and the separate Qt5/QScintilla sample viewer
+  use a bounded disposable LLVM/libclang parser with immutable buffer snapshots.
+  Compatible selected build context resolves types, overloads, namespaces,
+  members and templates. Unsupported compiler targets, incomplete includes or
+  ambiguous types retain conservative candidates and an explicit chooser.
+  Exact returned symbol ranges are highlighted. Library/header sources open
+  in one temporary locked preview; source buffers, dirty state and back/forward
+  history are preserved. Navigation neither compiles nor installs dependencies.
+  Bootstrap prepares the pinned `libclang==18.1.1` dependency.
+- **Pairing:** Settings controls Monaco's language-defined brackets and quotes,
+  including selection wrapping, overtype, paired deletion, escaped quotes,
+  block indentation, undo and multiple cursors. The preference applies live.
+- **Developer Access:** Dropdowns use its existing paper design. New/edit loading
+  indicators reserve their layout space, severity is centered, and tickets sort
+  by newest creation time with Oldest first/Recently updated alternatives.
+  Removing a custom category requires reassignment of every ticket first;
+  a fresh local/remote usage check refuses unverifiable removal.
+- **File access:** Known Windows synchronization roots use owned local build
+  workspaces without relocating projects or deleting old caches. Atomic source
+  saves retry transient sharing locks within a bound, detect disk conflicts and
+  keep newer buffers dirty until the exact revision is acknowledged. Sharing
+  locks do not trigger cache cleaning. Read-only Windows Restart Manager
+  diagnostics can identify blockers; backup programs are never terminated.
+- **Ubuntu:** Bootstrap stages and independently verifies a persistent per-user
+  application, prepares its runtime at the final location and publishes one
+  All Apps entry after all runtime/toolchain checks succeed. Interrupted setup
+  retains source/recovery staging; repeated setup reuses the owned installation
+  without downgrading it or moving sketches, caches or journals. `--check` is
+  read-only, and explicit folder shortcuts remain available.
+
+Local hardware-free checks cover real LLVM resolution, both editor integrations,
+save races, language pairing, category policies, installation publication and
+the existing runtime/build/layout contracts. Hosted Windows CI validates native
+queues separately from mocks. **Native Windows 11 verification remains pending**
+by the user's selected verification plan; hosted Windows Server results do not
+qualify Windows 11 input, physical USB or third-party backup integrations.
+
 ## November 10 Follow-up: Compact Menus, Settings, Package Search and Update Choices
 
 - **Compact glass menus:** Actions and Options now share the cached frosted

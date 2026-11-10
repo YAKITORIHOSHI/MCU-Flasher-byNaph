@@ -70,10 +70,10 @@ class SourceChecks(unittest.TestCase):
 
 
 os.environ.setdefault('QT_QPA_PLATFORM','windows' if sys.platform=='win32' else 'offscreen')
-from PySide6.QtCore import QCoreApplication,QEvent,Qt
-from PySide6.QtGui import QColor,QIcon,QImage,QPainter,QPalette
+from PySide6.QtCore import QCoreApplication,QEvent,Qt,QPoint
+from PySide6.QtGui import QColor,QIcon,QImage,QPainter,QPalette,QRegion
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication,QHBoxLayout,QLabel,QVBoxLayout,QWidget
+from PySide6.QtWidgets import QApplication,QHBoxLayout,QLabel,QVBoxLayout,QWidget,QTabBar,QStyle,QStyleOption,QMainWindow,QDockWidget,QAbstractButton
 from main.qt.icons import ActionButton,IconLabel,icon,_ink
 from main.qt.theme import build_stylesheet,register_fonts
 from main.qt.garbage_collection import install_gui_garbage_collector
@@ -148,6 +148,40 @@ class QtSvgChecks(unittest.TestCase):
         for mode in MODES:
             panel.apply_theme(mode)
             self.assertEqual(panel.toPlainText(),text)
+
+    def test_terminal_tab_and_floating_dock_close_glyphs_are_visible_and_clickable_in_each_theme(self):
+        from main.qt.theme import install_no_focus_lines
+        from main.qt.icons import tab_icon_inks, ClosableTerminalTabs
+        install_no_focus_lines(APP)
+        for mode in MODES:
+            Theme.apply_theme(mode); APP.setStyleSheet(build_stylesheet(mode))
+            host=self.own(QWidget()); layout=QVBoxLayout(host)
+            tabs=ClosableTerminalTabs(host); tabs.setTabsClosable(True); tabs.setExpanding(False)
+            tabs.addTab('Bash'); tabs.addTab('CMD'); layout.addWidget(tabs)
+            closed=[]; tabs.tabCloseRequested.connect(closed.append)
+            host.resize(400,100); host.show(); APP.processEvents()
+            for index in (0,1):
+                button=tabs.tabButton(index,QTabBar.ButtonPosition.RightSide) or tabs.tabButton(index,QTabBar.ButtonPosition.LeftSide)
+                self.assertIsNotNone(button)
+                self.assertTrue(tabs.tabRect(index).contains(button.geometry()), (mode,index))
+                glyph=QImage(button.size(),QImage.Format.Format_ARGB32); glyph.fill(Qt.GlobalColor.transparent)
+                button.render(glyph,QPoint(),QRegion(),QWidget.RenderFlag.DrawChildren)
+                ink=QColor(tab_icon_inks()[index==tabs.currentIndex()])
+                self.assertTrue(any(glyph.pixelColor(x,y).alpha()>128 and
+                                    max(abs(glyph.pixelColor(x,y).red()-ink.red()),abs(glyph.pixelColor(x,y).green()-ink.green()),abs(glyph.pixelColor(x,y).blue()-ink.blue()))<8
+                                    for x in range(glyph.width()) for y in range(glyph.height())), (mode,index))
+            QTest.mouseClick(button,Qt.MouseButton.LeftButton)
+            self.assertEqual(closed,[1])
+            main=self.own(QMainWindow()); dock=QDockWidget('Notifications',main)
+            dock.setWidget(QLabel('Owned notification fixture')); main.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea,dock)
+            main.show(); dock.setFloating(True); APP.processEvents()
+            close=dock.findChild(QAbstractButton,'qt_dockwidget_closebutton')
+            self.assertIsNotNone(close)
+            glyph=APP.style().standardIcon(QStyle.StandardPixmap.SP_DockWidgetCloseButton,None,dock).pixmap(16,16).toImage()
+            self.assertTrue(any(glyph.pixelColor(x,y).alpha()>128 for x in range(glyph.width()) for y in range(glyph.height())),mode)
+            QTest.mouseClick(close,Qt.MouseButton.LeftButton); APP.processEvents()
+            self.assertFalse(dock.isVisible())
+            main.hide(); host.hide()
 
     def test_render_all_icons_and_themed_gallery(self):
         names=sorted(NAMES)

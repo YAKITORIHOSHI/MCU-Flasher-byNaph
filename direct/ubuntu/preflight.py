@@ -268,6 +268,11 @@ def runtime_preflight(root=ROOT) -> None:
         raise RuntimeError(f"{linux_label()} runtime dependency validation failed: {exc}\n"
                            f"Rerun {linux_label()} Bootstrap.") from exc
     # Keep Qt5 and Qt6 native graphs in separate processes, as in production.
+    parser = subprocess.run([sys.executable, "-I", "-B", "-c",
+                             "from clang.cindex import Index; Index.create()"],
+                            capture_output=True, text=True, timeout=15, check=False)
+    if parser.returncode:
+        raise RuntimeError(f"The LLVM source-navigation parser is unavailable. Rerun {linux_label()} Bootstrap.")
     result = subprocess.run([sys.executable, "-B", "-c",
                              "import PyQt5.QtWidgets, PyQt5.Qsci; "
                              "from pathlib import Path; from PyQt5.QtCore import QLibraryInfo; "

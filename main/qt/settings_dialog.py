@@ -40,7 +40,7 @@ from main.core.config import (
     _load_raw_config, _save_raw_config,
     get_theme_settings, _detect_system_theme,
     get_monitor_font_size, get_hide_build_console_warnings,
-    get_autosave_settings, get_reset_on_baud_change,
+    get_autosave_settings, get_reset_on_baud_change, get_editor_auto_pairs,
 )
 from main.core.toolchain import _resource_safe_worker_count, _system_reserved_cpu_count
 from main.qt.signals import signals
@@ -448,6 +448,10 @@ class SettingsDialog(GlassDialog):
         editor_note.setProperty("role", "dim")
         editor_note.setWordWrap(True)
         ev.addWidget(editor_note)
+        self.cb_auto_pairs = QCheckBox("Automatically close brackets and quotes", editor_box)
+        self.cb_auto_pairs.setChecked(get_editor_auto_pairs())
+        self.cb_auto_pairs.setToolTip("Pair and wrap brackets and quotes according to the source language.")
+        ev.addWidget(self.cb_auto_pairs)
 
         layout.addWidget(editor_box)
 
@@ -720,6 +724,7 @@ class SettingsDialog(GlassDialog):
 
         self.cb_autosave.setChecked(False)
         self.autosave_spin.setValue(1500)
+        self.cb_auto_pairs.setChecked(True)
         self.cb_reset_on_baud.setChecked(False)
         self.cb_offline.setChecked(False)
 
@@ -928,6 +933,7 @@ class SettingsDialog(GlassDialog):
             as_enabled, as_delay = get_autosave_settings()
         data["shared"]["autosave_enabled"] = as_enabled
         data["shared"]["autosave_delay_ms"] = as_delay
+        data["shared"]["editor_auto_pairs"] = self.cb_auto_pairs.isChecked()
 
         # 8. Serial Monitor (Reset on Baud Change)
         reset_on_baud = self.cb_reset_on_baud.isChecked()
@@ -1002,6 +1008,8 @@ class SettingsDialog(GlassDialog):
         # Apply autosave settings live to Monaco Editor
         if hasattr(signals, "autosave_settings_changed"):
             signals.autosave_settings_changed.emit(as_enabled, as_delay)
+        if hasattr(signals, "editor_auto_pairs_changed"):
+            signals.editor_auto_pairs_changed.emit(self.cb_auto_pairs.isChecked())
 
         # Apply continuous resizing live to splitters.
         if hasattr(signals, "graphics_accel_changed"):

@@ -22,6 +22,7 @@ def _typed_prefix(prefix):
     # arguments are bounded by the 300-character declaration prefix above.
     plain = re.sub(r'<[^;{}()=]+>', '', prefix)
     return bool(re.fullmatch(r'[\w:\s*&]+', plain) and re.search(r'\w', plain)
+                and not re.fullmatch(r'(?:\w+::)+', plain.strip())
                 and not _NOT_TYPES.intersection(plain.split()))
 
 
@@ -48,7 +49,7 @@ class Definition:
     label: str
 
 
-def find_definitions(snapshots, word, active_path, offset):
+def find_definitions(snapshots, word, active_path, offset, *, include_declarations=False):
     """Recognize typed functions/variables/types/macros; never jump to a use.
 
     Local declarations must enclose the reference and precede it. The innermost
@@ -121,6 +122,30 @@ def find_definitions(snapshots, word, active_path, offset):
         return []
     best = max(rank for rank, _ in candidates)
     result = [definition for rank, definition in candidates if rank == best]
-    if any(item.label == 'function' for item in result):
+    if not include_declarations and any(item.label == 'function' for item in result):
         result = [item for item in result if item.label != 'function declaration']
     return result
+
+
+def split_arguments(text):
+    """Split a non-template C++ list without counting commas inside literals."""
+    def mask(match):
+        value = match[0]
+        prefix = ' ' if value.startswith(('//', '/*')) else 'x'
+        return prefix + ''.join('\n' if char == '\n' else ' ' for char in value[1:])
+    code = _NON_CODE.sub(mask, text)
+    if '<' in code or '>' in code:
+        return None  # The compiler owns template/comparison disambiguation.
+    if not code.strip():
+        return []
+    parts, start, stack = [], 0, []
+    for index, char in enumerate(code):
+        if char in '([{':
+            stack.append(char)
+        elif char in ')]}':
+            if not stack or stack.pop() != {')':'(', ']':'[', '}':'{'}[char]:
+                return None
+        elif char == ',' and not stack:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    return None if stack else parts + [text[start:].strip()]

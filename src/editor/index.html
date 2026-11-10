@@ -20,6 +20,7 @@
       window.__mcuInitialEditorFontSize = parameters.has('font') && Number.isFinite(size)
         ? Math.max(6, Math.min(48, size)) : null;
       window.__mcuResourceConstrained = parameters.get('constrained') === '1';
+      window.__mcuInitialAutoPairs = parameters.get('autopairs') !== '0';
       document.documentElement.classList.add('theme-' + theme.replace(/_/g, '-'));
       document.documentElement.classList.toggle('resource-constrained', window.__mcuResourceConstrained);
       document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
@@ -1392,7 +1393,9 @@
               };
               storageReplies.set(request, finish);
               try {
-                bridge.request_editor_storage(rendererToken, request, operation, args[0] || '', accepted => {
+                const argument = operation === 'save_file'
+                  ? JSON.stringify({path: args[0], content: args[1]}) : args[0] || '';
+                bridge.request_editor_storage(rendererToken, request, operation, argument, accepted => {
                   if (!accepted) finish({success: false, error: 'The source request is no longer available. Try again.'});
                 });
               } catch (error) { finish({success: false, error: String(error)}); }
@@ -1408,12 +1411,17 @@
                   return function (...args) {
                     return new Promise((resolve, reject) => {
                       try {
-                        if (asyncStorage && (prop === 'get_project_files' || prop === 'read_file')) {
+                        if (asyncStorage && (prop === 'get_project_files' || prop === 'read_file' || prop === 'save_file')) {
                           readEditorStorage(prop, args).then(res => {
                             if (prop === 'read_file' && res?.success === false) {
                               window._editorReadFailures = (window._editorReadFailures || 0) + 1;
                               reject(new Error(res.error || 'File could not be read'));
-                            } else resolve(res);
+                            } else {
+                              if (prop === 'save_file' && !res?.success) {
+                                window._editorSaveFailures = (window._editorSaveFailures || 0) + 1;
+                              }
+                              resolve(res);
+                            }
                           }, reject);
                           return;
                         }
@@ -1465,6 +1473,7 @@
   </script>
   <!-- Local C-family Monaco bundle. No CDN / network dependency. -->
   <script src="bundle.js"></script>
+  <script src="editor_pairing.js"></script>
   <script src="project_files.js"></script>
   <script>
     // Extend the offline C++ language after its lazy configuration loads.
@@ -1886,7 +1895,7 @@
             tab.setAttribute('role', 'tab');
             tab.setAttribute('aria-controls', 'editor-container');
             tab.setAttribute('aria-selected', String(selected));
-            tab.setAttribute('aria-label', label + (dirty ? ', unsaved changes' : ''));
+            tab.setAttribute('aria-label', label + (tab.dataset.preview ? ', read-only library preview' : '') + (dirty ? ', unsaved changes' : ''));
             tab.tabIndex = selected ? 0 : -1;
             const title = (tab._filePath || label) + (dirty ? '\nUnsaved changes' : '');
             if (tab.title !== title) tab.title = title;
@@ -2055,8 +2064,8 @@
         // The bundled loader already owns the exact source list it just read.
         // Reuse that list while it builds each tab; rescanning the folder on
         // every asynchronous read is especially expensive on cold/removable IO.
-        const loaded = window.__mcuProjectFileStore?.list?.();
-        const tabs = Array.from(document.querySelectorAll('#tab-bar .tab'));
+        const loaded = window.__mcuProjectFileStore?.list?.().filter(file => !file.preview);
+        const tabs = Array.from(document.querySelectorAll('#tab-bar .tab:not([data-preview])'));
         const loadedNames = new Set((loaded || []).map(file => file.name));
         const localFiles = Array.isArray(loaded) && loaded.length === tabs.length &&
           tabs.every(tab => loadedNames.has(tab.querySelector('span:first-child')?.textContent))
@@ -2067,7 +2076,7 @@
                 || listRevision !== (window.__mcuProjectFileListRevision || 0)) return [];
             fileList = Array.isArray(files) ? files : [];
             window.projectFileList = fileList;
-            const tabs = Array.from(document.querySelectorAll('#tab-bar .tab'));
+            const tabs = Array.from(document.querySelectorAll('#tab-bar .tab:not([data-preview])'));
             // Root filenames uniquely identify sources. Async construction and
             // drag ordering can change DOM positions, so never map by index.
             // Wrong paths corrupt dirty snapshots and cross-file review routing.
@@ -2153,7 +2162,7 @@
 
         const paths = [];
         for (const child of tabBar.children) {
-          if (child._filePath) {
+          if (child._filePath && !child.dataset.preview) {
             paths.push(child._filePath);
           }
         }
@@ -3868,6 +3877,10 @@
       }
 
       async function jumpToDefinitionAtPosition(targetPos, explicitWord) {
+        const language = window.editorInstance?.getModel()?.getLanguageId();
+        if (window.navigateSourceAtPosition && ['cpp', 'c', 'ino', 'h'].includes(language)) {
+          return window.navigateSourceAtPosition(targetPos, explicitWord);
+        }
         if (!window.editorInstance) return false;
         const editor = window.editorInstance;
         const model = editor.getModel();
@@ -4902,8 +4915,11 @@
         try {
           if (typeof monaco !== 'undefined' && monaco.languages) {
             monaco.languages.registerDefinitionProvider(SUPPORTED_LANGS, {
-              provideDefinition: function (model, position) {
+              provideDefinition: function (model, position, token) {
                 if (isPositionInStringOrComment(model, position)) return null;
+                if (window.sourceDefinitionLocations && ['cpp', 'c', 'ino', 'h'].includes(model.getLanguageId())) {
+                  return window.sourceDefinitionLocations(model, position, token);
+                }
                 const wordInfo = model.getWordAtPosition(position);
                 if (!wordInfo || !wordInfo.word) return null;
                 const sym = parseSymbolDetails(wordInfo.word, model, position);
@@ -5311,6 +5327,8 @@
       window.setEditorTheme(window.__mcuInitialTheme || 'default');
     })();
   </script>
+  <script src="editor_saves.js"></script>
+  <script src="source_navigation.js"></script>
 </body>
 
 </html>

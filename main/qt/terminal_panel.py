@@ -60,7 +60,7 @@ _SPIN_CHARS = ["", "", "", "", "", "", "", "", "", ""]
 
 from main.qt.icons import IconLabel as QLabel
 
-from main.qt.icons import ActionButton as QPushButton, icon
+from main.qt.icons import ActionButton as QPushButton, icon, ClosableTerminalTabs
 
 class _EmbedContainer(QWidget):
     """Native window embedding container with automatic geometry synchronization."""
@@ -68,6 +68,7 @@ class _EmbedContainer(QWidget):
     def __init__(self, panel: "TerminalPanel", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._panel = panel
+        self.setProperty("mcuForeignInput", True)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
         self.setStyleSheet("background: #0a0e14;")
@@ -91,10 +92,9 @@ class _EmbedContainer(QWidget):
             self._panel._resize_embedded_terminal(show=True)
             QTimer.singleShot(30, lambda: self._panel._resize_embedded_terminal(show=True))
             QTimer.singleShot(100, lambda: self._panel._resize_embedded_terminal(show=True))
-            QTimer.singleShot(250, self._panel.focus_terminal)
 
 
-class _SessionTabBar(QTabBar):
+class _SessionTabBar(ClosableTerminalTabs):
     def set_scroll_colors(self, normal, active, disabled):
         colors = (normal, active, disabled)
         if colors != getattr(self, "_scroll_colors", None):
@@ -205,7 +205,8 @@ class TerminalPanel(QWidget):
         self._header = QFrame(self)
         header = self._header
         header.setObjectName("terminal-header")
-        header.setFixedHeight(28)
+        header.setMinimumHeight(32)
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header.setStyleSheet("QFrame#terminal-header { background: #0b0e14; border-bottom: 1px solid #1a2230; }")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(6, 2, 6, 2)
@@ -629,7 +630,7 @@ class TerminalPanel(QWidget):
                 self._stack.setCurrentWidget(self._loader_card if self._sessions_meta else self._empty_card)
             else:
                 should_show = self.isVisible() and bool(self._sessions_meta)
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW if should_show else win32con.SW_HIDE)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNA if should_show else win32con.SW_HIDE)
                 self._resize_embedded_terminal(show=should_show)
                 if len(self._sessions_meta) > 0:
                     self._stack.setCurrentWidget(self._embed_container)
@@ -746,7 +747,7 @@ class TerminalPanel(QWidget):
             self._send_control("select", session_id)
             self._update_buttons_state()
             self.refresh_terminal()
-            QTimer.singleShot(50, self.focus_terminal)
+            self._embed_container.setFocus(Qt.FocusReason.MouseFocusReason)
 
     def _on_tab_close_requested(self, index: int) -> None:
         """Handle user clicking close button () on a session tab."""
@@ -943,7 +944,6 @@ class TerminalPanel(QWidget):
             self._resize_embedded_terminal(show=True)
             QTimer.singleShot(30, lambda: self._resize_embedded_terminal(show=True))
             QTimer.singleShot(100, lambda: self._resize_embedded_terminal(show=True))
-            QTimer.singleShot(250, self.focus_terminal)
         if self._port and self._is_ready:
             self._send_control("fit")
 
@@ -976,7 +976,7 @@ class TerminalPanel(QWidget):
             )
             if should_show:
                 flags |= win32con.SWP_SHOWWINDOW
-                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOWNA)
             else:
                 flags |= win32con.SWP_HIDEWINDOW
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
@@ -1019,8 +1019,6 @@ class TerminalPanel(QWidget):
     def _on_tab_revealed(self) -> None:
         """Called when bottom dock notebook switches onto this tab."""
         self.refresh_terminal()
-        if self._sessions_meta:
-            QTimer.singleShot(100, self.focus_terminal)
 
     def _on_tab_hidden(self) -> None:
         """Called when bottom dock notebook switches away from this tab."""

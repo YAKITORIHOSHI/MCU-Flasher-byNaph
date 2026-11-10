@@ -1248,7 +1248,7 @@ def _open_fallback_editor(file_path: str, report=None, reason: Optional[str] = N
 
 
 def _launch_code_viewer(file_path, all_paths=None, report=None, *, python_exe=None,
-                        theme_mode=None, font_size=None):
+                        theme_mode=None, font_size=None, include_roots=()):
     viewer_script = os.path.join(SCRIPT_DIR, "src", "qscintilla_viewer.py")
     if not os.path.exists(viewer_script):
         _open_fallback_editor(file_path, report, f"Viewer script not found:\n{viewer_script}")
@@ -1260,6 +1260,10 @@ def _launch_code_viewer(file_path, all_paths=None, report=None, *, python_exe=No
         if all_paths:
             cmd.extend(all_paths)
         environment = os.environ.copy()
+        if include_roots:
+            environment["MCU_FLASHER_VIEWER_INCLUDE_ROOTS"] = json.dumps(list(include_roots))
+        else:
+            environment.pop("MCU_FLASHER_VIEWER_INCLUDE_ROOTS", None)
         if theme_mode is not None:
             environment["MCU_FLASHER_VIEWER_THEME"] = str(theme_mode)
         if font_size is not None:

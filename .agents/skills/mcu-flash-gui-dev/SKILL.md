@@ -1,9 +1,42 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, passive serial monitoring and intentional resets, rounded glass combos/compact menus, responsive Settings, package-source find/navigation, update choices, compact OpenCode columns, Windows UNC terminals and native host adapters. Use for app changes and platform verification; firmware work follows sketch skills."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/header navigation, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, passive serial monitoring and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## Input, navigation, saves and installation
+
+Use native_input.py only for explicit owned input events. Verify the destination
+process, the exact embedded HWND/child, balanced thread attachments and resulting
+native focus. Show/resize/readiness never requests keyboard focus. Give Windows
+and POSIX terminal tabs explicit painted close marks and preserve header spacing.
+The native Windows fixture runs only in isolated Actions; Windows Server results
+leave native Windows 11 verification pending.
+
+Both editors use the pinned libclang parser in a bounded child process; Qt5 and
+Qt6 never share a process. Compile records actual parsing context in the normal
+build hook. No target inference, compiler execution or package installation is
+permitted for navigation. Keep one locked temporary preview, exact ranges,
+ambiguous candidate choices, back/forward history and generation/revision guards.
+Monaco language configuration owns pairing; Settings applies editor_auto_pairs
+live. Save only root project sources off Qt, atomically compare expected disk
+bytes, and clear dirty state only for the exact acknowledged model revision.
+
+Upload reads backend/live-worker/save/recovery state and exposes each blocking
+reason. Refresh after save completion; stale display labels are not authoritative.
+Developer tickets retain paper combos, centered severity and stable spinner
+geometry. Default to newest-created ordering; custom category removal requires
+reassignment plus a fresh local/cloud usage check under serialized local changes.
+Configured sync roots use local owned build storage. Bounded lock retries preserve
+objects and buffers; read-only blocker diagnostics never terminate other programs.
+Ubuntu Bootstrap stages verified per-user application sources and prepares the
+runtime at its final XDG path. Publish one menu entry only after every setup check
+succeeds. Preserve projects, old caches, journals, preferences and failed stages;
+reuse owned installs without downgrading them. Verify the new contracts with
+native_input, source_navigation, editor_features, file_access, user_install,
+owner_ticket_service, library_samples, controls and svg_icons.
+
 
 For migration continuation, read [CURRENT.md](../../../audit/migration/CURRENT.md)
 first, then only targeted reports needed for the current slice. Preserve the
@@ -39,8 +72,8 @@ Verify actual production paths with
 
 Every native combo popup gets `main/qt/combo_popup.py` after style polish. Paint
 one cached frosted scene in its own clipped popup, with transparent view/viewport,
-readable native selection and bounded work-area geometry. This includes portal
-combos while retaining the portal's surrounding identity. Do not install global
+readable native selection and bounded work-area geometry. Developer Access uses
+the explicit paper popup mode, preserving black borders and yellow selection. Do not install global
 Python event filters. Verify `verify_combo_popups` and native layout scales.
 Compact Actions/Options share that material and transparent scroll surfaces.
 Use translucent/frameless flags before first native show, antialiased alpha
@@ -51,9 +84,11 @@ and keeps Auto-Save delay editable with `NoButtons`. Verify repeated open/close,
 Qt heartbeat, focus and popup release in `verify_controls` on native Windows.
 Installed-package Ctrl+F focuses its filter. The separate PyQt5/QScintilla sample
 viewer owns Ctrl+F/F3/Shift+F3/Escape and Ctrl+Click/F12. Never mix its toolkit with
-PySide6. Declaration scans use immutable open-file snapshots on one worker,
-discard stale results, preserve read-only source and offer ambiguous locations.
-Do not infer external headers or compiler-level resolution. Verify
+PySide6. Both editors share bounded disposable LLVM parsing in source_navigation.py, using
+immutable snapshots and actual selected build context. Follow explicit includes,
+keep one locked header preview and exact symbol ranges, discard stale requests
+and preserve source buffers/history. Unsupported targets or ambiguous types use
+conservative candidates; never guess a compiler context or install on navigation. Verify
 `verify_library_samples` and `verify_package_browser`.
 Update questions remain topmost until dismissed (including native Windows
 fallback). Skip Updates covers optional source/component updates; recheck live

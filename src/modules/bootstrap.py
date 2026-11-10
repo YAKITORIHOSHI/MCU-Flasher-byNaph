@@ -3060,6 +3060,19 @@ def _check_import_websockets() -> bool:
 def _check_import_pyqt5_qscintilla() -> bool:
     return _check_spec("PyQt5.QtWidgets") and _check_spec("PyQt5.Qsci")
 
+
+def _check_import_libclang() -> bool:
+    if not _check_spec("clang.cindex"):
+        return False
+    try:
+        result = subprocess.run([str(_get_target_python()), "-I", "-c",
+            "from clang.cindex import Index; Index.create()"], stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
 def _check_import_certifi() -> bool:
     return _check_spec("certifi")
 
@@ -3118,6 +3131,13 @@ def _check_import_mbed_python() -> bool:
 from src.modules.mbed_compat import REQUIREMENTS as _MBED_PYTHON_REQUIREMENTS
 
 PIP_PACKAGES_SPEC = [
+    {
+        "id": "libclang",
+        "name": "LLVM source navigation",
+        "check": _check_import_libclang,
+        "pip_args": ["libclang==18.1.1"],
+        "critical": True,
+    },
     {
         "id": "mbed_python",
         "name": "Mbed Python compatibility",
@@ -9602,7 +9622,7 @@ def _is_env_healthy() -> bool:
     except ImportError:
         return False
 
-    return True
+    return _check_import_libclang()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -9638,9 +9658,12 @@ def _user_startup_state_dir() -> Path:
 
 
 STARTUP_HEALTH_FILE = _user_startup_state_dir() / "startup_health.json"
-_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial", "psutil", "shiboken6", "PySide6", "platformio", "websockets",
+_STARTUP_REQUIRED_PACKAGE_DIRS = ("serial", "psutil", "shiboken6", "PySide6", "platformio", "websockets", "clang",
                                   "setuptools", "future", "past")
-from src.modules.mbed_compat import REQUIRED_FILES as _STARTUP_REQUIRED_PACKAGE_FILES
+from src.modules.mbed_compat import REQUIRED_FILES as _MBED_STARTUP_FILES
+_STARTUP_REQUIRED_PACKAGE_FILES = (*_MBED_STARTUP_FILES, "clang/cindex.py",
+    "clang/native/" + ("libclang.dll" if sys.platform == "win32" else
+                       "libclang.dylib" if sys.platform == "darwin" else "libclang.so"))
 
 
 def _startup_app_fingerprint() -> str:
@@ -9767,6 +9790,8 @@ def _startup_required_paths() -> list[Path]:
     paths.extend(SCRIPT_DIR / name for name in (
         "src/editor/index.html", "src/editor/bundle.js", "src/editor/qwebchannel.js",
         "src/editor/project_files.js",
+        "src/editor/editor_pairing.js", "src/editor/editor_saves.js", "src/editor/source_navigation.js",
+        "src/modules/source_navigation.py", "src/modules/sample_symbols.py",
         "src/editor/terminal.html", "src/assets/xterm/xterm.js", "src/assets/xterm/xterm.css",
     ))
     if site is not None:

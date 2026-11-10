@@ -1,9 +1,24 @@
 ---
 name: mcu-verify
-description: "Run MCU Flasher's hardware-free verifiers and separate new failures from pre-existing ones. Use after app changes, before a commit or release, or when a direct/verify_*.py check fails and you need to know whether your change caused it."
+description: "Run MCU Flasher hardware-free and isolated native CI checks, including keyboard routing, semantic navigation, pairing, save races and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
+
+## Editor and input improvement gates
+
+Run native_input, source_navigation, editor_features, file_access, user_install,
+owner_ticket_service, owner_tickets, library_samples, controls and svg_icons.
+Real semantic coverage requires libclang==18.1.1 in the isolated runtime; an
+LLVM-unavailable skip does not qualify semantic resolution. editor_features
+loads the real offline Monaco assets for pairing/escaping/indentation/history,
+read-only previews and acknowledged-save races. Installation checks mock all
+runtime/package work and menu publication. No live install or account is used.
+editor-improvements.yml runs these checks on Windows and Ubuntu. The explicit
+verify_native_input.py --native gate creates only owned fixture windows and
+injects keys on an isolated Actions runner, checking actual foreign-process
+keyboard queues. Record the runner OS; Windows Server leaves Windows 11 pending.
+
 
 Run from the project root with the private runtime:
 

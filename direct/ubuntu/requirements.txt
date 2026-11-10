@@ -14,6 +14,8 @@ setuptools==80.9.0
 future==1.0.0
 ptyprocess>=0.7,<1
 requests>=2.31,<3
+# Shared overload-aware navigation; parsing remains in a bounded child process.
+libclang==18.1.1
 # The sample viewer uses pip Qt5 wheels on amd64. ARM64 uses Ubuntu's native
 # python3-pyqt5/python3-pyqt5.qsci through a narrow private-venv package bridge.
 PyQt5>=5.15,<6; platform_machine != "aarch64" and platform_machine != "arm64"
