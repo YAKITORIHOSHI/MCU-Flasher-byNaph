@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HOME_ISOLATION = '''"""Fixture-only home path redirection; no environment home variables change."""
 import os
 from pathlib import Path
-_fixture_home = Path(os.environ["MCU_FIRST_RUN_FIXTURE"]) / "sandbox-home"
+_fixture_home = Path(os.environ.get("MCU_FIRST_RUN_FIXTURE", __MCU_OWNED_FIXTURE__)) / "sandbox-home"
 _fixture_home.mkdir(parents=True, exist_ok=True)
 Path.home = classmethod(lambda cls: _fixture_home)
 _original_expanduser = os.path.expanduser
@@ -43,6 +43,13 @@ if os.environ.get("MCU_FIRST_RUN_ALLOW_SMALL_RUNNER") == "1":
     from src.modules import runtime_resources as _fixture_resources
     _fixture_resources.enforce_minimum_cpu_requirement = lambda: True
 '''
+
+
+def _home_isolation(fixture: Path) -> str:
+    # Subsequent host verifiers may reuse this disposable application without
+    # the first-launch environment. Preserve its exact owned home even after
+    # Ubuntu relocates the application into per-user installation storage.
+    return HOME_ISOLATION.replace('__MCU_OWNED_FIXTURE__', repr(str(fixture.absolute())))
 
 GUI_SERIAL_ISOLATION = '''
 # Fixture-only hardware boundary: discovery is empty and serial opens fail.
@@ -143,7 +150,7 @@ def _copy_source(destination: Path) -> None:
     for name in ("mcu_flash_gui.py", "README.md"):
         shutil.copy2(ROOT / name, destination / name)
     shutil.copytree(ROOT / "LAUNCHER", destination / "LAUNCHER")
-    (destination / "src/__init__.py").write_text(HOME_ISOLATION, encoding="utf-8")
+    (destination / "src/__init__.py").write_text(_home_isolation(destination.parent), encoding="utf-8")
     # Direct verifiers can import main before src. Redirect home first there too.
     for name in ("verify_runtime.py", "verify_target_resolution.py"):
         script = destination / "direct" / name

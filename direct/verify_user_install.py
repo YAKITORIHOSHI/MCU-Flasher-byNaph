@@ -7,6 +7,7 @@ import contextlib
 import io
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 import sys
@@ -33,6 +34,19 @@ class UserInstallChecks(unittest.TestCase):
 
     def stage(self):
         return install.ensure_user_installation(self.source, data_home=self.data, report=lambda _text: None)
+
+    @unittest.skipIf(sys.platform == 'win32', 'POSIX first-launch fixture isolation')
+    def test_reused_first_launch_fixture_keeps_its_owned_home_without_launch_environment(self):
+        from direct.verify_ubuntu_first_run import _home_isolation
+        env = dict(os.environ)
+        env.pop('MCU_FIRST_RUN_FIXTURE', None)
+        env.pop('MCU_FIRST_RUN_ALLOW_SMALL_RUNNER', None)
+        source = _home_isolation(self.root) + '\nprint(Path.home())\nprint(os.path.expanduser("~/probe"))\n'
+        result = subprocess.run([sys.executable, '-I', '-B', '-c', source], env=env,
+                                capture_output=True, text=True, encoding='utf-8', timeout=5, check=True)
+        home = self.root / 'sandbox-home'
+        self.assertEqual(result.stdout.splitlines(), [str(home), str(home / 'probe')])
+        self.assertTrue(home.is_dir())
 
     def test_copies_verified_sources_preserves_modes_and_omits_projects_settings_and_runtimes(self):
         for name in ('User.ino', 'NOTE.txt', 'AGENTS.md', '.mcu_flasher_build_cache/.mcu_ai_edits/keep.txt',

@@ -17,6 +17,8 @@ slow-parser deadline fixture on Windows venvs to prove descendant retirement. ed
 loads the real offline Monaco assets for pairing/escaping/indentation/history,
 read-only previews and acknowledged-save races. Installation checks mock all
 runtime/package work and menu publication. No live install or account is used.
+The POSIX cold-setup fixture embeds its exact owned sandbox home as a fallback
+for later host verifiers that reuse the copy without its launch environment.
 editor-improvements.yml runs these checks on Windows and Ubuntu. The explicit
 verify_native_input.py --native gate creates only owned fixture windows and
 injects keys on an isolated Actions runner, checking actual foreign-process

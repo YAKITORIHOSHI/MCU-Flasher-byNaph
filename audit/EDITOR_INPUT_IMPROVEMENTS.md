@@ -37,9 +37,10 @@ with the pinned libclang 18.1.1 wheel; no live runtime repair is used as a test.
   and retirement of owned parser processes at their deadline.
 - Seven real offline Monaco checks pass for pairing, quoting, indentation,
   read-only previews, navigation history, stale replies and save races/off-Qt I/O.
-- Eight installation checks pass, including no menu before complete validation,
+- Nine installation checks pass, including no menu before complete validation,
   retained failed stages, changed source bytes, preference preservation, reuse
-  without downgrade and no copied virtual environment.
+  without downgrade, no copied virtual environment and retained fixture-only
+  home isolation when subsequent host checks reuse the installed application.
 - Thirty-three developer portal checks pass, including new sort/removal,
   spinner geometry, severity alignment and wrapped compact layouts. Captures
   were inspected for new/edit busy footers, ticket cards and the paper list.
