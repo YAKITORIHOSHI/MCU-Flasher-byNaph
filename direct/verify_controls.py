@@ -141,7 +141,11 @@ class ControlChecks(unittest.TestCase):
             timer.setInterval(5)
             timer.timeout.connect(lambda: ticks.append(True))
             timer.start()
-            QTest.qWait(30)
+            # Wait for actual dispatch, allowing native paint and Windows timer
+            # granularity under load; a fixed 30 ms can expire during one paint.
+            deadline = time.monotonic() + 1.0
+            while not ticks and time.monotonic() < deadline:
+                QTest.qWait(10)
             self.assertGreater(len(ticks), 0, "Qt stopped dispatching while Settings was open")
             self.assertEqual(dialog.autosave_spin.buttonSymbols(), dialog.autosave_spin.ButtonSymbols.NoButtons)
             dialog.cb_autosave.setChecked(True)
@@ -237,13 +241,19 @@ class ControlChecks(unittest.TestCase):
                     material = combo._mcu_glass_popup
                     backdrop = material.backdrop.grab().toImage()
                     # The top visible row, inside the list's rim; the current (last) row is below it.
-                    row = image.pixelColor(5, 6)
-                    fill = backdrop.pixelColor(5, 6)
+                    # grab() images contain device pixels. At 200%, raw (5, 6)
+                    # samples the bright rounded rim at logical (2.5, 3), outside
+                    # the reading row. Probe the same logical point at every DPI.
+                    ratio = image.devicePixelRatio()
+                    x, y = round(5 * ratio), round(6 * ratio)
+                    row = image.pixelColor(x, y)
+                    fill = backdrop.pixelColor(x, y)
                     self.assertEqual(row.alpha(), 255, f"{mode}: list has no fill")
                     self.assertLessEqual(max(abs(row.red() - fill.red()), abs(row.green() - fill.green()),
                                              abs(row.blue() - fill.blue())), 3,
                                          f"{mode}: unselected rows cover the frosted scene: {row.name()} instead of {fill.name()}")
-                    self.assertGreaterEqual(contrast_ratio(get_palette(mode)["TEXT"], fill.name()), 4.5)
+                    self.assertGreaterEqual(contrast_ratio(get_palette(mode)["TEXT"], fill.name()), 4.5,
+                                            f"{mode}: reading ink against {fill.name()} at DPR {ratio}")
                     combo.hidePopup()
                     pump(.05)
                 host.hide()
