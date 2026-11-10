@@ -1,6 +1,13 @@
 name: Native repair checks
 
 on:
+  push:
+    paths:
+      - .github/workflows/repair-native.yml
+      - main/qt/combo_popup.py
+      - main/qt/toolbar.py
+      - direct/verify_responsive.py
+      - direct/verify_monitor_matrix.py
   workflow_dispatch:
 
 permissions:
