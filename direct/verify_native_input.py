@@ -172,7 +172,10 @@ class RealInputQueueChecks(unittest.TestCase):
         for item in (embed, editor, terminal): layout.addWidget(item)
         dialog = QDialog(window); dialog.setWindowTitle('Owned settings fixture')
         settings = QLineEdit(dialog); QVBoxLayout(dialog).addWidget(settings)
-        window.resize(640, 400); window.show(); app.processEvents()
+        work = app.primaryScreen().availableGeometry()
+        window.resize(min(640, work.width()-40), min(400, work.height()-60))
+        window.move(work.left()+20, work.top()+20)
+        window.show(); app.processEvents()
         child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--foreign-child'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             creationflags=subprocess.CREATE_NO_WINDOW)
@@ -214,10 +217,24 @@ class RealInputQueueChecks(unittest.TestCase):
             window._ai_panel = SimpleNamespace(_ai_hwnd=root, _proc=SimpleNamespace(pid=handles['pid']))
             guard = WorkspacePointerGuard(window)
             guard._scan_owned_widgets()
+            def trace_handoff(destination, roots, **options):
+                before = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
+                user.GetGUIThreadInfo(0, ctypes.byref(before))
+                moved = handoff_owned_input(destination, roots, **options)
+                after = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
+                user.GetGUIThreadInfo(0, ctypes.byref(after))
+                print('Owned handoff:', dict(destination=destination, roots=roots,
+                      before=before.hwndFocus, after=after.hwndFocus, moved=moved), flush=True)
+                return moved
+            tracer = patch('main.qt.native_input.handoff_owned_input', side_effect=trace_handoff)
+            tracer.start(); self.addCleanup(tracer.stop)
             for target, host in ((editor, window), (settings, dialog), (terminal, window), (editor, window)):
                 host.show()
                 if host is dialog:
-                    dialog.move(window.frameGeometry().right()+20,window.y())
+                    # Keep the owned dialog reachable at 100–200% scale without
+                    # covering the foreign field used for calibration.
+                    dialog.move(window.x()+window.width()-dialog.width(),
+                                window.y()+window.height()-dialog.height())
                 destination=int(target.winId())
                 window.activateWindow(); user.SetForegroundWindow(int(window.winId()))
                 QTest.qWait(100)
@@ -247,9 +264,19 @@ class RealInputQueueChecks(unittest.TestCase):
                 QTest.qWait(400)
                 info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
                 self.assertTrue(user.GetGUIThreadInfo(0, ctypes.byref(info)))
-                destination = int(target.effectiveWinId())
-                self.assertTrue(info.hwndFocus == destination or user.IsChild(destination, info.hwndFocus),
-                                'Native input stayed in the foreign process after the owned input click')
+                native_pid = wintypes.DWORD()
+                user.GetWindowThreadProcessId(info.hwndFocus, ctypes.byref(native_pid))
+                owned_root = int(host.winId())
+                print('Clicked Qt input:', dict(focus=info.hwndFocus, focus_pid=native_pid.value,
+                      owned_pid=os.getpid(), root=owned_root, target=int(target.effectiveWinId())), flush=True)
+                # Qt can keep Win32 focus on its top-level and route input to
+                # the logical field, just as the calibrated foreign Qt child
+                # does. Require owned native focus, the intended Qt field and
+                # actual key delivery; a particular Qt HWND layout is incidental.
+                self.assertEqual(native_pid.value, os.getpid(),
+                                 'Native input stayed outside the owned Qt process')
+                self.assertTrue(info.hwndFocus == owned_root or user.IsChild(owned_root, info.hwndFocus))
+                self.assertIs(app.focusWidget(), target)
                 before = target.text()
                 events = (Input * 2)(Input(type=1, data=Data(keyboard=Keyboard(scan=ord('q'),flags=4))),
                                     Input(type=1, data=Data(keyboard=Keyboard(scan=ord('q'),flags=6))))
@@ -260,7 +287,7 @@ class RealInputQueueChecks(unittest.TestCase):
                 QTest.qWait(60)
                 self.assertTrue(startup.empty(),'The embedded process reported unexpected text input')
                 if host is dialog: dialog.hide()
-            print('Native host:', sys.getwindowsversion(), flush=True)
+            print('Native host:', sys.getwindowsversion(), 'Qt scale:', os.environ.get('QT_SCALE_FACTOR','1'), flush=True)
         finally:
             if root and user.IsWindow(root):
                 user.PostMessageW(root,0x10,0,0)  # WM_CLOSE to this fixture's child.
