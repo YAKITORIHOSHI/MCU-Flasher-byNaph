@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/repair-native.yml
       - main/qt/combo_popup.py
+      - main/qt/log_follow.py
       - main/qt/toolbar.py
       - main/qt/main_window.py
       - main/qt/settings_dialog.py

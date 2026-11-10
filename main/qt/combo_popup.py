@@ -113,9 +113,15 @@ class _PopupMaterial(QObject):
             # its field explicitly, in the same Qt logical coordinate space.
             field = self.combo.mapToGlobal(QPoint(0, 0))
             below = field.y() + self.combo.height()
-            above = field.y() - rect.height()
+            below_space = max(0, area.bottom() + 1 - below)
+            above_space = max(0, field.y() - area.top())
+            use_below = (rect.height() <= below_space or
+                         (rect.height() > above_space and below_space >= above_space))
+            # When neither side fits, shorten the native scrolling list instead
+            # of clamping its full height across the field it belongs to.
+            rect.setHeight(max(1, min(rect.height(), below_space if use_below else above_space)))
             rect.moveLeft(field.x())
-            rect.moveTop(below if below + rect.height() <= area.bottom() + 1 else above)
+            rect.moveTop(below if use_below else field.y() - rect.height())
             rect.moveLeft(max(area.left(), min(rect.left(), area.right() - rect.width() + 1)))
             rect.moveTop(max(area.top(), min(rect.top(), area.bottom() - rect.height() + 1)))
             if rect != self.popup.geometry():

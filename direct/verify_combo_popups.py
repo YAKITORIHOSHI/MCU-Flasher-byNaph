@@ -5,11 +5,13 @@ import argparse
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint, QRect
+from PySide6.QtGui import QScreen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QVBoxLayout, QWidget
 from main.core.theme import Theme
@@ -24,6 +26,33 @@ OUTPUT = ROOT / "temp/audit/combo-popups"
 
 
 class ComboPopups(unittest.TestCase):
+    def test_long_list_shortens_without_covering_its_field_and_keeps_scrolling(self):
+        host = QWidget()
+        host.resize(340, 220)
+        combo = QComboBox(host)
+        combo.setGeometry(12, 80, 180, 28)
+        combo.addItems([f"Package {i}" for i in range(30)])
+        host.show()
+        APP.processEvents()
+        field = combo.mapToGlobal(QPoint(0, 0))
+        area = QRect(field.x()-10, field.y()-70, 310, 160)
+        try:
+            with patch.object(QScreen, "availableGeometry", return_value=area.adjusted(-4, -4, 4, 4)):
+                combo.showPopup()
+                APP.processEvents()
+                popup = combo._mcu_glass_popup.popup.geometry()
+                self.assertTrue(area.contains(popup), str(popup))
+                self.assertTrue(popup.bottom() < field.y() or popup.top() >= field.y()+combo.height(), str(popup))
+                self.assertGreater(combo.view().verticalScrollBar().maximum(), 0)
+                QTest.keyClick(combo.view(), Qt.Key.Key_End)
+                QTest.keyClick(combo.view(), Qt.Key.Key_Return)
+                self.assertEqual(combo.currentIndex(), 29)
+        finally:
+            combo.hidePopup()
+            host.close()
+            host.deleteLater()
+            APP.processEvents()
+
     def test_all_native_combo_families_have_glass_and_keep_keyboard_selection(self):
         OUTPUT.mkdir(parents=True, exist_ok=True)
         for mode in ("default", "light", "solarized_dark"):

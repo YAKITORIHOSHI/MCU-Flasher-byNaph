@@ -17,6 +17,9 @@
   popup material. Native combo lists use per-pixel transparent rounded corners
   rather than an opaque frame cut by a coarse mask, removing the dark fringe.
   Native selection, scrolling and work-area fitting remain in place.
+  On short scaled screens, lists shrink to the available space above or below
+  their field rather than covering it. Setup's unwrapped activity log also
+  resumes following after native viewport changes while preserving reader holds.
 - **Settings responsiveness:** Compact actions finish destroying their native
   popup before dispatching a dialog action. Settings uses an owned, window-modal
   `open()` instead of nesting `exec()` in the popup event. Closing it deletes

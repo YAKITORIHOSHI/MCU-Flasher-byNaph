@@ -151,12 +151,16 @@ class LogFollow(QObject):
             self._retire_scroll_timer.start(0)
 
     def _on_range_changed(self, _minimum, _maximum):
-        # QPlainTextEdit can finish wrapping after the output transaction.
-        # Coalesce that layout work without polling or one callback per line.
-        if self._depth or not self._wrapped() or self.scrollbar_held or self._bar.isSliderDown():
+        # Native viewport/layout changes can publish a later range even for
+        # unwrapped output (notably Windows fractional scales). Coalesce that
+        # work without polling or one callback per line.
+        if self._depth or self.scrollbar_held or self._bar.isSliderDown():
             return
         if self._pending_scroll is None and self.enabled and not self.user_scrolled_up:
             self._pending_scroll = self._capture(False, follow_output=False)
+            # The reader was following before this range grew. The old maximum
+            # is no longer the bottom, so capture's new-range check cannot decide.
+            self._pending_scroll["following"] = True
         if self._pending_scroll is not None:
             self._settle_timer.start(0)
 
