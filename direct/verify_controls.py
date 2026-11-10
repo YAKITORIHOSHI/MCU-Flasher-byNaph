@@ -113,6 +113,74 @@ class ControlChecks(unittest.TestCase):
     def settings(self):
         return self.own(settings_module.SettingsDialog(self.backend))
 
+    def test_compact_settings_releases_popup_and_retires_each_dialog(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtTest import QTest
+        window = self.own(QMainWindow())
+        controls = ControlsBar(self.backend, window)
+        window.setCentralWidget(controls)
+        window.resize(700, 220)
+        window.show()
+        APP.processEvents()
+        for _ in range(8):
+            controls._toggle_options_menu()
+            popup = controls._opt_popup
+            button = next(b for b in popup.findChildren(QPushButton) if b.text() == "Settings")
+            button.click()
+            self.assertIsNone(getattr(controls, "_settings_dialog", None), "Dialog ran inside popup click")
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            APP.processEvents()
+            dialog = controls._settings_dialog
+            self.assertIsNotNone(dialog)
+            self.assertIsNone(APP.activePopupWidget())
+            self.assertEqual(APP.activeModalWidget(), dialog)
+            controls._open_settings()
+            self.assertEqual(window.findChildren(settings_module.SettingsDialog), [dialog])
+            ticks = []
+            timer = QTimer(dialog)
+            timer.setInterval(5)
+            timer.timeout.connect(lambda: ticks.append(True))
+            timer.start()
+            QTest.qWait(30)
+            self.assertGreater(len(ticks), 0, "Qt stopped dispatching while Settings was open")
+            self.assertEqual(dialog.autosave_spin.buttonSymbols(), dialog.autosave_spin.ButtonSymbols.NoButtons)
+            dialog.cb_autosave.setChecked(True)
+            dialog.autosave_spin.setFocus()
+            dialog.autosave_spin.selectAll()
+            QTest.keyClicks(dialog.autosave_spin, "2100")
+            dialog.autosave_spin.interpretText()
+            self.assertEqual(dialog.autosave_spin.value(), 2100)
+            dialog.reject()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.assertIsNone(controls._settings_dialog)
+            self.assertEqual(window.findChildren(settings_module.SettingsDialog), [])
+
+    def test_update_prompt_stays_on_top_and_skip_survives_failed_persistence(self):
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QMessageBox
+        dialog, gui, namespace = bootstrap_fixture()
+        self.own(dialog)
+        namespace["save_bootstrap_config"].return_value = False
+        dialog.skip_cb.setChecked(False)
+        self.assertFalse(gui._skip_updates)
+        self.assertFalse(dialog.skip_cb.isChecked())
+        dialog.show()
+        answers = []
+        dialog.ask_update(2, answers.append)
+        prompt = dialog._update_prompt
+        self.assertIsNotNone(prompt)
+        QTest.qWait(1100)  # The setup's initial elevation expires; the prompt's must not.
+        self.assertTrue(prompt.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        self.assertTrue(prompt.isVisible())
+        prompt.button(QMessageBox.StandardButton.No).click()
+        self.assertEqual(answers, [False])
+        dialog.skip_cb.setChecked(True)
+        self.assertTrue(gui._skip_updates)
+        self.assertTrue(dialog.skip_cb.isChecked())
+        dialog.ask_update(2, answers.append)
+        self.assertIsNone(dialog._update_prompt)
+        self.assertEqual(answers, [False, False])
+
     def test_combo_lists_drop_from_their_field_with_theme_rows(self):
         """Lists opened over their combo, and a bare container sheet cleared their fill."""
         from PySide6.QtCore import QPoint
@@ -663,6 +731,7 @@ class ControlChecks(unittest.TestCase):
             toolbar.btn_save.setEnabled(enabled)
             source.click()
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            APP.processEvents()
             self.assertIsNone(toolbar._actions_popup)
         invoked.assert_called_once()
         for _ in range(10):
@@ -688,8 +757,10 @@ class ControlChecks(unittest.TestCase):
             button.setEnabled(True)
             toolbar._toggle_actions_menu()
             toolbar._actions_popup.findChildren(QPushButton)[index].click()
-            callback.assert_called_once()
+            callback.assert_not_called()
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            APP.processEvents()
+            callback.assert_called_once()
 
     def test_compact_options_can_be_reopened_after_dismissal(self):
         window = self.own(QMainWindow())
@@ -1009,13 +1080,13 @@ class ControlChecks(unittest.TestCase):
         dialog._on_close()
         self.assertFalse(dialog._clock_timer.isActive())
 
-    def test_bootstrap_skip_write_failure_reverts_control(self):
+    def test_bootstrap_skip_write_failure_keeps_explicit_choice_for_current_run(self):
         dialog, gui, namespace = bootstrap_fixture(cores=6)
         self.own(dialog)
         namespace["save_bootstrap_config"].return_value = False
         dialog.skip_cb.setChecked(False)
-        self.assertTrue(dialog.skip_cb.isChecked())
-        self.assertTrue(gui._skip_updates)
+        self.assertFalse(dialog.skip_cb.isChecked())
+        self.assertFalse(gui._skip_updates)
         self.assertIn("was not saved", dialog.log_edit.toPlainText())
 
     def test_bootstrap_config_failure_preserves_existing_json(self):

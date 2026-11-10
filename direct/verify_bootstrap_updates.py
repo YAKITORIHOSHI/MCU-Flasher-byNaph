@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -210,6 +212,43 @@ class UpdateChecks(unittest.TestCase):
         namespace["section"].assert_called_once_with("Checking for updates")
         reachable.assert_not_called()
         checks.assert_not_called()
+
+    def test_skip_during_slow_checks_returns_without_prompt_or_install(self):
+        namespace, _, checks, _ = self.update_stage_fixture(None, online=True)
+        skipped, release, started = threading.Event(), threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        namespace["_update_check_skip_reason"] = lambda: "live checkbox" if skipped.is_set() else None
+
+        def slow_check():
+            started.set()
+            release.wait(3)
+            return {"update_available": True}
+
+        checks.side_effect = slow_check
+        result = []
+        worker = threading.Thread(target=lambda: result.append(namespace["run_update_checks"](auto_update=True)))
+        worker.start()
+        self.assertTrue(started.wait(1))
+        skipped.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive(), "Skip waited for stalled read-only network work")
+        self.assertEqual(result, ["skipped"])
+        namespace["_pip_upgrade"].assert_not_called()
+
+    def test_skip_after_accepting_prompt_prevents_installs(self):
+        gui = SimpleNamespace(log_section=Mock(), root=SimpleNamespace(after=Mock()))
+        namespace, _, _, summary = self.update_stage_fixture(gui, online=True)
+        skipped = [False]
+        namespace["_update_check_skip_reason"] = lambda: "live checkbox" if skipped[0] else None
+        summary.return_value = [{"name": "websockets", "installed": "17.1", "latest": "17.2"}]
+
+        def ask(_count):
+            skipped[0] = True
+            return True
+
+        gui.ask_update = ask
+        self.assertEqual(namespace["run_update_checks"](), "skipped")
+        namespace["_pip_upgrade"].assert_not_called()
 
     def test_update_target_display_expands_alias_without_changing_installer_target(self):
         namespace, _reachable, checks, _summary = self.update_stage_fixture(None, online=False)

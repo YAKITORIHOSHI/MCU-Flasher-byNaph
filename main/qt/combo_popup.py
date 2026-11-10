@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, QRectF, Qt, QTimer
-from PySide6.QtGui import QPainter, QPainterPath, QRegion
+from PySide6.QtGui import QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import QFrame, QStyledItemDelegate, QWidget
 
 from main.core.theme import get_palette
@@ -10,7 +10,19 @@ from main.qt.glass import _render_scene, _sheet_image, _theme_name
 from main.qt.theme import glass_tokens
 
 
-class _Backdrop(QWidget):
+def prepare_popup(popup):
+    """Use per-pixel alpha, including on Windows, before creating the native window.
+
+    A rounded mask cuts integer pixels out of an opaque rectangular window. It
+    leaves a dark, jagged fringe at fractional scales; paint the alpha edge instead.
+    """
+    popup.setWindowFlags(popup.windowFlags() | Qt.WindowType.FramelessWindowHint
+                         | Qt.WindowType.NoDropShadowWindowHint)
+    popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    popup.setAutoFillBackground(False)
+
+
+class PopupBackdrop(QWidget):
     def __init__(self, parent):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -22,8 +34,16 @@ class _Backdrop(QWidget):
         ratio = self.devicePixelRatioF()
         key = (self.width(), self.height(), ratio, self.mode)
         if self._key != key:
-            self._image = _render_scene(self.size(), ratio, self.mode, veiled=True)
+            scene = _render_scene(self.size(), ratio, self.mode, veiled=True)
+            self._image = QPixmap(scene.size())
+            self._image.setDevicePixelRatio(ratio)
+            self._image.fill(Qt.GlobalColor.transparent)
             painter = QPainter(self._image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(self.rect()), 9, 9)
+            painter.setClipPath(path)
+            painter.drawPixmap(0, 0, scene)
             painter.drawImage(0, 0, _sheet_image(self.width(), self.height(), 9, ratio, self.mode == "light"))
             painter.end()
             self._key = key
@@ -40,19 +60,19 @@ class _PopupMaterial(QObject):
         self.popup = self.view.window()
         self._mode = None
         self._fitting = False
+        prepare_popup(self.popup)
         self.popup.setObjectName("glass-combo-popup")
         self.popup.setAutoFillBackground(False)
         self.popup.setStyleSheet("QFrame#glass-combo-popup { background: transparent; border: none; }")
         if isinstance(self.popup, QFrame):
             self.popup.setFrameShape(QFrame.Shape.NoFrame)
-        self.backdrop = _Backdrop(self.popup)
+        self.backdrop = PopupBackdrop(self.popup)
         self.backdrop.lower()
         self.backdrop.show()
         self.view.setItemDelegate(QStyledItemDelegate(self.view))
         self.view.setAutoFillBackground(False)
         self.view.viewport().setAutoFillBackground(False)
         self.popup.installEventFilter(self)
-        self._refresh()
 
     def _refresh(self):
         mode = _theme_name()
@@ -88,9 +108,6 @@ class _PopupMaterial(QObject):
                 self.popup.setGeometry(rect)
             self.backdrop.setGeometry(self.popup.rect())
             self.backdrop.lower()
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(self.popup.rect()), 9, 9)
-            self.popup.setMask(QRegion(path.toFillPolygon().toPolygon()))
             self.backdrop.update()
         finally:
             self._fitting = False

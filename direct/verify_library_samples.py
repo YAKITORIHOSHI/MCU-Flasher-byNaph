@@ -10,6 +10,7 @@ import argparse
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,6 +42,64 @@ APP = QApplication.instance() or QApplication([])
 
 
 class SampleViewerChecks(unittest.TestCase):
+    def test_find_keyboard_next_previous_unicode_no_match_and_escape(self):
+        window = self.window()
+        editor = window.tabs.currentWidget()
+        editor.setCursorPosition(0, 0)
+        editor.setFocus()
+        QTest.keyClick(editor, Qt.Key_F, Qt.ControlModifier)
+        APP.processEvents()
+        self.assertTrue(window.find_bar.isVisible())
+        self.assertTrue(window.find_entry.hasFocus())
+        window.find_entry.setText("µ")
+        self.assertEqual(editor.selectedText(), "µ")
+        window.find_entry.setText("delay")
+        first = editor.getSelection()
+        QTest.keyClick(window.find_entry, Qt.Key_F3)
+        self.assertGreater(editor.getSelection()[0], first[0])
+        QTest.keyClick(window.find_entry, Qt.Key_F3, Qt.ShiftModifier)
+        self.assertEqual(editor.getSelection(), first)
+        window.find_entry.setText("ABSENT SYMBOL")
+        self.assertEqual(window.find_status.text(), "No matches")
+        QTest.keyClick(window.find_entry, Qt.Key_Escape)
+        self.assertFalse(window.find_bar.isVisible())
+        self.assertTrue(editor.hasFocus())
+        self.assertEqual(editor.text(), self.texts[0])
+        self.assertTrue(editor.isReadOnly())
+
+    def test_ctrl_click_function_and_variable_declarations_in_open_files(self):
+        self.texts[0] = '// µ prefix\n#include <Arduino.h>\nint count = 3;\nvoid blink() {}\nvoid loop() { blink(); count++; }\n'
+        self.files[0].write_text(self.texts[0], encoding="utf-8")
+        window = self.window()
+        editor = window.tabs.currentWidget()
+        for word, column, target_line in (("blink", 15, 3), ("count", 24, 2)):
+            editor.setCursorPosition(4, column)
+            position = editor.positionFromLineIndex(4, column)
+            point = editor.SendScintilla(editor.SCI_POINTXFROMPOSITION, 0, position)
+            y = editor.SendScintilla(editor.SCI_POINTYFROMPOSITION, 0, position)
+            from PyQt5.QtCore import QPoint
+            QTest.mouseClick(editor.viewport(), Qt.LeftButton, Qt.ControlModifier, QPoint(point+2, y+4))
+            deadline = time.monotonic() + 3
+            while editor.selectedText() != word and time.monotonic() < deadline:
+                QTest.qWait(10)
+            self.assertEqual(editor.selectedText(), word)
+            self.assertEqual(editor.getSelection()[0], target_line)
+        self.assertEqual(editor.text(), self.texts[0])
+
+    def test_declaration_lookup_excludes_comments_strings_calls_and_out_of_scope_locals(self):
+        from src.modules.sample_symbols import find_definitions, identifier_at
+        text = ('int count = 1;\nvoid fn() { int count = 2; count++; }\n'
+                'void other() { count++; }\n// int fake = 1;\n'
+                'const char *message = R"tag(int fake = 2;)tag";\nvoid run() { fn(); }\n')
+        inside = text.index('count++;')
+        outside = text.index('count++;', inside+1)
+        self.assertEqual(find_definitions((("a.ino", text),), 'count', 'a.ino', inside)[0].line, 1)
+        self.assertEqual(find_definitions((("a.ino", text),), 'count', 'a.ino', outside)[0].line, 0)
+        self.assertEqual(find_definitions((("a.ino", text),), 'fake', 'a.ino', 0), [])
+        self.assertEqual(identifier_at(text, text.index('fake')), '')
+        choices = find_definitions((("a.ino", 'void blink() {}'), ("b.cpp", 'void blink(int n) {}')), 'blink', 'a.ino', 0)
+        self.assertEqual(len(choices), 2)
+
     def test_sample_process_never_imports_workspace_qt_toolkit(self):
         self.assertFalse(any(name == "PySide6" or name.startswith("PySide6.")
                              for name in sys.modules))

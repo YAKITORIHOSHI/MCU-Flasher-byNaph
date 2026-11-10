@@ -91,7 +91,7 @@ class SettingsDialog(GlassDialog):
         if hasattr(self, "scroll") and self.scroll.verticalScrollBar():
             self.scroll.verticalScrollBar().setValue(0)
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(0) if hasattr(self, "scroll") and self.scroll.verticalScrollBar() else None)
+            QTimer.singleShot(0, self, lambda: self.scroll.verticalScrollBar().setValue(0))
         if hasattr(self, "btn_save"):
             self.btn_save.setFocus()
 
@@ -470,6 +470,8 @@ class SettingsDialog(GlassDialog):
         as_row.addWidget(delay_lbl)
 
         self.autosave_spin = QSpinBox()
+        self.autosave_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.autosave_spin.setAccessibleName("Auto-save delay in milliseconds")
         self.autosave_spin.setRange(500, 10000)
         self.autosave_spin.setSingleStep(500)
         self.autosave_spin.setValue(int(cur_autosave_delay))

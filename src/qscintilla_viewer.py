@@ -7,6 +7,8 @@ Specialized for viewing Arduino/C++ code (.ino / .cpp / .h) in read-only mode.
 
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +27,13 @@ from src.modules.ui_metrics import WorkArea, fit_rect, preferred_size
 
 try:
     # pyrefly: ignore [missing-import]
-    from PyQt5.QtCore import Qt, QSize, QTimer, QRect
+    from PyQt5.QtCore import Qt, QSize, QTimer, QRect, pyqtSignal
     # pyrefly: ignore [missing-import]
-    from PyQt5.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QIcon
+    from PyQt5.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QIcon, QKeySequence
     # pyrefly: ignore [missing-import]
     from PyQt5.QtWidgets import (
-        QApplication, QMainWindow, QVBoxLayout, QWidget, QTabBar, QTabWidget
+        QApplication, QMainWindow, QVBoxLayout, QWidget, QTabBar, QTabWidget,
+        QGridLayout, QLineEdit, QLabel, QPushButton, QShortcut, QMenu
     )
 except ImportError:
     sys.exit("PyQt5 is required. Prepare the sample viewer in MCU Flasher Bootstrap.")
@@ -144,6 +147,8 @@ class AdaptiveTabBar(QTabBar):
         self.updateGeometry()
 
 class CodeViewer(QsciScintilla):
+    definitionRequested = pyqtSignal(object, int)
+
     def __init__(self, parent=None, *, theme_mode="default", font_size=12):
         super().__init__(parent)
         self.colors = viewer_colors(theme_mode)
@@ -176,6 +181,15 @@ class CodeViewer(QsciScintilla):
             event.accept()
             return
         super().wheelEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and event.modifiers() & Qt.ControlModifier:
+            position = self.SendScintilla(self.SCI_POSITIONFROMPOINTCLOSE, event.pos().x(), event.pos().y())
+            if position >= 0:
+                self.definitionRequested.emit(self, position)
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def _configure_font(self):
         font = QFont("Consolas")
@@ -271,6 +285,8 @@ class CodeViewer(QsciScintilla):
         self.setStyleSheet(f"QAbstractScrollArea::corner {{ background: {self.colors['margin_bg']}; }}")
 
 class MainWindow(QMainWindow):
+    definitionsReady = pyqtSignal(int, object)
+
     def __init__(self, focus_file, files, *, theme_mode=None, font_size=None):
         super().__init__()
         if theme_mode is None or font_size is None:
@@ -280,6 +296,12 @@ class MainWindow(QMainWindow):
         self.theme_mode = theme_mode
         self.font_size = font_size
         self.colors = viewer_colors(theme_mode)
+        self._definition_request = 0
+        self._navigation_closed = False
+        self._definition_pool = None
+        self._definition_future = None
+        self._definition_menu = None
+        self.definitionsReady.connect(self._show_definitions)
         self.setWindowTitle("MCU Flasher — Code Viewer")
         self.resize(1000, 700)
         self.setStyleSheet(f"QMainWindow {{ background-color: {self.colors['background']}; }}")
@@ -319,6 +341,28 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(4, 4, 4, 4)
 
+        self.find_bar = QWidget(central_widget)
+        self.find_bar.setObjectName("sample-find")
+        find_layout = QGridLayout(self.find_bar)
+        find_layout.setContentsMargins(4, 4, 4, 4)
+        self.find_entry = QLineEdit(self.find_bar)
+        self.find_entry.setPlaceholderText("Find in this file")
+        self.find_entry.setAccessibleName("Find in sample source")
+        self.find_entry.setClearButtonEnabled(True)
+        self.find_status = QLabel(self.find_bar)
+        find_layout.addWidget(self.find_entry, 0, 0, 1, 4)
+        find_layout.addWidget(self.find_status, 1, 0)
+        for column, (label, callback) in enumerate((("Previous", lambda: self.find_text(False)),
+                                                    ("Next", self.find_text), ("Close", self.close_find)), 1):
+            button = QPushButton(label, self.find_bar)
+            button.clicked.connect(lambda _checked=False, action=callback: action())
+            find_layout.addWidget(button, 1, column)
+        find_layout.setColumnStretch(0, 1)
+        self.find_entry.textChanged.connect(lambda: self.find_text(restart=True))
+        self.find_entry.returnPressed.connect(self.find_text)
+        self.find_bar.hide()
+        layout.addWidget(self.find_bar)
+
         self.tabs = QTabWidget(central_widget)
         self.tabs.setTabBar(AdaptiveTabBar(self.tabs))
         self.tabs.setTabsClosable(False)
@@ -341,6 +385,7 @@ class MainWindow(QMainWindow):
         for i, file_path in enumerate(files):
             viewer = CodeViewer(self.tabs, theme_mode=theme_mode, font_size=font_size)
             self.load_file(viewer, file_path)
+            viewer.definitionRequested.connect(self.request_definition)
             tab_name = os.path.basename(file_path)
             self.tabs.addTab(viewer, tab_name)
             self.tabs.setTabToolTip(i, file_path)
@@ -348,6 +393,12 @@ class MainWindow(QMainWindow):
                 focus_index = i
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        QShortcut(QKeySequence.Find, self, self.open_find)
+        QShortcut(QKeySequence("F3"), self, self.find_text)
+        QShortcut(QKeySequence("Shift+F3"), self, lambda: self.find_text(False))
+        escape = QShortcut(QKeySequence("Escape"), self.find_bar, self.close_find)
+        escape.setContext(Qt.WidgetWithChildrenShortcut)
+        QShortcut(QKeySequence("F12"), self, self.definition_at_cursor)
         if files:
             self.tabs.setCurrentIndex(focus_index)
             self._on_tab_changed(focus_index)
@@ -360,7 +411,140 @@ class MainWindow(QMainWindow):
         self.fit_to_work_area(initial=True)
         QTimer.singleShot(0, self.fit_to_work_area)
 
+    def open_find(self):
+        editor = self.tabs.currentWidget()
+        if editor is None:
+            return
+        self._find_origin = editor.getCursorPosition()
+        self.find_bar.show()
+        selected = editor.selectedText()
+        if selected and "\n" not in selected and "\r" not in selected:
+            self.find_entry.setText(selected)
+        self.find_entry.setFocus()
+        self.find_entry.selectAll()
+
+    def close_find(self):
+        self.find_bar.hide()
+        editor = self.tabs.currentWidget()
+        if editor is not None:
+            editor.setFocus()
+
+    def find_text(self, forward=True, *, restart=False):
+        editor = self.tabs.currentWidget()
+        if editor is None or not self.find_entry.text():
+            self.find_status.clear()
+            return False
+        if not self.find_bar.isVisible():
+            self.open_find()
+        line, index = getattr(self, "_find_origin", (0, 0)) if restart else editor.getCursorPosition()
+        selection = editor.getSelection()
+        if not restart and selection[0] >= 0:
+            if forward:
+                line, index = selection[2:]
+            else:
+                line, index = selection[:2]
+                if index:
+                    index -= 1
+                elif line:
+                    line -= 1
+                    index = max(0, len(editor.text(line).rstrip("\r\n")))
+                else:
+                    line = max(0, editor.lines()-1)
+                    index = max(0, len(editor.text(line).rstrip("\r\n")))
+        found = editor.findFirst(self.find_entry.text(), False, False, False, True, forward, line, index)
+        self.find_status.setText("" if found else "No matches")
+        return found
+
+    def definition_at_cursor(self):
+        editor = self.tabs.currentWidget()
+        if editor is not None:
+            line, index = editor.getCursorPosition()
+            self.request_definition(editor, editor.positionFromLineIndex(line, index))
+
+    def request_definition(self, editor, byte_position):
+        from src.modules.sample_symbols import identifier_at, find_definitions
+        source = editor.text()
+        offset = len(source.encode("utf-8")[:byte_position].decode("utf-8", errors="ignore"))
+        snapshots = tuple((self.tabs.widget(i).file_path, self.tabs.widget(i).text())
+                          for i in range(self.tabs.count()) if self.tabs.widget(i).file_path)
+        self._definition_request += 1
+        request = self._definition_request
+        active_path = editor.file_path
+        self.statusBar().showMessage("Finding declaration in open sample files…")
+        owner = weakref.ref(self)
+
+        def resolve():
+            word = ''
+            try:
+                word = identifier_at(source, offset)
+                result = find_definitions(snapshots, word, active_path, offset) if word else []
+            except Exception:
+                result = []
+            window = owner()
+            if window is not None and not window._navigation_closed:
+                try:
+                    window.definitionsReady.emit(request, (word, result))
+                except RuntimeError:
+                    pass  # The native owner closed while this read-only scan finished.
+
+        # No toolkit calls or filesystem traversal in the scanner. Keep long
+        # installed samples off the UI thread and discard superseded responses.
+        if self._definition_pool is None:
+            self._definition_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Sample definitions")
+        if self._definition_future is not None:
+            self._definition_future.cancel()
+        self._definition_future = self._definition_pool.submit(resolve)
+
+    def _show_definitions(self, request, payload):
+        if request != self._definition_request or self._navigation_closed:
+            return
+        word, definitions = payload
+        if not word:
+            self.statusBar().clearMessage()
+        elif not definitions:
+            self.statusBar().showMessage(f"No declaration for {word} in the open sample files.", 6000)
+        elif len(definitions) == 1:
+            self._jump_to_definition(definitions[0])
+        else:
+            if self._definition_menu is not None:
+                self._definition_menu.close()
+            menu = QMenu(self)
+            self._definition_menu = menu
+            menu.setAttribute(Qt.WA_DeleteOnClose)
+            for definition in definitions:
+                label = f"{Path(definition.path).name}:{definition.line + 1} — {definition.label}"
+                menu.addAction(label, lambda target=definition: self._jump_to_definition(target))
+            menu.aboutToHide.connect(lambda: setattr(self, "_definition_menu", None))
+            menu.popup(self.tabs.currentWidget().mapToGlobal(self.tabs.currentWidget().rect().center()))
+
+    def _jump_to_definition(self, definition):
+        for index in range(self.tabs.count()):
+            editor = self.tabs.widget(index)
+            if editor.file_path == definition.path:
+                self.tabs.setCurrentIndex(index)
+                editor.setSelection(definition.line, definition.column,
+                                    definition.line, definition.column + len(definition.name))
+                editor.ensureLineVisible(definition.line)
+                editor.setFocus()
+                self.statusBar().showMessage(f"{Path(definition.path).name}:{definition.line + 1}", 6000)
+                return
+
+    def closeEvent(self, event):
+        self._navigation_closed = True
+        self._definition_request += 1
+        if self._definition_pool is not None:
+            self._definition_pool.shutdown(wait=False, cancel_futures=True)
+        super().closeEvent(event)
+
     def _apply_tab_style(self):
+        self.find_bar.setStyleSheet(f"""
+            QWidget#sample-find {{ background: {self.colors['margin_bg']}; border-radius: 8px; }}
+            QLineEdit, QPushButton {{ background: {self.colors['background']};
+                color: {self.colors['foreground']}; border: 1px solid {self.colors['border']};
+                border-radius: 5px; padding: 4px 6px; }}
+            QPushButton:hover {{ background: {self.colors['selection']}; }}
+            QLabel {{ color: {self.colors['foreground']}; background: transparent; }}
+        """)
         self.setStyleSheet(f"""
             QMainWindow {{ background-color: {self.colors['background']}; }}
             QStatusBar {{ background-color: {self.colors['margin_bg']};
@@ -477,6 +661,8 @@ class MainWindow(QMainWindow):
         widget = self.tabs.widget(index)
         if widget and hasattr(widget, 'file_path') and widget.file_path:
             self.setWindowTitle(f"MCU Flasher — Code Viewer: {os.path.basename(widget.file_path)}")
+            self._find_origin = widget.getCursorPosition()
+            self.find_status.clear()
 
     def load_file(self, viewer, file_path):
         try:

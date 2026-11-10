@@ -28,6 +28,15 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 from src.modules import app_update
 
 
+class UpdatePolicyChecks(unittest.TestCase):
+    def test_skip_updates_covers_source_updates_without_disabling_required_repairs(self):
+        self.assertTrue(app_update.automatic_updates_enabled({}, environ={}))
+        self.assertFalse(app_update.automatic_updates_enabled({"skip_updates": True}, environ={}))
+        self.assertTrue(app_update.automatic_updates_enabled({"skip_updates": False}, environ={}))
+        self.assertFalse(app_update.automatic_updates_enabled({}, environ={"MCU_FLASH_GUI_SKIP_UPDATES": "true"}))
+        self.assertFalse(app_update.automatic_updates_enabled({}, environ={"MCU_FLASHER_DISABLE_APP_UPDATE": "1"}))
+
+
 class _Response:
     def __init__(self, payload: bytes, url: str, *, status: int = 200, headers: dict[str, str] | None = None):
         self._payload = payload

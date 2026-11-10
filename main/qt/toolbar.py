@@ -126,21 +126,24 @@ class CompactDropdownPopup(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.NoDropShadowWindowHint,
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        from main.qt.combo_popup import PopupBackdrop, prepare_popup
+        from main.qt.glass import _theme_name
+        prepare_popup(self)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        from main.core.theme import Theme
-        self.setStyleSheet(
-            f"CompactDropdownPopup {{"
-            f"  background-color: {Theme.BG_MID};"
-            f"  border: 1px solid {Theme.BORDER};"
-            f"  border-radius: 6px;"
-            f"}}"
-        )
+        self._dispatching = False
+        self._backdrop = PopupBackdrop(self)
+        self._backdrop.mode = _theme_name()
+        self._backdrop.lower()
         body = QWidget(self)
+        body.setObjectName("compact-popup-body")
+        body.setStyleSheet("QWidget#compact-popup-body { background: transparent; border: none; }")
         self._layout = QVBoxLayout(body)
         self._layout.setContentsMargins(6, 6, 6, 6)
         self._layout.setSpacing(4)
         self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("compact-popup-scroll")
+        self._scroll.setStyleSheet("QScrollArea#compact-popup-scroll, QScrollArea#compact-popup-scroll > QWidget { background: transparent; border: none; }")
+        self._scroll.viewport().setAutoFillBackground(False)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -148,6 +151,11 @@ class CompactDropdownPopup(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self._scroll)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._backdrop.setGeometry(self.rect())
+        self._backdrop.lower()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
@@ -173,43 +181,51 @@ class CompactDropdownPopup(QWidget):
         )
         btn.setEnabled(enabled)
         from main.core.theme import Theme
+        from main.qt.theme import glass_tokens
+        from main.qt.glass import _theme_name
+        glass = glass_tokens(_theme_name())
 
         if custom_style:
             btn.setStyleSheet(custom_style)
         else:
-            from src.modules.ui_palette import readable_foreground
             style = (
                 f"QPushButton {{"
-                f"  background-color: {normal_bg};"
-                f"  color: {readable_foreground(normal_bg)};"
-                f"  border: 1px solid {Theme.BORDER};"
-                f"  border-radius: 4px;"
+                f"  background-color: {glass['well']};"
+                f"  color: {Theme.TEXT};"
+                f"  border: 1px solid {glass['rim']};"
+                f"  border-radius: 6px;"
                 f"  padding: 3px 12px;"
                 f"  font-size: 11px;"
                 f"  font-weight: 600;"
                 f"  text-align: center;"
                 f"}}"
                 f"QPushButton:hover {{"
-                f"  background-color: {hover_bg};"
+                f"  background-color: {glass['button_hover']};"
                 f"  border: 1px solid {Theme.CYAN};"
-                f"  color: {readable_foreground(hover_bg)};"
+                f"  color: {Theme.TEXT_BRIGHT};"
                 f"}}"
                 f"QPushButton:pressed {{"
-                f"  background-color: {Theme.BG_DARK};"
-                f"  color: {Theme.TEXT_BRIGHT};"
+                f"  background-color: {glass['chip']};"
+                f"  color: {glass['chip_ink']};"
                 f"  border: 1px solid {Theme.CYAN};"
                 f"}}"
                 f"QPushButton:disabled {{"
-                f"  background-color: {Theme.BG_DARK};"
-                f"  color: {Theme.TEXT_DIM};"
-                f"  border: 1px solid {Theme.BORDER};"
+                f"  background-color: {glass['well']};"
+                f"  color: {glass['disabled_ink']};"
+                f"  border: 1px solid {glass['rim']};"
                 f"}}"
             )
             btn.setStyleSheet(style)
 
         def _on_click():
+            if self._dispatching:
+                return
+            self._dispatching = True
+            # Let the native popup release its input grab and finish deletion
+            # before an action opens a modal dialog (notably Settings on Windows).
+            owner = self.parentWidget()
+            self.destroyed.connect(lambda: QTimer.singleShot(0, owner, callback))
             self.close()
-            callback()
 
         btn.clicked.connect(_on_click)
         self._layout.addWidget(btn)
@@ -1981,13 +1997,26 @@ class ControlsBar(QWidget):
 
     def _open_settings(self) -> None:
         from main.qt.settings_dialog import SettingsDialog
+        existing = getattr(self, "_settings_dialog", None)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
         dlg = SettingsDialog(self._backend, parent=self.window())
-        result = dlg.exec()
-        from PySide6.QtWidgets import QDialog
-        if result == QDialog.DialogCode.Accepted and getattr(dlg, "offline_mode_restart_requested", False):
-            window = self.window()
-            if hasattr(window, "restart_for_offline_mode"):
-                window.restart_for_offline_mode(dlg.offline_mode_previous)
+        self._settings_dialog = dlg
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        def finished(result):
+            self._settings_dialog = None
+            if result == dlg.DialogCode.Accepted and dlg.offline_mode_restart_requested:
+                window = self.window()
+                if hasattr(window, "restart_for_offline_mode"):
+                    window.restart_for_offline_mode(dlg.offline_mode_previous)
+
+        dlg.finished.connect(finished)
+        # Keep the main Qt loop running; never nest exec() inside a popup's
+        # native close/mouse event. The owned dialog remains window-modal.
+        dlg.open()
 
     def _toggle_ai_panel(self, checked: bool) -> None:
         self.btn_ai.set_icon("ai")

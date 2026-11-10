@@ -549,7 +549,7 @@ class InstalledTab(QWidget):
         row = QHBoxLayout()
         row.addWidget(QLabel("Search"))
         self.search_entry = QLineEdit()
-        self.search_entry.setPlaceholderText("Filter installed packages")
+        self.search_entry.setPlaceholderText("Filter installed packages (Ctrl+F)")
         self.search_entry.setClearButtonEnabled(True)
         self.search_entry.textChanged.connect(lambda _text: self._search_timer.start())
         row.addWidget(self.search_entry, 1)

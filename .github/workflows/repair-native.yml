@@ -7,6 +7,15 @@ on:
       - main/qt/combo_popup.py
       - main/qt/toolbar.py
       - main/qt/main_window.py
+      - main/qt/settings_dialog.py
+      - src/qscintilla_viewer.py
+      - src/modules/sample_symbols.py
+      - src/modules/bootstrap.py
+      - src/modules/bootstrap_qt.py
+      - src/modules/app_update.py
+      - direct/verify_combo_popups.py
+      - direct/verify_controls.py
+      - direct/verify_library_samples.py
       - direct/verify_responsive.py
       - direct/verify_monitor_matrix.py
   workflow_dispatch:
@@ -17,7 +26,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     env:
       QT_QPA_PLATFORM: windows
       QTWEBENGINE_CHROMIUM_FLAGS: --disable-gpu
@@ -33,7 +42,7 @@ jobs:
         run: |
           python -m venv env
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & env/Scripts/python.exe -m pip install 'PySide6>=6.12,<7' 'requests>=2.31,<3' 'psutil>=5.9,<8' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets pywinpty
+          & env/Scripts/python.exe -m pip install 'PySide6>=6.12,<7' 'PyQt5>=5.15.11,<6' 'QScintilla>=2.14.1,<3' 'requests>=2.31,<3' 'psutil>=5.9,<8' 'pyserial>=3.5,<4' 'platformio>=6.1,<7' websockets pywinpty
           exit $LASTEXITCODE
       - name: Independent native windows and compact splitters
         shell: pwsh
@@ -46,6 +55,12 @@ jobs:
           cases = []
           for scale in ('1', '1.25', '1.5', '1.75', '2'):
               cases += [
+                  (f'popups-{scale}', scale, ['direct/verify_combo_popups.py', '--render-dir', str(output / ('popups-' + scale))]),
+                  (f'controls-{scale}', scale, ['direct/verify_controls.py']),
+                  (f'samples-{scale}', scale, ['direct/verify_library_samples.py', '--scale', scale, '--render-dir', str(output / ('samples-' + scale))]),
+              ]
+          for scale in ('1', '1.25', '1.5', '1.75', '2'):
+              cases += [
                   (f'rows-{scale}', scale, ['direct/verify_responsive.py', '--only', 'control_rows_and_serial_reflow']),
                   (f'labels-{scale}', scale, ['direct/verify_responsive.py', '--only', 'selecting_a_tool_tab']),
                   (f'combined-{scale}', scale, ['direct/verify_responsive.py', '--only', 'control_rows_and_serial_reflow', '--only', 'selecting_a_tool_tab']),
@@ -53,7 +68,9 @@ jobs:
           cases += [('full-responsive-1.25', '1.25', ['direct/verify_responsive.py', '--render-dir', str(output / 'responsive-1.25')]),
                     ('compact-matrix', '1', ['direct/verify_monitor_matrix.py', '--only', '1024x768@100', '--only', '1280x720@150']),
                     ('terminal', '1', ['direct/verify_terminal.py']),
-                    ('performance', '1', ['direct/verify_performance.py'])]
+                    ('performance', '1', ['direct/verify_performance.py']),
+                    ('bootstrap-updates', '1', ['direct/verify_bootstrap_updates.py']),
+                    ('source-updates', '1', ['direct/verify_app_update.py'])]
           for name, scale, arguments in cases:
               log = output / (name + '.log')
               with log.open('w', encoding='utf-8') as stream:

@@ -57,12 +57,47 @@ class ComboPopups(unittest.TestCase):
                         APP.processEvents()
                         self.assertTrue(material.popup.grab().save(str(OUTPUT / f"{mode}-{kind.__name__}.png")))
                         self.assertIn("background: transparent", combo.view().styleSheet())
-                        self.assertFalse(material.popup.mask().isEmpty())
+                        self.check_alpha_corners(material.popup)
                     finally:
                         combo.hidePopup()
                         host.close()
                         host.deleteLater()
                         APP.processEvents()
+
+    def check_alpha_corners(self, popup):
+        self.assertTrue(popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+        image = popup.grab().toImage()
+        for x, y in ((0, 0), (image.width()-1, 0), (0, image.height()-1),
+                     (image.width()-1, image.height()-1)):
+            self.assertEqual(image.pixelColor(x, y).alpha(), 0, (x, y))
+        self.assertGreater(image.pixelColor(image.width()//2, image.height()//2).alpha(), 240)
+
+    def test_compact_actions_and_options_use_rounded_cached_material(self):
+        from main.qt.toolbar import CompactDropdownPopup
+        for mode in ("default", "light", "solarized_dark"):
+            Theme.apply_theme(mode)
+            APP.setStyleSheet(build_stylesheet(mode))
+            host = QWidget()
+            host.resize(320, 100)
+            host.show()
+            popup = CompactDropdownPopup(host)
+            for text in ("Save All", "Settings", "AI Assistant"):
+                popup.add_button(text, lambda: None, "#000000", "#000000")
+            popup.show_below(host, min_width=150)
+            try:
+                APP.processEvents()
+                self.check_alpha_corners(popup)
+                self.assertTrue(popup._backdrop.isVisible())
+                first = popup._backdrop._image.cacheKey()
+                popup.update()
+                APP.processEvents()
+                self.assertEqual(first, popup._backdrop._image.cacheKey())
+                self.assertTrue(popup.grab().save(str(OUTPUT / f"{mode}-compact.png")))
+            finally:
+                popup.close()
+                host.close()
+                host.deleteLater()
+                APP.processEvents()
 
 
 if __name__ == "__main__":

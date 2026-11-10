@@ -196,13 +196,15 @@ def update_branch(config: object | None = None, *, environ: dict[str, str] | Non
 
 
 def automatic_updates_enabled(config: object | None = None, *, environ: dict[str, str] | None = None) -> bool:
-    """Honor the dedicated source-update opt-out while defaulting to auto."""
+    """Honor both Skip Updates and the dedicated source-update opt-out."""
     env = os.environ if environ is None else environ
     if str(env.get("MCU_FLASHER_DISABLE_APP_UPDATE", "")).strip().casefold() in {"1", "true", "yes"}:
         return False
+    if str(env.get("MCU_FLASH_GUI_SKIP_UPDATES", "")).strip().casefold() in {"1", "true", "yes"}:
+        return False
     if not isinstance(config, dict):
         return True
-    return str(config.get("app_update_policy", "auto")).strip().casefold() in {"", "auto"}
+    return config.get("skip_updates") is not True and str(config.get("app_update_policy", "auto")).strip().casefold() in {"", "auto"}
 
 
 def _installation_root(root: Path | str) -> Path:

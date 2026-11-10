@@ -1668,6 +1668,21 @@ class BootstrapGUI:
         self._busy_generation += 1
 
     def ask_update(self, count: int) -> bool:
+        if self._app is not None:
+            # Update checks run on a worker. Keep the prompt and its lifetime on
+            # Qt, and keep a closed/Skip Updates setup from accepting stale work.
+            completed = threading.Event()
+            answer = [False]
+
+            def finish(accepted):
+                answer[0] = bool(accepted)
+                completed.set()
+
+            self.root.after(0, lambda: self._window.ask_update(count, finish))
+            while not completed.wait(0.1):
+                if self._closed or self._skip_updates:
+                    return False
+            return answer[0]
         if sys.platform == "win32":
             try:
                 import ctypes
@@ -1675,7 +1690,7 @@ class BootstrapGUI:
                     0,
                     f"{count} update(s) are available for MCU Flash components.\n\nWould you like to install them now?",
                     "Updates Available",
-                    0x24,  # MB_YESNO | MB_ICONQUESTION
+                    0x50024,  # MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND
                 )
                 return res == 6  # IDYES
             except Exception:
@@ -2291,7 +2306,7 @@ def run_update_checks(auto_update: bool = False):
         )
         return "offline"
 
-    from concurrent.futures import as_completed
+    from concurrent.futures import wait, FIRST_COMPLETED
     from concurrent.futures.thread import ThreadPoolExecutor
 
     results: dict[str, dict] = {}
@@ -2315,26 +2330,39 @@ def run_update_checks(auto_update: bool = False):
 
     # Keep this deliberately small for older/low-memory machines. Package
     # versions are read in-process, so the pool only covers network requests.
-    with ThreadPoolExecutor(
+    executor = ThreadPoolExecutor(
         max_workers=min(3, len(checks)),
         thread_name_prefix="MCUUpdateCheck",
-    ) as executor:
+    )
+    try:
         futures = {executor.submit(fn): key for key, fn in checks}
-        for future in as_completed(futures):
-            key = futures[future]
-            try:
-                results[key] = future.result()
-            except Exception as exc:
-                results[key] = {
-                    "name": key,
-                    "installed": None,
-                    "latest": None,
-                    "update_available": False,
-                    "error": f"check failed: {exc}",
-                }
+        pending = set(futures)
+        while pending:
+            skip_reason = _update_check_skip_reason()
+            if skip_reason:
+                warn(f"Online update checks skipped: {skip_reason}.")
+                return "skipped"
+            done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+            for future in done:
+                key = futures[future]
+                try:
+                    results[key] = future.result()
+                except Exception as exc:
+                    results[key] = {
+                        "name": key, "installed": None, "latest": None,
+                        "update_available": False, "error": f"check failed: {exc}",
+                    }
+    finally:
+        # Running read-only requests retain their finite timeouts; queued probes
+        # are cancelled. Skip never waits for the whole network batch to drain.
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # ── Display results (always shows per-package summary block) ──
     updates_found = _render_update_summary_block(results)
+
+    if _update_check_skip_reason():
+        warn("Optional updates skipped by the current Skip Updates choice.")
+        return "skipped"
 
     if not updates_found:
         unverified = [key for key, result in results.items() if result.get("error")]
@@ -2366,7 +2394,7 @@ def run_update_checks(auto_update: bool = False):
                     f"{len(updates_found)} update(s) are available for MCU Flash components.\n\n"
                     "Would you like to install them now?",
                     "Updates Available",
-                    0x24,  # MB_YESNO | MB_ICONQUESTION
+                    0x50024,  # MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND
                 )
                 answer = "y" if res == 6 else "n"
             except Exception:
@@ -2381,8 +2409,14 @@ def run_update_checks(auto_update: bool = False):
                 answer = "n"
                 dim("Update installation prompt dismissed.")
 
+    if _update_check_skip_reason():
+        warn("Optional updates skipped by the current Skip Updates choice.")
+        return "skipped"
     if answer == "y":
         for r in pip_updates:
+            if _update_check_skip_reason():
+                warn("Remaining optional updates skipped by the current Skip Updates choice.")
+                return "skipped"
             status(f"Upgrading {r['name']} {r['installed']} → {r['latest']}...")
             if _pip_upgrade(r["name"]):
                 try:
@@ -2399,6 +2433,8 @@ def run_update_checks(auto_update: bool = False):
                 warn(f"Failed to upgrade {r['name']} — continuing")
 
         if python_updates:
+            if _update_check_skip_reason():
+                return "skipped"
             r = python_updates[0]
             if _install_python_update(r.get("package_id", "")):
                 # Purge old env virtual environment folder so the new Python version builds a fresh env
@@ -2439,6 +2475,8 @@ def run_update_checks(auto_update: bool = False):
                 warn("Python was not updated; the existing environment will be kept.")
 
         if cli_updates:
+            if _update_check_skip_reason():
+                return "skipped"
             r = cli_updates[0]
             cli_path = find_arduino_cli()
             upgraded = False
@@ -2485,6 +2523,8 @@ def run_update_checks(auto_update: bool = False):
                     _cache_arduino_cli_path(new_cli)
 
         if opencode_updates:
+            if _update_check_skip_reason():
+                return "skipped"
             r = opencode_updates[0]
             status(f"Upgrading OpenCode AI Assistant {r['installed']} → {r['latest']}...")
             if _upgrade_opencode(r["latest"]):
