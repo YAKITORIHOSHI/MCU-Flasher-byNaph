@@ -132,12 +132,24 @@ jobs:
           python -B direct/verify_taskbar_identity.py
           python -B direct/verify_interface_size.py
           QT_QPA_PLATFORM=xcb xvfb-run -a python -B direct/verify_renderer_color_depth.py
+      - name: Compare older Windows Qt readability with the original source
+        if: failure() && runner.os == 'Windows' && matrix.python == '3.11'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: windows
+        run: |
+          git fetch --depth=1 origin fc9da288a467c1c75a3f1ce2c6dafb9d3d2ee78b
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B direct/run_verifiers.py --native --jobs 1 --baseline fc9da288a467c1c75a3f1ce2c6dafb9d3d2ee78b theme_readability
+          exit $LASTEXITCODE
       - name: SVG theme captures
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: svg-ui-${{ matrix.os }}-py-${{ matrix.python }}
-          path: temp/audit/svg-native/**/*.png
+          path: |
+            temp/audit/svg-native/**/*.png
+            temp/audit/verifier-runs/verify_theme_readability*.log
           if-no-files-found: warn
   developer-access-windows:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
@@ -546,6 +558,14 @@ jobs:
             & env/Scripts/python.exe -B direct/verify_responsive.py --render-dir "temp/audit/compatibility/scale-$scale"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+          exit $LASTEXITCODE
+      - name: Windows compact assistant columns and steady tools
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          Remove-Item Env:QT_SCALE_FACTOR -ErrorAction SilentlyContinue
+          & env/Scripts/python.exe -B direct/verify_monitor_matrix.py --only '1024x768@100' --only '1280x720@150'
           exit $LASTEXITCODE
       - name: Native Windows AVR Compile-button integration
         if: runner.os == 'Windows' && matrix.bundled

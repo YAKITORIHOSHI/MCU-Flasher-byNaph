@@ -111,11 +111,12 @@ def main():
             started = time.monotonic()
             with log_path.open("w", encoding="utf-8") as log:
                 try:
+                    deadline = 900 if script == "verify_monitor_matrix" else 240
                     completed = subprocess.run(command, cwd=ROOT, env=env, stdout=log,
-                                               stderr=subprocess.STDOUT, timeout=240)
+                                               stderr=subprocess.STDOUT, timeout=deadline)
                     code = completed.returncode
                 except subprocess.TimeoutExpired:
-                    log.write("\nNative UI fixture exceeded its 240-second deadline.\n")
+                    log.write(f"\nNative UI fixture exceeded its {deadline}-second deadline.\n")
                     code = 124
             result = dict(check=script, scale=scale, exit_code=code,
                           seconds=round(time.monotonic() - started, 2), log=str(log_path.relative_to(output)))

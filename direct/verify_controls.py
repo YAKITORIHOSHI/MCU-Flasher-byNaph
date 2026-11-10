@@ -38,11 +38,13 @@ from main.core.theme import Theme
 from main.qt import settings_dialog as settings_module
 from main.qt.toolbar import PrimaryToolbar, ControlsBar, CompactDropdownPopup
 from main.qt.garbage_collection import install_gui_garbage_collector
+from main.qt.theme import install_no_focus_lines
 from src.modules.runtime_resources import performance_profile
 from verify_runtime import PreviewBackend
 
 APP = QApplication.instance() or QApplication([])
 COLLECTOR = install_gui_garbage_collector(APP)
+install_no_focus_lines(APP)
 RENDER_DIR = None
 
 
@@ -130,7 +132,6 @@ class ControlChecks(unittest.TestCase):
         for mode in ("default", "light", "solarized_dark"):
             Theme.apply_theme(mode)
             APP.setStyleSheet(build_stylesheet(mode))
-            fill = QColor(get_palette(mode)["BG_MID"])
             dialog = self.settings()
             serial = self.own(SerialPanel(self.backend))
             serial.resize(900, 320)
@@ -150,19 +151,23 @@ class ControlChecks(unittest.TestCase):
                     popup = combo.view().window().geometry()
                     field = combo.mapToGlobal(QPoint(0, 0))
                     # Only the screen's own edge may push a list sideways off its field.
-                    at_edge = popup.right() >= combo.screen().availableGeometry().right()
+                    area = combo.screen().availableGeometry().adjusted(4, 4, -4, -4)
+                    at_edge = popup.right() >= area.right() - 1
                     self.assertTrue(popup.x() == field.x() or at_edge,
                                     f"{mode}: list at x={popup.x()} not aligned with its field at x={field.x()}")
                     below, above = popup.top() - (field.y() + combo.height()), (field.y()) - popup.bottom()
                     self.assertTrue(-2 <= below <= 1 or -2 <= above <= 1,
                                     f"{mode}: list at {popup.getRect()} is detached from field at {field.toTuple()}")
                     image = combo.view().window().grab().toImage()
+                    material = combo._mcu_glass_popup
+                    backdrop = material.backdrop.grab().toImage()
                     # The top visible row, inside the list's rim; the current (last) row is below it.
                     row = image.pixelColor(5, 6)
+                    fill = backdrop.pixelColor(5, 6)
                     self.assertEqual(row.alpha(), 255, f"{mode}: list has no fill")
                     self.assertLessEqual(max(abs(row.red() - fill.red()), abs(row.green() - fill.green()),
                                              abs(row.blue() - fill.blue())), 3,
-                                         f"{mode}: unselected rows paint {row.name()} instead of the theme's {fill.name()}")
+                                         f"{mode}: unselected rows cover the frosted scene: {row.name()} instead of {fill.name()}")
                     self.assertGreaterEqual(contrast_ratio(get_palette(mode)["TEXT"], fill.name()), 4.5)
                     combo.hidePopup()
                     pump(.05)

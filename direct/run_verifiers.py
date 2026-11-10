@@ -25,20 +25,21 @@ _ARGUMENTS = {"verify_bootstrap_promotion": ["--report-dir", str(LOGS / "bootstr
 _WINDOWS_ONLY = {"verify_bootstrap_download_failure", "verify_terminal"}
 
 
-def environment() -> dict:
+def environment(native: bool = False) -> dict:
     # A sweep must never reach the developer's desktop: refusal and notice fixtures
     # would otherwise open real dialogs for release data that is deliberately wrong.
     inherited = {name: value for name, value in os.environ.items()
-                 if name not in ("DISPLAY", "WAYLAND_DISPLAY")}
-    return dict(inherited, QT_QPA_PLATFORM="offscreen", QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu",
+                 if native or name not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    plugin = inherited.get("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "xcb") if native else "offscreen"
+    return dict(inherited, QT_QPA_PLATFORM=plugin, QTWEBENGINE_CHROMIUM_FLAGS="--disable-gpu",
                 PYTHONDONTWRITEBYTECODE="1")
 
 
-def run_one(name: str, root: Path, timeout: int, log: Path) -> dict:
+def run_one(name: str, root: Path, timeout: int, log: Path, native: bool = False) -> dict:
     started = time.monotonic()
     command = [sys.executable, "-B", str(root / "direct" / f"{name}.py"), *_ARGUMENTS.get(name, [])]
     try:
-        result = subprocess.run(command, cwd=root, env=environment(), stdin=subprocess.DEVNULL,
+        result = subprocess.run(command, cwd=root, env=environment(native), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 errors="replace", timeout=timeout)
         output, code = result.stdout, result.returncode
@@ -72,7 +73,10 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=max(2, min(6, (os.cpu_count() or 4) // 2)))
     parser.add_argument("--timeout", type=int, default=400)
     parser.add_argument("--baseline", help="Git ref used to classify failures as new or pre-existing")
+    parser.add_argument("--native", action="store_true", help="Keep the native display in an isolated GitHub Actions runner")
     arguments = parser.parse_args()
+    if arguments.native and os.environ.get("GITHUB_ACTIONS") != "true":
+        parser.error("--native is restricted to isolated GitHub Actions runners; local checks stay offscreen")
     LOGS.mkdir(parents=True, exist_ok=True)
     names = sorted(path.stem for path in (ROOT / "direct").glob("verify_*.py"))
     if sys.platform != "win32":
@@ -80,7 +84,7 @@ def main() -> int:
     if arguments.names:
         names = [name for name in names if any(part in name for part in arguments.names)]
     with ThreadPoolExecutor(arguments.jobs) as pool:
-        results = list(pool.map(lambda name: run_one(name, ROOT, arguments.timeout, LOGS / f"{name}.log"), names))
+        results = list(pool.map(lambda name: run_one(name, ROOT, arguments.timeout, LOGS / f"{name}.log", arguments.native), names))
     failed = [result for result in results if not result["passed"]]
     print(f"{len(results) - len(failed)}/{len(results)} verifiers passed")
     known = {}
@@ -89,7 +93,7 @@ def main() -> int:
             export_baseline(arguments.baseline, Path(temporary))
             with ThreadPoolExecutor(arguments.jobs) as pool:
                 outcomes = pool.map(lambda result: run_one(
-                    result["name"], Path(temporary), arguments.timeout, LOGS / f"{result['name']}.baseline.log"), failed)
+                    result["name"], Path(temporary), arguments.timeout, LOGS / f"{result['name']}.baseline.log", arguments.native), failed)
                 known = {result["name"]: result for result in outcomes}
     regressions = 0
     for result in failed:

@@ -48,6 +48,16 @@ def wait_until(predicate, timeout=3.0):
 
 
 class PerformanceChecks(unittest.TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        # The parser pool belongs to this isolated process. Join it before Qt
+        # finalization rather than leaving its workers alive during teardown.
+        from src import syntax_checker
+        executor, syntax_checker._SYNTAX_EXECUTOR = syntax_checker._SYNTAX_EXECUTOR, None
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
     def setUp(self):
         self.config_patch = patch.object(config, "_load_raw_config", return_value={"shared": {}, "instances": {}})
         # A plain dict saves as a whole file, so a fixture must never reach the user's settings.

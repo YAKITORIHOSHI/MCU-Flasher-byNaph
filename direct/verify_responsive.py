@@ -160,26 +160,32 @@ class QtResponsiveChecks(ControlChecks):
     def test_selecting_a_tool_tab_keeps_its_box_and_label_still(self):
         from main.qt.glass import WorkspaceTabBar
         from main.qt.icons import icon
+        from PySide6.QtWidgets import QStyleOptionTab
 
-        def ink_rows(image, rect, ratio, behind):
-            """First and last row holding text ink inside a tab's label area."""
-            # A tab is translucent, so over nothing its fill keeps its color at low alpha and
-            # reads as bright as its text. Judge it over a surface, as it always is on screen.
-            flat = QImage(image.size(), QImage.Format.Format_RGB32)
-            flat.fill(QColor(behind))
-            painter = QPainter(flat)
-            painter.drawImage(0, 0, image)
+        def label_image(bar, index):
+            # Paint the real native label control separately: fractional chip
+            # rims must not be counted as text ink when selection changes fill.
+            ratio = bar.devicePixelRatioF()
+            image = QImage(round(bar.width() * ratio), round(bar.height() * ratio),
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(image)
+            painter.scale(ratio, ratio)
+            option = QStyleOptionTab()
+            bar.initStyleOption(option, index)
+            bar.style().drawControl(QStyle.ControlElement.CE_TabBarTabLabel, option, painter, bar)
             painter.end()
-            image = flat
+            return image
+
+        def ink_rows(image, rect, ratio):
+            """First and last row holding text ink inside a tab's label area."""
             # Inside the chip: its margins, rim and rounded corners would read as ink
             # against what is around them.
             left, right = round((rect.left() + 34) * ratio), round((rect.right() - 18) * ratio)
             top, bottom = round((rect.top() + 8) * ratio), round((rect.bottom() - 7) * ratio)
             rows = []
             for y in range(top, bottom):
-                surface = image.pixelColor(left, y)
-                if any(abs(image.pixelColor(x, y).lightness() - surface.lightness()) > 60
-                       for x in range(left, right)):
+                if any(image.pixelColor(x, y).alpha() > 128 for x in range(left, right)):
                     rows.append(y)
             self.assertTrue(rows, 'The fixture tab must paint a label')
             return rows[0], rows[-1]
@@ -208,15 +214,11 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertEqual(bar.tabRect(1), rect, 'Selecting a tab must not change its box')
             tabs.setCurrentIndex(0)
             pump()
-            behind = get_palette(mode)['BG_DARK']
-            resting = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio, behind)
+            resting = ink_rows(label_image(bar, 1), bar.tabRect(1), ratio)
             tabs.setCurrentIndex(1)
             pump()
-            selected = ink_rows(bar.grab().toImage(), bar.tabRect(1), ratio, behind)
-            # Selected text is brighter, so one antialiased edge row may cross the
-            # threshold. A real jump moves the top and bottom rows together.
-            self.assertTrue(selected[0] == resting[0] or selected[1] == resting[1],
-                            f'The selected label jumped in {mode}: {resting} to {selected}')
+            selected = ink_rows(label_image(bar, 1), bar.tabRect(1), ratio)
+            self.assertEqual(selected, resting, f'The selected label jumped in {mode}: {resting} to {selected}')
             host.hide()
 
     def test_native_embeds_fill_actual_client_bounds_at_every_scale(self):

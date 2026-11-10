@@ -17,6 +17,9 @@ The runner removes `DISPLAY` and `WAYLAND_DISPLAY`. When running one verifier di
 on a desktop, do the same with `env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen`:
 refusal and notice fixtures use deliberately wrong release data and would otherwise
 open real dialogs on the user's screen.
+`--native` is restricted to isolated GitHub Actions runners. It retains that
+runner's native display when comparing a platform-specific failure with the
+same baseline; it must never be used to open fixtures on a developer's desktop.
 
 `--baseline <ref>` reruns each failure against a clean export of that ref and
 reports only what the working tree newly broke. Always use it before calling a

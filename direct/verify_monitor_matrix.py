@@ -172,10 +172,17 @@ def check_monitor(render_dir: Path | None) -> int:
             super().__init__()
             self.count = 0
             self.heights = set()
+            self.changes = []
 
         def eventFilter(self, watched, event):
             if event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
-                self.count += 1
+                old, new = ((event.oldPos(), event.pos()) if event.type() == QEvent.Type.Move
+                            else (event.oldSize(), event.size()))
+                if old != new:
+                    self.count += 1
+                    if len(self.changes) < 24:
+                        name = watched.objectName() or type(watched).__name__
+                        self.changes.append(f"{name} {event.type().name}: {old.toTuple()} -> {new.toTuple()}")
             return False
 
     def require_inside_sheet(state, window, widget, sheet, name):
@@ -281,7 +288,7 @@ def check_monitor(render_dir: Path | None) -> int:
         for widget in outside:
             widget.removeEventFilter(moves)
         if moves.count:
-            problems.append((state, f"{moves.count} moves or resizes outside the tool pane while switching tabs"))
+            problems.append((state, f"{moves.count} moves or resizes outside the tool pane while switching tabs: {moves.changes}"))
         capture(window, state)
         measured.append(dict(state=state, window=window.size().toTuple(), minimum=window.minimumSize().toTuple(),
                              editor=window._editor_area.height(), tools=tabs.height(), tab=tabs.tabText(0),

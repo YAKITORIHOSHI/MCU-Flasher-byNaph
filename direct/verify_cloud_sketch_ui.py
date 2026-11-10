@@ -951,8 +951,8 @@ class CloudUIChecks(unittest.TestCase):
                     dialog.resize(width, height)
                     self.settle_layout()
                     # A native window will not go below what its fixed rows need.
-                    needed = dialog.minimumSizeHint().height()
-                    self.assert_native_size(dialog, (width, needed if dialog.height() == needed > height else height))
+                    needed = max(dialog.minimumHeight(), dialog.minimumSizeHint().height())
+                    self.assert_native_size(dialog, (width, max(needed, height)))
                     self.assert_compact_sketch_header(panel)
                     self.reveal_in_scroll_ancestors(panel._refresh_btn)
                     self.assert_visible_in_ancestors(panel._refresh_btn)
