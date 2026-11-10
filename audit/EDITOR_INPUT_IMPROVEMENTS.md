@@ -18,7 +18,7 @@ mixed-monitor behavior, physical USB or every backup application's integration.
 | Developer Access dropdowns/severity | Explicit paper popup mode; centered severity row | `verify_combo_popups`, `verify_owner_tickets`, native layouts |
 | Remove custom categories | Serialized changes; fresh local/remote usage checks; reassignment required; no ticket rewrites | `verify_owner_ticket_service`, create/edit removal and retained drafts |
 | Ticket ordering | Newest-created default; oldest/recently updated choices | Service timestamp and actual UI ordering checks |
-| Backup/file locks | Configured sync roots use local owned build storage; bounded retries, atomic source saves, accurate read-only blocker diagnostics | `verify_file_access`, acknowledged-save race checks; external backup products remain environment-dependent |
+| Backup/file locks | Configured sync roots use local owned build storage; bounded retries, atomic source saves, accurate read-only blocker diagnostics in an owned Windows job | `verify_file_access`, acknowledged-save race checks; external backup products remain environment-dependent |
 | Upload unexpectedly disabled | Authoritative backend/live-worker/save/recovery guards, reason tooltips, post-save refresh | `verify_controls`, existing upload workers/logging/cache tests |
 | Persistent Ubuntu install | Verified source staging; runtime prepared at final XDG location; one menu entry after complete setup | `verify_user_install`, `verify_ubuntu_bootstrap`, launcher handoff fixtures |
 | Configurable pairing | Monaco language-defined pairing, wrapping, overtype/delete, escaping, indentation, undo and multiple cursors | Seven real offline Monaco integration checks; live Settings signal |

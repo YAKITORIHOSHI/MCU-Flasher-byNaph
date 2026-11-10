@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -66,6 +67,27 @@ class FileAccessChecks(unittest.TestCase):
         self.assertEqual(file_utils.classify_platformio_failure([lock]), 'lock')
         self.assertEqual(file_utils.classify_platformio_failure(['sketch.cpp:3:2: error: unknown type', lock]), 'source')
         self.assertEqual(file_utils.classify_platformio_failure(['SCons: corrupt sconsign database']), 'cache')
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows-owned diagnostic child')
+    def test_diagnostic_deadline_retires_a_windows_venv_child_without_touching_other_apps(self):
+        import json
+        import psutil
+        from src.modules import file_access
+        record = self.root / 'diagnostic-pid.json'
+        worker = self.root / 'slow-diagnostic.py'
+        worker.write_text('import json,os,time\nfrom pathlib import Path\n'
+            f'Path({str(record)!r}).write_text(json.dumps({{"pid":os.getpid()}}))\n'
+            'time.sleep(60)\n', encoding='utf-8')
+        started = time.monotonic()
+        with patch.object(file_access, '__file__', str(worker)):
+            self.assertEqual(file_access.blocking_processes(self.path), [])
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertTrue(record.is_file(), 'The diagnostic never reached its controlled slow phase')
+        pid = json.loads(record.read_text())['pid']
+        deadline = time.monotonic() + 2
+        while psutil.pid_exists(pid) and time.monotonic() < deadline:
+            time.sleep(.02)
+        self.assertFalse(psutil.pid_exists(pid), 'An owned diagnostic survived its deadline')
 
 
 if __name__ == '__main__':

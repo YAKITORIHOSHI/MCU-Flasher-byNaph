@@ -34,6 +34,7 @@
   Bootstrap prepares the pinned `libclang==18.1.1` dependency.
   Windows parser children run inside an owned job assigned before execution,
   preserving deadlines through virtual-environment launcher processes.
+  Read-only Windows lock diagnostics use the same owned containment.
 - **Pairing:** Settings controls Monaco's language-defined brackets and quotes,
   including selection wrapping, overtype, paired deletion, escaped quotes,
   block indentation, undo and multiple cursors. The preference applies live.

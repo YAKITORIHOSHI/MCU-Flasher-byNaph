@@ -73,14 +73,34 @@ def blocking_processes(path):
     """Confine Restart Manager's registry waits to a disposable two-second child."""
     if sys.platform != "win32":
         return []
+    from src.modules.bootstrap_pip_monitor import _WindowsJob
+    job, process = None, None
     try:
-        result = subprocess.run([sys.executable, "-I", "-B", str(Path(__file__).absolute()),
-            "--blocking-file", str(path)], capture_output=True, text=True, encoding="utf-8",
-            timeout=2.0, creationflags=subprocess.CREATE_NO_WINDOW, check=False)
-        value = json.loads(result.stdout) if result.returncode == 0 else []
+        job = _WindowsJob()
+        process = subprocess.Popen([sys.executable, "-I", "-B", str(Path(__file__).absolute()),
+            "--blocking-file", str(path)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW | 0x00000004)
+        job.assign_and_resume(process)
+        output, _errors = process.communicate(timeout=2.0)
+        value = json.loads(output.decode('utf-8')) if process.returncode == 0 else []
         return value[:8] if isinstance(value, list) else []
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return []
+    finally:
+        # Assign before resume: a Windows venv redirector can start a second
+        # Python whose inherited pipes would otherwise outlive the timeout.
+        if job is not None:
+            job.close()
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            try:
+                process.communicate(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def file_access_message(path, error):

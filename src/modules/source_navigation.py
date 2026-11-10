@@ -349,7 +349,7 @@ class NavigationResolver:
                 if sys.platform == 'win32':
                     from src.modules.bootstrap_pip_monitor import _WindowsJob
                     job = _WindowsJob()
-                    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_SUSPENDED
+                    flags = subprocess.CREATE_NO_WINDOW | 0x00000004
                 process = subprocess.Popen([self.python, "-I", "-B", str(Path(__file__).absolute()), "--worker"],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
                 self._process = process

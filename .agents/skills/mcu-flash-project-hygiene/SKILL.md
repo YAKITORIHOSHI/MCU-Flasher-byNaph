@@ -13,7 +13,8 @@ the unsaved buffer. Never mark a newer model revision saved. A persistent lock
 does not justify cache cleaning, ACL changes or terminating a backup program.
 Configured Windows synchronization roots use local owned build workspaces;
 projects, existing caches and recovery journals remain untouched. Restart Manager
-diagnostics query blockers in a bounded child and never request shutdown.
+diagnostics query blockers in a bounded owned Windows job, including venv
+redirector descendants, and never request shutdown.
 
 Ubuntu installation copies only allowlisted application sources to XDG data
 storage, uses native copy2 plus independent source/stage hashes and changed-source
