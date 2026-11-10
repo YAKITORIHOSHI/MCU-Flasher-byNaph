@@ -15,7 +15,9 @@
 
 **Passive monitoring and deliberate restart.** Normal serial open, reconnect and
 disconnect request no DTR/RTS pulse. POSIX monitoring clears HUPCL during initial
-tty configuration and baud changes; repeated requests reuse a healthy connection.
+tty configuration and baud changes. It clears both idle control-line bits together,
+avoiding a software-created intermediate reset state on two-line auto-reset
+circuits. Repeated requests reuse a healthy connection.
 Baud changes run off Qt, and automatic project baud detection never uses the reset
 preference. Upload and recovery workers check their restart results before success.
 Post-write restart no longer performs a 1200-baud bootloader touch, and the GUI no

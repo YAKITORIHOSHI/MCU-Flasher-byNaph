@@ -13,9 +13,11 @@
 
 The November 9 repair makes normal monitoring passive: opening, reconnecting and
 disconnecting request no DTR/RTS reset. POSIX monitoring disables hang-up-on-close,
-reuses healthy connections and changes baud without reopening. Automatic project
-baud detection never invokes Reset on Baud Change. Upload and recovery workers
-complete their declared restart before reporting success; GUI timers only focus
+reuses healthy connections and changes baud without reopening.
+POSIX idle transitions clear DTR/RTS together to avoid an intermediate one-line
+reset state. Automatic project baud detection never invokes Reset on Baud Change.
+Upload and recovery workers complete their declared restart before reporting
+success; GUI timers only focus
 the monitor. USB-driver transients still require physical-device verification.
 All native combo dropdowns now paint cached frosted scenes with rounded rims,
 readable selection and bounded popup geometry. The standalone Library & Board

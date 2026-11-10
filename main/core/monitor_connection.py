@@ -34,6 +34,25 @@ def idle_after_reset(conn):
 @lru_cache(maxsize=4)
 def _passive_type(factory):
     class PassiveSerial(factory):
+        def _clear_idle_lines(self):
+            if self._dtr_state or self._rts_state:
+                return False
+            import fcntl
+            import struct
+            from serial.serialposix import TIOCMBIC, TIOCM_DTR, TIOCM_RTS
+            # Clearing the two lines separately can briefly select reset on
+            # two-line auto-reset circuits. Preserve other modem-control bits.
+            fcntl.ioctl(self.fd, TIOCMBIC, struct.pack('I', TIOCM_DTR | TIOCM_RTS))
+            return True
+
+        def _update_dtr_state(self):
+            if not self._clear_idle_lines():
+                super()._update_dtr_state()
+
+        def _update_rts_state(self):
+            if not self._clear_idle_lines():
+                super()._update_rts_state()
+
         def _reconfigure_port(self, force_update=False):
             super()._reconfigure_port(force_update=force_update)
             import termios

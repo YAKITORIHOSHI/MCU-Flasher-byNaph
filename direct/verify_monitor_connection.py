@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -66,6 +66,42 @@ class MonitorConnections(unittest.TestCase):
             with idle_after_reset(conn):
                 raise OSError("original waveform")
         self.assertIn(("rts", False), conn.changes)
+
+    @unittest.skipUnless(os.name == "posix", "native POSIX tty flags")
+    def test_idle_transition_never_leaves_only_one_reset_line_active(self):
+        import serial
+        import struct
+        from serial.serialposix import TIOCMBIC, TIOCMBIS, TIOCM_DTR, TIOCM_RTS
+        from main.core.monitor_connection import _passive_type
+        conn = _passive_type(serial.Serial)()
+        descriptor = object()  # Cannot be accepted as a real OS handle.
+        conn.fd = descriptor
+        conn._dtr_state = conn._rts_state = False
+        state, transitions = TIOCM_DTR | TIOCM_RTS, []
+
+        def ioctl(fd, operation, value):
+            nonlocal state
+            self.assertIs(fd, descriptor)
+            bits, = struct.unpack('I', value)
+            if operation == TIOCMBIC:
+                state &= ~bits
+            elif operation == TIOCMBIS:
+                state |= bits
+            else:
+                self.fail('Unexpected modem-control operation')
+            transitions.append(state)
+
+        with patch('fcntl.ioctl', side_effect=ioctl):
+            conn._update_dtr_state()
+            conn._update_rts_state()
+            self.assertEqual(transitions, [0, 0], 'Passive open briefly selected one reset line')
+            conn._rts_state = True
+            conn._update_rts_state()
+            self.assertEqual(state, TIOCM_RTS, 'Intentional reset lost its declared control line')
+            conn._rts_state = False
+            conn._update_rts_state()
+            self.assertEqual(state, 0)
+        conn.fd = None
 
     @unittest.skipUnless(os.name == "posix", "native POSIX tty flags")
     def test_real_owned_pty_disables_hangup_on_open_and_baud_reconfiguration(self):

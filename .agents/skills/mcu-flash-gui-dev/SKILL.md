@@ -18,7 +18,10 @@ For explicitly requested assistant delegation, use the local
 
 Normal monitoring uses `main/core/monitor_connection.py`: configure inactive
 DTR/RTS before open, disable POSIX HUPCL in pySerial's configuration hook and
-retain that policy on baud changes. Reuse a healthy identical connection and
+retain that policy on baud changes. Clear both idle modem-control bits in one
+POSIX ioctl; separate clears can briefly select reset on a two-line auto-reset
+circuit. Explicit pulses retain
+their individual control-line updates. Reuse a healthy identical connection and
 reconfigure baud off Qt. Close does not change control lines. Never reopen a
 port merely to release it after failed flashing. Automatic project baud
 detection passes `allow_reset=False`; explicit baud changes alone may use the
