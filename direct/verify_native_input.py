@@ -34,7 +34,7 @@ def foreign_child():
     field.textChanged.connect(lambda value: print(json.dumps({'text':value}),flush=True))
     window.resize(360, 160)
     window.show()
-    print(json.dumps({'root':int(window.winId()), 'input':int(field.winId())}), flush=True)
+    print(json.dumps({'root':int(window.winId()), 'input':int(field.winId()),'pid':os.getpid()}), flush=True)
     return app.exec()
 
 
@@ -124,6 +124,7 @@ class RealInputQueueChecks(unittest.TestCase):
         user.IsWindowVisible.argtypes = [wintypes.HWND]
         user.SetCursorPos.argtypes = [ctypes.c_int,ctypes.c_int]
         user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user.PostMessageW.argtypes = [wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
 
         class Keyboard(ctypes.Structure):
             _fields_ = [('vk', wintypes.WORD), ('scan', wintypes.WORD), ('flags', wintypes.DWORD),
@@ -158,6 +159,8 @@ class RealInputQueueChecks(unittest.TestCase):
         child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--foreign-child'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             creationflags=subprocess.CREATE_NO_WINDOW)
+        foreign_process=None
+        root=None
         try:
             # The runner bounds this entire fixture; the child prints before
             # entering its message loop and owns no service or user state.
@@ -170,6 +173,11 @@ class RealInputQueueChecks(unittest.TestCase):
             threading.Thread(target=read_child, daemon=True).start()
             handles = json.loads(startup.get(timeout=10))
             root, source = handles['root'], handles['input']
+            # Windows venv python.exe is a redirector; Popen.pid can belong to
+            # that launcher rather than the Python process owning the HWND.
+            # The private child pipe reports its actual OS identity.
+            import psutil
+            foreign_process=psutil.Process(handles['pid'])
             embed_hwnd=int(embed.winId())
             user.SetParent(root,embed_hwnd)
             user.SetWindowLongW(root, -16, 0x50000000)  # WS_CHILD | WS_VISIBLE
@@ -180,7 +188,7 @@ class RealInputQueueChecks(unittest.TestCase):
             self.assertTrue(user.SetWindowPos(root,None,0,0,client.right,client.bottom,0x70))
             self.assertTrue(user.IsChild(embed_hwnd,root))
             QTest.qWait(150)
-            window._ai_panel = SimpleNamespace(_ai_hwnd=root, _proc=child)
+            window._ai_panel = SimpleNamespace(_ai_hwnd=root, _proc=SimpleNamespace(pid=handles['pid']))
             guard = WorkspacePointerGuard(window)
             guard._scan_owned_widgets()
             for target, host in ((editor, window), (settings, dialog), (terminal, window), (editor, window)):
@@ -196,10 +204,10 @@ class RealInputQueueChecks(unittest.TestCase):
                 focus_pid=wintypes.DWORD()
                 user.GetWindowThreadProcessId(info.hwndFocus,ctypes.byref(focus_pid))
                 print('Owned input fixture:',dict(root=root,input=source,focus=info.hwndFocus,
-                      focus_pid=focus_pid.value,child_pid=child.pid,target=destination),flush=True)
+                      focus_pid=focus_pid.value,child_pid=handles['pid'],launcher_pid=child.pid,target=destination),flush=True)
                 self.assertTrue(info.hwndFocus==root or user.IsChild(root,info.hwndFocus),
                                 'Fixture did not establish focus inside the owned foreign window')
-                self.assertEqual(focus_pid.value,child.pid)
+                self.assertEqual(focus_pid.value,handles['pid'])
                 # Qt may keep native focus on its foreign top-level while its
                 # logical line edit has focus. Prove actual key delivery rather
                 # than requiring one particular Qt HWND arrangement.
@@ -231,8 +239,17 @@ class RealInputQueueChecks(unittest.TestCase):
                 if host is dialog: dialog.hide()
             print('Native host:', sys.getwindowsversion(), flush=True)
         finally:
-            child.terminate()
-            child.communicate(timeout=5)
+            if root and user.IsWindow(root):
+                user.PostMessageW(root,0x10,0,0)  # WM_CLOSE to this fixture's child.
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                if foreign_process is not None:
+                    try: foreign_process.terminate()  # psutil rechecks captured creation identity.
+                    except psutil.NoSuchProcess: pass
+                child.terminate()
+                child.wait(timeout=5)
+            child.stdout.close(); child.stderr.close()
             user.SetCursorPos(original_cursor.x,original_cursor.y)
             dialog.close(); window.close(); app.processEvents()
 
