@@ -58,7 +58,10 @@ jobs:
         if: runner.os == 'Windows'
         env:
           QT_QPA_PLATFORM: windows
-        run: env/Scripts/python.exe -B direct/verify_native_input.py --native
+        shell: pwsh
+        run: |
+          & env/Scripts/python.exe -B direct/verify_native_input.py --native 2>&1 | Tee-Object -FilePath temp/audit/native-input.log
+          exit $LASTEXITCODE
       - name: Windows terminal protocol and input
         if: runner.os == 'Windows'
         env:
@@ -74,5 +77,6 @@ jobs:
           name: editor-input-${{ matrix.os }}-python-${{ matrix.python }}
           path: |
             temp/audit/verifier-runs/*.log
+            temp/audit/native-input.log
             temp/audit/terminal
           if-no-files-found: warn

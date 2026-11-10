@@ -146,9 +146,32 @@ def windows_runtime_files():
     return sorted(result)
 
 
+def committed_installer_receipts(commit):
+    """Read LFS identities from Git blobs even when git archive smudges them."""
+    records = subprocess.check_output(['git','ls-tree','-r','-l','-z',commit,'--','installers'],cwd=ROOT)
+    receipts = {}
+    for record in records.split(b'\0'):
+        if not record:
+            continue
+        metadata, name = record.split(b'\t',1)
+        _mode, kind, identity, size = metadata.split()
+        if kind != b'blob' or int(size) > 1024:
+            continue
+        data = subprocess.check_output(['git','cat-file','blob',identity.decode('ascii')],cwd=ROOT)
+        if not data.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+            continue
+        match = re.fullmatch(rb'version https://git-lfs.github.com/spec/v1\n'
+                             rb'oid sha256:([a-f0-9]{64})\nsize ([0-9]+)\n',data)
+        if match is None:
+            raise RuntimeError('Invalid committed installer LFS receipt: '+name.decode('utf-8'))
+        receipts[name.decode('utf-8')] = (match[1].decode('ascii'),int(match[2]))
+    return receipts
+
+
 def build(output, report_dir):
     runtime_files = windows_runtime_files()  # Refuse omission before creating any ZIP.
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
+    installer_receipts = committed_installer_receipts(commit)
     output = output or ROOT / f'MCU-Flasher-{commit[:7]}-fresh.zip'
     if output.exists():
         raise FileExistsError(f'Release output already exists: {output}')
@@ -209,13 +232,11 @@ def build(output, report_dir):
                         raise RuntimeError(f'Nonregular committed file: {path}')
                     data = archive.extractfile(member).read()
                     mode = 0o755 if member.mode & 0o111 else 0o644
-                    if data.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
-                        match = re.fullmatch(rb'version https://git-lfs.github.com/spec/v1\n'
-                                             rb'oid sha256:([a-f0-9]{64})\nsize ([0-9]+)\n', data)
-                        if match is None or path.parts[0] != 'installers':
-                            raise RuntimeError(f'Unrecognized LFS asset: {path}')
+                    if member.name in installer_receipts:
                         installers.append(add_local(bundle, ROOT / member.name, mode,
-                                                    (match[1].decode(), int(match[2]))))
+                                                    installer_receipts[member.name]))
+                    elif data.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+                        raise RuntimeError(f'Unrecognized LFS asset: {path}')
                     else:
                         if path.suffix == '.vbs':
                             data = data.replace(b'\r\n', b'\n').replace(b'\n', b'\r\n')

@@ -242,6 +242,16 @@ class ReleaseArchiveChecks(unittest.TestCase):
             self.build()
         self.assertFalse(self.output.exists())
 
+    def test_expanded_git_archive_installers_still_use_the_committed_lfs_identity(self):
+        real_extract = build_release.tarfile.TarFile.extractfile
+        def expanded(archive,member):
+            if member.name == self.installer_path:
+                return io.BytesIO(self.installer)
+            return real_extract(archive,member)
+        with patch.object(build_release.tarfile.TarFile,'extractfile',expanded):
+            manifest = self.build()
+        self.assertEqual(manifest['verified_lfs_installers'][0]['sha256'],hashlib.sha256(self.installer).hexdigest())
+
     def test_changed_installer_refuses_publication(self):
         (self.project / self.installer_path).write_bytes(b'damaged installer')
         with self.assertRaisesRegex(RuntimeError, 'committed LFS receipt'):

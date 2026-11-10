@@ -31,6 +31,7 @@ def foreign_child():
     layout = QVBoxLayout(window)
     field = QLineEdit(window)
     layout.addWidget(field)
+    field.textChanged.connect(lambda value: print(json.dumps({'text':value}),flush=True))
     window.resize(360, 160)
     window.show()
     print(json.dumps({'root':int(window.winId()), 'input':int(field.winId())}), flush=True)
@@ -116,16 +117,32 @@ class RealInputQueueChecks(unittest.TestCase):
         user.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
         user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        user.GetWindowRect.argtypes = [wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
+        user.IsWindowVisible.argtypes = [wintypes.HWND]
+        user.SetCursorPos.argtypes = [ctypes.c_int,ctypes.c_int]
+        user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
 
         class Keyboard(ctypes.Structure):
             _fields_ = [('vk', wintypes.WORD), ('scan', wintypes.WORD), ('flags', wintypes.DWORD),
                         ('time', wintypes.DWORD), ('extra', ctypes.c_size_t)]
         class Data(ctypes.Union):
-            _fields_ = [('keyboard', Keyboard), ('padding', ctypes.c_byte * (32 if ctypes.sizeof(ctypes.c_void_p) == 8 else 24))]
+            class Mouse(ctypes.Structure):
+                _fields_ = [('x',wintypes.LONG),('y',wintypes.LONG),('buttons',wintypes.DWORD),
+                            ('flags',wintypes.DWORD),('time',wintypes.DWORD),('extra',ctypes.c_size_t)]
+            _fields_ = [('keyboard', Keyboard), ('mouse',Mouse)]
         class Input(ctypes.Structure):
             _fields_ = [('type', wintypes.DWORD), ('data', Data)]
         user.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
         user.SendInput.restype = wintypes.UINT
+        original_cursor=wintypes.POINT(); user.GetCursorPos(ctypes.byref(original_cursor))
+        def click(hwnd):
+            self.assertTrue(user.IsWindowVisible(hwnd),'The owned fixture input is not visible')
+            rect=wintypes.RECT(); self.assertTrue(user.GetWindowRect(hwnd,ctypes.byref(rect)))
+            self.assertTrue(user.SetCursorPos((rect.left+rect.right)//2,(rect.top+rect.bottom)//2))
+            events=(Input*2)(Input(type=0,data=Data(mouse=Data.Mouse(flags=2))),
+                             Input(type=0,data=Data(mouse=Data.Mouse(flags=4))))
+            self.assertEqual(user.SendInput(2,events,ctypes.sizeof(Input)),2)
+            QTest.qWait(150)
         window = QWidget()
         window.setWindowTitle('MCU Flasher owned input fixture')
         layout = QVBoxLayout(window)
@@ -144,7 +161,10 @@ class RealInputQueueChecks(unittest.TestCase):
             import queue
             import threading
             startup = queue.Queue()
-            threading.Thread(target=lambda: startup.put(child.stdout.readline()), daemon=True).start()
+            def read_child():
+                for line in child.stdout:
+                    startup.put(line)
+            threading.Thread(target=read_child, daemon=True).start()
             handles = json.loads(startup.get(timeout=10))
             root, source = handles['root'], handles['input']
             user.SetParent(root, int(embed.winId()))
@@ -152,18 +172,18 @@ class RealInputQueueChecks(unittest.TestCase):
             window._ai_panel = SimpleNamespace(_ai_hwnd=root, _proc=child)
             guard = WorkspacePointerGuard(window)
             guard._scan_owned_widgets()
-            current = kernel.GetCurrentThreadId()
-            foreign = user.GetWindowThreadProcessId(source, None)
             for target, host in ((editor, window), (settings, dialog), (terminal, window), (editor, window)):
-                host.show(); host.activateWindow(); user.SetForegroundWindow(int(host.winId()))
+                host.show()
+                if host is dialog:
+                    dialog.move(window.frameGeometry().right()+20,window.y())
+                destination=int(target.winId())
+                window.activateWindow(); user.SetForegroundWindow(int(window.winId()))
                 QTest.qWait(100)
-                self.assertTrue(user.AttachThreadInput(current, foreign, True))
-                try: user.SetFocus(source)
-                finally: user.AttachThreadInput(current, foreign, False)
+                click(source)
                 info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
                 self.assertTrue(user.GetGUIThreadInfo(0, ctypes.byref(info)))
                 self.assertEqual(info.hwndFocus, source, 'Fixture did not establish foreign keyboard ownership')
-                QTest.mouseClick(target, Qt.MouseButton.LeftButton)
+                click(destination)
                 window.resize(window.width() + 1, window.height())
                 QTest.qWait(400)
                 info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
@@ -172,18 +192,20 @@ class RealInputQueueChecks(unittest.TestCase):
                 self.assertTrue(info.hwndFocus == destination or user.IsChild(destination, info.hwndFocus),
                                 'Native input stayed in the foreign process after the owned input click')
                 before = target.text()
-                events = (Input * 2)(Input(type=1, data=Data(keyboard=Keyboard(vk=0x51))),
-                                    Input(type=1, data=Data(keyboard=Keyboard(vk=0x51, flags=2))))
+                events = (Input * 2)(Input(type=1, data=Data(keyboard=Keyboard(scan=ord('q'),flags=4))),
+                                    Input(type=1, data=Data(keyboard=Keyboard(scan=ord('q'),flags=6))))
                 self.assertEqual(user.SendInput(2, events, ctypes.sizeof(Input)), 2)
                 deadline = time.monotonic() + 2
                 while target.text() == before and time.monotonic() < deadline: QTest.qWait(10)
                 self.assertEqual(target.text(), before + 'q')
-                self.assertEqual(user.GetWindowTextLengthW(source), 0, 'Typing leaked to the embedded process')
+                QTest.qWait(60)
+                self.assertTrue(startup.empty(),'The embedded process reported unexpected text input')
                 if host is dialog: dialog.hide()
             print('Native host:', sys.getwindowsversion(), flush=True)
         finally:
             child.terminate()
             child.communicate(timeout=5)
+            user.SetCursorPos(original_cursor.x,original_cursor.y)
             dialog.close(); window.close(); app.processEvents()
 
 if __name__ == '__main__':
