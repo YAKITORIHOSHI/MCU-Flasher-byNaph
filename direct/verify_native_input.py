@@ -171,6 +171,12 @@ class RealInputQueueChecks(unittest.TestCase):
                 for line in child.stdout:
                     startup.put(line)
             threading.Thread(target=read_child, daemon=True).start()
+            def next_child_message():
+                deadline=time.monotonic()+2
+                while startup.empty() and time.monotonic()<deadline:
+                    QTest.qWait(10)
+                self.assertFalse(startup.empty(),'The owned foreign input did not acknowledge the calibration key')
+                return json.loads(startup.get_nowait())
             handles = json.loads(startup.get(timeout=10))
             root, source = handles['root'], handles['input']
             # Windows venv python.exe is a redirector; Popen.pid can belong to
@@ -214,11 +220,11 @@ class RealInputQueueChecks(unittest.TestCase):
                 calibration=(Input*2)(Input(type=1,data=Data(keyboard=Keyboard(scan=ord('z'),flags=4))),
                                       Input(type=1,data=Data(keyboard=Keyboard(scan=ord('z'),flags=6))))
                 self.assertEqual(user.SendInput(2,calibration,ctypes.sizeof(Input)),2)
-                self.assertEqual(json.loads(startup.get(timeout=2)),{'text':'z'})
+                self.assertEqual(next_child_message(),{'text':'z'})
                 erase=(Input*2)(Input(type=1,data=Data(keyboard=Keyboard(vk=8))),
                                 Input(type=1,data=Data(keyboard=Keyboard(vk=8,flags=2))))
                 self.assertEqual(user.SendInput(2,erase,ctypes.sizeof(Input)),2)
-                self.assertEqual(json.loads(startup.get(timeout=2)),{'text':''})
+                self.assertEqual(next_child_message(),{'text':''})
                 click(destination)
                 window.resize(window.width() + 1, window.height())
                 QTest.qWait(400)
