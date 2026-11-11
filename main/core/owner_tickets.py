@@ -338,6 +338,21 @@ class OwnerTicketService:
         """Return the built-in starting set plus saved user-defined categories."""
         return _normalize_ticket_categories(self._read_config().get("ticket_categories"))
 
+    def _current_assignment_category(self, value, tickets) -> str | None:
+        """Validate a draft against fresh choices and currently used history.
+
+        Call under the ticket-change lock. The portal also offers categories
+        from existing tickets, including older records without a saved choice.
+        A removed unused category must not return through a stale open draft.
+        """
+        category = _clean_ticket_category(value)
+        if not category:
+            return None
+        choices = self.get_ticket_categories() + [ticket.get("category") for ticket in tickets]
+        return next((clean for choice in choices
+                     if (clean := _clean_ticket_category(choice))
+                     and clean.casefold() == category.casefold()), None)
+
     @_serialized_ticket_change
     def add_ticket_category(self, value: str) -> tuple[bool, str, list[str]]:
         """Add a bounded category to the per-user developer portal settings."""
@@ -943,20 +958,24 @@ class OwnerTicketService:
     def create_ticket(
         self,
         title: str,
-        category: str = "General",
+        category: str = "General Defect",
         severity: str = "Medium",
         description: str = "",
         status: str = "Open",
     ) -> Dict[str, Any]:
         """Create a new defect issue ticket."""
         try:
+            tickets = self._read_local_tickets()
+            category = self._current_assignment_category(category or "General Defect", tickets)
+            if category is None:
+                return {}
             ticket_id = f"tkt_{int(time.time())}_{uuid.uuid4().hex[:6]}"
             now_iso = datetime.now(timezone.utc).isoformat()
 
             ticket: Dict[str, Any] = {
                 "id": ticket_id,
                 "title": (title or "Untitled Defect").strip(),
-                "category": category or "General",
+                "category": category,
                 "severity": severity or "Medium",
                 "status": status or "Open",
                 "description": description.strip(),
@@ -967,7 +986,6 @@ class OwnerTicketService:
 
             # 1. Update local storage immediately
             try:
-                tickets = self._read_local_tickets()
                 tickets.insert(0, ticket)
                 if self._save_local_tickets(tickets) is False:
                     return {}
@@ -996,7 +1014,13 @@ class OwnerTicketService:
 
             for t in tickets:
                 if t.get("id") == ticket_id:
-                    t.update(updates)
+                    changes = dict(updates)
+                    if "category" in changes and changes["category"] != t.get("category"):
+                        category = self._current_assignment_category(changes["category"], tickets)
+                        if category is None:
+                            return False
+                        changes["category"] = category
+                    t.update(changes)
                     t["updated_at"] = datetime.now(timezone.utc).isoformat()
                     target_ticket = t
                     found = True

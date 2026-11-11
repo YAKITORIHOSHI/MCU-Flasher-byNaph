@@ -16,7 +16,7 @@ mixed-monitor behavior, physical USB or every backup application's integration.
 | Terminal spacing | Minimum header height and explicit close-button allocation | Responsive, native layouts and monitor matrix |
 | Terminal/Notifications close marks | Explicit terminal tab painting on Windows/POSIX; shared dock close icon | `verify_svg_icons` renders themes and exercises close actions |
 | Developer Access dropdowns/severity | Explicit paper popup mode; centered severity row | `verify_combo_popups`, `verify_owner_tickets`, native layouts |
-| Remove custom categories | Serialized changes; fresh local/remote usage checks; reassignment required; no ticket rewrites | `verify_owner_ticket_service`, create/edit removal and retained drafts |
+| Remove custom categories | Serialized changes; fresh local/remote usage checks; reassignment required; stale assignments revalidated; no ticket rewrites | `verify_owner_ticket_service`, create/edit removal and retained drafts |
 | Ticket ordering | Newest-created default; oldest/recently updated choices | Service timestamp and actual UI ordering checks |
 | Backup/file locks | Configured sync roots use local owned build storage; bounded retries, atomic source saves, accurate read-only blocker diagnostics in an owned Windows job | `verify_file_access`, acknowledged-save race checks; external backup products remain environment-dependent |
 | Upload unexpectedly disabled | Authoritative backend/live-worker/save/recovery guards, reason tooltips, post-save refresh | `verify_controls`, existing upload workers/logging/cache tests |

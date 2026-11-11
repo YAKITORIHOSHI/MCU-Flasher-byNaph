@@ -30,7 +30,8 @@ controls language-aware pairing, wrapping, overtyping and paired deletion.
 Developer Access keeps paper dropdowns, aligned loading indicators and centered
 severity badges. Tickets default to newest created first, with Oldest first and
 Recently updated options. Custom categories can be removed after all their
-tickets have been reassigned. Windows sync-managed sketches use local owned
+tickets have been reassigned; stale drafts recheck category availability before
+saving. Windows sync-managed sketches use local owned
 build storage; bounded file-lock handling and atomic saves retain unsaved text
 and report blockers without terminating backup programs. Ubuntu Bootstrap stages
 a persistent per-user application and registers one All Apps entry only after

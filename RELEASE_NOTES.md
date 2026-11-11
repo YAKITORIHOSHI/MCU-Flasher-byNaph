@@ -42,6 +42,7 @@
   indicators reserve their layout space, severity is centered, and tickets sort
   by newest creation time with Oldest first/Recently updated alternatives.
   Removing a custom category requires reassignment of every ticket first;
+  stale drafts recheck category availability before creating or reassigning a ticket.
   a fresh local/remote usage check refuses unverifiable removal.
 - **File access:** Known Windows synchronization roots use owned local build
   workspaces without relocating projects or deleting old caches. Atomic source

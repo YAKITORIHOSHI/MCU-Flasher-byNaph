@@ -40,6 +40,38 @@ class Response:
 
 
 class OwnerTicketServiceChecks(unittest.TestCase):
+    def test_removed_category_cannot_return_through_a_stale_create_or_edit_draft(self):
+        saved = {"ticket_categories": ["Removed fixture", "Current fixture"]}
+        tickets = [{"id": "current", "title": "Keep title", "category": "General Defect"}]
+        self.service._read_config.side_effect = lambda: dict(saved)
+        self.service._read_local_tickets.side_effect = lambda: [dict(ticket) for ticket in tickets]
+        self.service.save_config.side_effect = lambda updates: saved.update(updates) is None
+        self.service._save_local_tickets.side_effect = lambda values: tickets.__setitem__(slice(None), values) is None
+        self.assertTrue(self.service.remove_ticket_category("Removed fixture")[0])
+        self.assertEqual(self.service.create_ticket("Stale create", category="Removed fixture"), {})
+        self.assertFalse(self.service.update_ticket("current", {
+            "category": "Removed fixture", "title": "Must not overwrite title"}))
+        self.assertEqual(tickets, [{"id": "current", "title": "Keep title", "category": "General Defect"}])
+        self.service._save_local_tickets.assert_not_called()
+        self.assertTrue(self.service.create_ticket("Current choice", category="current fixture"))
+        self.assertEqual(tickets[0]["category"], "Current fixture")
+        self.assertTrue(self.service.create_ticket("Default choice"))
+        self.assertEqual(tickets[0]["category"], "General Defect")
+
+    def test_existing_historical_categories_remain_editable_and_available_to_current_ui_choices(self):
+        tickets = [{"id": "legacy", "title": "Before", "category": "Historical fixture"},
+                   {"id": "current", "category": "General Defect"}]
+        self.service._read_local_tickets.side_effect = lambda: [dict(ticket) for ticket in tickets]
+        self.service._save_local_tickets.side_effect = lambda values: tickets.__setitem__(slice(None), values) is None
+        self.assertNotIn("Historical fixture", self.service.get_ticket_categories())
+        self.assertTrue(self.service.update_ticket("legacy", {
+            "category": "Historical fixture", "title": "After"}))
+        self.assertEqual(tickets[0]["category"], "Historical fixture")
+        self.assertEqual(tickets[0]["title"], "After")
+        self.assertTrue(self.service.update_ticket("current", {"category": "Historical fixture"}))
+        self.assertTrue(self.service.create_ticket("Current legacy choice", category="Historical fixture"))
+        self.assertEqual(tickets[0]["category"], "Historical fixture")
+
     def test_unused_custom_category_removal_preserves_defaults_and_used_ticket_history(self):
         saved = {"ticket_categories": ["Custom fixture"]}
         def save(updates):
@@ -143,6 +175,7 @@ class OwnerTicketServiceChecks(unittest.TestCase):
             "use_firebase": True,
         }
         self.service.get_config = Mock(side_effect=lambda: dict(self.config))
+        self.service._read_config = Mock(side_effect=lambda: dict(self.config))
         self.service._read_local_tickets = Mock(return_value=[])
         self.service._save_local_tickets = Mock(
             side_effect=AssertionError("Live persistence is forbidden in this fixture")
