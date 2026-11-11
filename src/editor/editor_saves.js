@@ -1,26 +1,43 @@
 /* A save acknowledgement applies only to the exact model revision written. */
 (() => {
   let tail = Promise.resolve();
+  // One round close mark for every floating editor surface (notices, the declaration
+  // list and library previews). Its look lives in index.html as `.mcu-close`.
+  window.mcuCloseButton = (label, onClose) => {
+    const close = document.createElement('button');
+    close.type = 'button'; close.className = 'mcu-close';
+    close.setAttribute('aria-label', label); close.title = label;
+    close.addEventListener('click', event => { event.stopPropagation(); onClose(event); });
+    return close;
+  };
+  let noticeTimer = 0;
   window.showEditorNotice = message => {
     document.getElementById('editor-notice')?.remove();
+    clearTimeout(noticeTimer);
     const notice = document.createElement('div');
     notice.id = 'editor-notice';
     notice.setAttribute('role', 'status');
     notice.setAttribute('aria-live', 'polite');
-    Object.assign(notice.style, {position:'absolute', top:'44px', right:'12px', zIndex:'10000',
-      maxWidth:'min(520px, calc(100% - 24px))', maxHeight:'50%', overflow:'auto',
-      boxSizing:'border-box', padding:'12px', border:'1px solid var(--hover-border)',
-      borderRadius:'10px', background:'var(--reading)', backdropFilter:'blur(18px)', color:'var(--text)',
-      font:'12px Montserrat, sans-serif', whiteSpace:'pre-wrap', overflowWrap:'anywhere'});
-    const close = document.createElement('button');
-    close.type = 'button'; close.textContent = 'Close';
-    close.setAttribute('aria-label', 'Close notification');
-    Object.assign(close.style, {float:'right', margin:'0 0 6px 12px', padding:'4px 8px',
-      border:'1px solid var(--hover-border)', borderRadius:'5px', cursor:'pointer',
-      background:'var(--chip)', color:'var(--chip-ink)', font:'inherit'});
-    close.onclick = () => notice.remove();
-    notice.append(close, document.createTextNode(String(message)));
+    const icon = document.createElement('span');
+    icon.className = 'editor-notice-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'editor-notice-text';
+    text.textContent = String(message);
+    const dismiss = () => {
+      clearTimeout(noticeTimer);
+      if (!notice.isConnected) return;
+      notice.classList.add('leaving');
+      setTimeout(() => notice.remove(), 160);
+    };
+    notice.append(icon, text, window.mcuCloseButton('Close notification', dismiss));
+    // Short notices leave by themselves; reading or hovering one keeps it open.
+    const schedule = () => { clearTimeout(noticeTimer); noticeTimer = setTimeout(dismiss, 12000); };
+    notice.addEventListener('pointerenter', () => clearTimeout(noticeTimer));
+    notice.addEventListener('pointerleave', schedule);
+    notice.addEventListener('focusin', () => clearTimeout(noticeTimer));
     (document.getElementById('editor-container') || document.body).append(notice);
+    schedule();
   };
   const queued = operation => {
     const next = tail.then(operation);

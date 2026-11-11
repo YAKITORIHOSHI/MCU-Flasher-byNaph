@@ -183,6 +183,35 @@ class QtSvgChecks(unittest.TestCase):
             self.assertFalse(dock.isVisible())
             main.hide(); host.hide()
 
+    def test_terminal_close_marks_contrast_with_the_tab_actually_painted_under_them(self):
+        # What happened: the selected tab's mark used the chip ink while that terminal
+        # painted its selected tab dark, so the close button was invisible there.
+        from main.qt.theme import install_no_focus_lines
+        from main.qt.posix_terminal_panel import PosixTerminalPanel
+        from src.modules.ui_palette import contrast_ratio
+        install_no_focus_lines(APP)
+        for mode in MODES:
+            Theme.apply_theme(mode); APP.setStyleSheet(build_stylesheet(mode))
+            panel=self.own(PosixTerminalPanel()); panel.apply_theme(mode); panel.resize(520,140)
+            for name in ('Bash','Bash 2'):
+                surface=QLabel(''); panel._tabs.addTab(surface,name); panel._sessions[surface]=(None,None)
+            panel._update_session_state(); panel.show(); APP.processEvents()
+            bar=panel._tabs.tabBar()
+            image=QImage(bar.size(),QImage.Format.Format_ARGB32); image.fill(QColor('#000000' if mode!='light' else '#ffffff'))
+            bar.render(image,QPoint(),QRegion(),QWidget.RenderFlag.DrawChildren)
+            for index in range(bar.count()):
+                button=bar.tabButton(index,QTabBar.ButtonPosition.RightSide)
+                self.assertTrue(bar.tabRect(index).contains(button.geometry()),(mode,index))
+                tab=bar.tabRect(index)
+                # The chip's own fill, sampled inside its border beside the label.
+                fill=image.pixelColor(tab.left()+6,tab.center().y())
+                box=button.geometry()
+                ink=max((image.pixelColor(x,y) for x in range(box.left(),box.right()+1)
+                         for y in range(box.top(),box.bottom()+1)),
+                        key=lambda color: contrast_ratio(color.name(),fill.name()))
+                self.assertGreaterEqual(contrast_ratio(ink.name(),fill.name()),3.0,(mode,index,ink.name(),fill.name()))
+            panel._sessions.clear(); panel.hide()
+
     def test_render_all_icons_and_themed_gallery(self):
         names=sorted(NAMES)
         height=112+((len(names)+7)//8)*78

@@ -11,6 +11,19 @@
 
 [v11 release notes and verification limits](RELEASE_NOTES.md)
 
+The November 11 follow-up makes source updates reach installed copies again (a
+hand-packaged ZIP and source-folder Ubuntu installs had recorded a commit GitHub
+never received, which stopped every update). Ctrl+Click/F12 on `#include
+<Library.h>` or on a library's classes and functions opens that header in the
+locked preview before any compile, using installed libraries. Terminal tabs,
+editor notices and previews have round close marks that stay visible in every
+theme. The AI review bar, its toggle, editor popovers, Monaco's widgets and
+application menus use the workspace glass. Dropdowns and menus fade and slide
+in, and compact tool tabs reveal the selected tool's name. A detached editor
+leaves the monitors and the assistant side by side. The window keeps at least
+half the monitor's width and three quarters of its height. Settings shows a
+spinner while it applies, and the AI bar folds away once nothing is pending.
+
 The November 11 editor and input update returns Windows keyboard ownership when
 you click another workspace input, fills the assistant's existing viewport, and
 gives terminal tabs explicit themed close buttons. Upload explains its current

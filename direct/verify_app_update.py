@@ -251,13 +251,13 @@ class SourceUpdateChecks(unittest.TestCase):
         writer.assert_not_called()
 
     def bundled_check(self, *, bundled="1" * 40, remote="2" * 40, comparison="behind", state=None,
-                      remote_date="", installed_date=""):
+                      remote_date="", installed_date="", record_extra=None):
         """Check a copy's launch with GitHub's responses fabricated. ``comparison`` may be per-base."""
         revision = self.install / app_update.BUNDLED_REVISION_FILE
         revision.parent.mkdir(parents=True, exist_ok=True)
         revision.unlink(missing_ok=True)
         if bundled is not None:
-            revision.write_text(json.dumps({"commit": bundled}), encoding="utf-8")
+            revision.write_text(json.dumps({"commit": bundled, **(record_extra or {})}), encoding="utf-8")
         if state is not None:
             path = app_update.update_state_path(self.install, state_base=self.state)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +306,43 @@ class SourceUpdateChecks(unittest.TestCase):
             with self.subTest(comparison=comparison):
                 checked, _ = self.bundled_check(comparison=comparison)
                 self.assertEqual(checked.status, "unavailable")
+
+    def test_a_record_github_never_saw_is_judged_by_its_own_date(self):
+        # What happened: a hand-made v11 ZIP recorded an amended commit GitHub never received.
+        # Every comparison answered 404, so those copies silently stopped updating for good.
+        from urllib.error import HTTPError
+        unknown = HTTPError("https://api.github.com/compare", 404, "Not Found", {}, None)
+        later, earlier = "2026-11-11T00:00:00Z", "2026-11-09T02:23:07Z"
+        for key in ("committed_at", "timestamp"):
+            with self.subTest(record_key=key):
+                checked, requested = self.bundled_check(comparison=unknown, remote_date=later,
+                                                        record_extra={key: earlier})
+                self.assertEqual(checked.status, "available")
+                self.assertEqual(len(requested), 2)
+        checked, _ = self.bundled_check(comparison=unknown, remote_date=earlier,
+                                        record_extra={"committed_at": later})
+        self.assertEqual(checked.status, "current")
+        # Without both dates nothing says the branch is later work.
+        for remote_date, extra in ((later, {}), ("", {"committed_at": earlier}),
+                                   (later, {"committed_at": "yesterday"})):
+            with self.subTest(remote=remote_date, record=extra):
+                checked, _ = self.bundled_check(comparison=unknown, remote_date=remote_date, record_extra=extra)
+                self.assertEqual(checked.status, "unavailable")
+        # Any other refusal still means no update.
+        refused = HTTPError("https://api.github.com/compare", 403, "rate limited", {}, None)
+        checked, _ = self.bundled_check(comparison=refused, remote_date=later, record_extra={"committed_at": earlier})
+        self.assertEqual(checked.status, "unavailable")
+
+    def test_an_applied_update_records_its_commit_date_for_later_checks(self):
+        dated = app_update.SourceCandidate(commit=self.candidate.commit, branch="main",
+                                           committed_at="2026-11-11T01:02:03Z")
+        app_update.install_staged_source(self.install, self.source, self._source_names(), dated,
+                                         strategy="fixture", state_base=self.state)
+        record = json.loads((self.install / app_update.BUNDLED_REVISION_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(record, {"repository": app_update.REPOSITORY, "commit": dated.commit,
+                                  "committed_at": "2026-11-11T01:02:03Z"})
+        state = json.loads(app_update.update_state_path(self.install, state_base=self.state).read_text(encoding="utf-8"))
+        self.assertEqual(state["applied_committed_at"], "2026-11-11T01:02:03Z")
 
     def test_a_copy_with_no_record_is_never_replaced(self):
         # What happened: a ZIP packaged without its record went back to a two-week-old main on

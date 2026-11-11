@@ -131,6 +131,10 @@ class _GitUnavailable(ApplicationUpdateError):
     """The optional local Git client cannot start; archive fallback is allowed."""
 
 
+class _UnknownRecordedCommit(ApplicationUpdateError):
+    """GitHub has never seen the commit a copy records, so it cannot compare it."""
+
+
 @dataclass(frozen=True)
 class SourceCandidate:
     """One immutable commit selected from the configured GitHub branch."""
@@ -388,10 +392,41 @@ def _read_remote_commit(*, branch: str, timeout: float,
     return parse_remote_commit(payload, branch)
 
 
+_RECORD_DATE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+
+
 def _recorded_commit(install_root: Path) -> str | None:
     """The commit this copy's own record names, written by a release build or an update."""
     commit = _read_json(install_root / BUNDLED_REVISION_FILE, limit=4096).get("commit")
     return commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) else None
+
+
+def _recorded_date(record: dict[str, Any], *keys: str) -> str:
+    """The first fixed-width UTC commit date a record carries, or nothing usable."""
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, str) and _RECORD_DATE.fullmatch(value):
+            return value
+    return ""
+
+
+def _known_dates(install_root: Path, state: dict[str, Any]) -> dict[str, str]:
+    """When each known commit was made, as far as this copy's own records say.
+
+    GitHub can only compare commits it has. A record whose commit was amended or
+    never pushed (one release recorded such a commit) answers 404 forever; its
+    date is then the only honest way to tell whether the branch is later work.
+    ``timestamp`` is what that hand-made release record called its date.
+    """
+    dates: dict[str, str] = {}
+    record = _read_json(install_root / BUNDLED_REVISION_FILE, limit=4096)
+    recorded = _recorded_commit(install_root)
+    if recorded:
+        dates[recorded] = _recorded_date(record, "committed_at", "timestamp")
+    applied = state.get("applied_commit")
+    if isinstance(applied, str) and applied not in dates:
+        dates[applied] = _recorded_date(state, "applied_committed_at")
+    return dates
 
 
 def _known_commits(install_root: Path, state: dict[str, Any]) -> list[str]:
@@ -433,7 +468,12 @@ def _branch_offers_newer_source(installed: str, candidate: SourceCandidate, *, t
         status = comparison.get("status")
     except ApplicationUpdateError:
         raise
-    except (HTTPError, URLError, OSError, TimeoutError, UnicodeError, ValueError, AttributeError) as exc:
+    except HTTPError as exc:
+        if exc.code in (404, 422):
+            # GitHub answered, and it has no such commit (or no shared history with it).
+            raise _UnknownRecordedCommit(f"GitHub does not know the recorded commit {installed[:7]}.") from exc
+        raise ApplicationUpdateError(f"GitHub source comparison is unavailable: {exc}") from exc
+    except (URLError, OSError, TimeoutError, UnicodeError, ValueError, AttributeError) as exc:
         raise ApplicationUpdateError(f"GitHub source comparison is unavailable: {exc}") from exc
     if status not in ("ahead", "behind", "identical", "diverged"):
         raise ApplicationUpdateError("GitHub returned an unrecognized source comparison.")
@@ -467,11 +507,20 @@ def check_for_update(root: Path | str, *, config: object | None = None, timeout:
             "this copy does not record which version it is, so it is left as it is")
     # Replacing needs the branch to be newer than everything this copy might hold.
     current = candidate.commit in known
+    dates = _known_dates(install_root, state)
     try:
         for installed in known:
             if current:
                 break
-            current = not _branch_offers_newer_source(installed, candidate, timeout=timeout, opener=opener)
+            try:
+                current = not _branch_offers_newer_source(installed, candidate, timeout=timeout, opener=opener)
+            except _UnknownRecordedCommit:
+                # Judge an unknown commit as a rewritten branch is judged: only clearly
+                # later work replaces it, and without both dates nothing does.
+                recorded_at = dates.get(installed, "")
+                if not (recorded_at and candidate.committed_at):
+                    raise
+                current = not candidate.committed_at > recorded_at
     except ApplicationUpdateError as exc:
         return UpdateCheck("unavailable", detail=str(exc))
     cached = {
@@ -484,6 +533,8 @@ def check_for_update(root: Path | str, *, config: object | None = None, timeout:
         "applied_at": state.get("applied_at") if isinstance(state.get("applied_at"), str) else "",
         "managed_files": state.get("managed_files") if isinstance(state.get("managed_files"), list) else [],
     }
+    if _recorded_date(state, "applied_committed_at"):
+        cached["applied_committed_at"] = state["applied_committed_at"]
     # A normal current check is deliberately read-only.  Slow HDD/removable
     # installations should not pay a metadata write at every Bootstrap start.
     if any(state.get(key) != value for key, value in cached.items() if key != "checked_at"):
@@ -789,7 +840,11 @@ def install_staged_source(root: Path | str, source_root: Path | str, source_name
         existed = destination.exists() or destination.is_symlink()
         if existed:
             _backup_file(destination, backup_root, record)
-        _write_json_atomically(destination, {"repository": candidate.repository, "commit": candidate.commit})
+        written = {"repository": candidate.repository, "commit": candidate.commit}
+        if candidate.committed_at:
+            # Lets a later check judge this copy by date if GitHub ever loses the commit.
+            written["committed_at"] = candidate.committed_at
+        _write_json_atomically(destination, written)
         operations.append(_Operation(record, existed))
 
         next_state = {
@@ -799,6 +854,7 @@ def install_staged_source(root: Path | str, source_root: Path | str, source_name
             "latest_commit": candidate.commit,
             "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "applied_commit": candidate.commit,
+            "applied_committed_at": candidate.committed_at,
             "applied_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "strategy": strategy,
             "managed_files": [relative.as_posix() for relative in selected],

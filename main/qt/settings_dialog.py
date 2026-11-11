@@ -680,6 +680,19 @@ class SettingsDialog(GlassDialog):
 
         act_row.addStretch()
 
+        # Applying a theme restyles every window; show that work instead of a frozen dialog.
+        from main.qt.circular_spinner import CircularSpinner
+        self._apply_spinner = CircularSpinner(self, size=18, line_width=2.2)
+        self._apply_spinner.setAccessibleName("Applying settings")
+        size_policy = self._apply_spinner.sizePolicy()
+        size_policy.setRetainSizeWhenHidden(True)
+        self._apply_spinner.setSizePolicy(size_policy)
+        self._apply_spinner.hide()
+        act_row.addWidget(self._apply_spinner, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._apply_status = QLabel("")
+        self._apply_status.setObjectName("settings-apply-status")
+        act_row.addWidget(self._apply_status, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setFixedSize(85, 30)
         self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -690,7 +703,7 @@ class SettingsDialog(GlassDialog):
         self.btn_save.setProperty("role", "primary")
         self.btn_save.setFixedSize(85, 30)
         self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save.clicked.connect(self._save_and_apply)
+        self.btn_save.clicked.connect(lambda: self._save_and_apply(show_progress=True))
         act_row.addWidget(self.btn_save)
 
         outer_layout.addLayout(act_row)
@@ -848,8 +861,12 @@ class SettingsDialog(GlassDialog):
             self.accept()
 
 
-    def _save_and_apply(self) -> None:
-        """Persist all settings and emit console log confirmations."""
+    def _save_and_apply(self, *, show_progress: bool = False) -> None:
+        """Persist all settings and emit console log confirmations.
+
+        From the Save button the work runs on the next event-loop turn, after the
+        dialog has painted its spinner; called directly it completes at once.
+        """
         data = copy.deepcopy(_load_raw_config())
         if "shared" not in data or not isinstance(data["shared"], dict):
             data["shared"] = {}
@@ -938,21 +955,51 @@ class SettingsDialog(GlassDialog):
         # 8. Serial Monitor (Reset on Baud Change)
         reset_on_baud = self.cb_reset_on_baud.isChecked()
         data["shared"]["reset_on_baud_change"] = reset_on_baud
+        from main.core.theme import Theme
+        theme_changed = active_theme != Theme.active_theme
+        font_changed = new_font_size != get_monitor_font_size()
+        work = (data, mode_changed, current_offline, active_theme, theme_changed, font_changed, follow_sys,
+                cpu_key, g_accel, new_font_size, hide_warn, as_enabled, as_delay, reset_on_baud)
+        if not show_progress:
+            self._finish_save(*work)
+            return
+        self._set_applying(True, "Applying theme…" if theme_changed else "Saving…")
+        # Paint the spinner before the work below holds the event loop.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(30, self, lambda: self._finish_save(*work))
+
+    def reject(self) -> None:
+        # Escape and the window's close button wait while Save is applying, so a
+        # half-applied save can never be discarded; Save closes the dialog itself.
+        if getattr(self, "_applying", False):
+            return
+        super().reject()
+
+    def _set_applying(self, busy: bool, message: str = "") -> None:
+        self._applying = busy
+        for button in (self.btn_save, self.btn_cancel, self.btn_reset):
+            button.setEnabled(not busy)
+        self._apply_status.setText(message if busy else "")
+        self._apply_spinner.set_busy(busy)
+        self._apply_spinner.setVisible(busy)
+
+    def _finish_save(self, data, mode_changed, current_offline, active_theme, theme_changed, font_changed,
+                     follow_sys, cpu_key, g_accel, new_font_size, hide_warn, as_enabled, as_delay,
+                     reset_on_baud) -> None:
         # Persist the complete preference set once before applying it live.
         if _save_raw_config(data) is False:
+            if getattr(self, "_applying", False):
+                self._set_applying(False)
             QMessageBox.critical(self, "Settings not saved", "The configuration files could not be written. Check that your user folder is writable and try again.")
             return
         self.offline_mode_restart_requested = mode_changed
         self.offline_mode_previous = current_offline
 
         from main.core.theme import Theme
-        from main.qt.theme import build_stylesheet
-        from PySide6.QtWidgets import QApplication
         Theme.apply_theme(active_theme)
-        app = QApplication.instance()
-        if app:
-            app.setStyleSheet(build_stylesheet(active_theme))
-        self._apply_dialog_theme(active_theme)
+        # The workspace restyles the application once, from the theme signal below, and
+        # this dialog follows the same signal. Restyling here as well doubled the
+        # slowest part of closing Settings, even when the theme had not changed.
 
         if self._backend and hasattr(self._backend, "set_reset_on_baud_change"):
             self._backend.set_reset_on_baud_change(reset_on_baud)
@@ -997,9 +1044,12 @@ class SettingsDialog(GlassDialog):
             "type": "success" if history_saved else "warning",
         })
 
-        # Apply font size and theme live to child panels
-        signals.font_size_changed.emit(new_font_size)
-        signals.theme_changed.emit(active_theme)
+        # Apply font size and theme live to child panels, only when they changed:
+        # each one re-lays out or restyles every open panel.
+        if font_changed:
+            signals.font_size_changed.emit(new_font_size)
+        if theme_changed:
+            signals.theme_changed.emit(active_theme)
 
         # Apply hide warnings live to Build Console
         if hasattr(signals, "hide_warnings_changed"):
@@ -1015,4 +1065,5 @@ class SettingsDialog(GlassDialog):
         if hasattr(signals, "graphics_accel_changed"):
             signals.graphics_accel_changed.emit(g_accel == "ON")
 
+        self._applying = False
         self.accept()

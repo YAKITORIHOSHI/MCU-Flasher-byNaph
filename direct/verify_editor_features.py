@@ -156,9 +156,12 @@ class EditorFeatures(unittest.TestCase):
         embedded.wait_for(lambda: self.js("fixture.outcome === 'retained'"), 'The save race was incorrectly acknowledged')
         self.assertEqual(self.js('editorInstance.getValue()'), 'newer unsaved buffer')
         self.assertTrue(self.js('__mcuProjectFileStore.active().isDirty'))
-        self.assertTrue(self.js("document.querySelector('#editor-notice button').textContent === 'Close'"))
+        self.assertEqual(self.js("document.querySelector('#editor-notice button.mcu-close').getAttribute('aria-label')"),
+                         'Close notification')
+        # The round close mark is a real, visible target, not an empty native primitive.
+        self.assertGreaterEqual(self.js("document.querySelector('#editor-notice .mcu-close').getBoundingClientRect().width"), 18)
         self.js("document.querySelector('#editor-notice button').click(); true")
-        self.assertFalse(self.js("!!document.getElementById('editor-notice')"))
+        embedded.wait_for(lambda: self.js("!document.getElementById('editor-notice')"), 'The notice did not close')
 
     def test_preview_history_restores_call_selection_and_project_reload_disposes_preview_models(self):
         self.preview()
@@ -185,6 +188,92 @@ class EditorFeatures(unittest.TestCase):
         embedded.wait_for(lambda: self.js('fixture.navigated !== null'), 'Stale navigation was not acknowledged')
         self.assertFalse(self.js('fixture.navigated'))
         self.assertEqual(self.js('editorInstance.getValue()'), '// newer root buffer')
+
+    def reply_with(self, destinations, **extra):
+        self.js(f'fixture.answer={json.dumps(dict(success=True, destinations=destinations, **extra))}; true')
+        self.js("""
+          window.editorBridge={navigation_ready:{connect:fn=>fixture.reply=fn},
+            request_definition:(token,id,payload,accepted)=>{
+              fixture.requests=(fixture.requests||0)+1; accepted(true);
+              queueMicrotask(()=>fixture.reply(token,id,fixture.answer));
+            }};
+          fixture.navigated=null; fixture.requests=0;
+          editorInstance.setPosition({lineNumber:3,column:16});
+          navigateSourceAtPosition(editorInstance.getPosition()).then(value=>fixture.navigated=value); true
+        """)
+        embedded.wait_for(lambda: self.js('fixture.navigated !== null'), 'Navigation did not finish')
+
+    def test_one_candidate_opens_directly_even_when_conditional_code_could_hide_another(self):
+        library = str(Path(self.temporary.name) / 'library/Servo.h')
+        self.reply_with([dict(path=library, content='class Servo {};\n', name='Servo', line=0, column=6,
+                              end_line=0, end_column=11, signature='type', read_only=True)], requires_choice=True)
+        self.assertTrue(self.js('fixture.navigated'))
+        self.assertFalse(self.js("!!document.getElementById('mcu-declaration-chooser')"))
+        self.assertEqual(self.js('editorInstance.getModel().getValue()'), 'class Servo {};\n')
+        self.assertTrue(self.js("!!document.querySelector('[data-preview] .mcu-close')"))
+
+    def test_no_candidate_explains_instead_of_opening_an_empty_list(self):
+        self.reply_with([], requires_choice=True, word='Servo')
+        self.assertFalse(self.js('fixture.navigated'))
+        self.assertFalse(self.js("!!document.getElementById('mcu-declaration-chooser')"))
+        self.assertIn('Servo', self.js("document.getElementById('editor-notice').textContent"))
+
+    def test_several_candidates_open_a_keyboard_list_beside_the_word(self):
+        library = str(Path(self.temporary.name) / 'library')
+        self.reply_with([dict(path=library + '/a/Servo.h', content='class Servo {};\n', name='', line=0, column=0,
+                              end_line=0, end_column=0, signature='Servo.h', read_only=True),
+                         dict(path=library + '/b/Servo.h', content='class Servo { int b; };\n', name='', line=0,
+                              column=0, end_line=0, end_column=0, signature='Servo.h', read_only=True)],
+                        requires_choice=True, word='Servo.h')
+        self.assertEqual(self.js("document.querySelectorAll('#mcu-declaration-chooser .mcu-chooser-row').length"), 2)
+        self.assertEqual(self.js("document.activeElement.className"), 'mcu-chooser-row')
+        self.assertIn('Servo.h', self.js("document.querySelector('#mcu-declaration-chooser .mcu-chooser-title').textContent"))
+        self.js("document.querySelectorAll('#mcu-declaration-chooser .mcu-chooser-row')[1].click(); true")
+        embedded.wait_for(lambda: self.js("editorInstance.getModel().getValue() === 'class Servo { int b; };\\n'"),
+                          'The chosen header did not open')
+        self.assertFalse(self.js("!!document.getElementById('mcu-declaration-chooser')"))
+        # Escape closes a list without moving the editor.
+        self.reply_with([dict(path=library + '/a/Servo.h', content='x\n', name='', line=0, column=0, end_line=0,
+                              end_column=0, signature='Servo.h', read_only=True)] * 2, word='Servo.h')
+
+    def test_context_menu_definition_commands_use_the_same_navigation(self):
+        # The context menu runs Monaco's command ids through its command service.
+        self.js("window.editorBridge={navigation_ready:{connect:fn=>fixture.reply=fn},"
+                "request_definition:(token,id,payload,accepted)=>{fixture.asked=JSON.parse(payload);accepted(true);"
+                "queueMicrotask(()=>fixture.reply(token,id,{success:true,destinations:[]}));}};"
+                "fixture.asked=null; editorInstance.setPosition({lineNumber:3,column:16}); true")
+        available = self.js("!!(editorInstance._commandService && editorInstance._commandService.executeCommand)")
+        if not available:
+            self.skipTest("This Monaco build does not expose its command service to fixtures")
+        for command in ('editor.action.revealDefinition', 'editor.action.peekDefinition'):
+            with self.subTest(command=command):
+                self.js(f"fixture.asked=null; editorInstance._commandService.executeCommand('{command}'); true")
+                embedded.wait_for(lambda: self.js('fixture.asked !== null'), f'{command} did not ask the navigator')
+                self.assertEqual(self.js('fixture.asked.line'), 3)
+
+    def test_loading_spinner_keeps_turning_on_resource_constrained_computers(self):
+        # Six-core PCs are "constrained", and that switch froze the editor's loading spinner.
+        self.js("document.documentElement.classList.add('resource-constrained');"
+                "document.getElementById('editor-loading').hidden=false; true")
+        style = self.state("const spinner=document.querySelector('#editor-loading .circular-spinner');"
+                           "const css=getComputedStyle(spinner);"
+                           "return {name:css.animationName, duration:css.animationDuration, count:css.animationIterationCount,"
+                           " other:getComputedStyle(document.getElementById('tab-add')).transitionDuration};")
+        self.assertEqual(style['name'], 'mcu-spin')
+        self.assertEqual(style['count'], 'infinite')
+        self.assertNotEqual(style['duration'], '0s')
+        # Decorative motion elsewhere still stops in that mode.
+        self.assertEqual(style['other'], '0s')
+
+    def test_monaco_hover_lookups_have_no_side_effects(self):
+        self.js("window.editorBridge={navigation_ready:{connect:fn=>fixture.reply=fn},"
+                "request_definition:()=>{fixture.asked=true;}}; fixture.asked=false; fixture.located='pending';"
+                "sourceDefinitionLocations(editorInstance.getModel(), editorInstance.getPosition())"
+                ".then(value=>fixture.located=value); true")
+        embedded.wait_for(lambda: self.js("fixture.located !== 'pending'"), 'The provider did not answer')
+        self.assertTrue(self.js('fixture.located === null'))
+        self.assertFalse(self.js('fixture.asked'))
+        self.assertFalse(self.js("!!document.getElementById('mcu-declaration-chooser')"))
 
     def test_native_storage_save_runs_off_qt_and_keeps_the_event_loop_alive(self):
         from PySide6.QtCore import QTimer

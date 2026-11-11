@@ -60,6 +60,70 @@ class NavigationChecks(unittest.TestCase):
         self.assertEqual(item['content'].splitlines()[item['line']][item['column']:item['end_column']], 'stepRun')
         self.assertEqual(header.read_bytes(), item['content'].encode('utf-8'))
 
+    def test_an_include_directive_opens_its_header_from_installed_libraries_before_a_compile(self):
+        # What happened: Ctrl+Click on a library showed an empty "Choose a declaration"
+        # box, because nothing knew where installed libraries live until a compile.
+        store = self.root / 'store'
+        header = store / 'ESP32Servo/src/ESP32Servo.h'
+        header.parent.mkdir(parents=True)
+        header.write_text('#ifndef SERVO_H\n#define SERVO_H\nclass Servo { public: int attach(int pin); };\n#endif\n')
+        roots = [str(header.parent)]
+        text = '#include <ESP32Servo.h>\nServo servo;\nvoid run() { servo.attach(23); }\n'
+        for marker in ('ESP32Servo.h>', '#include'):
+            with self.subTest(marker=marker):
+                result = resolve_request(self.request(text, marker, library_roots=roots), semantic=False)
+                self.assertEqual(result['engine'], 'include')
+                self.assertEqual([item['path'] for item in result['destinations']], [str(header)])
+                self.assertEqual(result['destinations'][0]['line'], 0)
+                self.assertTrue(result['destinations'][0]['read_only'])
+                self.assertFalse(result['requires_choice'])
+        # The library's declarations resolve through the same explicit include.
+        for marker, line in (('Servo servo', 2), ('attach(23)', 2)):
+            with self.subTest(symbol=marker):
+                result = resolve_request(self.request(text, marker, library_roots=roots), semantic=False)
+                self.assertEqual([(item['path'], item['line']) for item in result['destinations']], [(str(header), line)])
+        # A header nobody provides explains itself instead of returning an empty list silently.
+        missing = resolve_request(self.request('#include <Nowhere.h>\n', 'Nowhere', library_roots=roots), semantic=False)
+        self.assertEqual(missing['destinations'], [])
+        self.assertIn('Nowhere.h', missing['error'])
+
+    def test_identical_installed_copies_are_one_header_and_different_versions_are_a_choice(self):
+        first, second, third = (self.root / name / 'src' for name in ('lib-a', 'lib-b', 'lib-c'))
+        for folder, body in ((first, 'v1'), (second, 'v1'), (third, 'v2')):
+            folder.mkdir(parents=True)
+            (folder / 'Servo.h').write_text('// ' + body + '\n')
+        text = '#include <Servo.h>\n'
+        result = resolve_request(self.request(text, 'Servo.h', library_roots=[str(first), str(second)]), semantic=False)
+        self.assertEqual([item['path'] for item in result['destinations']], [str(first / 'Servo.h')])
+        result = resolve_request(self.request(text, 'Servo.h', library_roots=[str(first), str(second), str(third)]),
+                                 semantic=False)
+        self.assertEqual([item['path'] for item in result['destinations']], [str(first / 'Servo.h'), str(third / 'Servo.h')])
+        self.assertTrue(result['requires_choice'])
+
+    def test_the_recorded_build_context_outranks_installed_libraries(self):
+        recorded, installed = self.root / 'recorded', self.root / 'installed'
+        for folder in (recorded, installed):
+            folder.mkdir()
+            (folder / 'Servo.h').write_text('// ' + folder.name + '\n')
+        workspace = self.root / 'workspace'
+        context = workspace / '.pio/build/mcu_env/mcu-navigation.json'
+        context.parent.mkdir(parents=True)
+        context.write_text('{"schema": 1, "includes": [' + repr(str(recorded)).replace("'", '"') + '], "flags": []}')
+        result = resolve_request(self.request('#include <Servo.h>\n', 'Servo.h', workspace=str(workspace),
+                                              library_roots=[str(installed)]), semantic=False)
+        self.assertEqual([item['path'] for item in result['destinations']], [str(recorded / 'Servo.h')])
+
+    def test_installed_library_roots_list_library_sources_without_traversing_them(self):
+        from main.qt.editor_panel import installed_library_roots
+        project = self.root / 'Sketch'
+        (project / 'lib/Local/src').mkdir(parents=True)
+        (project / 'lib/Flat').mkdir(parents=True)
+        (project / 'lib/.hidden').mkdir(parents=True)
+        with patch('src.modules.package_jobs.package_core_directory', return_value=self.root / 'missing-core'), \
+                patch('main.core.board_catalog._get_download_dir', return_value=str(self.root / 'missing-downloads')):
+            roots = installed_library_roots(project)
+        self.assertEqual(roots, [str(project / 'lib/Flat'), str(project / 'lib/Local/src')])
+
     def test_comments_and_strings_do_not_navigate(self):
         for text, marker in [('void fake() {}\n// fake();', 'fake();'),
                              ('void fake() {}\nconst char *s="fake";', 'fake"')]:

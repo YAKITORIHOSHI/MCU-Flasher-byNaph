@@ -8,6 +8,13 @@
   const store = () => window.__mcuProjectFileStore;
   const editor = () => window.editorInstance;
   const record = path => store()?.list().find(file => key(file.path) === key(path));
+  const baseName = path => String(path || '').replaceAll('\\', '/').split('/').pop();
+  const folderOf = path => {
+    const parts = String(path || '').replaceAll('\\', '/').split('/');
+    parts.pop();
+    return parts.slice(-3).join('/');
+  };
+
   function connect() {
     const current = window.editorBridge;
     if (!current?.request_definition || !current.navigation_ready?.connect) return false;
@@ -69,17 +76,26 @@
     if (!file.model.isDisposed()) file.model.dispose();
     if (preview === file) preview = null;
   }
+  function closeChooser(focusEditor = true) {
+    if (!choices) return;
+    choices.remove(); choices = null;
+    document.removeEventListener('pointerdown', outsideChooser, true);
+    if (focusEditor) editor()?.focus();
+  }
+  function outsideChooser(event) {
+    if (choices && !choices.contains(event.target)) closeChooser(false);
+  }
   window.closeAllSourcePreviews = () => {
     ++latestRequest;
     closePreview();
     history = []; historyIndex = -1;
-    choices?.remove(); choices = null;
+    closeChooser(false);
   };
   function materialize(destination) {
     const existing = record(destination.path);
     if (existing) return existing;
     closePreview();
-    const name = destination.path.replaceAll('\\', '/').split('/').pop();
+    const name = baseName(destination.path);
     const file = {name, path:destination.path, preview:true, readOnly:true, isDirty:false,
       model:monaco.editor.createModel(destination.content, name.endsWith('.c') ? 'c' : 'cpp')};
     store().add(file);
@@ -88,24 +104,20 @@
     tab.dataset.filePath = file.path;
     tab.dataset.preview = 'true';
     tab.draggable = false;
+    tab.title = `${destination.path}\nRead-only library preview`;
     tab.addEventListener('contextmenu', event => { event.preventDefault(); event.stopImmediatePropagation(); }, true);
     tab.setAttribute('aria-label', name + ', read-only library preview');
     const lock = document.createElement('span');
-    lock.textContent = 'Read only'; lock.style.fontSize = '10px';
-    lock.style.marginLeft = '6px';
-    const close = document.createElement('button');
-    close.type = 'button'; close.textContent = 'Close';
-    close.setAttribute('aria-label', 'Close ' + name + ' preview');
-    Object.assign(close.style, {marginLeft:'6px', padding:'2px 5px', cursor:'pointer',
-      background:'var(--chip)', color:'var(--chip-ink)', border:'1px solid var(--tab-rim)', borderRadius:'4px', font:'inherit'});
-    close.onclick = event => { event.stopPropagation(); closePreview(file); };
-    tab.append(lock, close);
+    lock.className = 'mcu-preview-lock';
+    lock.setAttribute('aria-hidden', 'true');
+    tab.append(lock, window.mcuCloseButton('Close ' + name + ' preview', () => closePreview(file)));
     preview = file;
     return file;
   }
   function range(destination, model) {
     const column = (line, index) => Array.from(model.getLineContent(line)).slice(0, index).join('').length + 1;
-    const line = destination.line + 1, endLine = (destination.end_line >= 0 ? destination.end_line : destination.line) + 1;
+    const line = Math.min(model.getLineCount(), destination.line + 1);
+    const endLine = Math.min(model.getLineCount(), (destination.end_line >= 0 ? destination.end_line : destination.line) + 1);
     return new monaco.Range(line, column(line, destination.column), endLine,
       column(endLine, destination.end_column >= 0 ? destination.end_column : destination.column + destination.name.length));
   }
@@ -124,44 +136,66 @@
     historyIndex = history.length - 1;
     return true;
   }
-  function choose(destinations) {
+  function choose(destinations, position, word) {
     const model = editor().getModel(), revision = model.getVersionId();
     const generation = window.__mcuProjectFilesGeneration || 0;
-    choices?.remove();
+    closeChooser(false);
+    const container = document.getElementById('editor-container') || document.body;
     const menu = document.createElement('div'); choices = menu;
+    menu.id = 'mcu-declaration-chooser';
     menu.setAttribute('role', 'dialog'); menu.setAttribute('aria-label', 'Choose a declaration');
-    Object.assign(menu.style, {position:'absolute', left:'12px', right:'12px', top:'48px',
-      zIndex:'10001', maxHeight:'60%', overflow:'auto', padding:'10px', borderRadius:'10px',
-      border:'1px solid var(--hover-border)', background:'var(--reading)', backdropFilter:'blur(18px)', color:'var(--text)'});
-    const heading = document.createElement('div'); heading.textContent = 'Choose a declaration';
-    const close = document.createElement('button'); close.type='button'; close.textContent='Close';
-    close.onclick = () => { menu.remove(); editor().focus(); };
-    heading.append(close); menu.append(heading);
+    const head = document.createElement('div'); head.className = 'mcu-chooser-head';
+    const icon = document.createElement('span'); icon.className = 'mcu-chooser-icon'; icon.setAttribute('aria-hidden', 'true');
+    const title = document.createElement('span'); title.className = 'mcu-chooser-title';
+    title.textContent = word ? `Go to ${word}` : 'Choose a declaration';
+    const count = document.createElement('span'); count.className = 'mcu-chooser-count';
+    count.textContent = `${destinations.length} matches`;
+    head.append(icon, title, count, window.mcuCloseButton('Close declaration list', () => closeChooser()));
+    const list = document.createElement('div'); list.className = 'mcu-chooser-list'; list.setAttribute('role', 'listbox');
     for (const destination of destinations) {
-      const option = document.createElement('button'); option.type='button';
-      option.textContent = `${destination.signature || destination.name} — ${destination.path}:${destination.line + 1}`;
-      Object.assign(option.style, {display:'block', width:'100%', textAlign:'left', padding:'8px',
-        marginTop:'4px', whiteSpace:'normal', overflowWrap:'anywhere', cursor:'pointer',
-        color:'var(--text)', background:'var(--tab-fill)', border:'1px solid var(--tab-rim)', borderRadius:'6px'});
+      const option = document.createElement('button'); option.type = 'button';
+      option.className = 'mcu-chooser-row'; option.setAttribute('role', 'option');
+      const signature = document.createElement('span'); signature.className = 'mcu-chooser-signature';
+      signature.textContent = destination.signature || destination.name;
+      const location = document.createElement('span'); location.className = 'mcu-chooser-location';
+      const fileName = document.createElement('b'); fileName.textContent = `${baseName(destination.path)}:${destination.line + 1}`;
+      location.append(fileName, document.createTextNode(`  ${folderOf(destination.path)}`));
+      option.title = `${destination.signature || destination.name}\n${destination.path}:${destination.line + 1}`;
+      option.append(signature, location);
       option.onclick = () => {
-        menu.remove();
+        closeChooser(false);
         if (model.isDisposed() || editor().getModel() !== model || model.getVersionId() !== revision ||
             generation !== (window.__mcuProjectFilesGeneration || 0)) return;
         jump(destination);
       };
-      menu.append(option);
+      list.append(option);
     }
+    menu.append(head, list);
     menu.onkeydown = event => {
-      if (event.key === 'Escape') { event.stopPropagation(); menu.remove(); editor().focus(); }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeChooser(); }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
-        const buttons = Array.from(menu.querySelectorAll('button'));
-        const index = buttons.indexOf(document.activeElement);
-        buttons[(index + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length].focus();
+        const rows = Array.from(list.querySelectorAll('button'));
+        const index = rows.indexOf(document.activeElement);
+        rows[(index + (event.key === 'ArrowDown' ? 1 : rows.length - 1) + rows.length) % rows.length]?.focus();
       }
     };
-    (document.getElementById('editor-container') || document.body).append(menu);
-    menu.querySelectorAll('button')[1]?.focus();
+    container.append(menu);
+    // Open beside the word that asked, like an editor's own definition list.
+    const bounds = container.getBoundingClientRect();
+    const width = Math.max(240, Math.min(560, bounds.width - 24));
+    menu.style.width = width + 'px';
+    const anchor = position && editor().getScrolledVisiblePosition?.(position);
+    const editorTop = (document.getElementById('monaco-anchor')?.getBoundingClientRect().top || bounds.top) - bounds.top;
+    let left = 12, top = 12;
+    if (anchor) {
+      left = Math.max(8, Math.min(bounds.width - width - 8, anchor.left + 24));
+      top = editorTop + anchor.top + anchor.height + 6;
+      if (top + menu.offsetHeight > bounds.height - 8) top = Math.max(8, editorTop + anchor.top - menu.offsetHeight - 6);
+    }
+    menu.style.left = left + 'px'; menu.style.top = top + 'px';
+    document.addEventListener('pointerdown', outsideChooser, true);
+    list.querySelector('button')?.focus();
   }
   window.navigateSourceAtPosition = async (position, explicitWord) => {
     const model = editor()?.getModel(), pos = position || editor()?.getPosition();
@@ -169,23 +203,23 @@
     const result = await window.requestSourceDefinition(model, pos);
     if (!result || result.cancelled) return false;
     if (!result.success || !result.destinations?.length) {
-      window.showEditorNotice?.(result.error || 'No declaration could be resolved. Compile once to record the selected target’s include paths and defines, then try again.');
+      if (result.word || result.error) {
+        window.showEditorNotice?.(result.error || `No declaration of ${result.word} was found. Compile once to record the selected target’s include paths and defines, then try again.`);
+      }
       return false;
     }
     if (editor().getModel() !== model) return false;
-    if (result.destinations.length === 1 && !result.requires_choice) return jump(result.destinations[0]);
-    choose(result.destinations);
+    // Conditional compilation can hide a declaration, but one candidate is still
+    // the only answer there is: a list appears only when there is a real choice.
+    if (result.destinations.length === 1) return jump(result.destinations[0]);
+    choose(result.destinations, pos, result.word);
     return true;
   };
-  window.sourceDefinitionLocations = async (model, position, token) => {
-    const result = await window.requestSourceDefinition(model, position);
-    if (!result?.success || result.cancelled || token?.isCancellationRequested || editor().getModel() !== model) return null;
-    if (result.destinations.length > 1 || result.requires_choice) { choose(result.destinations); return []; }
-    return result.destinations.map(destination => {
-      const file = materialize(destination);
-      return {uri:file.model.uri, range:range(destination, file.model)};
-    });
-  };
+  // Monaco asks its definition provider while Ctrl is held over a word, before any
+  // click. Answering with tabs or lists there opened previews and an empty chooser
+  // on hover, and its request replaced the click's own. Ctrl+Click, F12 and the
+  // context menu navigate through navigateSourceAtPosition instead.
+  window.sourceDefinitionLocations = async () => null;
   function install() {
     const ed = editor();
     if (!ed) return;
@@ -201,7 +235,9 @@
       const file = store()?.list().find(item => item.model === ed.getModel());
       if (file && store().active() !== file) store().activate(file);
       updateOptions({readOnly:requestedReadOnly || !!file?.readOnly});
+      closeChooser(false);
     });
+    ed.onDidScrollChange?.(() => closeChooser(false));
     monaco.editor.registerEditorOpener({openCodeEditor: (_editor, uri, selection) => {
       const file = store()?.list().find(item => item.model.uri.toString() === uri.toString());
       if (!file) return false;
@@ -217,6 +253,16 @@
       historyIndex = history.length - 1;
       return true;
     }});
+    // The context menu's definition entries run these commands; route them through the
+    // same navigation as Ctrl+Click so they never report "No definition found".
+    const navigateHere = () => {
+      const language = ed.getModel()?.getLanguageId();
+      if (['cpp', 'c', 'ino', 'h'].includes(language)) window.navigateSourceAtPosition(ed.getPosition());
+    };
+    for (const id of ['editor.action.revealDefinition', 'editor.action.goToDeclaration',
+                      'editor.action.peekDefinition', 'editor.action.revealDefinitionAside']) {
+      try { monaco.editor.registerCommand(id, navigateHere); } catch (error) { }
+    }
     for (const [code, direction] of [[monaco.KeyCode.LeftArrow, -1], [monaco.KeyCode.RightArrow, 1]]) {
       ed.addAction({id:direction < 0 ? 'mcu.navigation.back' : 'mcu.navigation.forward',
         label:direction < 0 ? 'Go Back' : 'Go Forward', keybindings:[monaco.KeyMod.Alt | code], run:() => {

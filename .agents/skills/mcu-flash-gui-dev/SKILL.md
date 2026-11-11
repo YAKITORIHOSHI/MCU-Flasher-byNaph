@@ -1,9 +1,47 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/header navigation, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, passive serial monitoring and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, passive serial monitoring and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 11 follow-up: navigation, glass, motion and updates
+
+Navigation: Ctrl+Click/F12 and the context menu's definition commands call
+`navigateSourceAtPosition` once per click (the DOM click fallback skips a click
+Monaco already reported). Monaco's definition provider returns null: it runs on
+Ctrl+hover, and side effects there opened previews and an empty chooser. A
+cursor on an `#include` opens that header (quoted includes search the source's
+folder first). `installed_library_roots()` lists project `lib/`, workspace
+libdeps, the PlatformIO global `lib` and the downloads `Libs` folders; they come
+after the recorded build context and are never compiler flags. Byte-identical
+copies collapse to one header; one candidate opens directly, several open the
+glass list beside the word, none explains itself. The Qt5 sample viewer follows
+the same single-candidate rule and paints its preview close mark.
+
+Glass and motion: editor popovers (AI bar, notices, the declaration list, the
+definition card and Monaco's hover/suggest/find/parameter widgets) use the
+per-theme `--popover` tint with backdrop blur, a lit rim and `.mcu-close` round
+close marks. `GlassMenu` gives Qt menus the dropdown material; it disables Qt's
+grab-based menu effects and fades only where window opacity exists. Dropdowns
+and compact menus fade and slide their contents through `main/qt/motion.py`
+while the native window keeps its anchored geometry. Compact icon tool strips
+reveal the selected tool's name (`WorkspaceTabBar.set_compact_labels`) only when
+the widest name fits. The editor's loading spinner keeps turning in
+resource-constrained mode.
+
+Layout: the window minimum keeps half the monitor's width (capped at 960) and
+three quarters of its usable height. With the editor detached, monitors stay left
+and OpenCode right. Toggle buttons reserve both labels' widths. The AI bar folds
+into its toggle after the last pending decision; a new pending edit reopens it.
+Settings Save shows a spinner, ignores Escape/close while applying, and restyles
+the application once, only when the theme changed.
+
+Updates: records carry `committed_at`; a 404/422 comparison (commit amended or
+never pushed) falls back to that date, never to "different means newer". Ubuntu
+installations copied from a checkout record its HEAD. Verify with app_update,
+user_install, release_sources, source_navigation, editor_features,
+editor_review_ui, combo_popups, controls, svg_icons, serial_view and monitor_matrix.
 
 ## Input, navigation, saves and installation
 

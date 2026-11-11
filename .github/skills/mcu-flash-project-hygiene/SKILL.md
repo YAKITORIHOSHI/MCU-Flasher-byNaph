@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, package publication and public release integrity."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, dated source-revision records, package publication and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene

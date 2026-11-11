@@ -90,6 +90,7 @@
       --sheet-light: rgba(255, 255, 255, 0.22);
       --sheet-bevel: rgba(255, 255, 255, 0.08);
       --reading: rgba(16, 27, 42, 0.667);
+      --popover: rgba(16, 27, 42, 0.84);
       --reading-rim: rgba(255, 255, 255, 0.133);
       --handle: rgba(246, 251, 255, 0.29);
       --chip: #f6fbff;
@@ -137,6 +138,7 @@
       --sheet-light: rgba(255, 255, 255, 0.78);
       --sheet-bevel: rgba(255, 255, 255, 0.3);
       --reading: rgba(255, 255, 255, 0.69);
+      --popover: rgba(255, 255, 255, 0.88);
       --reading-rim: rgba(255, 255, 255, 0.824);
       --handle: rgba(31, 35, 40, 0.345);
       --chip: #0969da;
@@ -184,6 +186,7 @@
       --sheet-light: rgba(255, 255, 255, 0.22);
       --sheet-bevel: rgba(255, 255, 255, 0.08);
       --reading: rgba(0, 27, 34, 0.667);
+      --popover: rgba(0, 27, 34, 0.84);
       --reading-rim: rgba(255, 255, 255, 0.133);
       --handle: rgba(255, 255, 255, 0.29);
       --chip: #ffffff;
@@ -275,20 +278,43 @@
       background: transparent;
     }
 
+    /* Show/hide for the AI bar: the same glass pill as an unselected source tab. */
     #ai-banner-toggle {
       display: none;
       flex: 0 0 auto;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
       margin: 5px 8px 5px 0;
-      padding: 6px 9px;
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      background: var(--bg-darkest);
+      padding: 0 12px 0 10px;
+      box-sizing: border-box;
+      border: 1px solid var(--tab-rim);
+      border-radius: 15px;
+      background: var(--tab-fill);
       color: var(--text);
       font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
+      white-space: nowrap;
       cursor: pointer;
+      box-shadow: inset 0 1px 0 var(--tab-sheen);
+      transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
     }
-
-    #ai-banner-toggle:hover { border-color: var(--accent); }
+    #ai-banner-toggle::before {
+      content: '';
+      flex: 0 0 14px;
+      width: 14px;
+      height: 14px;
+      background: var(--accent);
+      -webkit-mask: url('../assets/icons/actions/ai.svg') center / contain no-repeat;
+      mask: url('../assets/icons/actions/ai.svg') center / contain no-repeat;
+    }
+    #ai-banner-toggle:hover { background: var(--tab-fill-hover); border-color: var(--accent); }
+    #ai-banner-toggle:focus-visible { border-color: var(--accent); }
+    /* Collapsed with decisions waiting: a quiet accent ring says the bar has work. */
+    #ai-banner-toggle.pending[aria-expanded="false"] {
+      border-color: var(--accent);
+      box-shadow: inset 0 1px 0 var(--tab-sheen), 0 0 0 2px rgba(var(--diff-modify-rgb), .18);
+    }
+    @media (max-height: 460px) { #ai-banner-toggle { height: 26px; } }
 
     #tab-bar {
       display: flex;
@@ -345,7 +371,8 @@
     #detached-action-bar button {
       flex: 0 0 auto;
       color: var(--text);
-      background: linear-gradient(var(--tab-sheen), transparent), var(--bg-dark);
+      background: var(--tab-fill);
+      box-shadow: inset 0 1px 0 var(--tab-sheen);
       border: 1px solid var(--tab-rim);
       border-radius: 8px;
       min-height: 30px;
@@ -361,7 +388,7 @@
     }
 
     #detached-action-bar button:hover {
-      background: var(--bg-tab-hover);
+      background: var(--tab-fill-hover);
       border-color: var(--accent);
     }
 
@@ -610,10 +637,12 @@
       position: fixed;
       z-index: 99999;
       display: none;
-      background: var(--hover-bg);
-      border: 1px solid var(--hover-border);
-      border-radius: 9px;
-      box-shadow: var(--hover-shadow);
+      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover);
+      border: 1px solid var(--reading-rim);
+      border-radius: 12px;
+      box-shadow: var(--hover-shadow), inset 0 1px 0 var(--sheet-light);
+      -webkit-backdrop-filter: blur(18px) saturate(1.25);
+      backdrop-filter: blur(18px) saturate(1.25);
       padding: 11px 15px;
       max-width: 540px;
       min-width: 290px;
@@ -810,33 +839,41 @@
       border-color: var(--accent);
     }
 
-    /* Style Monaco's Native Hover and Quick Input Popups */
-    .monaco-editor .monaco-hover {
-      background: var(--hover-bg) !important;
-      border: 1px solid var(--hover-border) !important;
-      border-radius: 8px !important;
-      box-shadow: var(--hover-shadow) !important;
+    /* Monaco's own floating widgets share the popover glass of the app's overlays. */
+    .monaco-editor .monaco-hover,
+    .monaco-editor .suggest-widget,
+    .monaco-editor .suggest-details,
+    .monaco-editor .find-widget,
+    .monaco-editor .rename-box {
+      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover) !important;
+      border: 1px solid var(--reading-rim) !important;
+      border-radius: 10px !important;
+      box-shadow: var(--hover-shadow), inset 0 1px 0 var(--sheet-light) !important;
+      -webkit-backdrop-filter: blur(18px) saturate(1.25);
+      backdrop-filter: blur(18px) saturate(1.25);
       color: var(--text) !important;
     }
+    .monaco-editor .suggest-widget .monaco-list .monaco-list-row.focused {
+      background: rgba(var(--diff-modify-rgb), 0.22) !important;
+      border-radius: 6px;
+    }
+    .monaco-editor .suggest-widget .monaco-list-rows,
+    .monaco-editor .suggest-widget .monaco-list,
+    .monaco-editor .suggest-details .monaco-scrollable-element { background: transparent !important; }
 
     .monaco-editor .monaco-hover-content {
       color: var(--text) !important;
       font-family: 'Consolas', 'Segoe UI', monospace !important;
     }
 
-    .monaco-editor .quick-input-widget {
-      background: var(--hover-bg) !important;
-      border: 1px solid var(--hover-border) !important;
-      border-radius: 8px !important;
-      box-shadow: var(--hover-shadow) !important;
-      color: var(--text) !important;
-    }
-
+    .monaco-editor .quick-input-widget,
     .monaco-editor .parameter-hints-widget {
-      background: var(--hover-bg) !important;
-      border: 1px solid var(--hover-border) !important;
-      border-radius: 6px !important;
-      box-shadow: var(--hover-shadow) !important;
+      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover) !important;
+      border: 1px solid var(--reading-rim) !important;
+      border-radius: 10px !important;
+      box-shadow: var(--hover-shadow), inset 0 1px 0 var(--sheet-light) !important;
+      -webkit-backdrop-filter: blur(18px) saturate(1.25);
+      backdrop-filter: blur(18px) saturate(1.25);
       color: var(--text) !important;
     }
 
@@ -935,6 +972,116 @@
       margin-left: 3px;
     }
 
+    /* Round close mark, library previews and the declaration list. */
+    .mcu-close {
+      flex: 0 0 auto; display: inline-grid; place-items: center;
+      width: 22px; height: 22px; margin: 0; padding: 0;
+      border: 1px solid transparent; border-radius: 50%;
+      background: transparent; color: inherit; opacity: .78; cursor: pointer;
+      transition: background-color .14s ease, border-color .14s ease, opacity .14s ease, transform .14s ease;
+    }
+    .mcu-close::before {
+      content: ''; width: 10px; height: 10px; background: currentColor;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 3l6 6M9 3l-6 6' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    .mcu-close:hover, .mcu-close:focus-visible {
+      opacity: 1; color: var(--diff-remove-text);
+      background: rgba(var(--diff-remove-rgb), .18); border-color: rgba(var(--diff-remove-rgb), .55);
+    }
+    .mcu-close:active { transform: scale(.92); }
+    .tab[data-preview] > span:first-child { font-style: italic; }
+    .tab[data-preview] .mcu-preview-lock {
+      flex: 0 0 10px; width: 10px; height: 10px; background: currentColor; opacity: .7;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 5.5V4a2.5 2.5 0 0 1 5 0v1.5M2.5 5.5h7v5h-7z' fill='none' stroke='black' stroke-width='1.2' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 5.5V4a2.5 2.5 0 0 1 5 0v1.5M2.5 5.5h7v5h-7z' fill='none' stroke='black' stroke-width='1.2' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    .tab[data-preview] .mcu-close { width: 18px; height: 18px; margin-right: -4px; }
+    .tab[data-preview] .mcu-close::before { width: 8px; height: 8px; }
+    #mcu-declaration-chooser {
+      position: absolute; z-index: 10001; box-sizing: border-box;
+      display: flex; flex-direction: column; min-width: 240px; max-height: min(60%, 360px);
+      color: var(--text); font: 500 12px 'Montserrat', 'Segoe UI', sans-serif;
+      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover);
+      border: 1px solid var(--reading-rim); border-radius: 12px;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .42), inset 0 1px 0 var(--sheet-light);
+      -webkit-backdrop-filter: blur(18px) saturate(1.25); backdrop-filter: blur(18px) saturate(1.25);
+      overflow: hidden; animation: mcu-pop-in .16s ease-out both;
+    }
+    #mcu-declaration-chooser .mcu-chooser-head {
+      display: flex; align-items: center; gap: 8px; padding: 8px 8px 7px 12px;
+      border-bottom: 1px solid var(--reading-rim);
+    }
+    #mcu-declaration-chooser .mcu-chooser-icon {
+      flex: 0 0 14px; width: 14px; height: 14px; background: var(--accent);
+      -webkit-mask: url('../assets/icons/actions/link.svg') center / contain no-repeat; mask: url('../assets/icons/actions/link.svg') center / contain no-repeat;
+    }
+    #mcu-declaration-chooser .mcu-chooser-title { flex: 1 1 auto; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #mcu-declaration-chooser .mcu-chooser-count {
+      flex: 0 0 auto; padding: 2px 7px; border-radius: 9px; font-size: 11px; font-weight: 600;
+      color: var(--text-dim); background: var(--tab-fill); border: 1px solid var(--tab-rim);
+    }
+    #mcu-declaration-chooser .mcu-chooser-list { overflow: auto; padding: 5px; display: flex; flex-direction: column; gap: 3px; }
+    #mcu-declaration-chooser .mcu-chooser-row {
+      display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; width: 100%; box-sizing: border-box;
+      padding: 7px 10px; text-align: left; cursor: pointer; color: var(--text);
+      background: transparent; border: 1px solid transparent; border-radius: 8px; font: inherit;
+      transition: background-color .12s ease, border-color .12s ease;
+    }
+    #mcu-declaration-chooser .mcu-chooser-row:hover { background: var(--tab-fill-hover); border-color: var(--tab-rim); }
+    #mcu-declaration-chooser .mcu-chooser-row:focus-visible, #mcu-declaration-chooser .mcu-chooser-row:focus {
+      outline: none; background: var(--tab-fill-hover); border-color: var(--accent);
+    }
+    #mcu-declaration-chooser .mcu-chooser-signature {
+      font: 12px Consolas, 'Courier New', monospace; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #mcu-declaration-chooser .mcu-chooser-location {
+      font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #mcu-declaration-chooser .mcu-chooser-location b { color: var(--accent); font-weight: 600; }
+    @keyframes mcu-pop-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+    
+
+    /* Floating notices in the editor: glass, an accent edge and a round close mark. */
+    #editor-notice {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 10000;
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      box-sizing: border-box;
+      max-width: min(460px, calc(100% - 24px));
+      max-height: 50%;
+      overflow: auto;
+      padding: 9px 8px 9px 12px;
+      color: var(--text);
+      font: 500 12px/1.5 'Montserrat', 'Segoe UI', sans-serif;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover);
+      border: 1px solid var(--reading-rim);
+      border-left: 3px solid var(--accent);
+      border-radius: 12px;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .42), inset 0 1px 0 var(--sheet-light);
+      -webkit-backdrop-filter: blur(18px) saturate(1.25);
+      backdrop-filter: blur(18px) saturate(1.25);
+      animation: mcu-notice-in .2s ease-out both;
+    }
+    #editor-notice.leaving { animation: mcu-notice-out .16s ease-in both; }
+    #editor-notice .editor-notice-icon {
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      margin-top: 2px;
+      background: var(--accent);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.4' fill='none' stroke='black' stroke-width='1.4'/%3E%3Cpath d='M8 7.3v4M8 4.7v.1' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.4' fill='none' stroke='black' stroke-width='1.4'/%3E%3Cpath d='M8 7.3v4M8 4.7v.1' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+    }
+    #editor-notice .editor-notice-text { flex: 1 1 auto; min-width: 0; padding-top: 1px; }
+    @keyframes mcu-notice-in { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+    @keyframes mcu-notice-out { to { opacity: 0; transform: translateX(14px); } }
+
     #ai-diff-banner {
       position: absolute;
       bottom: 10px;
@@ -945,12 +1092,14 @@
       justify-content: flex-start;
       flex-wrap: nowrap;
       gap: 6px;
-      background: linear-gradient(135deg, var(--bg-dark), var(--bg-darkest));
-      border: 1px solid var(--border);
+      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover);
+      border: 1px solid var(--reading-rim);
       border-top-color: var(--accent);
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 6px 8px;
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2), inset 0 1px 0 var(--tab-rim);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38), inset 0 1px 0 var(--sheet-light);
+      -webkit-backdrop-filter: blur(18px) saturate(1.25);
+      backdrop-filter: blur(18px) saturate(1.25);
       font-family: 'Montserrat', 'Segoe UI', sans-serif;
       font-size: 12px;
       color: var(--text);
@@ -986,10 +1135,10 @@
 
     #ai-diff-banner .review-source {
       flex: 0 0 auto;
-      padding: 2px 5px;
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      background: var(--bg-darkest);
+      padding: 2px 7px;
+      border: 1px solid var(--tab-rim);
+      border-radius: 9px;
+      background: var(--tab-fill);
       color: var(--accent);
       font-size: 11px;
       font-weight: 600;
@@ -1087,19 +1236,22 @@
       gap: 3px;
       min-width: 28px;
       min-height: 28px;
-      background: var(--bg-darkest);
+      background: var(--tab-fill);
       color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 4px 8px;
+      border: 1px solid var(--tab-rim);
+      border-radius: 9px;
+      padding: 4px 9px;
       cursor: pointer;
       font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
       white-space: nowrap;
+      box-shadow: inset 0 1px 0 var(--tab-sheen);
+      transition: background-color .14s ease, border-color .14s ease, transform .1s ease;
     }
     #ai-diff-banner .review-btn:hover:not(:disabled) {
-      background: var(--bg-tab-hover);
+      background: var(--tab-fill-hover);
       border-color: var(--accent);
     }
+    #ai-diff-banner .review-btn:active:not(:disabled) { transform: scale(.97); }
     #ai-diff-banner .review-icon {
       width: 14px;
       height: 14px;
@@ -1265,6 +1417,12 @@
     }
     .resource-constrained *, .resource-constrained *::before,
     .resource-constrained *::after { animation: none !important; transition: none !important; }
+    /* A loading spinner is progress, not decoration: a rotated layer costs the
+       compositor almost nothing, and a frozen spinner reads as a hung editor. */
+    .resource-constrained .circular-spinner { animation: mcu-spin .8s linear infinite !important; }
+    @media (prefers-reduced-motion: reduce) {
+      .circular-spinner { animation: mcu-spin 1.6s linear infinite !important; }
+    }
   </style>
 </head>
 
@@ -2730,6 +2888,7 @@
         if (toggle) {
           toggle.style.display = available ? 'inline-flex' : 'none';
           toggle.setAttribute('aria-expanded', String(visible));
+          toggle.classList.toggle('pending', !!currentReview);
           const entry = currentReview || lastAiHistoryState?.undo || lastAiHistoryState?.redo;
           const source = aiEditProvenance(entry);
           const title = `${source.label} ${currentReview ? 'Review' : 'History'}`;
@@ -3510,6 +3669,9 @@
         }
         renderGeneration += 1;
         resolvingReview = true;
+        // Set once this click's decision is applied. When it was the last pending
+        // review, the bar folds into its toggle instead of lingering as history.
+        let decided = false;
         setReviewButtonsDisabled(true);
         showReviewBanner(currentReview, accept ? 'Accepting…' : 'Restoring original…');
         try {
@@ -3544,6 +3706,7 @@
             return;
           }
 
+          decided = true;
           const clickedStillCurrent = currentReview &&
             currentReview.revision === reviewAtClick.revision &&
             normalizePath(currentReview.path) === normalizePath(reviewAtClick.path);
@@ -3637,7 +3800,12 @@
             }
           }
           setReviewButtonsDisabled(!currentReview);
-          if (!currentReview) await refreshAiHistoryBanner();
+          if (!currentReview) {
+            // Nothing is pending any more: hide the bar. Its toggle beside the source
+            // tabs reopens history, and the next AI edit shows the bar again by itself.
+            if (decided) window.setAiBannerHidden(true);
+            await refreshAiHistoryBanner();
+          }
         }
       }
 
@@ -5011,6 +5179,8 @@
           if (isCtrl && isLeft) {
             const pos = (e.target && e.target.position) ? e.target.position : editor.getPosition();
             if (pos) {
+              // One click asks once: the DOM fallback below skips a click Monaco reported.
+              window.__mcuNavigationClickAt = performance.now();
               editor.setPosition(pos);
               jumpToDefinitionAtPosition(pos);
             }
@@ -5035,6 +5205,7 @@
         anchor.addEventListener('click', (e) => {
           if (e.ctrlKey || e.metaKey) {
             setTimeout(() => {
+              if (performance.now() - (window.__mcuNavigationClickAt || 0) < 750) return;
               jumpToDefinitionAtPosition();
             }, 20);
           }
@@ -5126,7 +5297,18 @@
               'editorIndentGuide.activeBackground': '#586e75',
               'editor.selectionBackground': '#0d4a59cc',
               'editor.inactiveSelectionBackground': '#0d4a5966',
-              'editorGutter.background': '#00000000'
+              'editorGutter.background': '#00000000',
+              'editorWidget.background': '#001b22d6',
+              'editorWidget.border': '#ffffff22',
+              'editorSuggestWidget.background': '#001b22d6',
+              'editorSuggestWidget.border': '#ffffff22',
+              'editorSuggestWidget.selectedBackground': '#2aa19840',
+              'editorHoverWidget.background': '#001b22d6',
+              'editorHoverWidget.border': '#ffffff22',
+              'menu.background': '#001b22d6',
+              'menu.foreground': '#d0e4e8',
+              'menu.selectionBackground': '#2aa19840',
+              'menu.border': '#ffffff22'
             }
           });
 
@@ -5147,7 +5329,18 @@
               'editorIndentGuide.activeBackground': '#afb8c1',
               'editor.selectionBackground': '#7fcbcdb3',
               'editor.inactiveSelectionBackground': '#7fcbcd66',
-              'editorGutter.background': '#00000000'
+              'editorGutter.background': '#00000000',
+              'editorWidget.background': '#ffffffe0',
+              'editorWidget.border': '#a6becf',
+              'editorSuggestWidget.background': '#ffffffe0',
+              'editorSuggestWidget.border': '#a6becf',
+              'editorSuggestWidget.selectedBackground': '#0969da26',
+              'editorHoverWidget.background': '#ffffffe0',
+              'editorHoverWidget.border': '#a6becf',
+              'menu.background': '#ffffffe0',
+              'menu.foreground': '#24292f',
+              'menu.selectionBackground': '#0969da26',
+              'menu.border': '#a6becf'
             }
           });
 
@@ -5165,7 +5358,18 @@
               'editorCursor.foreground': '#dae3e3',
               'editor.selectionBackground': '#00818480',
               'editor.inactiveSelectionBackground': '#00818440',
-              'editorGutter.background': '#00000000'
+              'editorGutter.background': '#00000000',
+              'editorWidget.background': '#101b2ad6',
+              'editorWidget.border': '#ffffff22',
+              'editorSuggestWidget.background': '#101b2ad6',
+              'editorSuggestWidget.border': '#ffffff22',
+              'editorSuggestWidget.selectedBackground': '#80d9ce33',
+              'editorHoverWidget.background': '#101b2ad6',
+              'editorHoverWidget.border': '#ffffff22',
+              'menu.background': '#101b2ad6',
+              'menu.foreground': '#e3edf6',
+              'menu.selectionBackground': '#80d9ce33',
+              'menu.border': '#ffffff22'
             }
           });
         } catch (e) {

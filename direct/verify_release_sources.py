@@ -197,7 +197,8 @@ class ReleaseArchiveChecks(unittest.TestCase):
         expected = {**self.sources, self.installer_path: self.installer,
                     **{'src/_python/' + name: data for name, data in self.runtime.items()}}
         expected['src/launch.vbs'] = expected['src/launch.vbs'].replace(b'\n', b'\r\n')
-        expected[build_release.BUNDLED_REVISION] = build_release.bundled_revision_entry(manifest['commit'])
+        expected[build_release.BUNDLED_REVISION] = build_release.bundled_revision_entry(
+            manifest['commit'], manifest['committed_at'])
         with zipfile.ZipFile(self.output) as bundle:
             self.assertEqual(set(bundle.namelist()), set(expected))
             self.assertIn('LAUNCHER/WINDOWS.exe', bundle.namelist())
@@ -232,9 +233,13 @@ class ReleaseArchiveChecks(unittest.TestCase):
         with zipfile.ZipFile(self.output) as bundle:
             revision = json.loads(bundle.read(build_release.BUNDLED_REVISION))
         self.assertEqual(revision['commit'], manifest['commit'])
+        self.assertRegex(revision['committed_at'], r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertEqual(revision['committed_at'], manifest['committed_at'])
         self.assertIn(build_release.BUNDLED_REVISION, {entry['path'] for entry in manifest['entries']})
         with self.assertRaises(RuntimeError):
             build_release.bundled_revision_entry('not-a-commit')
+        with self.assertRaises(RuntimeError):
+            build_release.bundled_revision_entry('1' * 40, 'yesterday')
 
     def test_incomplete_runtime_refuses_publication(self):
         (self.project / 'src/_python' / build_release.REQUIRED_RUNTIME[-1]).unlink()

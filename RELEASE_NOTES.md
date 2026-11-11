@@ -11,6 +11,44 @@
 
 ---
 
+## November 11 Follow-up: Library Navigation, Glass, Motion and Working Updates
+
+- **Updates reach installed copies again:** One hand-packaged v11 ZIP, and every
+  Ubuntu installation copied from the source folder, recorded a commit that was
+  amended before it was pushed. GitHub could never compare it, so those copies
+  silently stopped updating; that is why the Developer Access fixes never arrived.
+  Records now carry their commit date, and an unknown commit is judged by that
+  date. The release ZIP is rebuilt with `build_release.py`, and the improvements
+  are on `main`, the branch every installation follows.
+- **Go to library sources:** Ctrl+Click (or F12) on `#include <Library.h>` opens
+  that header in the locked preview tab, even before the first compile. Library
+  classes and functions such as `Servo`, `servo.attach()` or
+  `ESP32PWM::allocateTimer()` open at their declaration. Overloads still resolve
+  by their arguments (`stepRun()` and `stepRun(int)`). A single match opens
+  directly; several matches open a list beside the word; none explains why.
+  The empty "Choose a declaration" box is gone: it came from Monaco's Ctrl+hover
+  lookup, which no longer has side effects.
+- **Close buttons:** Terminal tabs on Windows and Ubuntu show a round close mark
+  in both selected and unselected tabs (the selected one was invisible), which
+  turns red under the pointer. Editor notices, the declaration list and library
+  previews use the same round mark instead of a "Close" text button.
+- **Glass everywhere:** The AI review/history bar, its Hide/Show toggle, editor
+  notices, the declaration list, the definition card, Monaco's
+  hover/suggestion/find widgets, the detached editor's action buttons and
+  application menus now use the frosted glass of the rest of the workspace.
+- **Motion:** Dropdowns and compact Actions/Options menus fade and slide in. In
+  compact panes, the selected tool tab slides open to show its name beside its
+  icon. Windows' "Show animations" setting (or `MCU_FLASHER_REDUCED_MOTION=1`)
+  turns motion off. The editor's loading spinner now turns on six-core PCs,
+  where low-resource mode had frozen it.
+- **Layout:** With the editor detached, the monitors and the AI assistant sit side
+  by side. The window can shrink to half the monitor's width and three quarters
+  of its height, no smaller. Toggle buttons no longer clip their longer label.
+- **AI review:** The bar folds into its toggle after the last pending edit is
+  accepted or rejected; the next AI edit shows it again.
+- **Settings:** Save shows a spinner while settings apply, cannot be cancelled
+  halfway, and restyles the application once, only when the theme changed.
+
 ## November 11 Editor, Input, Tickets and Ubuntu Installation
 
 - **Keyboard ownership:** An explicit input click returns the native Windows

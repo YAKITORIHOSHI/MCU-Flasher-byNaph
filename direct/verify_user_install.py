@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import contextlib
 import io
+import json
+import shutil
 from pathlib import Path
 import tempfile
 import subprocess
@@ -66,6 +68,35 @@ class UserInstallChecks(unittest.TestCase):
         self.assertFalse((self.data / 'applications/mcu-flasher.desktop').exists())
         if os.name != 'nt':
             self.assertEqual((destination / 'direct/ubuntu/run.sh').stat().st_mode & 0o777, 0o755)
+
+    @unittest.skipIf(shutil.which('git') is None, 'Git is needed to create the checkout fixture')
+    def test_a_checkout_installation_records_its_actual_commit_not_the_tracked_record(self):
+        record = self.source / install.REVISION_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        stale = '{"commit": "7710ca71197071002fdd24219c42b99ded36c610", "timestamp": "2026-11-09T02:23:07Z"}'
+        record.write_text(stale)
+        environment = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+                           GIT_AUTHOR_NAME='fixture', GIT_AUTHOR_EMAIL='fixture@invalid',
+                           GIT_COMMITTER_NAME='fixture', GIT_COMMITTER_EMAIL='fixture@invalid',
+                           GIT_AUTHOR_DATE='2026-11-11T01:02:03Z', GIT_COMMITTER_DATE='2026-11-11T01:02:03Z')
+        for command in (['init', '-q'], ['add', '-A'], ['commit', '-q', '-m', 'fixture']):
+            subprocess.run(['git', '-C', str(self.source), *command], check=True, env=environment,
+                           capture_output=True, timeout=30)
+        head = subprocess.run(['git', '-C', str(self.source), 'rev-parse', 'HEAD'], check=True, env=environment,
+                              capture_output=True, text=True, timeout=30).stdout.strip()
+        destination = self.stage()
+        written = json.loads((destination / install.REVISION_RECORD).read_text())
+        self.assertEqual(written, {'repository': 'YAKITORIHOSHI/MCU-Flasher-byNaph', 'commit': head,
+                                   'committed_at': '2026-11-11T01:02:03Z'})
+        self.assertEqual(record.read_text(), stale, 'the checkout itself is never modified')
+        self.assertFalse((destination / '.git').exists())
+
+    def test_a_release_folder_keeps_its_own_record(self):
+        record = self.source / install.REVISION_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text('{"commit": "' + '1' * 40 + '"}')
+        destination = self.stage()
+        self.assertEqual((destination / install.REVISION_RECORD).read_text(), record.read_text())
 
     def test_menu_registration_is_one_explicit_post_bootstrap_step_and_is_idempotent(self):
         destination = self.stage()

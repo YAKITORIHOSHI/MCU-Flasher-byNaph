@@ -271,11 +271,17 @@ class CompactDropdownPopup(QWidget):
         from main.qt.responsive import work_area
         from src.modules.ui_metrics import fit_rect
         area = work_area(anchor_widget)
+        opens_below = True
         if y + req_h > area.y + area.height - 8:
             y = anchor_pos.y() - req_h - 2
+            opens_below = False
         self.setGeometry(*fit_rect(x, y, req_w, req_h, area, margin=8))
         self.show()
         self.raise_()
+        # The menu fades in and slides from its button; the native window never moves.
+        from main.qt.motion import PopupMotion
+        self._motion = PopupMotion(self)
+        self._motion.start((self._backdrop, self._scroll), opens_below=opens_below)
 
 
 class PrimaryToolbar(QToolBar):
@@ -2438,10 +2444,15 @@ class ControlsBar(QWidget):
             # Revealing OpenCode changes its label to "Hide AI". Reserve the
             # larger state so that click cannot change Controls' row count and
             # move the editor's horizontal divider.
-            ai_width = max(PrimaryToolbar._button_width(self.btn_ai, text)
-                           for text in ("AI Assistant", "Hide AI"))
-            if self.btn_ai.minimumWidth() != ai_width:
-                self.btn_ai.setMinimumWidth(ai_width)
+            # The editor and monitor toggles and Detach/Attach swap labels the same way;
+            # sized for their current text, the longer one was clipped at both ends.
+            for button, labels in ((self.btn_ai, ("AI Assistant", "Hide AI")),
+                                   (self.btn_toggle_editor, ("Hide Editor", "Show Editor")),
+                                   (self.btn_toggle_monitors, ("Hide Monitors", "Show Monitors")),
+                                   (self.btn_detach_editor, ("Detach Editor", "Attach Editor"))):
+                reserved = max(PrimaryToolbar._button_width(button, text) for text in labels)
+                if button.minimumWidth() != reserved:
+                    button.setMinimumWidth(reserved)
 
             def checkbox_width(widget, text):
                 fm = widget.fontMetrics()

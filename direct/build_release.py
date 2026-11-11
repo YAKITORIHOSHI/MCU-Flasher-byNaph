@@ -18,6 +18,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,12 +73,26 @@ def validate_launcher_entries(entries):
         raise RuntimeError('Invalid executable macOS launcher entry.')
 
 
-def bundled_revision_entry(commit):
-    """Let the installed copy recognize its own commit, so a first launch never downgrades it."""
+def bundled_revision_entry(commit, committed_at=''):
+    """Let the installed copy recognize its own commit, so a first launch never downgrades it.
+
+    The commit date lets the updater still judge this copy if GitHub cannot compare its
+    commit, which happened when a release recorded a commit that was amended before pushing.
+    """
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise RuntimeError(f'Invalid release commit: {commit}')
-    return json.dumps({'repository': 'YAKITORIHOSHI/MCU-Flasher-byNaph', 'commit': commit},
-                      indent=2).encode('ascii') + b'\n'
+    record = {'repository': 'YAKITORIHOSHI/MCU-Flasher-byNaph', 'commit': commit}
+    if committed_at:
+        if not re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', committed_at):
+            raise RuntimeError(f'Invalid release commit date: {committed_at}')
+        record['committed_at'] = committed_at
+    return json.dumps(record, indent=2).encode('ascii') + b'\n'
+
+
+def commit_date(commit):
+    """The commit's committer date in the fixed-width UTC form GitHub reports."""
+    seconds = int(subprocess.check_output(['git', 'show', '-s', '--format=%ct', commit], cwd=ROOT).decode().strip())
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(seconds))
 
 
 def digest_file(path):
@@ -171,6 +186,7 @@ def committed_installer_receipts(commit):
 def build(output, report_dir):
     runtime_files = windows_runtime_files()  # Refuse omission before creating any ZIP.
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip()
+    committed_at = commit_date(commit)
     installer_receipts = committed_installer_receipts(commit)
     output = output or ROOT / f'MCU-Flasher-{commit[:7]}-fresh.zip'
     if output.exists():
@@ -244,7 +260,7 @@ def build(output, report_dir):
                         bundle.writestr(info_for(member.name, mode), data)
                         entries.append({'path': member.name, 'sha256': hashlib.sha256(data).hexdigest(),
                                         'size': len(data), 'mode': oct(mode)})
-                revision = bundled_revision_entry(commit)
+                revision = bundled_revision_entry(commit, committed_at)
                 bundle.writestr(info_for(BUNDLED_REVISION, 0o644), revision)
                 entries.append({'path': BUNDLED_REVISION, 'sha256': hashlib.sha256(revision).hexdigest(),
                                 'size': len(revision), 'mode': oct(0o644)})
@@ -311,7 +327,7 @@ def build(output, report_dir):
                     pass
             raise
 
-    manifest = {'commit': commit, 'archive': str(output), 'bytes': output.stat().st_size,
+    manifest = {'commit': commit, 'committed_at': committed_at, 'archive': str(output), 'bytes': output.stat().st_size,
                 'sha256': digest_file(output), 'files': len(entries),
                 'archive_layout': 'project-files-at-root',
                 'windows_private_runtime_files': len(runtime_files),

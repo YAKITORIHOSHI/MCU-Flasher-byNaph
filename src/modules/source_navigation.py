@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from bisect import bisect_right
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,9 @@ from src.modules.sample_symbols import code_only, find_definitions, identifier_a
 MAX_FILE = 4 * 1024**2
 MAX_INPUT = 16 * 1024**2
 MAX_HEADERS = 256
+MAX_LIBRARY_ROOTS = 256
 CONTEXT_NAME = "mcu-navigation.json"
+_INCLUDE = re.compile(r'[ \t]*#[ \t]*include[ \t]*([<"])([^>"\r\n]+)([>"])')
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,63 @@ def _context(request):
     for value in includes:
         flags += ["-I", value]
     return includes, flags, configured
+
+
+def _library_roots(request):
+    """Installed library folders, consulted only after the recorded build context.
+
+    They let an explicit ``#include <Library.h>`` open before the first compile. They
+    are never compiler flags: the recorded context alone decides what a build sees.
+    """
+    roots = [str(Path(value).absolute()) for value in request.get("library_roots", [])
+             if isinstance(value, str) and Path(value).is_absolute()]
+    return list(dict.fromkeys(roots))[:MAX_LIBRARY_ROOTS]
+
+
+def _include_at(source, offset):
+    """The (delimiter, header name) of an include directive under the cursor, if any."""
+    start = source.rfind("\n", 0, offset) + 1
+    end = source.find("\n", offset)
+    end = len(source) if end < 0 else end
+    match = _INCLUDE.match(source, start, end)
+    if not match or not (match.start() <= offset <= match.end()):
+        return None
+    name = match[2].strip()
+    if not name or Path(name).is_absolute() or ".." in Path(name).parts or "\x00" in name:
+        return None
+    return match[1], name
+
+
+def _header_destinations(path, include, includes, configured):
+    """Every readable header the directive can name, in the compiler's search order.
+
+    With the recorded build context the first match is the one the compiler used.
+    Without it, several installed libraries can provide the same name, so each is a
+    candidate and the person chooses.
+    """
+    delimiter, name = include
+    roots = ([str(Path(path).parent)] if delimiter == '"' else []) + list(includes)
+    found = []
+    for root in roots:
+        candidate = Path(root) / name
+        try:
+            if candidate.is_file():
+                found.append(str(candidate.absolute()))
+        except OSError:
+            continue
+        if configured and found:
+            break
+    result, seen = [], set()
+    for header in dict.fromkeys(found):
+        # Two installed copies of one library version are one choice, not two.
+        try:
+            identity = hashlib.sha256(_text(header).encode("utf-8")).hexdigest()
+        except (OSError, ValueError):
+            continue
+        if identity not in seen:
+            seen.add(identity)
+            result.append(Destination(header, "", 0, 0, "header", name, 0, 0))
+    return result
 
 
 def _compiler_target(compiler):
@@ -295,25 +355,39 @@ def resolve_request(request, *, semantic=True):
     if source is None:
         raise ValueError("The current source snapshot is unavailable.")
     offset = max(0, min(len(source), int(request["offset"])))
+    include = _include_at(source, offset)
     word = identifier_at(source, offset)
-    if not word:
+    if not word and include is None:
         return {"success": True, "destinations": [], "word": ""}
     includes, flags, configured = _context(dict(request, path=path))
     # Quoted project includes are explicit sources; add only the current root.
-    includes = list(dict.fromkeys([str(Path(path).parent), *includes]))
-    snapshots = _include_snapshots(snapshots, includes)
+    # Installed libraries come last, after everything the recorded build used.
+    includes = list(dict.fromkeys([str(Path(path).parent), *includes, *_library_roots(request)]))
     destinations, engine, requires_choice = [], "declarations", False
-    if semantic:
-        try:
-            destinations = _semantic(snapshots, path, offset, flags, configured)
-            if destinations:
-                engine = "LLVM"
-        except Exception:
-            pass
-    if not destinations:
+    if include is not None:
+        # An explicit include names a file, never a symbol: open that header itself.
+        destinations = _header_destinations(path, include, includes, configured)
+        engine, word = "include", include[1]
+        requires_choice = len(destinations) > 1
+        if not destinations:
+            return {"success": True, "destinations": [], "word": word, "engine": engine,
+                    "error": f"{word} was not found in the project, its recorded build context "
+                             "or the installed libraries. Install the library or compile once, then try again."}
+    else:
+        snapshots = _include_snapshots(snapshots, includes)
+        if semantic:
+            try:
+                destinations = _semantic(snapshots, path, offset, flags, configured)
+                if destinations:
+                    engine = "LLVM"
+            except Exception:
+                pass
+    if not destinations and include is None:
         destinations, requires_choice = _fallback(snapshots, path, offset, word)
         requires_choice = requires_choice or any(
             re.search(r'^\s*#\s*(if|ifdef|ifndef|elif)\b', text, re.M) for _, text in snapshots)
+        # Conditional compilation can hide a second declaration, but one candidate is
+        # not a choice: callers show the list only when more than one remains.
     files = dict(snapshots)
     result = []
     for item in destinations[:64]:

@@ -231,12 +231,17 @@ class MCUMainWindow(QMainWindow):
         # Wayland, QWindow can expose its client-side margins before QWidget's
         # cached frameGeometry catches up with the first native resize.
         frame_width = max(0, self.frameGeometry().width() - self.geometry().width())
+        frame_height = max(0, self.frameGeometry().height() - self.geometry().height())
         handle = self.windowHandle()
         if handle is not None:
             margins = handle.frameMargins()
             frame_width = max(frame_width, margins.left() + margins.right())
+            frame_height = max(frame_height, margins.top() + margins.bottom())
         new_min_w = max(1, self._minimum_width_for_display(sw, sh) - frame_width)
-        new_min_h = min(300, max(1, sh - 48))
+        # The complete frame keeps at least three quarters of the usable height, so a
+        # shrunken window still shows real code above the tools. Title bars count.
+        from src.modules.ui_metrics import workspace_minimum_height
+        new_min_h = max(1, min(sh, workspace_minimum_height(sh)) - frame_height)
         self.setMaximumWidth(16777215)
         self.setMinimumSize(new_min_w, new_min_h)
 
@@ -483,6 +488,15 @@ class MCUMainWindow(QMainWindow):
         for index, title in enumerate(titles):
             if tabs.tabText(index) != title:
                 tabs.setTabText(index, title)
+        # Compact panes slide the selected tool open to show its name beside its icon,
+        # but only when even the widest name fits: the strip must never scroll.
+        if hasattr(bar, "set_compact_labels"):
+            reveal = None
+            if titles is icons_only and not dense:
+                widest = max((bar.label_extent(label) for label in short), default=0)
+                if _tab_strip_width(bar, icons_only, True) + widest <= width:
+                    reveal = short
+            bar.set_compact_labels(reveal)
 
     def _apply_responsive_layout(self, w: int) -> None:
         """Propagate responsive width changes to all window components and child panels."""
@@ -826,7 +840,11 @@ class MCUMainWindow(QMainWindow):
         self._update_tab_titles_responsive()
         app = QApplication.instance()
         if app:
-            app.setStyleSheet(build_stylesheet(theme_name))
+            # Every open workspace hears this signal; the first one restyles the
+            # application and the others find the same sheet already applied.
+            sheet = build_stylesheet(theme_name)
+            if app.styleSheet() != sheet:
+                app.setStyleSheet(sheet)
             app.setProperty("mcuAppliedTheme", Theme.active_theme)
         if getattr(self, "_notification_type", None):
             self._apply_notification_color(self._notification_type)
@@ -848,7 +866,9 @@ class MCUMainWindow(QMainWindow):
         menu_bar.setNativeMenuBar(False)
         menu_bar.setObjectName("workspace-menu-bar")
 
-        self._view_menu = menu_bar.addMenu("&View")
+        from main.qt.combo_popup import GlassMenu
+        self._view_menu = GlassMenu("&View", menu_bar)
+        menu_bar.addMenu(self._view_menu)
         self._toolbar_menu = self._view_menu.addMenu("&Toolbars")
         toolbars = (self._primary_toolbar, self._controls_toolbar)
         self._toolbar_visibility_actions = tuple(
@@ -1490,12 +1510,12 @@ class MCUMainWindow(QMainWindow):
 
     def _show_project_file_menu(self, path: str) -> None:
         from PySide6.QtGui import QCursor
-        from PySide6.QtWidgets import QMenu
+        from main.qt.combo_popup import GlassMenu
         from main.qt.icons import icon
         name = Path(path).name if path else ""
         if not name:
             return
-        menu = QMenu(self._file_action_parent())
+        menu = GlassMenu(self._file_action_parent())
         menu.setObjectName("source-tab-menu")
         rename = menu.addAction(icon("edit"), "Rename…")
         delete = menu.addAction(icon("clear"), "Delete")
@@ -1607,8 +1627,8 @@ class MCUMainWindow(QMainWindow):
           1. Hide editor area on the main window (_editor_area.setVisible(False)), so no
              space is wasted on placeholders.
           2. If AI Assistant is visible:
-             Configure _h_splitter to orient=VERTICAL, stacking OpenCode AI Assistant (top)
-             and TABS / Monitors (bottom) in two rows so they take 100% of the window.
+             Keep _h_splitter HORIZONTAL: the tool tabs / monitors on the left and
+             OpenCode on the right, side by side, the same order as the attached layout.
           3. If AI Assistant is NOT visible:
              _bottom_tabs takes 100% of the main window space.
         - When editor is ATTACHED (docked):
@@ -1631,20 +1651,19 @@ class MCUMainWindow(QMainWindow):
             self._bottom_tabs.setVisible(True)
 
             if ai_visible:
-                # Stack AI Assistant (top) and TABS (bottom) in two rows
-                self._h_splitter.setOrientation(Qt.Orientation.Vertical)
-                self._h_splitter.insertWidget(0, self._ai_panel)
-                self._h_splitter.insertWidget(1, self._v_splitter)
+                # Monitors and OpenCode side by side: tools left, assistant right.
+                # Each keeps the window's full height for log lines and terminal rows.
+                self._h_splitter.setOrientation(Qt.Orientation.Horizontal)
+                self._h_splitter.insertWidget(0, self._v_splitter)
+                self._h_splitter.insertWidget(1, self._ai_panel)
                 self._ai_panel.setVisible(True)
 
-                self._h_splitter.setStretchFactor(0, 1)
-                self._h_splitter.setStretchFactor(1, 1)
+                self._h_splitter.setStretchFactor(0, 3)
+                self._h_splitter.setStretchFactor(1, 2)
 
-                h_total = max(500, self.centralWidget().height())
-                ai_h = max(200, int(h_total * 0.52))
-                tabs_h = max(180, h_total - ai_h)
-                self._h_splitter.setSizes([ai_h, tabs_h])
-                self._v_splitter.setSizes([0, tabs_h])
+                w_total = max(500, self.centralWidget().width())
+                self._h_splitter.setSizes([int(w_total * 0.58), int(w_total * 0.42)])
+                self._v_splitter.setSizes([0, max(1, self.centralWidget().height())])
 
                 if hasattr(self, "_ai_panel"):
                     QTimer.singleShot(80, self._ai_panel._resize_embedded_ai)

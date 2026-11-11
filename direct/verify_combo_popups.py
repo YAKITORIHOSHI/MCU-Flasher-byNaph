@@ -4,6 +4,7 @@ import os
 import argparse
 from pathlib import Path
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -84,6 +85,7 @@ class ComboPopups(unittest.TestCase):
                         self.assertEqual(combo.currentIndex(), 1)
                         combo.showPopup()
                         APP.processEvents()
+                        self.wait_for_motion(material.motion)
                         self.assertTrue(material.popup.grab().save(str(OUTPUT / f"{mode}-{kind.__name__}.png")))
                         if kind is PortalComboBox:
                             self.assertTrue(material.backdrop.paper)
@@ -101,6 +103,15 @@ class ComboPopups(unittest.TestCase):
                         host.deleteLater()
                         APP.processEvents()
 
+    def wait_for_motion(self, motion):
+        """Wait out a dropdown's short entrance motion, then check its exact resting state."""
+        deadline = time.monotonic() + 3
+        APP.processEvents()
+        while motion.running() and time.monotonic() < deadline:
+            APP.processEvents()
+            time.sleep(.005)
+        self.assertFalse(motion.running(), "The dropdown's entrance motion did not finish")
+
     def check_alpha_corners(self, popup):
         self.assertTrue(popup.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
         image = popup.grab().toImage()
@@ -108,6 +119,60 @@ class ComboPopups(unittest.TestCase):
                      (image.width()-1, image.height()-1)):
             self.assertEqual(image.pixelColor(x, y).alpha(), 0, (x, y))
         self.assertGreater(image.pixelColor(image.width()//2, image.height()//2).alpha(), 240)
+
+    def test_dropdowns_fade_and_slide_in_then_rest_exactly_where_they_were_placed(self):
+        from main.qt.toolbar import CompactDropdownPopup
+        Theme.apply_theme("default")
+        APP.setStyleSheet(build_stylesheet("default"))
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        combo = QComboBox(host)
+        combo.addItems(["9600", "115200", "460800"])
+        layout.addWidget(combo)
+        host.resize(320, 100)
+        host.show()
+        try:
+            APP.processEvents()
+            combo.showPopup()
+            material = combo._mcu_glass_popup
+            placed = None
+            seen_partial = False
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                APP.processEvents()
+                effect = combo.view().graphicsEffect()
+                if effect is not None and 0.0 < effect.opacity() < 1.0:
+                    seen_partial = True
+                    # The native window already holds its final, field-anchored place.
+                    placed = placed or material.popup.geometry()
+                    self.assertEqual(material.popup.geometry(), placed)
+                if seen_partial and not material.motion.running():
+                    break
+                time.sleep(.004)
+            self.assertTrue(seen_partial, "The list appeared without its fade")
+            self.assertIsNone(combo.view().graphicsEffect(), "The fade effect outlived the motion")
+            self.assertEqual(material.backdrop.geometry(), material.popup.rect())
+            self.assertEqual(material.popup.geometry(), placed)
+            combo.hidePopup()
+            APP.processEvents()
+            with patch.dict(os.environ, {"MCU_FLASHER_REDUCED_MOTION": "1"}):
+                combo.showPopup()
+                APP.processEvents(); APP.processEvents()
+                self.assertFalse(material.motion.running())
+                self.assertIsNone(combo.view().graphicsEffect())
+                combo.hidePopup()
+            popup = CompactDropdownPopup(host)
+            popup.add_button("Settings", lambda: None, "#000000", "#000000")
+            popup.show_below(combo, min_width=150)
+            self.assertTrue(popup._motion.running())
+            self.wait_for_motion(popup._motion)
+            self.assertIsNone(popup._scroll.graphicsEffect())
+            self.assertEqual(popup._scroll.geometry(), popup.rect())
+            popup.close()
+        finally:
+            host.close()
+            host.deleteLater()
+            APP.processEvents()
 
     def test_compact_actions_and_options_use_rounded_cached_material(self):
         from main.qt.toolbar import CompactDropdownPopup
@@ -123,6 +188,7 @@ class ComboPopups(unittest.TestCase):
             popup.show_below(host, min_width=150)
             try:
                 APP.processEvents()
+                self.wait_for_motion(popup._motion)
                 self.check_alpha_corners(popup)
                 self.assertTrue(popup._backdrop.isVisible())
                 first = popup._backdrop._image.cacheKey()

@@ -50,15 +50,26 @@ def tab_icon_inks(theme_mode: str | None = None) -> tuple[str, str]:
 
 
 class TabCloseButton(QAbstractButton):
-    """Paint the close mark ourselves: styled native tab primitives can be blank."""
+    """A painted round close mark: styled native tab primitives can be blank.
+
+    The mark takes its owner tab's ink (the selected chip's or the ordinary tab's),
+    sits inset from the tab's rounded edge and turns into a red disc under the
+    pointer, so it reads as a target in every theme without moving the label.
+    """
+    _WIDTH, _HEIGHT, _DISC = 22, 18, 16
+
     def __init__(self, tabbar):
         super().__init__(tabbar)
-        self.setFixedSize(18, 18)
+        self.setFixedSize(self._WIDTH, self._HEIGHT)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Close terminal tab")
         self.setAccessibleName("Close terminal tab")
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.clicked.connect(self._close_tab)
+
+    def sizeHint(self):
+        return QSize(self._WIDTH, self._HEIGHT)
 
     def _close_tab(self):
         bar = self.parentWidget()
@@ -66,23 +77,72 @@ class TabCloseButton(QAbstractButton):
         if index >= 0:
             bar.tabCloseRequested.emit(index)
 
+    def event(self, event):
+        if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverLeave):
+            self.update()
+        return super().event(event)
+
     def paintEvent(self, event):
-        from PySide6.QtGui import QColor
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QColor, QPen
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self.underMouse():
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(231, 76, 60, 100))
-            painter.drawRoundedRect(QRectF(self.rect()), 4, 4)
         bar = self.parentWidget()
         selected = bar.tabAt(self.mapTo(bar, self.rect().center())) == bar.currentIndex()
-        icon("close", tab_icon_inks()[selected], size=12).paint(painter, self.rect().adjusted(3, 3, -3, -3))
+        inks = bar.close_inks() if hasattr(bar, "close_inks") else tab_icon_inks()
+        # The disc sits left of the button's spare pixels, clear of the chip's rounded end.
+        disc = QRectF(1, (self.height() - self._DISC) / 2, self._DISC, self._DISC)
+        hovered, pressed = self.underMouse(), self.isDown()
+        if hovered or pressed:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(196, 43, 50, 240) if pressed else QColor(229, 72, 77, 232))
+            painter.drawEllipse(disc)
+            ink = QColor("#ffffff")
+        else:
+            ink = QColor(inks[selected])
+            ink.setAlphaF(0.9 if selected else 0.78)
+        pen = QPen(ink, 1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        center, arm = disc.center(), 3.4
+        painter.drawLine(QPointF(center.x() - arm, center.y() - arm), QPointF(center.x() + arm, center.y() + arm))
+        painter.drawLine(QPointF(center.x() + arm, center.y() - arm), QPointF(center.x() - arm, center.y() + arm))
+        painter.end()
+
+
+def terminal_tab_rules(theme_mode: str | None = None) -> str:
+    """Session-tab chips shared by the Windows and POSIX terminals.
+
+    Selected tabs are solid chips and the others glass, the same as the workspace's
+    tool tabs; ClosableTerminalTabs.close_inks() follows these exact surfaces.
+    """
+    from main.qt.theme import get_palette, glass_tokens
+    mode = theme_mode or Theme.active_theme
+    pal, glass = get_palette(mode), glass_tokens(mode)
+    return f"""
+        QTabBar {{ background: transparent; border: none; }}
+        QTabBar::tab {{
+            background: {glass['button']}; color: {pal.get('TEXT', Theme.TEXT)}; border: 1px solid {glass['rim']};
+            border-radius: 9px; padding: 3px 4px 3px 10px; font-family: Consolas, 'Segoe UI', monospace;
+            font-size: 11px; font-weight: 600; margin: 2px 5px 2px 0; min-height: 18px;
+        }}
+        QTabBar::tab:selected {{
+            background: {glass['chip']}; color: {glass['chip_ink']}; border: 1px solid {glass['chip']};
+        }}
+        QTabBar::tab:hover:!selected {{
+            background: {glass['button_hover']}; color: {pal.get('TEXT_BRIGHT', Theme.TEXT)};
+        }}
+    """
 
 
 class ClosableTerminalTabs(QTabBar):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.currentChanged.connect(self._refresh_close_buttons)
+
+    def close_inks(self) -> tuple[str, str]:
+        """(unselected, selected) close-mark inks for the chips terminal_tab_rules paints."""
+        return tab_icon_inks()
 
     def _refresh_close_buttons(self, _index):
         for index in range(self.count()):

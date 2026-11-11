@@ -37,6 +37,16 @@ def workspace_minimum_width(area_width):
     return max(1, min(int(area_width) // 2, WORKSPACE_MINIMUM_WIDTH_CAP))
 
 
+# The shortest complete frame, as a share of the monitor's usable height. Shorter
+# windows left one line of code above the tools, which read as a broken layout.
+WORKSPACE_MINIMUM_HEIGHT_SHARE = 0.75
+
+
+def workspace_minimum_height(area_height):
+    """Smallest complete frame: three quarters of the monitor's usable height."""
+    return max(1, round(int(area_height) * WORKSPACE_MINIMUM_HEIGHT_SHARE))
+
+
 def workspace_size(area: WorkArea):
     """Default workspace size for any monitor, in the work area's own units."""
     width, height = area.width, area.height

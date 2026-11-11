@@ -228,6 +228,10 @@ class ControlChecks(unittest.TestCase):
                     combo.setCurrentIndex(combo.count() - 1)
                     combo.showPopup()
                     pump()
+                    # The list fades in for a moment; measure its resting fill.
+                    settle = time.monotonic() + 2
+                    while combo._mcu_glass_popup.motion.running() and time.monotonic() < settle:
+                        pump(.02)
                     popup = combo.view().window().geometry()
                     field = combo.mapToGlobal(QPoint(0, 0))
                     # Only the screen's own edge may push a list sideways off its field.
@@ -424,6 +428,30 @@ class ControlChecks(unittest.TestCase):
         callbacks["autosave_settings_changed"].assert_called_once_with(True, 1800)
         callbacks["graphics_accel_changed"].assert_called_once_with(False)
         self.backend.set_reset_on_baud_change.assert_called_once_with(True)
+
+    def test_clicked_save_shows_progress_and_cannot_be_closed_half_applied(self):
+        # Closing Settings restyles every window when the theme changes. Show that work,
+        # and never let Escape or the close button discard a save already under way.
+        from PySide6.QtTest import QTest
+        dialog = self.settings()
+        dialog.show()
+        APP.processEvents()
+        dialog.theme_combo.setCurrentText(dialog._theme_rev["light"])
+        finished = []
+        dialog.finished.connect(finished.append)
+        dialog.btn_save.click()
+        self.assertTrue(dialog._apply_spinner.isVisible())
+        self.assertTrue(dialog._apply_spinner.is_busy())
+        self.assertIn("Applying", dialog._apply_status.text())
+        self.assertFalse(dialog.btn_save.isEnabled() or dialog.btn_cancel.isEnabled())
+        dialog.reject()
+        self.assertTrue(dialog.isVisible(), "Escape/close discarded a save in progress")
+        self.save.assert_not_called()
+        deadline = time.monotonic() + 3
+        while not finished and time.monotonic() < deadline:
+            QTest.qWait(10)
+        self.assertEqual(finished, [dialog.DialogCode.Accepted])
+        self.save.assert_called_once()
 
     def test_config_atomic_failure_keeps_files_and_memory(self):
         from main.core import config

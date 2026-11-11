@@ -60,7 +60,8 @@ _SPIN_CHARS = ["", "", "", "", "", "", "", "", "", ""]
 
 from main.qt.icons import IconLabel as QLabel
 
-from main.qt.icons import ActionButton as QPushButton, icon, ClosableTerminalTabs
+from main.qt.icons import ActionButton as QPushButton, icon, ClosableTerminalTabs, terminal_tab_rules
+from main.qt.combo_popup import GlassMenu
 
 class _EmbedContainer(QWidget):
     """Native window embedding container with automatic geometry synchronization."""
@@ -223,26 +224,8 @@ class TerminalPanel(QWidget):
         self._tab_bar.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._tab_bar.currentChanged.connect(self._on_tab_changed)
         self._tab_bar.tabCloseRequested.connect(self._on_tab_close_requested)
-        self._tab_bar.setStyleSheet("""
-            QTabBar { background: transparent; border: none; }
-            QTabBar::tab {
-                background: #111620; color: #8fa1b3; border: 1px solid #1c2636;
-                border-radius: 3px; padding: 2px 7px; font-family: Consolas, 'Segoe UI', monospace;
-                font-size: 11px; font-weight: 600; margin: 0 4px 0 0; min-height: 18px;
-            }
-            QTabBar::tab:selected {
-                background: #1c2636; color: #56cfbf; border: 1px solid #3d5069; border-bottom: 1px solid #3d5069;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #161e2a; color: #cdd6f4;
-            }
-            QTabBar::close-button {
-                subcontrol-position: right; margin-left: 5px;
-            }
-            QTabBar::close-button:hover {
-                background: #e74c3c; border-radius: 2px;
-            }
-        """)
+        # The same chips as every theme below, so no unthemed frame flashes first.
+        self._tab_bar.setStyleSheet(terminal_tab_rules(self._current_theme))
         # Pin to Arrow — prevents IBeam bleed-through from the xterm WebView child
         self._tab_bar.setCursor(Qt.CursorShape.ArrowCursor)
         hl.addWidget(self._tab_bar)
@@ -268,7 +251,7 @@ class TerminalPanel(QWidget):
             }
             QToolButton#btn-terminal-add::menu-indicator { image: none; width: 0; height: 0; }
         """)
-        self._add_menu = QMenu(self._btn_add_tab)
+        self._add_menu = GlassMenu(self._btn_add_tab)
         act_p = self._add_menu.addAction("PowerShell (pwsh)")
         act_p.triggered.connect(lambda: self.add_session("pwsh"))
         act_c = self._add_menu.addAction("Command Prompt (cmd)")
@@ -1055,25 +1038,7 @@ class TerminalPanel(QWidget):
             self._header.setStyleSheet("QFrame#terminal-header { background: transparent; border: none; }")
 
         if hasattr(self, "_tab_bar") and self._tab_bar:
-            self._tab_bar.setStyleSheet(f"""
-                QTabBar {{ background: transparent; border: none; }}
-                QTabBar::tab {{
-                    background: {glass['button']}; color: {text}; border: 1px solid {glass['rim']};
-                    border-radius: 9px; padding: 2px 7px; font-family: Consolas, 'Segoe UI', monospace;
-                    font-size: 11px; font-weight: 600; margin: 0 4px 0 0; min-height: 18px;
-                }}
-                QTabBar::tab:selected {{
-                    background: {glass['chip']}; color: {glass['chip_ink']}; border: 1px solid {glass['chip']};
-                }}
-                QTabBar::tab:hover:!selected {{
-                    background: {glass['button_hover']}; color: {text_bright};
-                }}
-                QTabBar::close-button {{
-                    subcontrol-position: right; margin-left: 5px;
-                }}
-                QTabBar::close-button:hover {{
-                    background: #e74c3c; border-radius: 2px;
-                }}
+            self._tab_bar.setStyleSheet(terminal_tab_rules(theme_mode) + f"""
                 QTabBar QToolButton {{
                     background: {glass['button']}; color: {text};
                     border: 1px solid {glass['rim']}; border-radius: 7px; padding: 0;
@@ -1098,15 +1063,7 @@ class TerminalPanel(QWidget):
                 QToolButton#btn-terminal-add::menu-indicator {{ image: none; width: 0; height: 0; }}
             """)
 
-        self._add_menu.setStyleSheet(f"""
-            QMenu {{
-                background: {bg_dark}; color: {text}; border: 1px solid {border};
-                border-radius: 4px; font-size: 11px; padding: 4px;
-                font-family: Consolas, 'Segoe UI', monospace;
-            }}
-            QMenu::item {{ padding: 6px 18px; border-radius: 3px; }}
-            QMenu::item:selected {{ background: {bg_hover}; color: {cyan}; }}
-        """)
+        # The shell chooser is a GlassMenu: it follows the theme's frosted material itself.
 
         btn_act_style = f"""
             QPushButton:enabled {{

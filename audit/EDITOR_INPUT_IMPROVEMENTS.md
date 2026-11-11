@@ -89,3 +89,20 @@ private runtime, validate all seven LFS installer receipts directly from committ
 and preserve the existing public asset until its staged replacement is verified.
 The source commit, final archive manifest and published size/SHA-256 form the
 release receipt; none of these checks qualifies native Windows 11 by inference.
+
+## November 11 follow-up review
+
+The earlier gates (native_input, cursor, source_navigation, editor_features,
+file_access, user_install, owner tickets, library_samples, controls, svg_icons,
+detached_actions, terminal_scroll, release_sources, app_update and
+bootstrap_updates) were rerun and passed before further changes. Real use still
+showed four gaps that those fixtures could not see:
+
+| Report | Cause | Change and evidence |
+| --- | --- | --- |
+| Developer Access updates never reached installed copies | The uploaded v11 ZIP was packed by hand and recorded `7710ca7`, a commit amended before pushing. Ubuntu installs copied the same tracked record. GitHub's comparison answered 404, so every update check ended "unavailable". The changes also existed only on the feature branch. | Records carry `committed_at`; 404/422 falls back to that date; installs from a checkout record HEAD; the tracked record names a published commit; the ZIP is rebuilt by `build_release.py`; `main` carries the work. `verify_app_update`, `verify_user_install`, `verify_release_sources` |
+| Empty "Choose a declaration" box | Monaco's definition provider (called on Ctrl+hover) opened the chooser even with no results, and nearly every result was marked ambiguous because headers contain include guards | Provider has no side effects; one candidate opens directly; includes and installed-library declarations resolve before compiling. `verify_source_navigation`, `verify_editor_features` |
+| Invisible terminal close mark | The selected tab's mark used chip ink while the POSIX session bar painted its selected tab dark; the earlier fixture tested a stand-in dock widget | Shared `terminal_tab_rules`; contrast measured against the painted tab in all themes. `verify_svg_icons` |
+| Frozen editor spinner | Six-core PCs run in resource-constrained mode, which removed every CSS animation | The loading spinner is exempt; decorative motion still stops. `verify_editor_features` |
+
+Native Windows 11 verification of keyboard routing remains pending, as before.

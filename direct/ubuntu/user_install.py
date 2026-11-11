@@ -11,9 +11,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
+import subprocess
 import tempfile
+import time
 
 from src.modules.bootstrap_file_pool import Progress, run_all
 
@@ -26,6 +29,8 @@ EXCLUDED = frozenset(("__pycache__", "_python", "env", "node_modules", ".git",
 STATE = frozenset(("gui_config.json", ".mcu_gui_config.json", "bootstrap_config.json",
     "arduino_browser_settings.json", "arduino_cli_path.txt", "dbs_notif.json",
     ".owner_config.json", ".owner_tickets.json", ".mcu_cloud_link.json"))
+# The copy's own record of the commit it holds, read by the forward-only source updater.
+REVISION_RECORD = "src/dbs/source_revision.json"
 REQUIRED = ("mcu_flash_gui.py", "main/web_bridge.py", "src/editor/index.html",
             "src/modules/bootstrap.py", "direct/ubuntu/setup.py", "direct/ubuntu/run.sh",
             "src/assets/mcu_icon.png", "LAUNCHER/UBUNTU")
@@ -99,6 +104,31 @@ def _inventory(root):
     return sorted(files), total
 
 
+def checkout_revision(source):
+    """The commit a Git working copy holds, or None for a release folder.
+
+    A checkout's tracked record lags behind on purpose (a commit cannot name itself),
+    and once named a commit that was amended before pushing: GitHub could never compare
+    it, so copies installed from that checkout stopped updating. Record HEAD instead.
+    A release ZIP's own record comes from build_release.py and is copied unchanged.
+    """
+    git = shutil.which("git")
+    if git is None or not (Path(source) / ".git").exists():
+        return None
+    environment = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
+    try:
+        output = subprocess.run([git, "-C", str(source), "show", "-s", "--format=%H %ct", "HEAD"],
+                                capture_output=True, timeout=15, check=True, env=environment,
+                                stdin=subprocess.DEVNULL).stdout.decode("ascii").split()
+        commit, seconds = output[0].casefold(), int(output[1])
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError, IndexError):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        return None
+    return {"repository": "YAKITORIHOSHI/MCU-Flasher-byNaph", "commit": commit,
+            "committed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))}
+
+
 def is_owned_installation(root):
     try:
         _plain(root, directory=True)
@@ -153,8 +183,15 @@ def ensure_user_installation(source, *, data_home=None, report=print):
             raise RuntimeError(f"Application source changed during installation: {relative}")
         receipts[relative.as_posix()] = {"sha256": stage_hash, "size": after.st_size}
 
+    revision = checkout_revision(source)
     try:
         run_all(copy, files, progress=progress)
+        if revision is not None:
+            record = stage / REVISION_RECORD
+            record.parent.mkdir(parents=True, exist_ok=True)
+            data = (json.dumps(revision, indent=2) + "\n").encode("ascii")
+            record.write_bytes(data)
+            receipts[REVISION_RECORD] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
         # These private preferences are data, outside the source manifest. The
         # per-user GUI store remains authoritative, and existing installations
         # retain their own settings. Never copy accounts, sketches or journals.

@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: "Design MCU Flasher glass workspaces and explicit terminal close controls, paper Developer Access dropdowns, stable spinner/badge layouts, responsive editor/terminal surfaces and restrained loading feedback."
+description: "Design MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short entrance motion and compact tab reveal, paper Developer Access dropdowns, stable spinner/badge layouts, responsive editor/terminal surfaces and restrained loading feedback."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -9,11 +9,22 @@ license: Complete terms in LICENSE.txt
 ## Terminal close controls and portal details
 
 Terminal tabs use explicit TabCloseButton painting; native stylesheet close
-primitives can disappear. Paint the mark with selected-chip or ordinary tab ink,
-preserve an 18px target and stable label geometry, and keep all controls within
-the header. Both Windows and POSIX terminal tab bars share this implementation.
-Floating Notifications uses the shared close icon. Verify rendering and clicks
-across themes with svg_icons, plus responsive and native layout scales.
+primitives can disappear. Both Windows and POSIX session bars share
+`terminal_tab_rules` (glass tabs, solid selected chip), so the mark's ink always
+matches the tab painted under it: chip ink when selected, text ink otherwise, a
+red disc with a white cross under the pointer. Keep the 22x18 target inset from
+the chip's rounded end and stable label geometry. Floating editor notices, the
+declaration list and library preview tabs use the round `.mcu-close` mark, never
+a "Close" text button. svg_icons measures the mark's contrast against the tab
+actually painted under it in every theme.
+
+Floating editor surfaces (AI bar, its toggle, notices, the declaration list, the
+definition card and Monaco's own widgets) are glass: the per-theme `--popover`
+tint, backdrop blur, a lit top rim and soft shadow. Never use the opaque
+`--bg-dark`/`--hover-bg` blocks for them. Qt menus use GlassMenu. Entrance motion
+stays short (140-190 ms), moves children rather than native popup windows and
+switches off with Windows' animation setting or MCU_FLASHER_REDUCED_MOTION=1.
+Compact icon tool strips reveal only the selected tool's name.
 
 Developer Access dropdowns explicitly select paper popup mode in combo_popup.py:
 cream/white paper, black border, yellow selection and native list behavior.

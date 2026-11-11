@@ -78,6 +78,50 @@ def _editor_workspace(panel):
     return None
 
 
+
+def installed_library_roots(project, workspace=None, limit=256):
+    """Folders of installed Arduino/PlatformIO libraries, for explicit includes only.
+
+    Navigation consults these after the recorded build context, so `#include <Lib.h>`
+    and the library's declarations open before a first compile. Listing folders is
+    read-only and bounded; nothing is installed, compiled or guessed from a board.
+    """
+    bases = [Path(project) / "lib"]
+    if workspace:
+        libdeps = Path(workspace) / ".pio" / "libdeps"
+        try:
+            bases.extend(sorted(path for path in libdeps.iterdir() if path.is_dir())[:8])
+        except OSError:
+            pass
+    try:
+        from src.modules.package_jobs import package_core_directory
+        core = Path(package_core_directory())
+        bases += [core / "lib", core / "arduino-cli" / "user" / "libraries"]
+    except Exception:
+        pass
+    try:
+        from main.core.board_catalog import _get_download_dir
+        bases.append(Path(_get_download_dir()) / "Libs")
+    except Exception:
+        pass
+    roots = []
+    for base in bases:
+        try:
+            libraries = sorted(base.iterdir())[:limit]
+        except OSError:
+            continue
+        for library in libraries:
+            try:
+                if library.name.startswith(".") or not library.is_dir():
+                    continue
+                source = library / "src"
+                roots.append(str(source if source.is_dir() else library))
+            except OSError:
+                continue
+            if len(roots) >= limit:
+                return roots
+    return roots
+
 class EditorBridgeAPI(QObject):
     """
     Python-side of the Monaco ↔ Python bridge via QWebChannel.
@@ -303,7 +347,8 @@ class EditorBridgeAPI(QObject):
                     cache = backend._remote_workspace_root(root) or root / PROJECT_BUILD_CACHE_DIR
                     workspace = str(cache / "boards" / host_namespace() / backend._board_cache_key(board))
                 result = navigator.resolve({"path": path, "offset": offset, "snapshots": snapshots,
-                    "project": project, "workspace": workspace})
+                    "project": project, "workspace": workspace,
+                    "library_roots": installed_library_roots(root, workspace)})
             except Exception as error:
                 result = {"success": False, "error": str(error)[:512]}
             try:

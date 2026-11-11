@@ -590,6 +590,27 @@ class EditorReviewChecks(unittest.TestCase):
         self.async_js('await window.__focusModel.redo();return true;')
         self.assertEqual(self.js(buffer_state)['models'], buffers['models'])
 
+    def test_bar_folds_into_its_toggle_after_the_last_pending_decision(self):
+        # With nothing left to decide, the bar folds away by itself; its toggle beside
+        # the source tabs reopens history, and the next AI edit shows the bar again.
+        self.review('only-pending')
+        self.assertEqual(self.snapshot()['banner'], 'flex')
+        self.js("document.getElementById('ai-review-accept').click(); true")
+        until(lambda: not self.snapshot()['pending'])
+        until(lambda: self.snapshot()['banner'] == 'none')
+        folded = self.snapshot()
+        self.assertEqual(folded['toggle']['expanded'], 'false')
+        self.assertIn('History', self.js("document.getElementById('ai-banner-toggle').textContent"))
+        self.assertFalse(self.js("document.getElementById('ai-diff-banner').contains(document.activeElement)"))
+        self.assertEqual(self.js("sessionStorage.getItem('mcu_ai_banner_hidden')"), '1')
+        self.js("document.getElementById('ai-banner-toggle').click(); true")
+        until(lambda: self.snapshot()['banner'] == 'flex')
+        self.assertIn('History', self.snapshot()['title'])
+        self.js("window.setAiBannerHidden(true); true")
+        self.review('next-edit')
+        self.assertEqual(self.snapshot()['banner'], 'flex')
+        self.assertEqual(self.snapshot()['toggle']['expanded'], 'true')
+
     def test_history_hide_remains_hidden_on_new_state_and_reload(self):
         self.js("(() => {const f=window.__reviewFixture; f.history={canUndo:true,canRedo:false,undoDepth:1,redoDepth:0,undo:{path:f.mainPath,fileName:'Sketch.ino',action:'accepted'}};window.resetAiReviewForProject();return true;})()")
         until(lambda: 'History' in self.snapshot()['title'])

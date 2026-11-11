@@ -125,10 +125,13 @@ class SerialViewChecks(unittest.TestCase):
     def inspect_context_event(self, view, inspect):
         # Shiboken's native QMenu.exec descriptor ignores a class monkeypatch.
         # Override it on a real Qt subclass while retaining parent ownership.
-        class FixtureMenu(QMenu):
+        # The panel builds its menus on the shared glass material (GlassMenu).
+        from main.qt.combo_popup import GlassMenu
+
+        class FixtureMenu(GlassMenu):
             def exec(menu, position):
                 return inspect(menu, position)
-        with patch("main.qt.serial_panel.QMenu", FixtureMenu):
+        with patch("main.qt.serial_panel.GlassMenu", FixtureMenu):
             self.send_context_event(view)
 
     def test_default_wrap_makes_message_after_escaped_boot_noise_visible(self):

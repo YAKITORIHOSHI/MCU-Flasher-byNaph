@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 from main.qt.icons import ActionButton as QPushButton
 from main.qt.log_follow import LogFollow, preserve_log_view
+from main.qt.combo_popup import GlassMenu
 
 
 class ConsolePanelHeader(QWidget):
@@ -86,7 +87,7 @@ class ConsolePanelHeader(QWidget):
         self._btn_options = QPushButton("Options", self)
         self._btn_options.setFixedHeight(26)
         self._btn_options.setToolTip("Build and serial clear-on-action preferences")
-        menu = QMenu(self._btn_options)
+        menu = GlassMenu(self._btn_options)
         self._clear_actions = []
         for checkbox, label in ((self.cb_auto_clear, "Clear build console on action"),
                                 (self.cb_auto_clear_serial, "Clear serial monitor on action")):

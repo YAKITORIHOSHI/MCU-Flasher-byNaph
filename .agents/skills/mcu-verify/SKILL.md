@@ -5,6 +5,15 @@ description: "Run MCU Flasher hardware-free and isolated native CI checks, inclu
 
 # Verify MCU Flasher changes
 
+## Navigation, glass, motion and update gates
+
+Run source_navigation, editor_features, editor_review_ui, library_samples,
+combo_popups, controls, serial_view, svg_icons, app_update, user_install,
+release_sources and monitor_matrix. Popup tests wait for `PopupMotion.running()`
+to end before sampling resting pixels; the monitor matrix waits for compact tab
+reveals and allows only the tab strip itself to change width. Half-height window
+requests must be refused (three quarters is the minimum).
+
 ## Editor and input improvement gates
 
 Run native_input, cursor, source_navigation, editor_features, file_access, user_install,

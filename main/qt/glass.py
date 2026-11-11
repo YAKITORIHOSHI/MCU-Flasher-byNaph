@@ -504,8 +504,32 @@ def pane_for(widget: QWidget, window: QWidget, grow: int = 0) -> QRect:
     return QRect(widget.mapTo(window, widget.rect().topLeft()), widget.size()).adjusted(-grow, -grow, grow, grow)
 
 
+def _qcolor(value: str) -> QColor:
+    """A QColor from a stylesheet color: #rrggbb or rgba() with 0-255 alpha."""
+    value = str(value).strip()
+    if value.startswith("rgba("):
+        red, green, blue, alpha = (int(float(part)) for part in value[5:-1].split(","))
+        return QColor(red, green, blue, alpha)
+    return QColor(value)
+
+
+def _gradient_stops(value: str) -> tuple[str, str]:
+    """The two stops of a theme's vertical qlineargradient token."""
+    import re
+    stops = re.findall(r"stop:\s*[01]\s+(rgba\([^)]*\)|#[0-9a-fA-F]{6})", str(value))
+    return (stops[0], stops[-1]) if stops else (value, value)
+
+
 class WorkspaceTabBar(QTabBar):
-    """Tool tabs switch by mouse without taking focus from the editor or terminal."""
+    """Tool tabs switch by mouse without taking focus from the editor or terminal.
+
+    In compact (icon-only) panes the selected tool slides open to show its name
+    beside its icon while the others stay icons. The owner enables that only when
+    the widest name fits the pane, so the strip never needs to scroll.
+    """
+
+    LABEL_GAP = 6
+    LABEL_TAIL = 4
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -514,3 +538,172 @@ class WorkspaceTabBar(QTabBar):
         self.setExpanding(False)
         self.setDrawBase(False)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._labels: list[str] | None = None
+        self._reveal: dict[int, float] = {}
+        self._reveal_animation = None
+        self.currentChanged.connect(self._slide_to_current)
+
+    # ── Compact labels ──────────────────────────────────────────────────────
+    def _label_font(self):
+        from PySide6.QtGui import QFont
+        font = QFont(self.font())
+        font.setPixelSize(12)  # QTabBar::tab in the workspace stylesheet.
+        font.setWeight(QFont.Weight.DemiBold)
+        return font
+
+    def label_extent(self, text: str) -> int:
+        """Width a revealed name adds to an icon tab, from the same font it is painted in."""
+        from PySide6.QtGui import QFontMetrics
+        return QFontMetrics(self._label_font()).horizontalAdvance(text) + self.LABEL_GAP + self.LABEL_TAIL + 1
+
+    def compact_labels(self) -> list[str] | None:
+        return list(self._labels) if self._labels is not None else None
+
+    def set_compact_labels(self, labels) -> None:
+        """Names to reveal for the selected icon tab, or None for plain icon/text tabs."""
+        labels = list(labels) if labels else None
+        if labels == self._labels:
+            return
+        self._labels = labels
+        self._stop_reveal()
+        current = self.currentIndex()
+        self._reveal = {current: 1.0} if labels is not None and current >= 0 else {}
+        self._relayout()
+
+    def _stop_reveal(self) -> None:
+        animation, self._reveal_animation = self._reveal_animation, None
+        if animation is not None:
+            animation.stop()
+            animation.deleteLater()
+
+    def _slide_to_current(self, index: int) -> None:
+        if self._labels is None:
+            return
+        from main.qt.motion import TAB_DURATION_MS, motion_enabled
+        self._stop_reveal()
+        targets = {index: 1.0} if index >= 0 else {}
+        if not motion_enabled():
+            self._reveal = targets
+            self._relayout()
+            return
+        start = dict(self._reveal)
+        keys = set(start) | set(targets)
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+        animation = QVariantAnimation(self)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(TAB_DURATION_MS)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def step(value, keys=keys, start=start, targets=targets):
+            progress = float(value)
+            self._reveal = {key: start.get(key, 0.0) + (targets.get(key, 0.0) - start.get(key, 0.0)) * progress
+                            for key in keys}
+            self._relayout()
+
+        def finished(targets=targets):
+            self._reveal = dict(targets)
+            self._reveal_animation = None
+            self._relayout()
+
+        animation.valueChanged.connect(step)
+        animation.finished.connect(finished)
+        self._reveal_animation = animation
+        animation.start()
+
+    def revealing(self) -> bool:
+        return self._reveal_animation is not None
+
+    def _relayout(self) -> None:
+        # setIconSize marks Qt's tab layout dirty, so every tab rect follows tabSizeHint.
+        self.setIconSize(self.iconSize())
+        self.update()
+
+    def _extra(self, index: int) -> int:
+        if self._labels is None or not 0 <= index < len(self._labels):
+            return 0
+        progress = self._reveal.get(index, 0.0)
+        return round(progress * self.label_extent(self._labels[index])) if progress > 0 else 0
+
+    def _paint_chip(self, painter, rect, selected, hovered, pal, glass) -> None:
+        from PySide6.QtGui import QBrush
+        compact = bool(self.parent() is not None and self.parent().property("compactPane"))
+        top, right, bottom = (3, 3, 2) if compact else (5, 4, 4)
+        box = QRectF(rect.adjusted(0, top, -right, -bottom)).adjusted(0.5, 0.5, -0.5, -0.5)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if selected:
+            fill = QBrush(_qcolor(glass["chip"]))
+            rim = _qcolor(glass["chip"])
+        else:
+            upper, lower = ((_gradient_stops(glass["button_hover"])) if hovered
+                            else (glass["glass_highlight"], glass["glass"]))
+            gradient = QLinearGradient(box.topLeft(), box.bottomLeft())
+            gradient.setColorAt(0, _qcolor(upper))
+            gradient.setColorAt(1, _qcolor(lower))
+            fill = QBrush(gradient)
+            rim = _qcolor(pal.get("BORDER_LIT", Theme.CYAN) if hovered else glass["rim"])
+        painter.setPen(QPen(rim, 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(box, 11, 11)
+        painter.restore()
+
+    def tabSizeHint(self, index):
+        hint = super().tabSizeHint(index)
+        extra = self._extra(index)
+        if extra:
+            hint.setWidth(hint.width() + extra)
+        return hint
+
+    def paintEvent(self, event):
+        if self._labels is None:
+            super().paintEvent(event)
+            return
+        from PySide6.QtGui import QIcon
+        from PySide6.QtWidgets import QStyle, QStyleOptionTab, QStylePainter
+        painter = QStylePainter(self)
+        font = self._label_font()
+        from main.qt.theme import get_palette, glass_tokens
+        mode = _theme_name()
+        pal, glass = get_palette(mode), glass_tokens(mode)
+        current, hovered = self.currentIndex(), self.tabAt(self.mapFromGlobal(self.cursor().pos()))
+        icon_size = self.iconSize()
+        for index in range(self.count()):
+            option = QStyleOptionTab()
+            self.initStyleOption(option, index)
+            # A copy: option.icon is the option's own member, cleared on the next line.
+            icon = QIcon(option.icon)
+            option.icon = QIcon()
+            option.text = ""
+            rect = option.rect
+            selected = index == current
+            if self._extra(index):
+                # The stylesheet fixes an icon tab's box at 18px, so a widening chip is
+                # painted from the same tokens: radius, margins, fill and rim.
+                self._paint_chip(painter, rect, selected, index == hovered, pal, glass)
+            else:
+                painter.drawControl(QStyle.ControlElement.CE_TabBarTabShape, option)
+            base = rect.width() - self._extra(index)
+            # The icon keeps its centred place in the collapsed chip, so it never shifts.
+            x = rect.left() + (base - icon_size.width()) // 2
+            y = rect.top() + (rect.height() - icon_size.height()) // 2
+            state = QIcon.State.On if selected else QIcon.State.Off
+            mode_icon = QIcon.Mode.Normal if self.isTabEnabled(index) else QIcon.Mode.Disabled
+            icon.paint(painter, QRect(x, y, icon_size.width(), icon_size.height()),
+                       Qt.AlignmentFlag.AlignCenter, mode_icon, state)
+            progress = self._reveal.get(index, 0.0)
+            if progress <= 0.01 or index >= len(self._labels):
+                continue
+            ink = QColor(glass["chip_ink"] if selected else
+                         pal.get("TEXT_BRIGHT", Theme.TEXT) if index == hovered else pal.get("TEXT", Theme.TEXT))
+            ink.setAlphaF(min(1.0, progress * 1.4))
+            left = x + icon_size.width() + self.LABEL_GAP
+            clip = QRect(left, rect.top(), max(0, rect.right() - left - 2), rect.height())
+            painter.save()
+            painter.setClipRect(clip)
+            painter.setFont(font)
+            painter.setPen(ink)
+            painter.drawText(QRect(left, rect.top(), self.label_extent(self._labels[index]), rect.height()),
+                             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), self._labels[index])
+            painter.restore()
+        painter.end()

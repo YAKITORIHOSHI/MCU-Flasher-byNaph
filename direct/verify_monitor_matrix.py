@@ -4,7 +4,7 @@
 Each monitor runs in a fresh process with a real QScreen of that size, through
 Qt's offscreen platform and QT_SCALE_FACTOR, so geometry goes through the same
 code paths as a desktop instead of a mocked work area. A workspace is checked at
-its default size, tiled to half width, tiled to half height and full screen, with
+its default size, tiled to half width, at three quarters of the height and full screen, with
 and without the assistant. Persistence, hardware and services are mocked and no
 window can reach the desktop. Native window managers need their own evidence: see
 verify_window_alignment.py and verify_ui_layout.py.
@@ -255,8 +255,12 @@ def check_monitor(render_dir: Path | None) -> int:
             problems.append((state, "a tool tab lost its name"))
         # The reported defect: switching tools must not move anything around them.
         moves = Moves()
+        # Compact icon tabs slide the selected tool open to show its name; then the strip
+        # itself may change width, but nothing around the tool pane may move.
+        revealing = bar.compact_labels() is not None
         outside = (window, toolbar, window._controls_toolbar, controls, window.centralWidget(), window._h_splitter,
-                   window._v_splitter, window._editor_area, window._editor_panel, tabs, bar, window.statusBar())
+                   window._v_splitter, window._editor_area, window._editor_panel, tabs,
+                   *(() if revealing else (bar,)), window.statusBar())
         for widget in outside:
             widget.installEventFilter(moves)
         lines = {}
@@ -266,9 +270,20 @@ def check_monitor(render_dir: Path | None) -> int:
             strip = [bar.tabRect(tab).getRect() for tab in range(tabs.count())]
             tabs.setCurrentIndex(index)
             pump(.12)
+            settle = time.monotonic() + 2
+            while revealing and bar.revealing() and time.monotonic() < settle:
+                pump(.03)
             if window._editor_area.height() != divider:
                 problems.append((state, f"divider moved on tab {index}: {divider} to {window._editor_area.height()}"))
-            if [bar.tabRect(tab).getRect() for tab in range(tabs.count())] != strip:
+            if revealing:
+                widths = [bar.tabRect(tab).width() for tab in range(tabs.count())]
+                plain = [width for tab, width in enumerate(widths) if tab != tabs.currentIndex()]
+                if len(set(plain)) > 1 or widths[tabs.currentIndex()] <= max(plain, default=0):
+                    problems.append((state, f"compact tab {index} did not open alone: {widths}"))
+                if bar.tabRect(tabs.count() - 1).right() > bar.width() or any(
+                        button.isVisible() for button in bar.findChildren(QToolButton)):
+                    problems.append((state, f"compact tab {index} pushed the strip past its pane"))
+            elif [bar.tabRect(tab).getRect() for tab in range(tabs.count())] != strip:
                 problems.append((state, f"tool tabs moved on tab {index}"))
             page = tabs.currentWidget()
             for control in page.findChildren(QWidget):
@@ -343,8 +358,14 @@ def check_monitor(render_dir: Path | None) -> int:
         if window.frameGeometry().width() > area.width() // 2:
             problems.append(("half", f"a half-monitor frame was refused: {window.frameGeometry().width()} of {area.width()}"))
         check_workspace(window, "half")
+        # Three quarters of the usable height is the shortest complete frame. A request
+        # for half the height is refused rather than squeezing the code to one line.
         place(area.width(), area.height() // 2)
-        check_workspace(window, "half-height")
+        if window.frameGeometry().height() < round(area.height() * .75) - 1:
+            problems.append(("half-height", f"a frame below three quarters of the height was accepted: "
+                                            f"{window.frameGeometry().height()} of {area.height()}"))
+        place(area.width(), round(area.height() * .75))
+        check_workspace(window, "three-quarter-height")
         place(area.width(), area.height())
         check_workspace(window, "full")
         # Directly from full screen: the narrowest window anyone can drag to.

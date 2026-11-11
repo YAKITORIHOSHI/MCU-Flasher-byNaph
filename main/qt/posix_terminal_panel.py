@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPu
 from main.core.log_colors import glass_terminal_colors
 from main.core.theme import get_palette
 from main.qt.glass import PageBackdrop, page_surface
-from main.qt.icons import ClosableTerminalTabs
+from main.qt.icons import ClosableTerminalTabs, terminal_tab_rules
 from main.platforms.ubuntu_pty import PromptObserver, close_pty_tree
 from src.modules.runtime_resources import performance_profile
 
@@ -331,7 +331,12 @@ class PosixTerminalPanel(QWidget):
         self._empty.setWordWrap(True)
         self._stack.addWidget(self._empty)
         self._tabs = QTabWidget(self._stack)
-        self._tabs.setTabBar(ClosableTerminalTabs(self._tabs))
+        session_tabs = ClosableTerminalTabs(self._tabs)
+        session_tabs.setObjectName("terminal-session-tabs")
+        session_tabs.setDrawBase(False)
+        session_tabs.setExpanding(False)
+        session_tabs.setStyleSheet(terminal_tab_rules(self._theme))
+        self._tabs.setTabBar(session_tabs)
         self._tabs.setTabsClosable(True)
         self._tabs.tabCloseRequested.connect(self._close_tab)
         self._tabs.currentChanged.connect(self._update_session_state)
@@ -448,6 +453,7 @@ class PosixTerminalPanel(QWidget):
 
     def apply_theme(self, mode):
         self._theme = mode
+        self._tabs.tabBar().setStyleSheet(terminal_tab_rules(mode))
         for view in self._sessions:
             self._configure(view)
 

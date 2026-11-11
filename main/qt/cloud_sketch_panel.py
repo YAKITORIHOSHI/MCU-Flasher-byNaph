@@ -23,6 +23,7 @@ from main.qt.icons import ActionButton, icon
 from main.qt.setup_components import GlassCard
 from main.qt.assistant_loader import _PhaseTrace
 from main.core.cloud_sketch_service import CloudSketchService, CloudNameConflict, CloudLocalConflict, CloudError, read_project_link
+from main.qt.combo_popup import GlassMenu
 
 
 _CLOUD_UI_GATE = threading.Lock()
@@ -507,7 +508,7 @@ class CloudSketchPanel(QWidget):
         account_actions = QHBoxLayout(self._signed_in_actions)
         account_actions.setContentsMargins(0, 0, 0, 0)
         self._account_button = self._button("Account", lambda: None, self._signed_in_actions)
-        self._account_menu = QMenu(self._account_button)
+        self._account_menu = GlassMenu(self._account_button)
         self._sign_out_action = self._account_menu.addAction("Sign out", self._sign_out)
         self._forget_action = self._account_menu.addAction("Sign out and forget saved login", self._forget_login)
         self._account_menu.addSeparator()
@@ -547,7 +548,7 @@ class CloudSketchPanel(QWidget):
         sketch_heading.addWidget(self._refresh_btn)
         self._sketch_actions = self._button("Actions", lambda: None, self._sketch_header)
         self._sketch_actions.setAccessibleName("Selected cloud sketch actions")
-        self._sketch_menu = QMenu(self._sketch_actions)
+        self._sketch_menu = GlassMenu(self._sketch_actions)
         self._rename_sketch_action = self._sketch_menu.addAction("Rename sketch…", self._rename_sketch)
         self._delete_sketch_action = self._sketch_menu.addAction("Delete sketch…", self._delete_sketch)
         self._sketch_actions.setMenu(self._sketch_menu)

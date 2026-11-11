@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, package publication and public release integrity."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, dated source-revision records, package publication and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
@@ -327,6 +327,12 @@ in per-user state, outside the application installation. They may replace only
 verified tracked application source files. Preserve `src/dbs` settings, user
 instructions, project/build caches, private runtimes, installers, catalog data
 and active launchers. A source checkout is managed by Git and must be skipped.
+Never package a public ZIP by hand: one hand-made v11 ZIP recorded a commit amended
+before pushing (`7710ca7`). GitHub answered 404 for it, so those copies never updated
+and lost Developer Access fixes. Records now carry `committed_at`, and a 404/422
+comparison falls back to that date. The tracked record names a published commit; a
+`legacy-source-record-7710ca7` tag keeps the orphan comparable for older updaters.
+Ubuntu installations copied from a checkout record its HEAD instead of the tracked file.
 Defer source replacement while any workspace is live. `build_release.py` writes the
 release's commit to `src/dbs/source_revision.json`, and every applied update rewrites it,
 so the record travels with the folder. An update never moves a copy backwards: the updater

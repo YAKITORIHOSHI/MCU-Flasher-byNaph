@@ -98,6 +98,7 @@ def sanitize_serial_clipboard_text(text: str) -> str:
 
 from main.qt.icons import IconLabel as QLabel
 from main.core.ansi_sgr import PLAIN, apply_sgr
+from main.qt.combo_popup import GlassMenu
 
 
 def _styled_tag(tag, style):
@@ -381,7 +382,7 @@ class SerialOutputView(QPlainTextEdit):
         super().keyPressEvent(event)
 
     def _show_context_menu(self, position) -> None:
-        menu = QMenu(self)
+        menu = GlassMenu(self)
         copy_action = menu.addAction(self.tr("&Copy"))
         copy_action.setObjectName("serial-copy-selection")
         copy_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Copy))
@@ -970,7 +971,7 @@ class SerialPanel(QWidget):
         self._display_options.setAccessibleName("Serial display options")
         self._display_options.setToolTip("Serial display options, including Wrap lines; also available by right-clicking output")
         self._display_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(self._display_options)
+        menu = GlassMenu(self._display_options)
         self._baud_menu = menu.addMenu("Baud rate")
         self._baud_menu.aboutToShow.connect(self._populate_baud_menu)
         self._baud_menu.menuAction().setVisible(False)

@@ -45,6 +45,46 @@ try:
 except ImportError:
     sys.exit("QScintilla is required. Prepare the sample viewer in MCU Flasher Bootstrap.")
 
+class PreviewCloseButton(QToolButton):
+    """A painted round close mark, so the preview tab never relies on a blank native primitive."""
+
+    def __init__(self, parent, owner):
+        super().__init__(parent)
+        self._owner = owner
+        self.setFixedSize(18, 18)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setToolTip("Close library preview")
+        self.setAccessibleName("Close library preview")
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.update()
+
+    def paintEvent(self, _event):
+        from PyQt5.QtCore import QPointF, QRectF
+        from PyQt5.QtGui import QPainter, QPen
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        hovered = self.underMouse()
+        if hovered:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(229, 72, 77, 225))
+            painter.drawEllipse(QRectF(self.rect()).adjusted(1, 1, -1, -1))
+        ink = QColor("#ffffff") if hovered else QColor(self._owner.colors.get("foreground", "#cccccc"))
+        pen = QPen(ink, 1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        center, arm = QRectF(self.rect()).center(), 3.5
+        painter.drawLine(QPointF(center.x() - arm, center.y() - arm), QPointF(center.x() + arm, center.y() + arm))
+        painter.drawLine(QPointF(center.x() + arm, center.y() - arm), QPointF(center.x() - arm, center.y() + arm))
+        painter.end()
+
+
 ARDUINO_FUNCTIONS = """
 setup loop pinMode digitalWrite digitalRead analogWrite analogRead analogReference
 analogWriteResolution analogReadResolution tone noTone pulseIn pulseInLong shiftIn shiftOut
@@ -527,8 +567,10 @@ class MainWindow(QMainWindow):
         if not word:
             self.statusBar().clearMessage()
         elif not definitions:
-            self.statusBar().showMessage(f"No declaration for {word} in the current source/include context.", 6000)
-        elif len(definitions) == 1 and not payload.get("requires_choice"):
+            self.statusBar().showMessage(payload.get("error") or
+                                         f"No declaration for {word} in the current source/include context.", 6000)
+        elif len(definitions) == 1:
+            # Conditional code may hide another declaration, but one candidate is no choice.
             self._jump_to_definition(definitions[0])
         else:
             if self._definition_menu is not None:
@@ -564,10 +606,7 @@ class MainWindow(QMainWindow):
             index = self.tabs.addTab(target, Path(definition.path).name + " [read only]")
             self.tabs.setTabToolTip(index, "Read-only library preview\n" + definition.path)
             self._preview_editor = target
-            close = QToolButton(self.tabs.tabBar())
-            close.setText("Close")
-            close.setToolTip("Close library preview")
-            close.setAccessibleName("Close library preview")
+            close = PreviewCloseButton(self.tabs.tabBar(), self)
             close.clicked.connect(self._close_preview)
             self.tabs.tabBar().setTabButton(index, QTabBar.RightSide, close)
         for index in range(self.tabs.count()):
