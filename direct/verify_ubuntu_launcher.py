@@ -55,6 +55,7 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
     def test_clean_checkout_copy_does_not_require_or_inherit_generated_guidance(self):
         tree = ast.parse((ROOT / "direct/verify_ubuntu_first_run.py").read_text(encoding="utf-8"))
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_copy_source")
+        home_helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_home_isolation")
         scratch = ROOT / "temp/audit/ubuntu-launcher"
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as temporary:
@@ -78,7 +79,7 @@ class FirstLaunchPackagingChecks(unittest.TestCase):
             scope = {"ROOT": source, "Path": Path, "shutil": shutil,
                      "HOME_ISOLATION": "# isolated home\n", "GUI_SERIAL_ISOLATION": "# isolated serial\n",
                      "GUI_SMOKE": "        # isolated smoke\n"}
-            exec(compile(ast.Module(body=[function], type_ignores=[]), "<first-launch-copy>", "exec"), scope)
+            exec(compile(ast.Module(body=[home_helper, function], type_ignores=[]), "<first-launch-copy>", "exec"), scope)
             for has_guidance, has_arm64 in ((False, False), (True, True)):
                 with self.subTest(local_guidance_present=has_guidance, arm64_present=has_arm64):
                     if has_guidance:

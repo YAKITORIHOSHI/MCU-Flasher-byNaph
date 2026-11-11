@@ -142,6 +142,10 @@ class RealInputQueueChecks(unittest.TestCase):
         user.IsWindowVisible.argtypes = [wintypes.HWND]
         user.SetCursorPos.argtypes = [ctypes.c_int,ctypes.c_int]
         user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user.WindowFromPoint.argtypes = [wintypes.POINT]
+        user.WindowFromPoint.restype = wintypes.HWND
+        user.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user.GetAncestor.restype = wintypes.HWND
         user.PostMessageW.argtypes = [wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
 
         class Keyboard(ctypes.Structure):
@@ -171,8 +175,27 @@ class RealInputQueueChecks(unittest.TestCase):
             self.assertTrue(user.ClientToScreen(int(host.effectiveWinId()), ctypes.byref(origin)))
             point = widget.mapTo(host, widget.rect().center())
             ratio = host.devicePixelRatioF()
-            self.assertTrue(user.SetCursorPos(origin.x+round(point.x()*ratio),
-                                              origin.y+round(point.y()*ratio)))
+            physical = wintypes.POINT(origin.x+round(point.x()*ratio),
+                                     origin.y+round(point.y()*ratio))
+            hit = user.WindowFromPoint(physical)
+            hit_pid = wintypes.DWORD()
+            user.GetWindowThreadProcessId(hit, ctypes.byref(hit_pid))
+            native = wintypes.RECT()
+            user.GetWindowRect(int(host.effectiveWinId()), ctypes.byref(native))
+            client = wintypes.RECT()
+            user.GetClientRect(int(host.effectiveWinId()), ctypes.byref(client))
+            print('Qt click geometry:', dict(field=widget.objectName(), host=int(host.effectiveWinId()),
+                  logical_rect=widget.geometry().getRect(), logical_center=(point.x(), point.y()),
+                  ratio=ratio, client_origin=(origin.x, origin.y),
+                  native_rect=(native.left, native.top, native.right, native.bottom),
+                  native_client=(client.left, client.top, client.right, client.bottom),
+                  physical=(physical.x, physical.y), hit=hit, hit_root=user.GetAncestor(hit, 2),
+                  hit_pid=hit_pid.value), flush=True)
+            if widget.objectName() == 'settings':
+                capture('settings-before-click')
+                self.assertEqual(user.GetAncestor(hit, 2), int(host.effectiveWinId()),
+                                 'The Settings input click is obscured or outside its owned dialog')
+            self.assertTrue(user.SetCursorPos(physical.x, physical.y))
             press()
         def press():
             events=(Input*2)(Input(type=0,data=Data(mouse=Data.Mouse(flags=2))),
@@ -184,18 +207,67 @@ class RealInputQueueChecks(unittest.TestCase):
         layout = QVBoxLayout(window)
         embed = QWidget(window); embed.setMinimumHeight(180); embed.setProperty('mcuForeignInput', True)
         editor, terminal = QLineEdit(window), QLineEdit(window)
+        editor.setObjectName('editor'); terminal.setObjectName('terminal')
         for item in (embed, editor, terminal): layout.addWidget(item)
         dialog = QDialog(window); dialog.setWindowTitle('Owned settings fixture')
         settings = QLineEdit(dialog); QVBoxLayout(dialog).addWidget(settings)
+        settings.setObjectName('settings')
         work = app.primaryScreen().availableGeometry()
         window.resize(min(640, work.width()-40), min(400, work.height()-60))
         window.move(work.left()+20, work.top()+20)
         window.show(); app.processEvents()
+        # Reserve a separate on-screen column for the nonmodal fixture dialog.
+        # Calibration explicitly activates the parent, so overlapping its
+        # input fields makes a physical click dependent on native z-order.
+        # Measure actual frame/client borders, converting pixels to logical Qt
+        # units once; the same fixture must fit at every declared scale.
+        import math
+        dialog.adjustSize(); dialog.show(); app.processEvents()
+        def native_frame_size(host):
+            native = wintypes.RECT(); client = wintypes.RECT()
+            self.assertTrue(user.GetWindowRect(int(host.effectiveWinId()), ctypes.byref(native)))
+            self.assertTrue(user.GetClientRect(int(host.effectiveWinId()), ctypes.byref(client)))
+            ratio = host.devicePixelRatioF()
+            return (math.ceil((native.right-native.left)/ratio),
+                    math.ceil((native.bottom-native.top)/ratio),
+                    math.ceil(((native.right-native.left)-(client.right-client.left))/ratio),
+                    math.ceil(((native.bottom-native.top)-(client.bottom-client.top))/ratio))
+        dialog_frame_width, _height, _dx, _dy = native_frame_size(dialog)
+        _width, _height, window_border_width, window_border_height = native_frame_size(window)
+        margin, gap = 16, 16
+        client_width = min(640, work.width()-margin*2-gap-dialog_frame_width-window_border_width)
+        client_height = min(400, work.height()-margin*2-window_border_height)
+        minimum = window.minimumSizeHint()
+        self.assertGreaterEqual(client_width, minimum.width(), 'The fixture cannot fit both owned windows')
+        self.assertGreaterEqual(client_height, minimum.height(), 'The fixture cannot fit its input fields')
+        window.resize(client_width, client_height)
+        window.move(work.left()+margin, work.top()+margin)
+        app.processEvents()
+        dialog.move(window.frameGeometry().right()+gap+1, work.top()+margin)
+        app.processEvents()
+        self.assertFalse(window.frameGeometry().intersects(dialog.frameGeometry()),
+                         'The owned input fixture windows must not overlap')
+        dialog.hide()
         child = subprocess.Popen([sys.executable, '-B', str(Path(__file__).resolve()), '--foreign-child'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             creationflags=subprocess.CREATE_NO_WINDOW)
         foreign_process=None
         root=None
+        def capture(label):
+            directory = ROOT / 'temp/audit'
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f'native-input-{os.environ.get("QT_SCALE_FACTOR", "1")}-{label}.png'
+            print('Native capture:', str(path), app.primaryScreen().grabWindow(0).save(str(path)), flush=True)
+        def describe_focus(label):
+            current = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
+            user.GetGUIThreadInfo(0, ctypes.byref(current))
+            focus_pid = wintypes.DWORD()
+            user.GetWindowThreadProcessId(current.hwndFocus, ctypes.byref(focus_pid))
+            logical, active = app.focusWidget(), app.activeWindow()
+            print('Native focus phase:', dict(phase=label, native=current.hwndFocus,
+                  native_pid=focus_pid.value, logical=(logical.objectName() if logical else None),
+                  active=(active.windowTitle() if active else None),
+                  dialog_visible=dialog.isVisible()), flush=True)
         try:
             # The runner bounds this entire fixture; the child prints before
             # entering its message loop and owns no service or user state.
@@ -246,10 +318,7 @@ class RealInputQueueChecks(unittest.TestCase):
             for target, host in ((editor, window), (settings, dialog), (terminal, window), (editor, window)):
                 host.show()
                 if host is dialog:
-                    # Keep the owned dialog reachable at 100–200% scale without
-                    # covering the foreign field used for calibration.
-                    dialog.move(window.x()+window.width()-dialog.width(),
-                                window.y()+window.height()-dialog.height())
+                    dialog.move(window.frameGeometry().right()+gap+1, work.top()+margin)
                 destination=int(target.effectiveWinId())
                 window.activateWindow(); user.SetForegroundWindow(int(window.winId()))
                 QTest.qWait(100)
@@ -275,8 +344,10 @@ class RealInputQueueChecks(unittest.TestCase):
                 self.assertEqual(user.SendInput(2,erase,ctypes.sizeof(Input)),2)
                 self.assertEqual(next_child_message(),{'text':''})
                 click_qt(target)
+                describe_focus('immediately-after-click')
                 window.resize(window.width() + 1, window.height())
                 QTest.qWait(400)
+                describe_focus('after-parent-resize')
                 info = _GuiThreadInfo(cbSize=ctypes.sizeof(_GuiThreadInfo))
                 self.assertTrue(user.GetGUIThreadInfo(0, ctypes.byref(info)))
                 native_pid = wintypes.DWORD()
@@ -303,6 +374,10 @@ class RealInputQueueChecks(unittest.TestCase):
                 self.assertTrue(startup.empty(),'The embedded process reported unexpected text input')
                 if host is dialog: dialog.hide()
             print('Native host:', sys.getwindowsversion(), 'Qt scale:', os.environ.get('QT_SCALE_FACTOR','1'), flush=True)
+        except BaseException:
+            describe_focus('failure')
+            capture('failure')
+            raise
         finally:
             if root and user.IsWindow(root):
                 user.PostMessageW(root,0x10,0,0)  # WM_CLOSE to this fixture's child.

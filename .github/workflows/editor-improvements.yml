@@ -86,5 +86,6 @@ jobs:
           path: |
             temp/audit/verifier-runs/*.log
             temp/audit/native-input*.log
+            temp/audit/native-input*.png
             temp/audit/terminal
           if-no-files-found: warn
