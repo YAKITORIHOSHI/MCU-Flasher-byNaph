@@ -510,12 +510,29 @@ class LauncherChecks(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), ["--desktop", *arguments])
         self.assertFalse((self.root / "NEVER").exists())
 
+    def place_host_launcher(self, target):
+        """Copy a shipped root launcher, or build the same source when none ships.
+
+        Releases now ship LAUNCHER/UBUNTU entries (verify_launcher_folder.py)
+        and no root binary; src/launcher_ubuntu.c keeps this behavior contract.
+        """
+        name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
+        if (ROOT / name).is_file():
+            shutil.copy2(ROOT / name, target)
+            return
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("No shipped root launcher and no native C compiler to build one")
+        subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Wformat=2",
+                        "-Wwrite-strings", "-Werror", str(ROOT / "src/launcher_ubuntu.c"), "-o", str(target)],
+                       capture_output=True, text=True, timeout=30, check=True)
+
     def test_shipped_host_launcher_preserves_location_and_literal_arguments_after_relocation(self):
         folder = self.root / 'Moved Ubuntu Ω folder $cash `literal`'
         (folder / "direct/ubuntu").mkdir(parents=True)
         name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
         target = folder / name
-        shutil.copy2(ROOT / name, target)
+        self.place_host_launcher(target)
         self.assertTrue(ubuntu_architecture.elf_matches_host(target))
         self.launcher_arguments(target)
         moved = self.root / 'Relocated Ubuntu Ω folder %literal "quoted"'
@@ -532,7 +549,7 @@ class LauncherChecks(unittest.TestCase):
             self.skipTest("Ubuntu GLib file information CLI unavailable")
         name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
         target = self.root / name
-        shutil.copy2(ROOT / name, target)
+        self.place_host_launcher(target)
         result = subprocess.run([gio, "info", "-a", "standard::content-type,access::can-execute", str(target)],
                                 capture_output=True, text=True, timeout=10, check=True,
                                 env={**os.environ, "LC_ALL": "C"})
@@ -555,7 +572,7 @@ class LauncherChecks(unittest.TestCase):
     def test_shipped_native_wrapper_reports_missing_resources_and_preserves_runner_failure(self):
         name = "MCU_Flasher-arm64" if ubuntu_architecture.host_architecture() == "arm64" else "MCU_Flasher"
         target = self.root / name
-        shutil.copy2(ROOT / name, target)
+        self.place_host_launcher(target)
         result = subprocess.run([str(target)], cwd=self.root, capture_output=True,
                                 text=True, timeout=10, check=False)
         self.assertEqual(result.returncode, 1)

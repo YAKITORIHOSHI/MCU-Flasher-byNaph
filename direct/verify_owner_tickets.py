@@ -148,7 +148,14 @@ class PortalChecks(unittest.TestCase):
 
     def assert_scroll_width(self, scroll):
         viewport = scroll.viewport()
-        self.assertLessEqual(scroll.widget().width(), viewport.width())
+        # A clamped resize can show the vertical scrollbar for a moment before
+        # the wrapped card settles; judge the settled layout, within a bound.
+        deadline = time.monotonic() + 1.5
+        while scroll.widget().width() > viewport.width() and time.monotonic() < deadline:
+            QTest.qWait(10)
+        self.assertLessEqual(scroll.widget().width(), viewport.width(),
+                             (scroll.window().objectName(), scroll.window().size(), scroll.widget().minimumSizeHint(),
+                              scroll.verticalScrollBar().isVisible()))
         self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
 
     def reveal_full_widget(self, scroll, widget):

@@ -604,7 +604,16 @@ class AppearanceChecks(QtBrowserFixture):
         self.pump(.05)
         self.assertGreater(window.sources_status.height(), 12)
         self.assertLessEqual(window.sources_status.width(), window._sources_card.width())
-        tab.detail_scroll.ensureWidgetVisible(tab.arduino_cli_btn)
+        # The window fits itself to a small screen in a coalesced pass after
+        # show; scroll only once its final size has landed, or a later shrink
+        # leaves an earlier scroll position pointing past the action.
+        deadline, previous = time.monotonic() + 2, None
+        while time.monotonic() < deadline and previous != (window.size(), tab.detail_scroll.viewport().size()):
+            previous = (window.size(), tab.detail_scroll.viewport().size())
+            self.pump(.1)
+        # On a short 200% screen the viewport can be shorter than
+        # ensureWidgetVisible's default 50 px margins; ask for the action itself.
+        tab.detail_scroll.ensureWidgetVisible(tab.arduino_cli_btn, 0, 0)
         self.pump()
         self.assertTrue(tab.arduino_cli_btn.visibleRegion().boundingRect().height() > 0, "Its action must scroll into view")
 

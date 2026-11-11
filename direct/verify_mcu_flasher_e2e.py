@@ -66,6 +66,24 @@ def pump_events(iterations: int = 5, sleep_sec: float = 0.01) -> None:
             time.sleep(sleep_sec)
 
 
+def sign_in_locally(dialog, service, key: str = "fixture-local-key", timeout: float = 4.0) -> None:
+    """Developer Access opens only after a local access key or cloud sign-in.
+
+    There is deliberately no default bypass to the dashboard; sign in through
+    the real form with a mocked service, as a developer would.
+    """
+    if not isinstance(service.authenticate.return_value, tuple):
+        service.authenticate.return_value = (True, "Signed in")
+    deadline = time.monotonic() + timeout
+    while dialog._task_name and time.monotonic() < deadline:  # service initialization
+        pump_events(1, 0.01)
+    dialog.txt_auth_pwd.setText(key)
+    dialog._do_authenticate()
+    while dialog._task_name and time.monotonic() < deadline:
+        pump_events(1, 0.01)
+    pump_events(5, 0.01)
+
+
 def wait_for_file(path: Path, timeout: float = 1.5) -> bool:
     """Poll for a file written by a background worker thread."""
     deadline = time.monotonic() + timeout
@@ -241,21 +259,23 @@ class TestTier1_R2_DeveloperTickets(BaseE2ETestCase):
         self.mock_service._storage_dir = self.temp_path / "portal"
         self.mock_service._storage_dir.mkdir(parents=True, exist_ok=True)
 
-    def test_r2_owner_ticket_dialog_bypasses_login_directly_to_dashboard(self):
-        """Opening Developer Tickets navigates directly to dashboard without requiring login."""
+    def test_r2_owner_ticket_dialog_requires_sign_in_before_dashboard(self):
+        """Developer Tickets opens on sign-in, then reaches the dashboard with a local key."""
         with patch("main.qt.owner_ticket_dialog.OwnerTicketService", return_value=self.mock_service):
             dialog = OwnerTicketDialog(backend=None, parent=None)
             self.addCleanup(dialog.deleteLater)
             pump_events(10, 0.02)
+            self.assertEqual(dialog.stack.currentWidget().objectName(), "developer-login-page",
+                             "Developer Access must not bypass sign-in")
+            sign_in_locally(dialog, self.mock_service)
 
-            # Must switch to dashboard page, bypassing login page
             current = dialog.stack.currentWidget()
             is_dashboard = (
                 current.objectName() == "developer-dashboard-page"
                 or getattr(dialog, "btn_new", None) is not None and dialog.btn_new.parentWidget() == current
                 or dialog.stack.currentIndex() == 1
             )
-            self.assertTrue(is_dashboard, "Must switch directly to dashboard page")
+            self.assertTrue(is_dashboard, "Signing in must open the dashboard")
             self.assertNotEqual(current.objectName(), "developer-login-page")
 
     def test_r2_loading_screen_displayed_during_initialization(self):
@@ -291,11 +311,12 @@ class TestTier1_R2_DeveloperTickets(BaseE2ETestCase):
             self.assertTrue(len(cards) >= 1, "Loading screen must utilize NeoCard container")
 
     def test_r2_local_developer_access_without_credentials(self):
-        """Local mode without cloud credentials defaults to Local Developer Access."""
+        """Without cloud credentials a local access key gives Local Developer Access."""
         with patch("main.qt.owner_ticket_dialog.OwnerTicketService", return_value=self.mock_service):
             dialog = OwnerTicketDialog(backend=None, parent=None)
             self.addCleanup(dialog.deleteLater)
             pump_events(10, 0.02)
+            sign_in_locally(dialog, self.mock_service)
 
             self.assertIn("local", dialog.access_label.text().lower(),
                           "Access label must indicate Local developer access when unauthenticated")
@@ -549,6 +570,7 @@ class TestTier2_R2_DeveloperTickets_Boundaries(BaseE2ETestCase):
             dialog = OwnerTicketDialog(backend=None, parent=None)
             self.addCleanup(dialog.deleteLater)
             pump_events(10, 0.02)
+            sign_in_locally(dialog, mock_service)
 
             is_dashboard = (
                 dialog.stack.currentWidget().objectName() == "developer-dashboard-page"
@@ -572,6 +594,7 @@ class TestTier2_R2_DeveloperTickets_Boundaries(BaseE2ETestCase):
             dialog = OwnerTicketDialog(backend=None, parent=None)
             self.addCleanup(dialog.deleteLater)
             pump_events(10, 0.02)
+            sign_in_locally(dialog, mock_service)
 
             self.assertEqual(len(dialog._tickets), 0)
             is_dashboard = (
@@ -885,6 +908,7 @@ class TestTier3_CrossFeatureCombinations(BaseE2ETestCase):
 
             # Wait for dialog to settle
             pump_events(10, 0.02)
+            sign_in_locally(dialog, mock_service)
             is_dashboard = (
                 dialog.stack.currentWidget().objectName() == "developer-dashboard-page"
                 or getattr(dialog, "btn_new", None) is not None and dialog.btn_new.parentWidget() == dialog.stack.currentWidget()
@@ -999,6 +1023,7 @@ class TestTier4_RealWorldScenarios(BaseE2ETestCase):
 
             # Transition to dashboard
             pump_events(10, 0.02)
+            sign_in_locally(dialog, mock_service)
             is_dashboard = (
                 dialog.stack.currentWidget().objectName() == "developer-dashboard-page"
                 or getattr(dialog, "btn_new", None) is not None and dialog.btn_new.parentWidget() == dialog.stack.currentWidget()
