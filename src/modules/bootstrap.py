@@ -2023,6 +2023,12 @@ def check_arduino_cli_update() -> dict:
                 "update_available": False, "error": "network unavailable — skipping"}
 
     update_available = _version_tuple(latest) > _version_tuple(installed)
+    if update_available:
+        # An earlier run may already have installed the release elsewhere while
+        # the remembered path still named an older copy: adopt it, don't re-offer.
+        upgraded_path, found = _verified_arduino_cli_upgrade(latest)
+        if upgraded_path:
+            installed, update_available = found, False
     return {"name": "arduino-cli", "installed": installed, "latest": latest,
             "update_available": update_available, "error": None}
 

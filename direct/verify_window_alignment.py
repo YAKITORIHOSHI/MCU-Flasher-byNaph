@@ -119,8 +119,10 @@ class AlignmentChecks(unittest.TestCase):
                 tile = tiling_area_width(area.width(), area != screen.geometry()) // 2
                 self.assertEqual(window.minimumWidth() + left + right, min(tile, 960))
                 if area == screen.geometry():
-                    # The Ubuntu dock (60-90 px) fits beside two half tiles.
-                    self.assertLessEqual(window.minimumWidth() + left + right, (area.width() - 96) // 2)
+                    # Ubuntu's dock (about 70 px with its default 48 px icons)
+                    # fits beside two half tiles, even on a small screen.
+                    dock = min(96, area.width() // 8)
+                    self.assertLessEqual(window.minimumWidth() + left + right, (area.width() - dock) // 2)
             with patch("PySide6.QtGui.QGuiApplication.platformName", return_value="xcb"):
                 self.assertTrue(MCUMainWindow._panels_reported(screen))
 

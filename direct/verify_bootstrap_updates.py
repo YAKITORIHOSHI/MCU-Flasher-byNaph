@@ -200,6 +200,30 @@ class UpdateChecks(unittest.TestCase):
         self.assertFalse(any("upgraded" in message for kind, message in self.messages if kind == "ok"))
         self.assertTrue(any("reports 1.4.0" in message for _, message in self.messages))
 
+    def test_an_already_installed_newer_cli_is_adopted_instead_of_offered(self):
+        source = ROOT / "src/modules/bootstrap.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        names = {"_verified_arduino_cli_upgrade", "_arduino_cli_version_of", "_arduino_cli_installed_version",
+                 "check_arduino_cli_update", "_version_tuple"}
+        cached = []
+        versions = {"C:/old/arduino-cli.exe": "1.4.0", "C:/Program Files/Arduino CLI/arduino-cli.exe": "1.5.1"}
+        namespace = dict(sys=sys, Path=Path,
+            subprocess=SimpleNamespace(run=lambda command, **_: SimpleNamespace(
+                stdout=f"arduino-cli  Version: {versions.get(command[0], '')} Commit: fixture\n"), CREATE_NO_WINDOW=0),
+            shutil=SimpleNamespace(which=lambda name: None), find_arduino_cli=lambda: "C:/old/arduino-cli.exe",
+            _search_arduino_cli_install_dirs=lambda: "C:/Program Files/Arduino CLI/arduino-cli.exe",
+            _cache_arduino_cli_path=cached.append, _arduino_cli_latest_version=lambda: "1.5.1")
+        exec(compile(ast.Module(body=[node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[]), str(source), "exec"), namespace)
+        result = namespace["check_arduino_cli_update"]()
+        self.assertFalse(result["update_available"], result)
+        self.assertEqual(result["installed"], "1.5.1")
+        self.assertEqual(cached, ["C:/Program Files/Arduino CLI/arduino-cli.exe"])
+        versions["C:/Program Files/Arduino CLI/arduino-cli.exe"] = "1.4.0"
+        cached.clear()
+        self.assertTrue(namespace["check_arduino_cli_update"]()["update_available"])
+        self.assertEqual(cached, [])
+
     def test_latest_version_probe_has_no_upgrade_side_effect(self):
         source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
         tree = ast.parse(source)

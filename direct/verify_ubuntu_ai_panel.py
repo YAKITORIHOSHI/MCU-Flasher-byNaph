@@ -45,6 +45,7 @@ class FakeView(QWidget):
 class FakePty(QObject):
     output = Signal(str)
     ended = Signal(str)
+    exited = Signal()
     instances = []
 
     def __init__(self, cwd, argv, parent=None):
