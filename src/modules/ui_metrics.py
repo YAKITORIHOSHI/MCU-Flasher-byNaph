@@ -37,6 +37,21 @@ def workspace_minimum_width(area_width):
     return max(1, min(int(area_width) // 2, WORKSPACE_MINIMUM_WIDTH_CAP))
 
 
+# Wayland never tells a client where docks and panels are, so Qt reports the
+# whole monitor as available. GNOME then tiles half of what the dock leaves
+# (Ubuntu's dock is 60-90 logical pixels wide), and refuses to tile a window
+# whose minimum is wider than that half. Allow for an unreported side panel.
+UNREPORTED_PANEL_ALLOWANCE = 128
+
+
+def tiling_area_width(area_width, panels_reported=True):
+    """The width a desktop divides when it tiles windows side by side."""
+    width = max(1, int(area_width))
+    if panels_reported:
+        return width
+    return max(1, width - min(UNREPORTED_PANEL_ALLOWANCE, width // 8))
+
+
 # The shortest complete frame, as a share of the monitor's usable height. Shorter
 # windows left one line of code above the tools, which read as a broken layout.
 WORKSPACE_MINIMUM_HEIGHT_SHARE = 0.75

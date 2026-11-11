@@ -126,13 +126,16 @@ class MonitorConnections(unittest.TestCase):
 
 
 class IntentionalResets(unittest.TestCase):
+    RESET_METHODS = {"_require_board_restart", "_trigger_actual_board_reset", "_serial_reset_family",
+                     "_run_reset_waveform", "_reset_on_live_monitor"}
+
     def setUp(self):
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MCUWebBackendAPI")
         methods = [n for n in cls.body if isinstance(n, ast.FunctionDef)]
-        for name in ("_require_board_restart", "_trigger_actual_board_reset", "_start_serial_monitor"):
+        for name in (*self.RESET_METHODS, "_start_serial_monitor"):
             self.assertEqual(sum(n.name == name for n in methods), 1, "Shadowed serial/reset method")
-        cls.body = [n for n in methods if n.name in {"_require_board_restart", "_trigger_actual_board_reset"}]
+        cls.body = [n for n in methods if n.name in self.RESET_METHODS]
         cls.bases = []
         self.port = Port()
         self.factory = Mock(return_value=self.port)
@@ -141,7 +144,44 @@ class IntentionalResets(unittest.TestCase):
         exec(compile(ast.Module(body=[cls], type_ignores=[]), "backend-reset", "exec"), ns)
         self.api = ns["MCUWebBackendAPI"]()
         self.api.current_board, self.api.current_port = "Fixture", "SIMULATED"
+        self.api.current_baud = 115200
         self.api.emit = Mock()
+        self.api._serial_lock = __import__("threading").RLock()
+        self.api._serial_conn = None
+        self.api._upload_status_key = lambda kind: f"1:upload-{kind}"
+        self.api._apply_sketch_monitor_baud = Mock()
+        # By default the monitor cannot attach: the passive one-shot open is used.
+        self.api._start_serial_monitor = Mock()
+
+    def test_restart_runs_on_the_attached_monitor_with_ordered_notices(self):
+        live = Port()
+        live.is_open, live.port = True, "SIMULATED"
+        events = []
+        publisher = Mock()
+        publisher.hold = lambda text, tag: events.append(("hold", text))
+        publisher.release = lambda *notices: events.append(("release", notices[0][0]))
+
+        def attach(**_):
+            self.assertTrue(_.get("operation_handoff"), "The worker attached without its handoff")
+            self.api._serial_conn, self.api._serial_log_flush = live, publisher
+            events.append(("attached", ""))
+        self.api._start_serial_monitor = Mock(side_effect=attach)
+        for family, line in (("atmelavr", "dtr"), ("espressif32", "rts")):
+            with self.subTest(family=family):
+                events.clear()
+                live.changes.clear()
+                self.api._serial_conn = None
+                summary = self.api._require_board_restart("SIMULATED", "Fixture", {"platform": family},
+                                                          sketch_firmware=True)
+                self.assertEqual([kind for kind, _ in events], ["attached", "hold", "release"])
+                self.assertIn("after upload", events[1][1])
+                self.assertIn("Board restarted", events[2][1])
+                self.assertEqual([(name, value) for name, value in live.changes if value], [(line, True)])
+                self.assertFalse(live.dtr)
+                self.assertTrue(live.is_open, "The monitor connection was closed by its own restart")
+                self.assertIn("Serial Monitor attached", summary)
+                self.factory.assert_not_called()
+                self.api._apply_sketch_monitor_baud.assert_called()
 
     def test_actual_production_reset_runs_declared_waveform(self):
         for family, line in (("atmelavr", "dtr"), ("espressif32", "rts"), ("espressif8266", "rts")):

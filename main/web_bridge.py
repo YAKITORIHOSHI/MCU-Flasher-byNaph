@@ -3514,8 +3514,12 @@ class MCUWebBackendAPI:
     # ──────────────────────────────────────────────────────────
     # JS-RPC: SERIAL MONITOR & SEND
     # ──────────────────────────────────────────────────────────
-    def _start_serial_monitor(self, _expected_generation=None):
-        """Open the COM port and stream data in a background thread."""
+    def _start_serial_monitor(self, _expected_generation=None, *, operation_handoff=False):
+        """Open the COM port and stream data in a background thread.
+
+        ``operation_handoff`` lets an upload worker attach the monitor before
+        it restarts the board it just wrote, so the boot output is captured.
+        """
         from main.core.serial_stream import SerialTextDecoder
 
         with self._serial_lock:
@@ -3546,7 +3550,8 @@ class MCUWebBackendAPI:
                     pass
                 self._serial_conn = None
 
-            if not self.current_port or (self.is_busy and self.active_operation != "compile"):
+            if not self.current_port or (self.is_busy and self.active_operation != "compile"
+                                         and not operation_handoff):
                 self.emit("serial:status", {
                     "generation": generation,
                     "connected": False,
@@ -3630,6 +3635,11 @@ class MCUWebBackendAPI:
         next_flush = time.monotonic() + 0.03
         finalized = False
         warned_invalid = False
+        # While a reset waveform runs, received bytes wait (in memory, bounded
+        # by time and size) so its notices precede the board's boot output
+        # instead of landing in the middle of one of its lines.
+        hold_until = 0.0
+        held_limit = 262144
         log_lock = threading.RLock()
         reader_start = threading.Event()
 
@@ -3650,9 +3660,14 @@ class MCUWebBackendAPI:
                 }
             return None
 
-        def publish(*, stream_end=False, clear=False):
+        def holding():
+            return hold_until > time.monotonic() and piece_chars < held_limit
+
+        def publish(*, stream_end=False, clear=False, force=False):
             nonlocal piece_chars, next_flush
             with log_lock:
+                if not (force or stream_end or clear) and holding():
+                    return
                 if (pieces or stream_end) and generation == self._serial_generation:
                     self.emit("serial:log", {
                         "text": "".join(pieces), "newline": False,
@@ -3670,12 +3685,41 @@ class MCUWebBackendAPI:
         def retain(text):
             nonlocal piece_chars
             while text:
-                room = 8192 - piece_chars
+                limit = held_limit if holding() else 8192
+                room = max(1, limit - piece_chars)
                 part, text = text[:room], text[room:]
                 pieces.append(part)
                 piece_chars += len(part)
-                if piece_chars >= 8192:
-                    publish()
+                if piece_chars >= limit:
+                    publish(force=True)
+
+        def emit_notice(text, tag):
+            self.emit("serial:log", {
+                "generation": generation, "stream": False,
+                "text": text, "tag": tag, "newline": True,
+            })
+
+        def hold(text="", tag="info", seconds=2.0):
+            """Publish what came before, show one notice, then hold new bytes."""
+            nonlocal hold_until
+            with log_lock:
+                publish(force=True)
+                if text:
+                    emit_notice(text, tag)
+                if generation == self._serial_generation and not finalized:
+                    hold_until = time.monotonic() + max(0.0, float(seconds))
+                    return True
+                return False
+
+        def release(*notices):
+            """End a hold: its notices first, then everything received during it."""
+            nonlocal hold_until
+            with log_lock:
+                hold_until = 0.0
+                for text, tag in notices:
+                    if text:
+                        emit_notice(text, tag)
+                publish(force=True)
 
         def finish():
             # State transitions take state -> log locks; readers and Copy/Clear
@@ -3746,6 +3790,9 @@ class MCUWebBackendAPI:
         with self._serial_lock:
             if generation != self._serial_generation:
                 return
+            # Hold/release travel with this connection's publisher, so a reset
+            # notice can only be ordered against the stream it belongs to.
+            publish.hold, publish.release = hold, release
             self._serial_log_finalize = finish
             self._serial_log_flush = publish
             self._serial_log_lock = log_lock
@@ -3954,11 +4001,9 @@ class MCUWebBackendAPI:
                 if not target_unchanged() or self._serial_conn is not conn:
                     return
                 binfo = self._resolve_board_info(requested_board)
-                platform = str(binfo.get("platform", "")).lower()
-                if platform not in {"atmelavr", "espressif32", "espressif8266", "ststm32", "raspberrypi", "ch32v", "samd"}:
+                family = self._serial_reset_family(binfo.get("platform", ""))
+                if not family:
                     return  # No reset sequence is declared for this target.
-                is_uno = ("avr" in platform)
-                is_arm = platform in ("ststm32", "raspberrypi", "ch32v", "samd")
 
                 # Resolve outside the lock, then revalidate after that work.
                 # Keep the brief waveform under the same lock used to stop/
@@ -3969,34 +4014,7 @@ class MCUWebBackendAPI:
                             or not conn.is_open
                             or (self.is_busy and self.active_operation != "compile")):
                         return
-                    from main.core.monitor_connection import idle_after_reset
-                    with idle_after_reset(conn):
-                        if is_uno:
-                            conn.rts = False
-                            conn.dtr = False
-                            time.sleep(0.05)
-                            conn.dtr = True
-                            time.sleep(0.10)
-                            conn.dtr = False
-                            time.sleep(0.05)
-                        elif is_arm:
-                            conn.dtr = False
-                            conn.rts = False
-                            time.sleep(0.05)
-                            conn.dtr = True
-                            time.sleep(0.05)
-                            conn.dtr = False
-                            time.sleep(0.05)
-                        else:
-                            # ESP32 / ESP8266 auto-reset transistor circuit:
-                            # RTS=1, DTR=0 asserts EN (RESET pulled LOW)
-                            # RTS=0, DTR=0 releases EN (MCU boots normally into flash)
-                            conn.dtr = False
-                            conn.rts = True
-                            time.sleep(0.15)
-                            conn.rts = False
-                            conn.dtr = False
-                            time.sleep(0.05)
+                    self._run_reset_waveform(conn, family)
             except Exception:
                 pass  # Port may have been closed or disconnected mid-pulse; ignore silently.
 
@@ -5437,7 +5455,12 @@ class MCUWebBackendAPI:
         return True
 
     def _detect_sketch_baud_rate(self) -> Optional[str]:
-        """Scan active sketch directory for Serial.begin(...) calls and return a valid baud rate string, or None."""
+        """Return the Serial Monitor rate from the sketch's Serial.begin(...), or None.
+
+        The monitor shows ``Serial``; Serial1/Serial2 usually drive other devices
+        (GPS, modems) at their own rates, so ``Serial.begin`` wins over them.
+        Integer suffixes (115200UL) and named constants in any root source count.
+        """
         if not self.sketch_dir_path or not self.sketch_dir_path.is_dir():
             return None
         valid_baud_rates = {b for b in VALID_BAUD_RATES if b <= MAX_BAUD_RATE}
@@ -5447,36 +5470,66 @@ class MCUWebBackendAPI:
             if hit:
                 return cached_baud
 
-            macros: dict[str, int] = {}
-            sketch_files = get_sketch_files_fast(self.sketch_dir_path)
-            for file_path in sketch_files:
+            sources = []
+            for file_path in get_sketch_files_fast(self.sketch_dir_path):
                 content = _sketch_ram_cache.get_content(file_path, refresh=True)
-                if content is None:
-                    continue
+                if content is not None:
+                    sources.append(re.sub(r"//[^\n]*|/\*.*?\*/", "", content, flags=re.DOTALL))
 
-                content_clean = re.sub(r'//.*?\n|/\*.*?\*/', '', content, flags=re.DOTALL)
-                for macro_match in re.finditer(r"#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+([0-9]+)\b", content_clean):
-                    macros[macro_match.group(1)] = int(macro_match.group(2))
-                for const_match in re.finditer(r"(?:const\s+)?(?:unsigned\s+)?(?:long|int|uint32_t)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([0-9]+)\b", content_clean):
-                    macros[const_match.group(1)] = int(const_match.group(2))
+            literal = r"([0-9]+)[uUlL]*"
+            macros: dict[str, int] = {}
+            for content_clean in sources:
+                for name, value in re.findall(rf"#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+\(?\s*{literal}\s*\)?\s*$",
+                                              content_clean, flags=re.MULTILINE):
+                    macros[name] = int(value)
+                for name, value in re.findall(
+                        rf"\b(?:static\s+)?(?:constexpr\s+|const\s+)?(?:unsigned\s+)?"
+                        rf"(?:long\s+long|long|int|uint32_t|int32_t|uint64_t|size_t|auto)\s+"
+                        rf"([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|\{{)\s*{literal}\s*\}}?\s*;", content_clean):
+                    macros[name] = int(value)
 
-                for match in re.finditer(r"\bSerial[0-9A-Za-z_]*\.begin\s*\(\s*([A-Za-z0-9_]+)\b", content_clean):
-                    raw_val = match.group(1)
-                    if raw_val.isdigit():
-                        candidate = int(raw_val)
-                        if candidate in valid_baud_rates:
-                            _sketch_ram_cache.set_baud_rate(self.sketch_dir_path, curr_hash, str(candidate))
-                            return str(candidate)
-                    elif raw_val in macros:
-                        candidate = macros[raw_val]
-                        if candidate in valid_baud_rates:
-                            _sketch_ram_cache.set_baud_rate(self.sketch_dir_path, curr_hash, str(candidate))
-                            return str(candidate)
-
-            _sketch_ram_cache.set_baud_rate(self.sketch_dir_path, curr_hash, None)
+            found: dict[int, int] = {}
+            for content_clean in sources:
+                for match in re.finditer(r"\b(Serial[0-9A-Za-z_]*|USBSerial)\s*\.\s*begin\s*\(\s*([A-Za-z0-9_]+)",
+                                         content_clean):
+                    name, raw_val = match.group(1), match.group(2)
+                    number = re.fullmatch(literal, raw_val)
+                    candidate = int(number.group(1)) if number else macros.get(raw_val)
+                    if candidate in valid_baud_rates:
+                        priority = 0 if name in ("Serial", "SerialUSB", "USBSerial") else 1
+                        found.setdefault(priority, candidate)
+            result = str(found[min(found)]) if found else None
+            _sketch_ram_cache.set_baud_rate(self.sketch_dir_path, curr_hash, result)
+            return result
         except Exception:
             pass
         return None
+
+    def apply_board_monitor_baud(self, default_baud: int) -> None:
+        """Board changes set the monitor to the sketch's rate, else the board default.
+
+        Fingerprinting the sketch stays off Qt; the board default alone used to
+        overwrite the detected Serial.begin() rate, depending on thread timing.
+        """
+        try:
+            default_baud = int(default_baud)
+        except (TypeError, ValueError):
+            return
+        token = getattr(self, "_monitor_default_token", 0) + 1
+        self._monitor_default_token = token
+        board, project = self.current_board, getattr(self, "sketch_dir_path", None)
+
+        def _apply():
+            try:
+                detected = self._detect_sketch_baud_rate()
+            except Exception:
+                detected = None
+            if (token != getattr(self, "_monitor_default_token", 0) or self.current_board != board
+                    or getattr(self, "sketch_dir_path", None) != project):
+                return
+            self.set_baud_rate(int(detected) if detected else default_baud, allow_reset=False)
+
+        threading.Thread(target=_apply, name="MCU_MonitorBaud", daemon=True).start()
 
     def _scan_includes_for_libs(self) -> list[str]:
         """Scan sketch files for external #include directives to populate lib_deps."""
@@ -5624,7 +5677,7 @@ class MCUWebBackendAPI:
     def _append_upload_progress(self, label: str, stage: int, stage_total: int,
                                 percent: float, written: int | None = None,
                                 total: int | None = None,
-                                force_new: bool = False) -> None:
+                                force_new: bool = False, note: str = "") -> None:
         """Render responsive, in-place firmware flashing progress."""
         bar_width = 30
         pct = max(0.0, min(100.0, float(percent)))
@@ -5639,7 +5692,8 @@ class MCUWebBackendAPI:
             else:
                 size_label = f" | {written}/{total}B"
 
-        progress_text = f"  {icon} Flashing {stage_str}{label} [ {bar} ] | {pct:5.1f}%{size_label}"
+        note_label = f" | {note}" if note else ""
+        progress_text = f"  {icon} Flashing {stage_str}{label} [ {bar} ] | {pct:5.1f}%{size_label}{note_label}"
         self.emit("console:log", {
             "text": progress_text,
             "tag": "success" if pct >= 100.0 else "info",
@@ -5680,6 +5734,8 @@ class MCUWebBackendAPI:
             "started": False,
             "last_percent": None,
             "compressed_total": None,
+            # The first progress row of each region carries its start address.
+            "expect_region_start": True,
         }
 
     @staticmethod
@@ -5752,17 +5808,20 @@ class MCUWebBackendAPI:
         compressed = _parse_esptool_compressed(line)
         if compressed:
             state["compressed_total"] = compressed["compressed"]
+            state["expect_region_start"] = True
             if callable(phase_callback):
                 phase_callback("Writing")
             return True
 
         progress = _parse_esptool_write_progress(line)
         if progress:
-            # esptool v5 reports running write pointer (address + bytes_written) in the progress description.
-            # Never use the running pointer to change stages when a stage is locked or in v5,
-            # as it will hit the boundary address of the next stage (e.g. 0xe000 + 0x2000 = 0x10000) at 100%!
-            if progress.get("version") != 5 and not state.get("stage_locked"):
-                if progress.get("address"):
+            # esptool reports a running write pointer (address + bytes written).
+            # Its first row for a region is that region's start address, which
+            # selects the stage; later rows can reach the next region's
+            # boundary (0xe000 + 0x2000 = 0x10000) and must never move it.
+            region_start = state.pop("expect_region_start", False)
+            if not state.get("stage_locked") and progress.get("address"):
+                if region_start or progress.get("version") != 5:
                     self._select_upload_stage_for_address(state, progress["address"])
             if callable(before_progress):
                 before_progress()
@@ -5771,15 +5830,11 @@ class MCUWebBackendAPI:
             stages = state.get("stages") or [{"label": "Firmware"}]
             idx = max(0, min(int(state.get("active_index", 0)), len(stages) - 1))
             stage = stages[idx]
-            self._append_upload_progress(
-                stage.get("label") or "Firmware",
-                idx + 1,
-                len(stages),
-                progress["percent"],
-                progress.get("written"),
-                progress.get("total"),
-                force_new=not bool(state.get("started")),
-            )
+            row = {"label": stage.get("label") or "Firmware", "stage": idx + 1,
+                   "stage_total": len(stages), "percent": progress["percent"],
+                   "written": progress.get("written"), "total": progress.get("total")}
+            self._append_upload_progress(**row, force_new=not bool(state.get("started")))
+            state["last_row"] = row
             state["started"] = True
             state["last_percent"] = progress["percent"]
             return True
@@ -5789,6 +5844,7 @@ class MCUWebBackendAPI:
             if wrote.get("address"):
                 self._select_upload_stage_for_address(state, wrote["address"])
             state["stage_locked"] = False
+            state["expect_region_start"] = True
             if callable(before_progress):
                 before_progress()
             if callable(phase_callback):
@@ -5797,17 +5853,12 @@ class MCUWebBackendAPI:
             if stages:
                 idx = max(0, min(int(state.get("active_index", 0)), len(stages) - 1))
                 stage = stages[idx]
-                pct = 100.0
                 file_bytes = wrote.get("compressed") or wrote.get("raw")
-                self._append_upload_progress(
-                    stage.get("label") or "Firmware",
-                    idx + 1,
-                    len(stages),
-                    pct,
-                    file_bytes,
-                    file_bytes,
-                    force_new=not bool(state.get("started")),
-                )
+                row = {"label": stage.get("label") or "Firmware", "stage": idx + 1,
+                       "stage_total": len(stages), "percent": 100.0,
+                       "written": file_bytes, "total": file_bytes}
+                self._append_upload_progress(**row, force_new=not bool(state.get("started")))
+                state["last_row"] = row
                 state["started"] = True
             return True
 
@@ -7046,6 +7097,9 @@ class MCUWebBackendAPI:
             if port:
                 command += ["--upload-port", port]
             _, env = self._platformio_build_environment(jobs)
+            monitor_restart = self._monitor_restarts_upload(port, info)
+            if monitor_restart:
+                env["MCU_FLASHER_ESPTOOL_AFTER"] = "no-reset"
             from main.core.upload_log import UploadLog
             upload_log = UploadLog(
                 self, info, getattr(self, "current_board", "") or "", port,
@@ -7146,11 +7200,11 @@ class MCUWebBackendAPI:
                     })
                 raise RuntimeError(f"PlatformIO upload exited with code {code}. Review the console for the programmer or device requirement.")
             firmware_written = True
-            if not uploader_restarted:
-                self._require_board_restart(port, board_name, info)
+            restart = ("Hard reset by esptool (RTS)" if uploader_restarted
+                       else self._require_board_restart(port, board_name, info, sketch_firmware=True))
             success = True
             if upload_log is not None:
-                upload_log.finish(True, time.monotonic() - upload_started)
+                upload_log.finish(True, time.monotonic() - upload_started, restart=restart)
                 upload_log_finished = True
             self.emit("notification", {"title": "Upload completed", "message": "PlatformIO reported a successful upload.", "type": "success"})
             self.emit("console:progress", {"action": "Completed", "percent": 100})
@@ -7666,10 +7720,145 @@ class MCUWebBackendAPI:
             "newline": True,
         })
 
-    def _require_board_restart(self, port, board_name, board_info):
-        """Finish the write operation before success, without using the monitor."""
+    def _monitor_restarts_upload(self, port: str, info: dict) -> bool:
+        """ESP uploads through an external USB-UART bridge restart via the monitor.
+
+        esptool then leaves the chip in its bootloader and the worker pulses EN
+        on the Serial Monitor's own connection, capturing the boot output.
+        Espressif native USB keeps esptool's transport-specific reset.
+        """
+        platform = str((info or {}).get("platform", "")).lower()
+        if not port or platform not in ("espressif32", "espressif8266"):
+            return False
+        protocol = str((info or {}).get("upload_protocol") or "esptool").lower()
+        if protocol != "esptool":
+            return False
+        try:
+            return not self._is_native_usb_port(port)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _serial_reset_family(platform: str) -> str:
+        """Name the declared serial reset waveform for a PlatformIO platform."""
+        platform = str(platform or "").lower()
+        if "avr" in platform:
+            return "avr"
+        if platform in ("ststm32", "raspberrypi", "ch32v", "samd"):
+            return "arm"
+        if platform in ("espressif32", "esp32", "espressif8266", "esp8266"):
+            return "esp"
+        return ""
+
+    @staticmethod
+    def _run_reset_waveform(conn, family: str) -> None:
+        """Issue one declared reset waveform; both lines always return idle."""
+        from main.core.monitor_connection import idle_after_reset
+        with idle_after_reset(conn):
+            if family == "avr":
+                # Arduino auto-reset: the DTR edge pulses RESET through a capacitor.
+                conn.rts = False
+                conn.dtr = False
+                time.sleep(0.05)
+                conn.dtr = True
+                time.sleep(0.10)
+                conn.dtr = False
+                time.sleep(0.05)
+            elif family == "arm":
+                conn.dtr = False
+                conn.rts = False
+                time.sleep(0.05)
+                conn.dtr = True
+                time.sleep(0.05)
+                conn.dtr = False
+                time.sleep(0.05)
+            elif family == "esp":
+                # Two-transistor auto-reset: RTS=1/DTR=0 holds EN low and
+                # RTS=0 releases it with IO0 high, so the chip boots from flash.
+                conn.dtr = False
+                conn.rts = True
+                time.sleep(0.15)
+                conn.rts = False
+                conn.dtr = False
+                time.sleep(0.05)
+            else:
+                raise RuntimeError("No serial reset waveform is declared for this target")
+
+    def _reset_on_live_monitor(self, port: str, family: str, *, before: str, after: str,
+                               target_unchanged=None) -> bool | None:
+        """Pulse through the open Serial Monitor connection with ordered notices.
+
+        The reader holds bytes received during the waveform, so ``after`` is
+        shown before the board's boot output rather than inside one of its
+        lines. Returns None when no monitor connection on ``port`` is open.
+        """
+        with self._serial_lock:
+            conn = self._serial_conn
+            if not (conn and getattr(conn, "is_open", False) and conn.port == port):
+                return None
+            if target_unchanged is not None and not target_unchanged():
+                return False
+            publisher = getattr(self, "_serial_log_flush", None)
+            hold = getattr(publisher, "hold", None)
+            release = getattr(publisher, "release", None)
+            if callable(hold):
+                hold(before, "info")
+            else:
+                self.emit("serial:log", {"text": before, "tag": "info", "newline": True})
+            try:
+                self._run_reset_waveform(conn, family)
+            except Exception as exc:
+                failure = (f"--- Could not complete Reset(DTR/RTS): {exc} ---", "error")
+                if callable(release):
+                    release(failure)
+                else:
+                    self.emit("serial:log", {"text": failure[0], "tag": "error", "newline": True})
+                return False
+            if callable(release):
+                release((after, "success"))
+            else:
+                self.emit("serial:log", {"text": after, "tag": "success", "newline": True})
+            return True
+
+    def _apply_sketch_monitor_baud(self) -> None:
+        """Match the monitor to the uploaded sketch's Serial.begin() before it boots.
+
+        Automatic project baud detection never resets anything; the monitor is
+        stopped here, so only the remembered rate changes.
+        """
+        try:
+            detected = self._detect_sketch_baud_rate()
+        except Exception:
+            detected = None
+        if not detected:
+            return
+        baud = min(int(detected), MAX_BAUD_RATE)
+        if baud == getattr(self, "current_baud", None):
+            return
+        self.current_baud = baud
+        try:
+            cfg = load_gui_config()
+            cfg["baud_rate"] = baud
+            save_gui_config(cfg)
+            self._sync_project_hardware_state()
+        except Exception:
+            pass  # The live monitor still uses the sketch's rate this session.
+        self.emit("serial:log", {
+            "text": f"--- Serial Monitor set to {baud} baud to match this sketch's Serial.begin() ---",
+            "tag": "info", "newline": True, "stream": False,
+        })
+
+    def _require_board_restart(self, port, board_name, board_info, *, sketch_firmware: bool = False) -> str:
+        """Finish the write with the board's restart, before reporting success.
+
+        The Serial Monitor is attached first and the declared waveform runs on
+        its own connection, so the boot log and setup() output are captured
+        from the first byte. Only an uploaded sketch selects the monitor rate
+        from its Serial.begin(); reset firmware prints at the board default.
+        Returns a short description for the summary.
+        """
         if not port:
-            return  # Nonserial programmers own their run command.
+            return "Run by the programmer"  # Nonserial programmers own their run command.
         if (self.current_board != board_name or self.current_port != port
                 or getattr(self, "_stop_requested", False)
                 or getattr(self, "_operation_connection_loss", "")):
@@ -7679,13 +7868,51 @@ class MCUWebBackendAPI:
         if platform not in {"atmelavr", "avr", "espressif32", "esp32", "espressif8266", "esp8266"}:
             # Native programmers and USB bootloaders own their run command.
             # A generic DTR/1200-baud touch could put them back in a bootloader.
-            return
-        if not self._trigger_actual_board_reset(port, board_name, board_info):
+            return "Run by the programmer"
+        family = self._serial_reset_family(platform)
+        self.emit("console:log", {
+            "text": "  Restarting the board (DTR/RTS)…", "tag": "info", "newline": True,
+            "progress_key": self._upload_status_key("restart"),
+        })
+        if sketch_firmware:
+            self._apply_sketch_monitor_baud()
+        owner_pid = port_occupied_owner(port)
+        attached = None
+        if not owner_pid:
+            try:
+                self._start_serial_monitor(operation_handoff=True)
+            except Exception:
+                pass
+            attached = self._reset_on_live_monitor(
+                port, family,
+                before=(f"--- Restarting {board_name or 'the board'} on {port} after "
+                        f"{'upload' if sketch_firmware else 'reset'} (DTR/RTS)... ---"),
+                after="--- Board restarted; showing the new firmware's output ---",
+                target_unchanged=lambda: (self.current_board == board_name and self.current_port == port
+                                          and not getattr(self, "_operation_connection_loss", "")),
+            )
+        if attached is None:
+            # The monitor could not attach; restart through one short passive open.
+            restarted = self._trigger_actual_board_reset(port, board_name, board_info)
+            description = "DTR/RTS pulse"
+        else:
+            restarted = attached
+            description = f"DTR/RTS pulse; Serial Monitor attached at {self.current_baud} baud"
+        if not restarted:
             self._restart_failed = True
+            self.emit("console:log", {
+                "text": "  Board restart failed", "tag": "error", "newline": True,
+                "progress_key": self._upload_status_key("restart"),
+            })
             raise RuntimeError("Firmware written, but Reset(DTR/RTS) failed. Use the board's Reset button; no flash was replayed.")
+        self.emit("console:log", {
+            "text": "  Board restarted (DTR/RTS)", "tag": "success", "newline": True,
+            "progress_key": self._upload_status_key("restart"),
+        })
+        return description
 
     def _trigger_actual_board_reset(self, port: str, board_name: str | None = None, board_info: dict | None = None) -> bool:
-        """Open serial port and perform architecture-correct hardware reset pulse."""
+        """Open the port passively and perform the architecture-correct reset pulse."""
         if not port:
             return True
         owner_pid = port_occupied_owner(port)
@@ -7694,42 +7921,13 @@ class MCUWebBackendAPI:
             return False
         b_name = board_name or self.current_board or ""
         b_info = board_info or self._resolve_board_info(b_name)
-        platform = str(b_info.get("platform", "")).lower()
-        is_uno = ("avr" in platform)
-        self.emit("console:log", {"text": f"  Rebooting board on {port}...", "tag": "info", "newline": True})
+        family = self._serial_reset_family(b_info.get("platform", ""))
         try:
-            from main.core.monitor_connection import open_passive_serial, idle_after_reset
+            from main.core.monitor_connection import open_passive_serial
             # Open idle, then issue exactly the requested reset waveform. Never
             # use a 1200-baud bootloader touch to run freshly written firmware.
-            with open_passive_serial(serial.Serial, port, 115200, timeout=0.1) as conn, idle_after_reset(conn):
-                if is_uno:
-                    # AVR / Arduino Optiboot reset pulse
-                    conn.dtr = False
-                    time.sleep(0.05)
-                    conn.dtr = True
-                    time.sleep(0.05)
-                    conn.dtr = False
-                elif platform in ("ststm32", "raspberrypi", "ch32v", "samd"):
-                    # ARM / RISC-V pulse reset
-                    conn.dtr = False
-                    conn.rts = False
-                    time.sleep(0.05)
-                    conn.dtr = True
-                    time.sleep(0.05)
-                    conn.dtr = False
-                elif platform in {"espressif32", "esp32", "espressif8266", "esp8266"}:
-                    # Official esptool hard_reset sequence for ESP32 / ESP8266 auto-reset circuit
-                    # DTR=False, RTS=True -> pulls EN low (Reset)
-                    # RTS=False -> EN goes high (MCU boots sketch)
-                    conn.dtr = False
-                    conn.rts = True
-                    time.sleep(0.15)
-                    conn.rts = False
-                    conn.dtr = False
-                else:
-                    raise RuntimeError("No serial reset waveform is declared for this target")
-                time.sleep(0.05)
-            self.emit("console:log", {"text": "  Reset pulse completed successfully.", "tag": "success", "newline": True})
+            with open_passive_serial(serial.Serial, port, 115200, timeout=0.1) as conn:
+                self._run_reset_waveform(conn, family)
             return True
         except Exception as e:
             self.emit("console:log", {"text": f"  Could not complete Reset(DTR/RTS): {e}", "tag": "warning", "newline": True})
@@ -8041,8 +8239,8 @@ class MCUWebBackendAPI:
                 if fast_ok:
                     rc = 0  # The bytes were written even if the restart fails.
                     time.sleep(0.5)
-                    self._require_board_restart(port, board_name, binfo)
-                    upload_log.finish(True, upload_duration)
+                    restart = self._require_board_restart(port, board_name, binfo, sketch_firmware=True)
+                    upload_log.finish(True, upload_duration, restart=restart)
                     self.emit("console:progress", {"action": "Completed"})
                     self.emit("notification", {"title": "Upload Succeeded", "message": f"Successfully flashed to {port} ({upload_duration}s)", "type": "success"})
                     return
@@ -8161,6 +8359,8 @@ class MCUWebBackendAPI:
                 if esptool_cfg_path:
                     launch_env["ESPTOOL_CFGFILE"] = esptool_cfg_path
                 launch_env["ESPTOOL_CONNECT_ATTEMPTS"] = str(_MAX_CONNECT_RETRIES)
+                if self._monitor_restarts_upload(port, binfo):
+                    launch_env["MCU_FLASHER_ESPTOOL_AFTER"] = "no-reset"
 
             if is_avr and not (Path(core_dir) / "packages/tool-avrdude/package.json").is_file():
                 from src.modules.offline_runtime import bootstrap_instruction
@@ -8297,8 +8497,9 @@ class MCUWebBackendAPI:
                     continue
                 upload_line_action, verdict = _classify_platformio_upload_line(line_clean)
                 if upload_line_action == "outcome":
-                    tag = "success" if verdict == "SUCCESS" else "error"
-                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": tag, "newline": True})
+                    if verdict == "SUCCESS":
+                        continue  # The Upload Summary reports the result and its time.
+                    self.emit("console:log", {"text": f"  {line_clean.strip()}", "tag": "error", "newline": True})
                     continue
                 if upload_line_action == "suppress":
                     continue
@@ -8391,7 +8592,7 @@ class MCUWebBackendAPI:
                 # ── Upload protocol noise (suppress but capture phase) ──
                 _NOISE = (
                     "auto-detected:", "uploading stub", "running stub", "stub running",
-                    "stub flasher running", "connected to",
+                    "stub flasher running", "connected to", "staying in bootloader",
                     "changing baud", "compressed", "leaving...",
                     "warning: espcomm", "esptool.py v", "esptool v", "serial port",
                     "v2.", "v3.", "v4.", "v5.", "loaded custom configuration",
@@ -8521,20 +8722,13 @@ class MCUWebBackendAPI:
             upload_duration = round(time.time() - upload_start, 2)
 
             if rc == 0:
-                if not uploader_restarted:
-                    self._require_board_restart(port, board_name, binfo)
+                restart = ("Hard reset by esptool (RTS)" if uploader_restarted
+                           else self._require_board_restart(port, board_name, binfo, sketch_firmware=True))
                 _flip_to_connected_bar()
                 # Show chip-info box if not shown yet (e.g. AVR boards or unprobed chips)
                 if is_esp and not _chip_info_shown[0]:
                     _maybe_show_chip_info_box(force=True)
-
-                self.emit("console:log", {"text": "", "newline": True})
-                self.emit("console:log", {
-                    "text": "  Firmware written; completing the board restart.",
-                    "tag": "info",
-                    "newline": True
-                })
-                upload_log.finish(True, upload_duration)
+                upload_log.finish(True, upload_duration, restart=restart)
 
                 self.emit("console:progress", {"action": "Completed"})
                 self.emit("notification", {"title": "Upload Succeeded", "message": f"Successfully flashed to {port} ({upload_duration}s)", "type": "success"})
@@ -8653,7 +8847,8 @@ class MCUWebBackendAPI:
             })
             self.emit("window:closable", {"closable": True})
             if (rc == 0 or was_monitoring) and not getattr(self, "_operation_connection_loss", ""):
-                time.sleep(0.5)
+                if not getattr(self, "serial_running", False):
+                    time.sleep(0.5)
                 self._start_serial_monitor()
 
     # ──────────────────────────────────────────────────────────
@@ -8692,135 +8887,40 @@ class MCUWebBackendAPI:
             try:
                 if not target_unchanged():
                     return
-                from main.core.monitor_connection import idle_after_reset
                 self.emit("console:progress", {"action": "Resetting MCU"})
                 binfo = self._resolve_board_info(requested_board)
-                platform = str(binfo.get("platform", "")).lower()
-                board_id = str(binfo.get("board", "")).lower()
-                is_uno = ("avr" in platform)
-                is_arm = platform in ("ststm32", "raspberrypi", "ch32v", "samd")
-                is_s3_or_cdc = "s3" in board_id or platform in ("raspberrypi", "samd")
-
-                self.emit("serial:log", {
-                    "text": f"--- Triggering pin reset (DTR/RTS) on {requested_port}... ---",
-                    "tag": "info",
-                    "newline": True,
-                })
-
-                # 1. Check if serial connection is already active and open
-                with self._serial_lock:
-                    active_conn = self._serial_conn if (self._serial_conn and self._serial_conn.is_open) else None
-
-                if active_conn:
+                family = self._serial_reset_family(binfo.get("platform", ""))
+                before = f"--- Triggering pin reset (DTR/RTS) on {requested_port}... ---"
+                after = "--- Pin reset (DTR/RTS) completed successfully ---"
+                result = self._reset_on_live_monitor(requested_port, family, before=before, after=after,
+                                                     target_unchanged=target_unchanged)
+                if result is None and target_unchanged():
+                    # Attach the monitor first, so the boot output it causes is shown.
+                    self._start_serial_monitor()
+                    result = self._reset_on_live_monitor(requested_port, family, before=before, after=after,
+                                                         target_unchanged=target_unchanged)
+                if result is None and target_unchanged():
+                    # The monitor cannot hold this port: one short passive open.
+                    # Never a 1200-baud touch, which starts USB bootloaders instead.
+                    self.emit("serial:log", {"text": before, "tag": "info", "newline": True})
                     try:
-                        from main.core.monitor_connection import idle_after_reset
+                        from main.core.monitor_connection import open_passive_serial
                         with self._serial_lock:
-                            if not target_unchanged() or self._serial_conn is not active_conn or not active_conn.is_open:
+                            if not target_unchanged():
                                 return
-                            with idle_after_reset(active_conn):
-                                if is_uno:
-                                    active_conn.rts = False
-                                    active_conn.dtr = False
-                                    time.sleep(0.05)
-                                    active_conn.dtr = True
-                                    time.sleep(0.10)
-                                    active_conn.dtr = False
-                                    time.sleep(0.05)
-                                elif is_arm:
-                                    active_conn.dtr = False
-                                    active_conn.rts = False
-                                    time.sleep(0.05)
-                                    active_conn.dtr = True
-                                    time.sleep(0.05)
-                                    active_conn.dtr = False
-                                    time.sleep(0.05)
-                                else:
-                                    active_conn.dtr = False
-                                    active_conn.rts = True
-                                    time.sleep(0.15)
-                                    active_conn.rts = False
-                                    active_conn.dtr = False
-                                    time.sleep(0.05)
-
+                            with open_passive_serial(serial.Serial, requested_port,
+                                                     self.current_baud or 115200, timeout=0.1) as conn:
+                                self._run_reset_waveform(conn, family)
+                        self.emit("serial:log", {"text": after, "tag": "success", "newline": True})
+                    except Exception as e:
                         self.emit("serial:log", {
-                            "text": "--- Pin reset (DTR/RTS) completed successfully ---",
-                            "tag": "success",
+                            "text": f"--- Could not complete Reset(DTR/RTS): {e} ---",
+                            "tag": "error",
                             "newline": True,
                         })
-                        return
-                    except Exception as ex:
-                        self.emit("serial:log", {
-                            "text": f"--- In-place reset pulse error: {ex}, attempting direct port reset... ---",
-                            "tag": "warning",
-                            "newline": True,
-                        })
-
-                # 2. If not active or in-place failed, briefly connect directly, pulse, and resume monitor
-                if not target_unchanged():
-                    return
-                self._stop_serial_monitor()
-                time.sleep(0.1)
-                try:
-                    with self._serial_lock:
-                        if not target_unchanged():
-                            return
-                        if is_s3_or_cdc and not is_uno:
-                            try:
-                                with serial.Serial(port=requested_port, baudrate=1200, timeout=0.1) as c1200, idle_after_reset(c1200):
-                                    c1200.dtr = False
-                                    c1200.rts = True
-                                    time.sleep(0.1)
-                                    c1200.rts = False
-                                    c1200.dtr = False
-                            except Exception:
-                                pass
-                            time.sleep(0.2)
-
-                        with serial.Serial(
-                            port=requested_port,
-                            baudrate=self.current_baud or 115200,
-                            timeout=0.1,
-                            dsrdtr=False,
-                            rtscts=False,
-                        ) as conn, idle_after_reset(conn):
-                            if is_uno:
-                                conn.rts = False
-                                conn.dtr = False
-                                time.sleep(0.05)
-                                conn.dtr = True
-                                time.sleep(0.10)
-                                conn.dtr = False
-                                time.sleep(0.05)
-                            elif is_arm:
-                                conn.dtr = False
-                                conn.rts = False
-                                time.sleep(0.05)
-                                conn.dtr = True
-                                time.sleep(0.05)
-                                conn.dtr = False
-                                time.sleep(0.05)
-                            else:
-                                conn.dtr = False
-                                conn.rts = True
-                                time.sleep(0.15)
-                                conn.rts = False
-                                conn.dtr = False
-                                time.sleep(0.05)
-
-                        self.emit("serial:log", {
-                            "text": "--- Pin reset (DTR/RTS) completed successfully ---",
-                            "tag": "success",
-                            "newline": True,
-                        })
-                except Exception as e:
-                    self.emit("serial:log", {
-                        "text": f"--- Could not complete Reset(DTR/RTS): {e} ---",
-                        "tag": "error",
-                        "newline": True,
-                    })
-                finally:
-                    if target_unchanged():
-                        self._start_serial_monitor()
+                    finally:
+                        if target_unchanged():
+                            self._start_serial_monitor()
             finally:
                 self.emit("console:progress", {"action": "Completed"})
 

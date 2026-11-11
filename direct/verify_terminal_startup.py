@@ -144,6 +144,56 @@ class TerminalStartupChecks(unittest.TestCase):
         self.start.assert_called_once()
         self.assertEqual(len([call for call in self.sent.call_args_list if call.args[0] == 'new']), 2)
 
+    def test_shell_exit_disposes_only_its_own_tab(self):
+        self.panel.resize(800, 220)
+        self.panel.show()
+        pump()
+        self.open_chooser('pwsh')
+        self.open_chooser('cmd')
+        first, second = (self.panel._tab_bar.tabData(index) for index in range(2))
+        self.sent.reset_mock()
+        # The engine reports a shell that ended by itself (exit, Ctrl+D).
+        self.panel.session_exited.emit(first)
+        pump()
+        self.assertEqual([self.panel._tab_bar.tabData(index) for index in range(self.panel._tab_bar.count())], [second])
+        self.assertIn(('kill', first), [(call.args[0], call.args[1]) for call in self.sent.call_args_list])
+        self.panel.session_exited.emit("unknown-session")
+        pump()
+        self.assertEqual(self.panel._tab_bar.count(), 1)
+        self.panel.session_exited.emit(second)
+        pump()
+        self.assert_empty()
+        self.start.assert_called_once()  # No shell is restarted or replayed.
+
+    def test_engine_reports_only_shells_that_ended_by_themselves(self):
+        from src.modules import project_terminal
+        server = project_terminal.ProjectTerminalServer(0, str(ROOT), str(ROOT))
+        self.assertEqual(server.wait_for_exits(0, timeout=0.01), {"seq": 0, "exited": [], "running": True})
+        server._record_exit("pwsh_1")
+        server._record_exit("cmd_2")
+        self.assertEqual(server.wait_for_exits(0, timeout=0)["exited"], ["pwsh_1", "cmd_2"])
+        self.assertEqual(server.wait_for_exits(1, timeout=0)["exited"], ["cmd_2"])
+        waiter = {}
+        import threading
+        thread = threading.Thread(target=lambda: waiter.update(server.wait_for_exits(2, timeout=5)))
+        thread.start()
+        time.sleep(0.05)
+        server._record_exit("pwsh_3")
+        thread.join(2)
+        self.assertEqual(waiter.get("exited"), ["pwsh_3"], "A held request did not wake for a new exit")
+        server.running = False
+        with server._exit_condition:
+            server._exit_condition.notify_all()
+        self.assertFalse(server.wait_for_exits(99, timeout=5)["running"])
+        for link, expected in (("https://example.com/x", "https://example.com/x"), ("http://localhost:8080", "http://localhost:8080"),
+                               ("file:///C:/Windows", ""), ("javascript:alert(1)", ""), ("https://", ""),
+                               ("https://example.com/\x1b[0m", "")):
+            self.assertEqual(project_terminal._web_link(link), expected, link)
+        html = project_terminal.get_terminal_html()
+        self.assertIn('/assets/editor/terminal_links.js', html)
+        self.assertIn('ctrlVPastes: true', html)
+        self.assertTrue(project_terminal.TERMINAL_LINKS_SCRIPT.is_file())
+
     def test_project_change_clears_existing_sessions_without_replacing_them(self):
         self.panel.resize(800, 220)
         self.panel.show()

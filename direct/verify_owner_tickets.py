@@ -414,6 +414,41 @@ class PortalChecks(unittest.TestCase):
         self.service.authenticate.assert_called_once_with("developer@example.com", "fixture-only",
                                                           keep_signed_in=False)
 
+    def test_deleting_a_ticket_removes_only_its_card_without_a_blink(self):
+        self.sign_in()
+        cards = {self.dialog.cards_layout.itemAt(index).widget().ticket["id"]: self.dialog.cards_layout.itemAt(index).widget()
+                 for index in range(self.dialog.cards_layout.count())
+                 if isinstance(self.dialog.cards_layout.itemAt(index).widget(), portal.TicketCard)}
+        self.assertEqual(set(cards), {"fixture-1", "fixture-2", "fixture-3"})
+        disabled = []
+        original = self.dialog.cards_container.setEnabled
+        self.dialog.cards_container.setEnabled = lambda value: (disabled.append(value), original(value))
+        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+            cards["fixture-2"].delete_button.click()
+            settle(self.dialog)
+        self.service.delete_ticket.assert_called_once_with("fixture-2")
+        remaining = [self.dialog.cards_layout.itemAt(index).widget()
+                     for index in range(self.dialog.cards_layout.count())]
+        remaining = [card for card in remaining if isinstance(card, portal.TicketCard)]
+        # The surviving cards are the very same widgets, in the same order:
+        # nothing was rebuilt, neither locally nor after the service replied.
+        self.assertEqual([card.ticket["id"] for card in remaining], ["fixture-1", "fixture-3"])
+        self.assertIs(remaining[0], cards["fixture-1"])
+        self.assertIs(remaining[1], cards["fixture-3"])
+        live_cards = [card for card in self.dialog.cards_container.findChildren(portal.TicketCard)
+                      if not card.isHidden()]
+        self.assertEqual(set(map(id, live_cards)), {id(cards["fixture-1"]), id(cards["fixture-3"])},
+                         "Deleting one ticket recreated other cards")
+        self.assertNotIn(False, disabled, "Deleting greyed out the whole ticket list")
+        self.assertTrue(self.dialog.btn_new.isEnabled())
+        self.assertEqual(self.dialog.stat_total.findChild(QLabel, "val-label").text(), "2")
+        # A live refresh that started before the deletion cannot bring the card back.
+        started = (self.dialog._live_generation, self.dialog._tickets_generation - 1)
+        self.dialog._live_loaded(("live", copy.deepcopy(TICKETS), ""), started)
+        self.assertEqual(len([w for w in (self.dialog.cards_layout.itemAt(i).widget()
+                                          for i in range(self.dialog.cards_layout.count()))
+                              if isinstance(w, portal.TicketCard)]), 2)
+
     def test_search_filter_create_edit_and_delete_routes(self):
         self.sign_in()
         self.assertEqual(self.dialog.stat_total.findChild(QLabel, "val-label").text(), "3")
@@ -637,12 +672,28 @@ class PortalChecks(unittest.TestCase):
             fields=dialog.fields
             fields.title.setText('Retained title'); fields.description.setPlainText('Retained notes')
             fields.category.setCurrentText(custom)
-            self.assertTrue(dialog.spinner.sizePolicy().retainSizeWhenHidden())
+            # Progress spins inside the Save button, in place of its icon: no
+            # separate slot between Cancel and Save, and nothing moves.
+            from main.qt.circular_spinner import ButtonSpinner, CircularSpinner
+            self.assertIsInstance(dialog.spinner, ButtonSpinner)
+            self.assertFalse([child for child in dialog.backdrop.findChildren(CircularSpinner) if child.isVisible()])
+            idle_icon = dialog.btn_save.icon().cacheKey()
+            save_rect, cancel_rect = dialog.btn_save.geometry(), dialog.btn_cancel.geometry()
             for busy in (True,False,True,False):
                 dialog._set_busy(busy); pump()
+                self.assertEqual(dialog.btn_save.geometry(), save_rect, "Saving moved or resized its button")
+                self.assertEqual(dialog.btn_cancel.geometry(), cancel_rect)
+                self.assertEqual(dialog.spinner.is_busy(), busy)
                 if busy:
-                    self.assertLessEqual(abs(dialog.spinner.geometry().center().y()-dialog.btn_save.geometry().center().y()),1)
+                    self.assertNotEqual(dialog.btn_save.icon().cacheKey(), idle_icon)
+                    before = dialog.btn_save.icon().cacheKey()
+                    deadline = time.monotonic() + 1
+                    while dialog.btn_save.icon().cacheKey() == before and time.monotonic() < deadline:
+                        pump(); time.sleep(.01)
+                    self.assertNotEqual(dialog.btn_save.icon().cacheKey(), before, "The spinner did not turn")
                     capture(dialog,'input-update-'+dialog.objectName()+'-busy')
+                else:
+                    self.assertEqual(dialog.btn_save.icon().cacheKey(), idle_icon, "The Save icon was not restored")
             self.service.remove_ticket_category.return_value=(False,'Reassign existing tickets first',list(dialog.categories))
             fields.btn_remove_category.click(); settle(dialog)
             self.assertEqual(fields.category.currentText(),custom)

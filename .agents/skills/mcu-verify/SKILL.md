@@ -5,6 +5,21 @@ description: "Run MCU Flasher hardware-free and isolated native CI checks, inclu
 
 # Verify MCU Flasher changes
 
+## Upload, restart, monitor, ticket and terminal gates
+
+Run `direct/verify_upload_images.py` for nobuild flash images (real
+PlatformIO `envdump` when espressif32 is prepared; never a build, port or
+upload), `verify_monitor_connection`, `verify_serial_reader` (reset notices
+precede boot output), `verify_upload_workers`, `verify_upload_logging`,
+`verify_ubuntu_logging`, `verify_platforms`, `verify_reset_build_cache`,
+`verify_owner_tickets` (in-place deletion, in-button spinner),
+`verify_combo_popups` (concealed first frame, snapshot motion),
+`verify_window_alignment` (Wayland tiling allowance), `verify_posix_terminal_state`,
+`verify_terminal_startup` (exit disposal, engine events) and
+`verify_terminal_scroll` (real-page links, clicks and clipboard keys) and
+`verify_bootstrap_updates` (no `arduino-cli upgrade`). Physical boards and native
+GNOME tiling remain separate evidence.
+
 ## Navigation, glass, motion and update gates
 
 Run source_navigation, editor_features, editor_review_ui, library_samples,

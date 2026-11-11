@@ -31,7 +31,8 @@ def reader_fixture():
                and node.name in ("_start_serial_monitor", "_stop_serial_monitor",
                                  "flush_serial_output", "clear_serial_output",
                                  "_queue_serial_notification", "_stop_serial_notifications",
-                                 "set_baud_rate", "_release_port_lines")]
+                                 "set_baud_rate", "_release_port_lines", "_reset_on_live_monitor",
+                                 "_run_reset_waveform", "_serial_reset_family")]
     fixture = ast.ClassDef(name="ReaderBackend", bases=[], keywords=[], body=methods,
                           decorator_list=[])
     module = ast.fix_missing_locations(ast.Module(body=[fixture], type_ignores=[]))
@@ -176,7 +177,58 @@ class DecoderChecks(unittest.TestCase):
         self.assertEqual(decoder.feed(b"", final=True), "")
 
 
+class BootingPort(FakePort):
+    """A board that starts its boot log the moment EN is released."""
+
+    BOOT = (b"ets Jul 29 2019 12:21:46\r\n\r\nrst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\r\n"
+            b"load:0x3fff0030,len:1184\r\nload:0x40078000,len:13232\r\nload:0x40080400,len:3028\r\n"
+            b"entry 0x400805e4\r\n")
+
+    def __setattr__(self, name, value):
+        held = self.__dict__.get("rts", False)
+        super().__setattr__(name, value)
+        if name == "rts" and held and not value and "chunks" in self.__dict__:
+            # Split the way a USB driver may: mid-line, right after release.
+            self.chunks.append(self.BOOT[:120])
+            self.chunks.append(self.BOOT[120:])
+            self.wake.set()
+
+
 class ReaderChecks(unittest.TestCase):
+    def test_reset_notices_precede_the_boot_output_they_cause(self):
+        port = BootingPort([b"Temp: 23."], close_when_empty=False)
+        api, events = backend_fixture(port)
+        try:
+            api._start_serial_monitor()
+            limit = time.monotonic() + 1
+            while "Temp: 23." not in device_text(events) and time.monotonic() < limit:
+                time.sleep(0.005)
+            ok = api._reset_on_live_monitor("SIMULATED", "esp", before="--- Triggering pin reset ---",
+                                            after="--- Pin reset completed successfully ---")
+            self.assertTrue(ok)
+            limit = time.monotonic() + 2
+            while "entry 0x400805e4" not in device_text(events) and time.monotonic() < limit:
+                time.sleep(0.005)
+        finally:
+            api._stop_serial_monitor()
+        sequence = []
+        for name, payload in events:
+            if name != "serial:log" or not payload.get("text"):
+                continue
+            sequence.append(("device" if payload.get("stream") else "notice", payload["text"]))
+        kinds = [kind for kind, _ in sequence]
+        first_boot = next(index for index, (kind, text) in enumerate(sequence) if "ets Jul" in text)
+        triggering = next(index for index, (_, text) in enumerate(sequence) if "Triggering" in text)
+        completed = next(index for index, (_, text) in enumerate(sequence) if "completed" in text)
+        self.assertLess(triggering, completed)
+        self.assertLess(completed, first_boot, "The completion notice landed inside the boot log")
+        self.assertNotIn("notice", kinds[first_boot:], "A notice split the board's output")
+        self.assertEqual(device_text(events), "Temp: 23." + BootingPort.BOOT.decode().replace("\r\n", "\n"))
+        self.assertIn("len:13232", device_text(events))
+        self.assertEqual([change for change in port.line_changes if change[1]], [("rts", True)])
+        self.assertFalse(port.rts)
+        self.assertFalse(port.dtr)
+
     def test_serial_write_timeout_is_finite(self):
         port = FakePort()
         api, _events = backend_fixture(port)

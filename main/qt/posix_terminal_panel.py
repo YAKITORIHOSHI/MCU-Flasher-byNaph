@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSocketNotifier, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QClipboard, QColor, QDesktopServices
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QPushButton, QLabel, QStackedWidget
@@ -25,9 +25,25 @@ from src.modules.runtime_resources import performance_profile
 ROOT = Path(__file__).resolve().parents[2]
 
 
+_CLIPBOARD_LIMIT = 4 * 1024 * 1024
+
+
+def _web_link(url) -> str:
+    """Only complete http(s) URLs leave the terminal; nothing else is opened."""
+    url = str(url or "").strip()
+    if not 8 <= len(url) <= 8192 or any(ord(ch) < 32 for ch in url):
+        return ""
+    parsed = QUrl(url, QUrl.ParsingMode.StrictMode)
+    if not parsed.isValid() or parsed.scheme().lower() not in ("http", "https") or not parsed.host():
+        return ""
+    return parsed.toString()
+
+
 class PtySession(QObject):
     output = Signal(str)
     ended = Signal(str)
+    # The shell (or its program) ended after a successful start.
+    exited = Signal()
 
     def __init__(self, cwd, argv, parent=None):
         super().__init__(parent)
@@ -278,6 +294,36 @@ class PtySession(QObject):
     def _finish(self, message):
         self.close()
         self.ended.emit(message)
+        self.exited.emit()
+
+    @Slot(str)
+    def openLink(self, url):
+        link = _web_link(url)
+        if link:
+            QDesktopServices.openUrl(QUrl(link))
+
+    @staticmethod
+    def _clipboard():
+        from PySide6.QtWidgets import QApplication
+        return QApplication.clipboard()
+
+    @Slot(str)
+    def copyText(self, text):
+        if text and len(text) <= _CLIPBOARD_LIMIT:
+            self._clipboard().setText(text)
+
+    @Slot(str)
+    def setPrimarySelection(self, text):
+        clipboard = self._clipboard()
+        if text and len(text) <= _CLIPBOARD_LIMIT and clipboard.supportsSelection():
+            clipboard.setText(text, QClipboard.Mode.Selection)
+
+    @Slot(result=str)
+    def primarySelection(self):
+        clipboard = self._clipboard()
+        mode = QClipboard.Mode.Selection if clipboard.supportsSelection() else QClipboard.Mode.Clipboard
+        text = clipboard.text(mode)
+        return text if len(text) <= _CLIPBOARD_LIMIT else ""
 
     def close(self):
         if self._closed:
@@ -371,6 +417,10 @@ class PosixTerminalPanel(QWidget):
         view.page().setWebChannel(channel)
         session.output.connect(lambda data: view.page().runJavaScript(f"window.writeOutput?.({json.dumps(data)})"))
         session.ended.connect(lambda data: view.page().runJavaScript(f"window.sessionEnded?.({json.dumps(data)})"))
+        # `exit`, Ctrl+D or a finished program closes its own tab.
+        session.exited.connect(lambda: QTimer.singleShot(0, self, lambda: self._session_exited(view)))
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        view.customContextMenuRequested.connect(lambda pos: self._terminal_menu(view, pos))
         view.loadFinished.connect(lambda ok: self._loaded(view, ok))
         if hasattr(view, "renderProcessTerminated"):
             view.renderProcessTerminated.connect(lambda *_: self._renderer_terminated(view))
@@ -407,6 +457,49 @@ class PosixTerminalPanel(QWidget):
         backdrop = getattr(view, "_glass_backdrop", None)
         if backdrop is not None:
             backdrop.forget()
+
+    def _session_exited(self, view):
+        if view not in self._sessions:
+            return
+        index = self._tabs.indexOf(view)
+        if index >= 0:
+            self._close_tab(index)
+
+    def _terminal_menu(self, view, pos):
+        """Copy, paste, select all, clear and links, read from xterm's own state."""
+        if view not in self._sessions:
+            return
+        global_pos = view.mapToGlobal(pos)
+
+        def show(state):
+            if view not in self._sessions:
+                return
+            try:
+                state = json.loads(state) if isinstance(state, str) else (state or {})
+            except ValueError:
+                state = {}
+            from main.qt.combo_popup import GlassMenu
+            from PySide6.QtWidgets import QApplication
+            menu = GlassMenu(view)
+            menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            page = view.page()
+            link = _web_link(state.get("link", ""))
+            if link:
+                menu.addAction("Open Link", lambda: QDesktopServices.openUrl(QUrl(link)))
+                menu.addAction("Copy Link Address", lambda: QApplication.clipboard().setText(link))
+                menu.addSeparator()
+            copy = menu.addAction("Copy", lambda: page.runJavaScript("window.terminalCopy?.()"))
+            copy.setEnabled(bool(state.get("selection")))
+            paste_text = QApplication.clipboard().text()
+            paste = menu.addAction("Paste", lambda: page.runJavaScript(
+                f"window.terminalPasteText?.({json.dumps(paste_text)})"))
+            paste.setEnabled(bool(paste_text) and len(paste_text) <= _CLIPBOARD_LIMIT)
+            menu.addAction("Select All", lambda: page.runJavaScript("window.terminalSelectAll?.()"))
+            menu.addSeparator()
+            menu.addAction("Clear", lambda: page.runJavaScript("window.clearTerminal?.()"))
+            menu.popup(global_pos)
+
+        view.page().runJavaScript("JSON.stringify(window.terminalContextState ? window.terminalContextState() : {})", 0, show)
 
     def _clear(self):
         view = self._tabs.currentWidget()

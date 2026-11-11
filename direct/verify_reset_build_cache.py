@@ -7,6 +7,7 @@ import os
 import platform
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
@@ -75,6 +76,8 @@ class ResetBuildCacheChecks(unittest.TestCase):
         api._stop_serial_monitor = Mock()
         api._start_serial_monitor = Mock()
         api._trigger_actual_board_reset = Mock(return_value=True)
+        # No live monitor connection: restarts use their passive one-shot open.
+        api._serial_lock, api._serial_conn = threading.RLock(), None
         api._get_jobs = Mock(return_value=2)
         api._is_native_usb_port = Mock(return_value=False)
         api._locate_esp32_boot_app0 = Mock(return_value=self.boot_app)

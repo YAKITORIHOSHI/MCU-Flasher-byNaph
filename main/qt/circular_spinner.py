@@ -6,11 +6,11 @@ behavior (pauses when hidden or disabled to save CPU/battery).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Slot
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt, QTimer, Slot
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
-__all__ = ["CircularSpinner"]
+__all__ = ["ButtonSpinner", "CircularSpinner"]
 
 
 class CircularSpinner(QWidget):
@@ -183,3 +183,98 @@ class CircularSpinner(QWidget):
             painter.drawArc(rect, start_angle, span_angle)
         finally:
             painter.end()
+
+
+def _paint_arc(painter: QPainter, rect: QRectF, angle: float, color: QColor, line_width: float) -> None:
+    """Draw the spinner's faint track and rotating arc inside ``rect``."""
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    inset = line_width / 2.0 + 1.0
+    rect = rect.adjusted(inset, inset, -inset, -inset)
+    track = QColor(color)
+    track.setAlpha(48)
+    pen = QPen(track)
+    pen.setWidthF(line_width)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawEllipse(rect)
+    pen.setColor(color)
+    painter.setPen(pen)
+    painter.drawArc(rect, int(-angle * 16), int(100 * 16))
+
+
+class ButtonSpinner(QObject):
+    """Spin in place of a button's own icon while it works.
+
+    Each frame is a plain pixmap icon of the button's own icon size, so the
+    label and every neighbouring control stay exactly where they were.
+    Matches the parts of CircularSpinner's API that task dialogs use.
+    """
+
+    def __init__(self, button, color: str | QColor = "#141414", line_width: float = 2.0) -> None:
+        super().__init__(button)
+        self._button = button
+        self.color = QColor(color)
+        self.line_width = float(line_width)
+        self.angle = 0.0
+        self._busy = False
+        self._saved_icon = QIcon()
+        self._frame_key = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._advance)
+
+    def set_busy(self, busy: bool) -> None:
+        busy = bool(busy)
+        if busy == self._busy:
+            return
+        self._busy = busy
+        if busy:
+            self._saved_icon = self._button.icon()
+            self.angle = 0.0
+            self._show_frame()
+            self._timer.start()
+        else:
+            self._timer.stop()
+            self._frame_key = None
+            self._button.setIcon(self._saved_icon)
+
+    def start(self) -> None:
+        self.set_busy(True)
+
+    def stop(self) -> None:
+        self.set_busy(False)
+
+    def is_busy(self) -> bool:
+        return self._busy
+
+    def is_spinning(self) -> bool:
+        return self._busy and self._timer.isActive()
+
+    def set_color(self, color: str | QColor) -> None:
+        self.color = QColor(color)
+        if self._busy:
+            self._show_frame()
+
+    def _show_frame(self) -> None:
+        size = self._button.iconSize()
+        if size.isEmpty():
+            size = QSize(16, 16)
+        ratio = max(1.0, float(self._button.devicePixelRatioF()))
+        image = QPixmap(max(1, round(size.width() * ratio)), max(1, round(size.height() * ratio)))
+        image.setDevicePixelRatio(ratio)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        _paint_arc(painter, QRectF(0, 0, size.width(), size.height()), self.angle, self.color, self.line_width)
+        painter.end()
+        icon = QIcon(image)
+        # A busy button is disabled; keep the spinner's own ink rather than a greyed copy.
+        icon.addPixmap(image, QIcon.Mode.Disabled)
+        self._frame_key = icon.cacheKey()
+        self._button.setIcon(icon)
+
+    def _advance(self) -> None:
+        if self._button.icon().cacheKey() != self._frame_key:
+            # A theme refresh replaced the icon; restore that one afterwards.
+            self._saved_icon = self._button.icon()
+        self.angle = (self.angle + 12.0) % 360.0
+        self._show_frame()

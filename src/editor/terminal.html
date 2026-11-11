@@ -31,6 +31,7 @@
   <script src="../assets/xterm/xterm-addon-fit.js"></script>
   <script src="qwebchannel.js"></script>
   <script src="glass_page.js"></script>
+  <script src="terminal_links.js"></script>
 </head>
 <body>
   <div id="terminal" aria-label="Interactive project terminal"></div>
@@ -72,6 +73,14 @@
       };
       new QWebChannel(qt.webChannelTransport, channel => {
         bridge = channel.objects.terminalBridge;
+        if (window.mcuEnhanceTerminal) {
+          window.mcuEnhanceTerminal(term, {
+            openLink: url => bridge.openLink(url),
+            copyText: text => bridge.copyText(text),
+            setPrimary: text => bridge.setPrimarySelection(text),
+            pastePrimary: () => bridge.primarySelection(text => { if (text) term.paste(text); }),
+          });
+        }
         term.onData(data => bridge.write(data));
         bridge.start(() => { window.fitTerminal(); if (document.hasFocus()) term.focus(); });
       });

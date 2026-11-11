@@ -149,6 +149,65 @@ class UpdateChecks(unittest.TestCase):
         self.assertTrue(any("not verified" in message for _, message in self.messages))
         self.assertFalse(any("upgraded and verified" in message for _, message in self.messages))
 
+    def arduino_cli_update_fixture(self, versions, *, msi_ok=True):
+        """run_update_checks with an arduino-cli update whose executables report ``versions``."""
+        source = ROOT / "src/modules/bootstrap.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        extra = {"_verified_arduino_cli_upgrade", "_arduino_cli_version_of"}
+        namespace = self.functions
+        exec(compile(ast.Module(body=[node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in extra], type_ignores=[]), str(source), "exec"), namespace)
+        update = {"name": "arduino-cli", "installed": "1.4.0", "latest": "1.5.1"}
+        runs = []
+        cached = []
+
+        def run(command, **_options):
+            runs.append(list(command))
+            return SimpleNamespace(stdout=f"arduino-cli  Version: {versions.get(command[0], '')} Commit: fixture\n")
+
+        namespace.update(
+            _update_check_skip_reason=lambda: None, section=Mock(), status=Mock(), dim=Mock(), DIM="", _gui=None,
+            warn=lambda message: self.messages.append(("warning", message)),
+            ok=lambda message: self.messages.append(("ok", message)),
+            _is_network_reachable=lambda **kwargs: True,
+            _render_update_summary_block=lambda results, **kwargs: [update],
+            check_python_update=lambda: {}, check_pio_update=lambda: {}, check_arduino_cli_update=lambda: {},
+            check_pip_package_update=lambda name, *args: {}, SCRIPT_DIR=self.root, CYAN="", RESET="",
+            find_arduino_cli=lambda: "C:/old/arduino-cli.exe",
+            _search_arduino_cli_install_dirs=lambda: "C:/Program Files/Arduino CLI/arduino-cli.exe",
+            _refresh_bundled_msi=Mock(return_value=True), _run_arduino_cli_msi=Mock(return_value=msi_ok),
+            _cache_arduino_cli_path=cached.append,
+            subprocess=SimpleNamespace(run=run, CREATE_NO_WINDOW=0),
+            shutil=SimpleNamespace(which=lambda name: None))
+        with patch.object(sys, "platform", "win32"):
+            namespace["run_update_checks"](auto_update=True)
+        return runs, cached
+
+    def test_arduino_cli_update_never_runs_core_upgrade_and_verifies_the_installed_cli(self):
+        runs, cached = self.arduino_cli_update_fixture(
+            {"C:/old/arduino-cli.exe": "1.4.0", "C:/Program Files/Arduino CLI/arduino-cli.exe": "1.5.1"})
+        # `arduino-cli upgrade` upgrades cores and libraries, never the CLI.
+        self.assertFalse([command for command in runs if "upgrade" in command], runs)
+        self.assertEqual(cached, ["C:/Program Files/Arduino CLI/arduino-cli.exe"],
+                         "The next update check must read the upgraded executable")
+        self.assertTrue(any("upgraded and verified at 1.5.1" in message for _, message in self.messages))
+
+    def test_arduino_cli_update_is_not_reported_when_the_version_stayed(self):
+        runs, cached = self.arduino_cli_update_fixture(
+            {"C:/old/arduino-cli.exe": "1.4.0", "C:/Program Files/Arduino CLI/arduino-cli.exe": "1.4.0"})
+        self.assertFalse([command for command in runs if "upgrade" in command])
+        self.assertEqual(cached, [])
+        self.assertFalse(any("upgraded" in message for kind, message in self.messages if kind == "ok"))
+        self.assertTrue(any("reports 1.4.0" in message for _, message in self.messages))
+
+    def test_latest_version_probe_has_no_upgrade_side_effect(self):
+        source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
+        tree = ast.parse(source)
+        for name in ("_arduino_cli_latest_version", "run_update_checks", "check_arduino_cli_update"):
+            node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == name)
+            calls = [ast.unparse(call) for call in ast.walk(node) if isinstance(call, ast.Call)]
+            self.assertFalse([call for call in calls if "'upgrade'" in call], (name, calls))
+
     def test_no_updates_with_metadata_error_reports_incomplete(self):
         namespace = self.functions
         summary = Mock(return_value=[])

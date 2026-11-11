@@ -34,6 +34,8 @@ TRANSPORT = r'''
 window.auditMessages = [];
 window.auditInput = [];
 window.auditConsumed = 0;
+window.auditLinks = [];
+window.auditCopied = [];
 const RealTerminal = window.Terminal;
 window.Terminal = class extends RealTerminal {
   constructor(options) { super(options); window.auditTerm = this; }
@@ -52,7 +54,11 @@ window.QWebChannel = class {
     complete({objects: {terminalBridge: {
       start: done => done(), resize: () => {},
       consumed: count => { window.auditConsumed += count; },
-      write: data => { window.auditInput.push(data); }
+      write: data => { window.auditInput.push(data); },
+      openLink: url => { window.auditLinks.push(url); },
+      copyText: text => { window.auditCopied.push(text); },
+      setPrimarySelection: () => {},
+      primarySelection: done => done('primary fixture')
     }}});
   }
 };
@@ -119,6 +125,7 @@ class TerminalScrollChecks(unittest.TestCase):
             for name, value in substitutions.items():
                 html = html.replace(name, value)
             html = html.replace('/assets/xterm/', '../assets/xterm/')
+            html = html.replace('/assets/editor/terminal_links.js', 'terminal_links.js')
         else:
             html = (ROOT / 'src/editor/terminal.html').read_text(encoding='utf-8')
         # Assets and app code stay real. Replace only the transport and observe
@@ -194,6 +201,88 @@ class TerminalScrollChecks(unittest.TestCase):
                     if RENDER_DIR is not None and width == 400:
                         QTest.qWait(50)  # Let xterm paint its latest frame.
                         self.assertTrue(self.view.grab().save(str(RENDER_DIR / f'terminal-scroll-{variant}-{mode}.png')))
+
+    def check_links_and_keys(self, variant):
+        self.load_renderer(variant)
+        self.view.resize(640, 260)
+        if variant == 'windows':
+            self.js('fitAll(); true')
+        else:
+            self.js('fitTerminal(); true')
+        QTest.qWait(80)
+        cols = int(self.js('auditTerm.cols'))
+        url = 'https://example.com/' + 'docs/' * ((cols // 5) + 2) + 'end_of_path?x=1'
+        self.assertGreater(len(url), cols, 'The fixture URL must wrap')
+        text = '\r\nBuild log (see ' + url + '). Then www.example.org/help, ok\r\n'
+        self.js('window.auditWritten=false; auditTerm.write(' + json.dumps(text)
+                + ',()=>{window.auditWritten=true}); auditTerm.scrollToBottom(); true')
+        self.wait_for(lambda: self.js('window.auditWritten'), 'Link fixture output did not parse')
+        row = int(self.js("(() => { const b = auditTerm.buffer.active;"
+                      " for (let y = b.length - 1; y >= 0; y--) {"
+                      "  if (b.getLine(y).translateToString(true).includes('Build log')) return y + 1; }"
+                      " return 0; })()"))
+        self.assertGreater(row, 0)
+        links = json.loads(self.js('JSON.stringify(mcuTerminalLinks.linksOnRow(' + str(row) + '))'))
+        self.assertEqual([link['url'] for link in links], [url])
+        self.assertEqual(links[0]['range']['start']['y'], row)
+        self.assertGreater(links[0]['range']['end']['y'], row, 'A wrapped URL must keep its continuation')
+        # The continuation row reports the same complete link, without ").".
+        continuation = json.loads(self.js('JSON.stringify(mcuTerminalLinks.linksOnRow(' + str(row + 1) + '))'))
+        self.assertIn(url, [link['url'] for link in continuation])
+        last = json.loads(self.js('JSON.stringify(mcuTerminalLinks.linksOnRow('
+                                  + str(links[0]['range']['end']['y']) + '))'))
+        self.assertIn('https://www.example.org/help', [link['url'] for link in last])
+        self.assertEqual(self.js("mcuTerminalLinks.trimLink('https://a.example/x_(y)).')"), 'https://a.example/x_(y)')
+        # A real click on the link opens it through the host, never in the page.
+        point = json.loads(self.js(
+            "JSON.stringify((() => {"
+            " const cell = auditTerm._core._renderService.dimensions.css.cell;"
+            " const screen = auditTerm.element.querySelector('.xterm-screen').getBoundingClientRect();"
+            " const start = " + json.dumps(links[0]['range']['start']) + ";"
+            " const y = start.y - 1 - auditTerm.buffer.active.viewportY;"
+            " return {x: screen.left + (start.x + 12) * cell.width, y: screen.top + (y + 0.5) * cell.height};"
+            "})())"))
+        target = self.view.focusProxy()
+        position = QPoint(round(point['x']), round(point['y']))
+        QTest.mouseMove(target, position)
+        QTest.qWait(120)
+        QTest.mouseMove(target, position + QPoint(1, 0))
+        QTest.qWait(120)
+        QTest.mouseClick(target, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, position + QPoint(1, 0))
+        if variant == 'windows':
+            self.wait_for(lambda: self.js("auditMessages.filter(m => m.type === 'open_link').length") >= 1,
+                          'A clicked link did not reach the terminal engine')
+            self.assertEqual(self.js("auditMessages.filter(m => m.type === 'open_link')[0].url"), url)
+        else:
+            self.wait_for(lambda: self.js('auditLinks.length') >= 1, 'A clicked link did not reach the bridge')
+            self.assertEqual(self.js('auditLinks[0]'), url)
+        # Keyboard: Ctrl+Shift+C copies, Ctrl+C with a selection copies, Ctrl+C
+        # alone still interrupts. Plain Ctrl+V reaches vim/nano on Linux only.
+        self.js("auditInput = []; auditTerm.focus(); auditTerm.selectAll(); true")
+        QTest.keyClick(target, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        if variant != 'windows':
+            self.wait_for(lambda: self.js('auditCopied.length') >= 1, 'Ctrl+Shift+C did not copy the selection')
+            self.assertIn('Build log', self.js('auditCopied[auditCopied.length - 1]'))
+        self.assertTrue(self.js('auditTerm.hasSelection()'), 'Ctrl+Shift+C must keep the selection')
+        QTest.keyClick(target, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        self.wait_for(lambda: not self.js('auditTerm.hasSelection()'), 'Ctrl+C with a selection did not copy it')
+        QTest.qWait(50)
+        self.assertNotIn('\x03', self.js('auditInput.join("")'), 'Copying also interrupted the program')
+        QTest.keyClick(target, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+        self.wait_for(lambda: '\x03' in self.js('auditInput.join("")'), 'Ctrl+C no longer interrupts')
+        self.js('auditInput = []; true')
+        QTest.keyClick(target, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+        QTest.qWait(80)
+        if variant == 'windows':
+            self.assertNotIn('\x16', self.js('auditInput.join("")'), 'Ctrl+V must paste on Windows')
+        else:
+            self.assertIn('\x16', self.js('auditInput.join("")'), 'Ctrl+V must stay ^V for vim and nano')
+
+    def test_ubuntu_links_clicks_and_clipboard_keys(self):
+        self.check_links_and_keys('ubuntu')
+
+    def test_windows_links_clicks_and_clipboard_keys(self):
+        self.check_links_and_keys('windows')
 
     def test_windows_output_scrollbar_hidden_history_still_scrolls(self):
         self.check_scrolling('windows')

@@ -1915,9 +1915,8 @@ def check_pip_package_update(pkg_name: str, pkg_import: str | None = None) -> di
             "update_available": update_available, "error": None}
 
 
-def _arduino_cli_installed_version() -> str | None:
-    """Return the installed arduino-cli version string, e.g. '1.1.1'."""
-    cli = find_arduino_cli()
+def _arduino_cli_version_of(cli: str | None) -> str | None:
+    """Return the version reported by one arduino-cli executable, e.g. '1.1.1'."""
     if not cli:
         return None
     try:
@@ -1935,6 +1934,41 @@ def _arduino_cli_installed_version() -> str | None:
     except Exception:
         pass
     return None
+
+
+def _arduino_cli_installed_version() -> str | None:
+    """Return the version of the arduino-cli the application uses."""
+    return _arduino_cli_version_of(find_arduino_cli())
+
+
+def _verified_arduino_cli_upgrade(required: str) -> tuple[str | None, str | None]:
+    """Find an installed arduino-cli at least ``required`` and remember its path.
+
+    The MSI installs under Program Files (or the per-user Programs folder), while
+    the remembered path can still name an older copy elsewhere; the update check
+    reads the remembered one, so it must point at the upgraded executable.
+    """
+    candidates = []
+    for candidate in (_search_arduino_cli_install_dirs(), shutil.which("arduino-cli"), find_arduino_cli()):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    best_path, best_version = None, None
+    for candidate in candidates:
+        version = _arduino_cli_version_of(candidate)
+        if not version:
+            continue
+        try:
+            if best_version is None or _version_tuple(version) > _version_tuple(best_version):
+                best_path, best_version = candidate, version
+        except Exception:
+            continue
+    try:
+        if best_path and _version_tuple(best_version) >= _version_tuple(required):
+            _cache_arduino_cli_path(best_path)
+            return best_path, best_version
+    except Exception:
+        pass
+    return None, best_version
 
 
 def _arduino_cli_latest_version() -> str | None:
@@ -1957,25 +1991,10 @@ def _arduino_cli_latest_version() -> str | None:
     except Exception:
         pass
 
-    # ── Strategy 2: arduino-cli upgrade (fallback) ──
-    cli = find_arduino_cli()
-    if cli:
-        try:
-            result = subprocess.run(
-                [cli, "upgrade"],
-                capture_output=True, text=True, timeout=15,
-                encoding="utf-8", errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
-            # "arduino-cli X.Y.Z -> A.B.C" or "already up to date"
-            import re
-            m = re.search(r"(\d+\.\d+[\.\d]*)\s*$", result.stdout)
-            if m:
-                return m.group(1).strip()
-        except Exception:
-            pass
+    # `arduino-cli upgrade` is not a version query: it upgrades every installed
+    # core and library, so it must never run as part of an update check.
 
-    # ── Strategy 3: GitHub releases API (fallback) ──
+    # ── Strategy 2: GitHub releases API (fallback) ──
     body = _fetch_url("https://api.github.com/repos/arduino/arduino-cli/releases/latest")
     if body:
         try:
@@ -2483,49 +2502,30 @@ def run_update_checks(auto_update: bool = False):
             if _update_check_skip_reason():
                 return "skipped"
             r = cli_updates[0]
-            cli_path = find_arduino_cli()
-            upgraded = False
-
-            # ── Strategy A: arduino-cli upgrade (built-in self-updater) ──
-            if cli_path:
-                status(f"Running arduino-cli upgrade {r['installed']} -> {r['latest']}...")
-                try:
-                    subprocess.check_call(
-                        [cli_path, "upgrade"],
-                        stdout=sys.stdout, stderr=sys.stderr,
-                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                    )
-                    ok(f"arduino-cli upgraded to {r['latest']}")
-                    upgraded = True
-                except Exception:
-                    warn("arduino-cli upgrade command failed — falling back to MSI re-install...")
-
-            # ── Strategy B: download fresh MSI then msiexec ──────────────
-            if not upgraded:
-                msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
-                if _refresh_bundled_msi(r["latest"]):
-                    if _run_arduino_cli_msi(msi_path):
-                        ok(f"arduino-cli upgraded to {r['latest']} via MSI")
-                        upgraded = True
-                    else:
-                        warn(
-                            f"MSI install failed. Download manually:\n"
-                            f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
-                        )
+            # `arduino-cli upgrade` upgrades installed cores and libraries, never
+            # the CLI itself: it reported success while the version stayed put,
+            # so the same update was offered on every launch. Install the exact
+            # release, then believe only the version the executable reports.
+            msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
+            if sys.platform != "win32":
+                warn("arduino-cli updates are prepared by this system's own setup; no update was applied here.")
+            elif not _refresh_bundled_msi(r["latest"]):
+                warn(
+                    f"Could not download the arduino-cli {r['latest']} installer. Download manually:\n"
+                    f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
+                )
+            elif not _run_arduino_cli_msi(msi_path):
+                warn(
+                    f"MSI install failed. Download manually:\n"
+                    f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
+                )
+            else:
+                upgraded_path, found = _verified_arduino_cli_upgrade(r["latest"])
+                if upgraded_path:
+                    ok(f"arduino-cli upgraded and verified at {found} ({upgraded_path})")
                 else:
-                    warn(
-                        f"Could not download MSI. Download manually:\n"
-                        f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
-                    )
-
-            # ── Always refresh the bundled MSI copy ───────────────────────
-            # Even when the self-updater succeeded, keep installers/arduino-cli.msi
-            # current so the next fresh-machine install gets the new version.
-            if upgraded:
-                _refresh_bundled_msi(r["latest"])
-                new_cli = find_arduino_cli()
-                if new_cli:
-                    _cache_arduino_cli_path(new_cli)
+                    warn(f"arduino-cli {r['latest']} was installed, but the executable found reports "
+                         f"{found or 'no version'}; the update will be offered again.")
 
         if opencode_updates:
             if _update_check_skip_reason():

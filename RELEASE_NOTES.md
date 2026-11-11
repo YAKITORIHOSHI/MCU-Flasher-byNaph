@@ -11,6 +11,54 @@
 
 ---
 
+## November 11 Fixes: Complete Uploads, Visible Restarts, Terminals and Tiling
+
+- **Uploads write the whole firmware again:** Upload reuses the verified build
+  with PlatformIO's `nobuild`, which skipped the step that lists an ESP32's
+  bootloader, partition table and boot_app0, so only the application was
+  written. A board could keep an older partition table or OTA choice and go on
+  running the previous sketch. The build now records those images and every
+  upload writes all of them; a missing one stops the upload instead.
+- **The restart shows in the Serial Monitor:** After writing, MCU Flasher opens
+  the Serial Monitor first and then restarts the board on that connection, so
+  the boot log and `setup()` output appear from their first byte. ESP boards on
+  USB-serial bridges (CP210x, CH34x, FTDI) are restarted this way; native ESP USB
+  keeps esptool's own restart. The monitor switches to the uploaded sketch's
+  `Serial.begin()` rate, and choosing or restoring a board no longer overwrites
+  that rate with the board's default, which is what turned output into
+  `\x00\x80x\xf8…`. `Serial.begin` wins over `Serial1/Serial2`, and rates
+  such as `115200UL` or named constants are recognized.
+- **Reset notices stay on their own lines:** "Triggering pin reset" and "Pin
+  reset completed successfully" now always appear before the boot output instead
+  of cutting a line in half (`len:1323` / `2` on Windows). Reset no longer uses a
+  1200-baud touch, which put native-USB boards into their bootloader.
+- **A cleaner upload log:** Board, port, protocol and speed appear once, in the
+  Upload Target box. All four flash regions show their own row, each marked
+  `verified`; the chip box is titled Chip Information; the summary reports the
+  result, what was written, how the board restarted and the time. The repeated
+  "Connected to <board>", "Changing baud rate", "Flash data verified" lines and
+  PlatformIO's `[SUCCESS]` banner are gone. esptool 5 progress no longer shows
+  one region's bytes on the previous region's row.
+- **Developer Access:** Deleting a ticket removes just that card; the list and
+  dashboard no longer blink or grey out, and a background refresh cannot bring
+  the card back. Create/Edit show the loading spinner inside the Save button.
+- **Smooth dropdowns:** Dropdowns no longer flash before fading in, and the fade
+  animates a single image instead of redrawing every row on every frame (2
+  instead of 11 list repaints per opening).
+- **Half-screen on Ubuntu:** On Wayland, where the dock is invisible to
+  applications, the window's minimum width now leaves room for it, so GNOME
+  accepts Super+Left/Right and edge tiling.
+- **Terminals:** Typing `exit` (or Ctrl+D) closes that terminal tab. Links are
+  clickable, including URLs that wrap across lines and program hyperlinks.
+  Ctrl+Shift+C copies, Ctrl+C copies a selection (and still interrupts without
+  one), Ctrl+Shift+V or Shift+Insert pastes, and on Ubuntu middle-click pastes
+  the selection and right-click offers Copy, Paste, Select All, Clear and Open
+  Link. On Windows, Ctrl+V pastes and right-click copies a selection or pastes.
+- **Bootstrap stops re-offering arduino-cli:** The "update" ran
+  `arduino-cli upgrade`, which upgrades installed cores and libraries but not the
+  CLI, then reported success. It now installs the new release and accepts it
+  only when the installed executable reports the new version.
+
 ## November 11 Follow-up: Library Navigation, Glass, Motion and Working Updates
 
 - **Updates reach installed copies again:** One hand-packaged v11 ZIP, and every

@@ -135,14 +135,25 @@ class ComboPopups(unittest.TestCase):
             APP.processEvents()
             combo.showPopup()
             material = combo._mcu_glass_popup
+            # Hidden before its first frame: the list is never drawn at full
+            # strength and then snapped to transparent (the blink).
+            effect = combo.view().graphicsEffect()
+            self.assertIsNotNone(effect, "The list could paint before its motion began")
+            self.assertEqual(effect.opacity(), 0.0)
+            self.assertEqual(material.motion.progress(), 0.0)
             placed = None
             seen_partial = False
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
                 APP.processEvents()
-                effect = combo.view().graphicsEffect()
-                if effect is not None and 0.0 < effect.opacity() < 1.0:
+                progress = material.motion.progress()
+                if material.motion.running() and 0.0 < progress < 1.0:
                     seen_partial = True
+                    # One cached image moves; the live list stays hidden and unpainted.
+                    layer = material.motion._layer
+                    self.assertIsNotNone(layer)
+                    self.assertTrue(layer.isVisible())
+                    self.assertEqual(combo.view().graphicsEffect().opacity(), 0.0)
                     # The native window already holds its final, field-anchored place.
                     placed = placed or material.popup.geometry()
                     self.assertEqual(material.popup.geometry(), placed)
@@ -151,6 +162,7 @@ class ComboPopups(unittest.TestCase):
                 time.sleep(.004)
             self.assertTrue(seen_partial, "The list appeared without its fade")
             self.assertIsNone(combo.view().graphicsEffect(), "The fade effect outlived the motion")
+            self.assertIsNone(material.motion._layer, "The motion image outlived the motion")
             self.assertEqual(material.backdrop.geometry(), material.popup.rect())
             self.assertEqual(material.popup.geometry(), placed)
             combo.hidePopup()

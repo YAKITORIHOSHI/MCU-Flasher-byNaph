@@ -62,6 +62,7 @@ class AlignmentWindow(QMainWindow):
     """Real decorated container using the production minimum-size method."""
 
     _minimum_width_for_display = staticmethod(MCUMainWindow._minimum_width_for_display)
+    _panels_reported = staticmethod(MCUMainWindow._panels_reported)
     _update_minimum_window_size = MCUMainWindow._update_minimum_window_size
 
     def _get_active_screen(self):
@@ -100,6 +101,28 @@ class AlignmentChecks(unittest.TestCase):
             window.close()
             window.deleteLater()
             pump()
+
+    def test_wayland_minimum_leaves_room_for_a_dock_it_cannot_see(self):
+        # Wayland reports the whole monitor as available. GNOME tiles half of
+        # what its dock leaves and refuses a window whose minimum is wider.
+        from src.modules.ui_metrics import UNREPORTED_PANEL_ALLOWANCE, tiling_area_width
+        self.assertEqual(tiling_area_width(1920, True), 1920)
+        self.assertEqual(tiling_area_width(1920, False), 1920 - UNREPORTED_PANEL_ALLOWANCE)
+        self.assertEqual(tiling_area_width(800, False), 700)
+        with self.window() as (window, _field):
+            screen = window.screen()
+            area = screen.availableGeometry()
+            left, _top, right, _bottom = frame_margins(window)
+            with patch("PySide6.QtGui.QGuiApplication.platformName", return_value="wayland"):
+                self.assertFalse(MCUMainWindow._panels_reported(screen) is True and area == screen.geometry())
+                window._update_minimum_window_size(screen)
+                tile = tiling_area_width(area.width(), area != screen.geometry()) // 2
+                self.assertEqual(window.minimumWidth() + left + right, min(tile, 960))
+                if area == screen.geometry():
+                    # The Ubuntu dock (60-90 px) fits beside two half tiles.
+                    self.assertLessEqual(window.minimumWidth() + left + right, (area.width() - 96) // 2)
+            with patch("PySide6.QtGui.QGuiApplication.platformName", return_value="xcb"):
+                self.assertTrue(MCUMainWindow._panels_reported(screen))
 
     def test_show_refreshes_minimum_after_native_decoration_arrives(self):
         with self.window(watch=True) as (window, _field):

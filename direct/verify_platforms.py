@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import io
+import threading
 import os
 import platform
 import shutil
@@ -296,6 +297,8 @@ class PlatformChecks(unittest.TestCase):
         api._needs_recompile = Mock(return_value=(False, "fixture verified"))
         api.current_board, api.upload_speed = "Fixture Arduino Uno", "115200"
         api._trigger_actual_board_reset = Mock(return_value=True)
+        # No live monitor connection: the restart uses its passive one-shot open.
+        api._serial_lock, api._serial_conn = threading.RLock(), None
         api._active_board_info = dict(platform="atmelavr", board="uno", framework="arduino", require_upload_port=True)
         api._resolve_board_info = lambda name=None: api._active_board_info
         api.sketch_dir_path = self.root
@@ -343,8 +346,10 @@ class PlatformChecks(unittest.TestCase):
         shown_text = "\n".join(record["text"] for record in records)
         for hidden in ("Dependency Graph", "Arduino @ 1.0.0", "Building in release mode"):
             self.assertNotIn(hidden, shown_text)
-        for visible in ("Connecting to programmer", "Found programmer", "Writing flash", "[SUCCESS] Took 1.20 seconds"):
+        for visible in ("Connecting to programmer", "Found programmer", "Writing flash", "Upload successful"):
             self.assertIn(visible, shown_text)
+        # The summary reports the result and its time; PlatformIO's banner repeated it.
+        self.assertNotIn("[SUCCESS] Took 1.20 seconds", shown_text)
         warning = next(record for record in records if "programmer firmware is outdated" in record["text"])
         self.assertEqual(warning["tag"], "warning")
         timeout = next(record for record in records if "Timed out waiting" in record["text"])
@@ -376,6 +381,7 @@ class PlatformChecks(unittest.TestCase):
         api._unmap_unc_after_build = Mock()
         api._probe_chip_info = Mock(side_effect=AssertionError("Logging probed hardware"))
         api._trigger_actual_board_reset = Mock(return_value=reset_ok)
+        api._serial_lock, api._serial_conn = threading.RLock(), None
         api._get_jobs = lambda: 2
         api._stop_requested = False
         api.emit = Mock()
@@ -408,9 +414,12 @@ class PlatformChecks(unittest.TestCase):
             "Hard resetting via RTS pin...", "================ [SUCCESS] Took 1.20 seconds ================",
         ])
         text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
-        for expected in ("UPLOADING (PlatformIO)", "Upload Speed : 921600", "ESP32-D0WD-V3 (revision v3.1) Information",
-                         "00:11:22:33:44:55", "Flashing [4/4] Firmware", "Upload Summary", "Upload successful"):
+        for expected in ("UPLOADING (PlatformIO)", "Upload Speed : 921600", "Chip Information",
+                         "ESP32-D0WD-V3 (revision v3.1)", "00:11:22:33:44:55", "Flashing [4/4] Firmware",
+                         "| verified", "Upload Summary", "Upload successful", "Hard reset by esptool"):
             self.assertIn(expected, text)
+        for redundant in ("Connected to Fixture", "Flash data verified.", "[SUCCESS] Took"):
+            self.assertNotIn(redundant, text)
         phases = [payload for name, payload in events if name == "operation:phase"]
         self.assertTrue(any(phase.get("phase") == "flash" and not phase.get("can_stop") for phase in phases))
         self.assertTrue(any(name == "notification" and payload.get("title") == "Upload completed"

@@ -203,7 +203,9 @@ class MCUMainWindow(QMainWindow):
 
         from src.modules.ui_metrics import WorkArea, workspace_size
         target_w, target_h = workspace_size(WorkArea(avail.x(), avail.y(), avail_w, avail_h))
-        target_w = max(target_w, self._minimum_width_for_display(avail_w, avail_h))
+        from src.modules.ui_metrics import tiling_area_width
+        target_w = max(target_w, self._minimum_width_for_display(
+            tiling_area_width(avail_w, self._panels_reported(screen)), avail_h))
 
         # Center within the available work area (respecting taskbar location)
         x = avail.x() + max(0, (avail_w - target_w) // 2)
@@ -217,6 +219,16 @@ class MCUMainWindow(QMainWindow):
         """Return the half-monitor frame budget; Qt already applies display scale."""
         from src.modules.ui_metrics import workspace_minimum_width
         return workspace_minimum_width(screen_width)
+
+    @staticmethod
+    def _panels_reported(screen: QScreen | None) -> bool:
+        """Wayland gives clients the whole monitor; docks it occupies go unreported."""
+        if screen is None:
+            return True
+        from PySide6.QtGui import QGuiApplication
+        if not QGuiApplication.platformName().lower().startswith("wayland"):
+            return True
+        return screen.availableGeometry() != screen.geometry()
 
     def _update_minimum_window_size(self, screen: QScreen | None = None) -> None:
         """Fit the complete normal-window minimum to the logical work area."""
@@ -237,7 +249,9 @@ class MCUMainWindow(QMainWindow):
             margins = handle.frameMargins()
             frame_width = max(frame_width, margins.left() + margins.right())
             frame_height = max(frame_height, margins.top() + margins.bottom())
-        new_min_w = max(1, self._minimum_width_for_display(sw, sh) - frame_width)
+        from src.modules.ui_metrics import tiling_area_width
+        tiling_width = tiling_area_width(sw, self._panels_reported(screen))
+        new_min_w = max(1, self._minimum_width_for_display(tiling_width, sh) - frame_width)
         # The complete frame keeps at least three quarters of the usable height, so a
         # shrunken window still shows real code above the tools. Title bars count.
         from src.modules.ui_metrics import workspace_minimum_height

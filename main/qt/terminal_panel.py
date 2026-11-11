@@ -148,6 +148,8 @@ class TerminalPanel(QWidget):
     """
 
     control_failed = Signal(str)
+    # A shell that ended by itself (exit, Ctrl+D); its tab closes.
+    session_exited = Signal(str)
 
     def __init__(self, backend=None, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -171,7 +173,9 @@ class TerminalPanel(QWidget):
         self._control_lock = threading.Lock()
         self._control_worker_running = False
         self._control_generation = 0
+        self._exit_watch_generation = None
         self.control_failed.connect(self._on_control_failed)
+        self.session_exited.connect(self._on_session_exited)
 
         self._current_theme = "default"
         from main.core.config import get_monitor_font_size
@@ -662,6 +666,7 @@ class TerminalPanel(QWidget):
 
             # Flush queued control actions
             self._flush_pending_controls()
+            self._start_exit_watch()
 
             # Apply active theme to xterm
             self.apply_theme(self._current_theme)
@@ -759,6 +764,58 @@ class TerminalPanel(QWidget):
                 self._send_control("select", new_sid)
 
         self._update_buttons_state()
+
+    def _start_exit_watch(self) -> None:
+        """One held request at a time learns when a shell ends; no idle polling."""
+        port = self._port
+        with self._control_lock:
+            generation = self._control_generation
+            if not port or self._exit_watch_generation == generation:
+                return
+            self._exit_watch_generation = generation
+
+        def watch():
+            import urllib.request
+            after, failures = 0, 0
+            while True:
+                with self._control_lock:
+                    if generation != self._control_generation:
+                        return
+                try:
+                    url = f"http://127.0.0.1:{int(port)}/events?after={after}"
+                    with urllib.request.urlopen(url, timeout=40.0) as response:
+                        result = json.loads(response.read(65536))
+                    failures = 0
+                except (OSError, ValueError):
+                    failures += 1
+                    if failures >= 3:
+                        return  # The engine stopped; a new one starts its own watch.
+                    time.sleep(1.0)
+                    continue
+                if not isinstance(result, dict):
+                    return
+                try:
+                    after = max(after, int(result.get("seq", after)))
+                except (TypeError, ValueError):
+                    return
+                for session_id in result.get("exited") or []:
+                    with self._control_lock:
+                        if generation != self._control_generation:
+                            return
+                    try:
+                        self.session_exited.emit(str(session_id))
+                    except RuntimeError:
+                        return  # The panel was deleted while the request ended.
+                if result.get("running") is False:
+                    return
+
+        threading.Thread(target=watch, daemon=True, name="TerminalExitWatch").start()
+
+    def _on_session_exited(self, session_id: str) -> None:
+        for index in range(self._tab_bar.count()):
+            if self._tab_bar.tabData(index) == session_id:
+                self._on_tab_close_requested(index)
+                return
 
     def _kill_active_session(self) -> None:
         """Kill the currently selected terminal session."""

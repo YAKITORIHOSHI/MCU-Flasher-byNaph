@@ -1930,7 +1930,13 @@ class ControlsBar(QWidget):
         )
         if self._backend:
             try:
-                self._backend.set_baud_rate(int(mon_baud))
+                # The sketch's own Serial.begin() rate wins over the board default;
+                # the backend reads the sketch off the GUI thread.
+                apply_default = getattr(self._backend, "apply_board_monitor_baud", None)
+                if callable(apply_default):
+                    apply_default(int(mon_baud))
+                else:
+                    self._backend.set_baud_rate(int(mon_baud))
             except Exception:
                 pass
 

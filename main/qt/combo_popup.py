@@ -167,11 +167,16 @@ class _PopupMaterial(QObject):
         if self.popup.isVisible():
             # The list fades in and slides from its field once its final geometry is set.
             self.motion.start((self.backdrop, self.view), opens_below=self._opens_below)
+        else:
+            self.motion.finish()
 
     def eventFilter(self, watched, event):
         if event.type() in (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.DevicePixelRatioChange):
             self._refresh()
             if event.type() == QEvent.Type.Show:
+                # Before the first frame: the combo still scrolls to its current
+                # row, so the motion's image is taken once the event loop returns.
+                self.motion.conceal((self.backdrop, self.view))
                 QTimer.singleShot(0, self, self._settle_and_reveal)
         elif event.type() == QEvent.Type.Hide:
             self.motion.finish()

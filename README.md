@@ -40,7 +40,7 @@ a conservative declaration chooser. No compiler or package installer runs for
 navigation. Settings → Editor → **Automatically close brackets and quotes**
 controls language-aware pairing, wrapping, overtyping and paired deletion.
 
-Developer Access keeps paper dropdowns, aligned loading indicators and centered
+Developer Access deletes a ticket without redrawing the list, spins its save indicator inside the Save button, keeps paper dropdowns and centered
 severity badges. Tickets default to newest created first, with Oldest first and
 Recently updated options. Custom categories can be removed after all their
 tickets have been reassigned; stale drafts recheck category availability before
@@ -479,7 +479,10 @@ and are not overwritten by instruction generation.
 Each main window permits a complete framed width of half the current monitor's
 available width, capped at 960 logical pixels so very wide monitors can also tile in
 thirds. The client minimum subtracts measured native borders, so desktop
-half-screen snapping can fit the complete window. It can resize wider and
+half-screen snapping can fit the complete window. Wayland does not tell
+applications where the dock is, so there the minimum also leaves room for an
+unseen side dock; GNOME refuses to tile a window whose minimum is wider than its
+half. It can resize wider and
 maximize normally; saved maximized state is restored. Minimum sizing follows the
 current monitor in Qt logical pixels, including native Wayland decorations. A new
 window fills small laptop screens, stays 1440×920 on ordinary desktops and grows on
@@ -1814,8 +1817,20 @@ Firebase administrative credentials or changes server rules automatically.
   - Upon a successful upload, hard reset, or soft reset, the application automatically switches the bottom view to the **Serial Monitor** after a 500ms grace delay.
   - The operation worker completes the declared restart after successful writing,
     checking the captured target and reporting a failed reset separately from
-    written firmware. A successful uploader reset is not repeated by a GUI timer.
-    Post-write restart never performs a 1200-baud bootloader touch.
+    written firmware. It opens the Serial Monitor first and restarts the board on
+    that connection, so the boot log and `setup()` output appear from their first
+    byte. ESP boards on USB-serial bridges (CP210x, CH34x, FTDI) stay in the
+    bootloader after esptool writes and are restarted this way; native ESP USB
+    keeps esptool's own restart. A successful uploader reset is not repeated.
+    Neither a restart nor Reset performs a 1200-baud bootloader touch.
+  - Upload writes every image the build declares (an ESP32's bootloader,
+    partition table and boot_app0 as well as the sketch), even when it reuses the
+    verified build, so an older partition table cannot keep old firmware running.
+  - Reset notices ("Triggering pin reset", "Pin reset completed successfully")
+    always appear before the boot output they cause, never inside one of its lines.
+  - The monitor follows the uploaded sketch's `Serial.begin()` rate. Choosing or
+    restoring a board uses that rate before the board's default; `Serial.begin`
+    wins over `Serial1`/`Serial2`, and `115200UL` or named constants count.
   - Normal monitor open/close/reconnect does not issue a reset. POSIX setup clears
     HUPCL during initial tty configuration and baud changes. OS/USB-driver opening
     transients require separate physical verification.
@@ -1870,9 +1885,11 @@ Firebase administrative credentials or changes server rules automatically.
   - Unreadable startup bytes can originate from a different boot baud rate.
     ESP8266 ROM startup logs commonly use 74880 baud even when the sketch uses
     115200 ([Espressif boot-log documentation](https://docs.espressif.com/projects/esptool/en/latest/esp8266/advanced-topics/boot-mode-selection.html)).
-    Keep the monitor at the running sketch's baud for its normal output. A message
-    printed only in `setup()` can already have been sent before a passive monitor
-    connects; use the explicit Reset control when you intend to restart it.
+    Keep the monitor at the running sketch's baud for its normal output. Output
+    like `\x00\x80x\xf8` repeating means the monitor runs faster than the board
+    prints; select the sketch's `Serial.begin()` rate. A message printed only in
+    `setup()` can already have been sent before a passive monitor connects; use the
+    explicit Reset control when you intend to restart it.
   - Every monitor connection uses explicit **8N1** with software and hardware
     flow control disabled. The baud picker starts from the saved monitor value
     and follows the baud confirmed by the live connection, preventing the UI
@@ -2019,6 +2036,8 @@ verification; board compilation/upload still requires separate target checks.
 - Terminal shutdown closes its local HTTP listener as well as stopping the server, releasing the port without an unclosed-socket warning.
 - **Ubuntu**: **New Bash** explicitly starts a native PTY with Qt WebEngine and offline xterm.js. The terminal starts empty and preserves PATH so installed coding CLIs can run. PTY creation uses `openpty` and native `Popen` session setup; the separate supervisor acquires its controlling terminal after exec, avoiding Python's deprecated `forkpty` inside the threaded workspace.
 - Capability replies, alternate screens, Ctrl+C, Unicode and bracketed paste pass through the PTY. Output acknowledgements limit queued data when the renderer is slow. Shell failures are visible; sessions and commands are never automatically replayed.
+- **Exit closes the tab**: typing `exit` (or Ctrl+D, `logout`, or a program that ends the shell) disposes that terminal tab. A shell that fails to start, or a terminal view that stops, keeps its tab so the message stays readable.
+- **Links, keyboard and mouse**: click an `http`/`https` link, including a URL wrapped across lines or a program's hyperlink, to open it in your browser. **Ctrl+Shift+C** copies the selection and **Ctrl+C** copies when text is selected (without a selection it still interrupts). **Ctrl+Shift+V** or **Shift+Insert** pastes. On Ubuntu, plain Ctrl+V stays `^V` for vim and nano, middle-click pastes the selection, and right-click offers Copy, Paste, Select All, Clear and Open Link. On Windows, Ctrl+V pastes and right-click copies a selection or pastes. Programs that use the mouse (htop, vim, OpenCode) receive clicks, wheel and drags as usual.
 - Hardware-free lifecycle and layout checks: `direct/verify_terminal_startup.py`, `direct/verify_posix_terminal_state.py` and `direct/verify_responsive.py`. These mock child processes and IPC; `direct/verify_terminal.py` separately checks the Windows PTY/renderer protocol. Native Linux execution requires its own host verification.
 
 ### 9. OpenCode AI Assistant & Pulsating Diff Glow

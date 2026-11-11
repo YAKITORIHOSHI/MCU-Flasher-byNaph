@@ -35,6 +35,7 @@ class UploadLog:
         self.backend = backend
         self.is_esp = str(self.info.get("platform") or "").lower() in {"espressif32", "espressif8266"}
         self.upload_speed = serial_upload_speed(self.info, upload_speed)
+        self._target_speed = self.upload_speed
         self._progress = api._new_upload_progress_state() if self.is_esp else None
         self._chip: dict[str, str] = {}
         self._chip_shown = False
@@ -47,6 +48,9 @@ class UploadLog:
         self._verified = False
         self._verify_requested = False
         self._written_bytes = ""
+        self._regions_written = 0
+        self._bytes_written = 0
+        self._protocol_in_target = bool(self.info.get("upload_protocol"))
         self._write_label = "Writing"
         self._read_label = "Verifying"
         self._bars: dict[str, tuple[float, str]] = {}
@@ -87,7 +91,8 @@ class UploadLog:
         self._connection = status
         text, tag = {
             "connecting": ("  Connecting to bootloader…", "magenta"),
-            "connected": (f"  Connected to {self.board_name or 'board'}", "success"),
+            # The board is already named in the Upload Target box above.
+            "connected": ("  Connected to the bootloader", "success"),
             "failed": ("  Connection failed", "error"),
             "stopped": ("  ■ Connection stopped", "info"),
         }[status]
@@ -105,7 +110,8 @@ class UploadLog:
         if self._chip_shown or not model:
             return
         self._chip_shown = True
-        self.api._print_chip_info_box(model, list(self._chip.items()))
+        # The model is the first row; repeating it as the title only doubled it.
+        self.api._print_info_box("Chip Information", list(self._chip.items()))
         self._show_memory()
 
     def _phase_row(self, phase: str, text: str, tag: str = "info") -> None:
@@ -219,10 +225,11 @@ class UploadLog:
             return True
         protocol = re.fullmatch(r"CURRENT:\s+upload_protocol\s*=\s*([\w.+-]+)", clean, re.IGNORECASE)
         if protocol:
-            if protocol.group(1) != self.info.get("upload_protocol"):
-                self._emit(f"  Upload protocol: {protocol.group(1)}", "dim")
-                self.info["upload_protocol"] = protocol.group(1)
+            # Recorded for the summary; a separate line repeated the obvious.
+            self.info["upload_protocol"] = protocol.group(1)
             return True
+        if re.fullmatch(r"=+\s*\[SUCCESS\]\s*Took\s*[\d.]+\s*seconds\s*=+", clean, re.IGNORECASE):
+            return True  # The Upload Summary reports the result and its time.
         if clean in {"No dependencies", "Configuring upload protocol..."}:
             return True
         if self.port and clean in {f"Using manually specified: {self.port}", f"Serial port {self.port}"}:
@@ -239,6 +246,7 @@ class UploadLog:
             ("Crystal", r"Crystal (?:is|frequency)\s*:?\s+(.+)"),
             ("MAC Address", r"MAC(?: address)?\s*:\s*(.+)"),
             ("Flash Size", r"(?:(?:Auto-detected|Detected)\s+)?Flash size\s*:\s*(.+)"),
+            ("USB Mode", r"USB mode\s*:\s*(.+)"),
         )
         for label, pattern in patterns:
             match = re.fullmatch(pattern, clean, re.IGNORECASE)
@@ -263,18 +271,22 @@ class UploadLog:
         if re.fullmatch(r"Connecting\.{1,}(?:_\.*)*", clean, re.IGNORECASE):
             self._connection_row("connecting")
             return True
-        if re.fullmatch(r"(?:Uploading stub|Running stub|Stub running|Stub flasher running)\.{0,3}", clean, re.IGNORECASE):
+        if re.fullmatch(r"(?:Uploading stub(?: flasher)?|Running stub(?: flasher)?|Stub running|Stub flasher running)\.{0,3}",
+                        clean, re.IGNORECASE):
             if self._chip.get("Chip Model"):
                 self._connection_row("connected")
             self._show_chip()
             return True
         if re.fullmatch(r"esptool(?:\.py)? v\d+(?:\.\d+)+(?:-[\w.-]+)?", clean, re.IGNORECASE):
             return True
-        if re.fullmatch(r"Changing baud rate to \d+\.{0,3}|Changed\.", clean, re.IGNORECASE):
-            if clean.lower().startswith("changing"):
-                self._emit(f"  {clean}", "dim")
+        rate = re.fullmatch(r"Changing baud rate to (\d+)\.{0,3}|Changed\.", clean, re.IGNORECASE)
+        if rate:
+            # The selected rate is already in the Upload Target box; only a
+            # different rate is news.
+            if rate.group(1) and rate.group(1) != self.upload_speed:
+                self._emit(f"  Upload baud changed by the programmer: {rate.group(1)}", "dim")
             return True
-        if re.fullmatch(r"Configuring flash size\.{3}|SHA digest in image updated", clean, re.IGNORECASE):
+        if re.fullmatch(r"Configuring flash size\.{3}|SHA digest in image updated\.?", clean, re.IGNORECASE):
             return True
         if re.fullmatch(r"Flash will be erased from 0x[0-9a-f]+ to 0x[0-9a-f]+\.{3}", clean, re.IGNORECASE):
             self._show_chip()
@@ -288,22 +300,29 @@ class UploadLog:
             # Older esptool has no image-start row. Select its stage from the
             # actual address before using the unchanged Windows progress helper.
             self.api._select_upload_stage_for_address(self._progress, legacy_progress.group(1))
+        wrote = re.match(r"Wrote ([\d,]+) bytes\b", clean, re.IGNORECASE)
         if self.api._consume_esptool_upload_progress(
                 self._progress, clean, before_progress=self._show_chip):
             self._phase = "writing"
+            if wrote:
+                self._regions_written += 1
+                self._bytes_written += int(wrote.group(1).replace(",", ""))
             return True
         if re.fullmatch(r"Hash of data verified\.", clean, re.IGNORECASE):
+            # Mark the region's own row; one line per region repeated itself.
             self._verified = True
-            self._phase_row("verified", "  Flash data verified.", "success")
+            row = self._progress.get("last_row") if self._progress else None
+            if row:
+                self.api._append_upload_progress(**row, note="verified")
             return True
         if re.fullmatch(r"Hard resetting via (?:RTS|DTR) pin\.{0,3}", clean, re.IGNORECASE):
             self._phase_row("resetting", f"  {clean}", "success")
             return True
-        if clean == "Leaving...":
-            return True
+        if re.fullmatch(r"Leaving\.{3}|Staying in bootloader\.?", clean, re.IGNORECASE):
+            return True  # The application restarts the board itself, then reports it.
         return False
 
-    def finish(self, success: bool, duration: float, stopped: bool = False) -> None:
+    def finish(self, success: bool, duration: float, stopped: bool = False, restart: str = "") -> None:
         if self._finished:
             return
         self._finished = True
@@ -320,17 +339,21 @@ class UploadLog:
             self._emit("  Upload failed.", "error")
             return
         self._emit("", "normal")
-        board_label = f" {self.board_name}" if self.board_name else ""
-        self._emit(f"  Upload successful!{board_label}", "success")
-        fields: list[tuple[str, str]] = [("Board", self.board_name or "Selected target"),
-                                       ("Uploader", self.backend),
-                                       ("Result", "Written and verified" if self._verified else "Uploader completed successfully")]
-        if self.port:
-            speed = f" @ {self.upload_speed} baud" if self.upload_speed else ""
-            fields.append(("Upload Port", self.port + speed))
-        if self.info.get("upload_protocol"):
-            fields.append(("Upload Protocol", _bounded(self.info["upload_protocol"])))
-        if self._written_bytes:
-            fields.append(("Firmware", f"{self._written_bytes} bytes"))
+        self._emit("  Upload successful!", "success")
+        # Board, target, port and speed are in the Upload Target box; the
+        # summary reports only what the upload itself established.
+        fields: list[tuple[str, str]] = [
+            ("Result", "Written and verified" if self._verified else "Uploader completed successfully")]
+        if self._regions_written:
+            regions = "region" if self._regions_written == 1 else "regions"
+            fields.append(("Written", f"{self._regions_written} {regions}, {self._bytes_written:,} bytes"))
+        elif self._written_bytes:
+            fields.append(("Written", f"{self._written_bytes} bytes"))
+        if self.info.get("upload_protocol") and not self._protocol_in_target:
+            fields.append(("Protocol", _bounded(self.info["upload_protocol"])))
+        if self.port and self.upload_speed and self.upload_speed != self._target_speed:
+            fields.append(("Upload Speed", f"{self.upload_speed} baud (reported by programmer)"))
+        if restart:
+            fields.append(("Restart", _bounded(restart, 160)))
         fields.append(("Upload Time", f"{round(max(0.0, float(duration)), 2)}s"))
         self.api._print_info_box("Upload Summary", fields)

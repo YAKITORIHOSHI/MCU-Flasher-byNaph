@@ -1,9 +1,64 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, passive serial monitoring and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 11 fixes: uploads, restarts, monitor, tickets, tiling and terminals
+
+Uploads: `-t nobuild` never runs the framework script that lists an ESP32's
+bootloader, partition table and boot_app0, so uploads wrote only the app and a
+board kept its old partition table/OTA choice. `platformio_build_hook.py`
+records `FLASH_EXTRA_IMAGES` after a build (`mcu-flash-images.json` in the
+build dir) and restores it in the pre pass of a nobuild upload; a recorded image
+that is missing fails the upload. esptool progress selects a region from the
+first row after `Compressed`/`Wrote` (its running pointer can reach the next
+region's address). `direct/verify_upload_images.py` checks the hook and, when
+the espressif32 packages are prepared, the real uploader command via `envdump`.
+
+Restarts: `_require_board_restart` attaches the Serial Monitor
+(`operation_handoff=True`) and runs `_run_reset_waveform` on its connection
+through `_reset_on_live_monitor`. The reader's `hold`/`release` (attached to its
+publisher) keeps bytes received during the waveform until the notices are out,
+so "Pin reset … completed" never splits a boot-log line. ESP uploads through an
+external USB-UART bridge set `MCU_FLASHER_ESPTOOL_AFTER=no-reset`; the hook
+rewrites `--after` in esptool's own spelling. Native Espressif USB keeps
+esptool's reset. Only uploads (`sketch_firmware=True`) match the monitor to the
+sketch's `Serial.begin()`; reset firmware prints at the board default. Manual
+Reset attaches the monitor first and never uses a 1200-baud touch.
+
+Monitor baud: `_detect_sketch_baud_rate` prefers `Serial`/`SerialUSB`/
+`USBSerial` over `Serial1/2`, reads constants from every root source and
+accepts integer suffixes. Board changes call `apply_board_monitor_baud`, which
+uses that rate before the board default, off Qt.
+
+Upload log: the Upload Target box holds board, target, port, protocol and
+speed; nothing repeats them. "Connected to the bootloader", a `Chip
+Information` box, each region's row marked `| verified`, and a summary of
+Result, Written (regions, bytes), Restart and time. PlatformIO's `[SUCCESS]`
+banner and an unchanged `Changing baud rate` are not shown.
+
+Developer Access: deleting a ticket removes only its card (signature-checked
+renders, `_tickets_generation` bump against stale live refreshes); card
+deletes/updates run without disabling the dashboard. Create/Edit spin
+`ButtonSpinner` inside the Save button in place of its icon; `_steady_label`
+reserves both labels' widths.
+
+Dropdowns: `PopupMotion.conceal` hides the live list synchronously at Show and
+`start` animates one `grab()` image on `_MotionLayer`; the list stays behind a
+fully transparent effect (which paints nothing) until rest.
+
+Tiling: on Wayland, where docks go unreported, the half-monitor minimum comes
+from `tiling_area_width(width, panels_reported=False)`.
+
+Terminals: Linux `PtySession.exited` and Windows long-poll `/events` close a tab
+whose shell ended by itself; failed starts and renderer loss keep their tab.
+`src/editor/terminal_links.js` adds link providers, OSC 8 handling, copy/paste
+keys, middle-click primary paste and context-menu state; Linux uses a GlassMenu,
+Windows right-click copies a selection or pastes the clipboard through the
+engine. Bootstrap's arduino-cli update installs the MSI and verifies the
+executable's own version; `arduino-cli upgrade` (cores/libraries) never runs.
 
 ## November 11 follow-up: navigation, glass, motion and updates
 

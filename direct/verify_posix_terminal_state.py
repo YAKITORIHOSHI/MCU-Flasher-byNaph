@@ -20,6 +20,7 @@ from main.qt.garbage_collection import install_gui_garbage_collector
 APP = QApplication.instance() or QApplication([])
 COLLECTOR = install_gui_garbage_collector(APP)
 PANELS = []
+REAL_SESSION = terminal.PtySession
 
 
 class FakeView(QWidget):
@@ -37,6 +38,7 @@ class FakeView(QWidget):
 class FakeSession(QObject):
     output = Signal(str)
     ended = Signal(str)
+    exited = Signal()
 
     def __init__(self, cwd, argv, parent=None):
         super().__init__(parent)
@@ -115,6 +117,47 @@ class PosixTerminalStateChecks(unittest.TestCase):
             panel._on_tab_revealed()
             create.assert_not_called()
         self.assert_empty(panel)
+
+    def test_exit_disposes_only_that_session_tab(self):
+        panel = self.panel()
+        panel.add_session()
+        panel.add_session()
+        first, second = (panel._tabs.widget(index) for index in range(2))
+        first_session = panel._sessions[first][0]
+        first_session.exited.emit()  # `exit` or Ctrl+D in the first shell.
+        APP.processEvents()
+        self.assertEqual(panel._tabs.count(), 1)
+        self.assertIs(panel._tabs.widget(0), second)
+        self.assertNotIn(first, panel._sessions)
+        first_session.close.assert_called_once()
+        panel._sessions[second][0].exited.emit()
+        APP.processEvents()
+        self.assert_empty(panel)
+        with patch.object(panel, "add_session") as create:
+            panel._on_tab_revealed()
+            create.assert_not_called()  # Nothing restarts or replays a shell.
+
+    def test_renderer_failure_keeps_its_tab(self):
+        panel = self.panel()
+        panel.add_session()
+        view = panel._tabs.currentWidget()
+        panel._renderer_terminated(view)
+        APP.processEvents()
+        self.assertEqual(panel._tabs.count(), 1)
+        self.assertIn("Terminal view stopped", panel._label.text())
+
+    def test_terminal_bridge_opens_only_web_links(self):
+        from PySide6.QtCore import QUrl
+        self.assertEqual(terminal._web_link("https://example.com/a?b=c"), "https://example.com/a?b=c")
+        for unsafe in ("file:///etc/passwd", "javascript:alert(1)", "https://", "http://exa mple.com",
+                       "https://example.com/\x07", "ftp://example.com"):
+            self.assertEqual(terminal._web_link(unsafe), "", unsafe)
+        opened = []
+        with patch.object(terminal.QDesktopServices, "openUrl", side_effect=lambda url: opened.append(url)):
+            session = REAL_SESSION(str(ROOT), ["/bin/true"])
+            session.openLink("file:///etc/passwd")
+            session.openLink("https://example.com/docs")
+        self.assertEqual(opened, [QUrl("https://example.com/docs")])
 
     def test_project_reset_closes_sessions_and_returns_to_empty(self):
         panel = self.panel()

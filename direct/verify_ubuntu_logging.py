@@ -109,13 +109,20 @@ class UbuntuLoggingChecks(unittest.TestCase):
         self.assertEqual(dict(chip_boxes[0])["MAC Address"], "00:11:22:33:44:55")
         self.assertNotIn("Flash Size", dict(chip_boxes[0]))
         text = api.text()
-        self.assertLess(text.index("ESP32-D0WD-V3 (revision v3.1) Information"), text.index("Flashing"))
+        self.assertLess(text.index("Chip Information"), text.index("Flashing"))
+        self.assertIn("Chip Model  : ESP32-D0WD-V3 (revision v3.1)", text)
         self.assertIn("[1/4] Bootloader", text)
         self.assertIn("[4/4] Firmware", text)
         self.assertIn("Upload Summary", text)
-        self.assertIn("/dev/fixture0 @ 921600 baud", text)
+        # Port and speed appear once, in the Upload Target box.
+        self.assertEqual(text.count("/dev/fixture0"), 1)
+        self.assertIn("921600 baud (selected)", text)
         self.assertIn("4.12s", text)
-        self.assertIn("Flash data verified", text)
+        # Verification marks the region's own row instead of a line per region.
+        self.assertIn("[1/4] Bootloader", text)
+        self.assertIn("| verified", text)
+        self.assertNotIn("Flash data verified.", text)
+        self.assertIn("Written     : 1 region, 17,536 bytes", text)
         connection = [row for row in api.logs() if row.get("progress_key")]
         self.assertEqual(len({row["progress_key"] for row in connection}), 1)
         self.assertIn("Connected", connection[-1]["text"])
@@ -134,7 +141,11 @@ class UbuntuLoggingChecks(unittest.TestCase):
         self.assertIn("Crystal", text)
         self.assertIn("40MHz", text)
         self.assertIn("Flash Size: 4MB", text)
-        self.assertIn("Changing baud rate to 921600", text)
+        # The selected rate is already in the Upload Target box.
+        self.assertNotIn("Changing baud rate to 921600", text)
+        self.assertNotIn("921600", text)
+        self.assertTrue(log.consume("Changing baud rate to 460800..."))
+        self.assertIn("Upload baud changed by the programmer: 460800", api.text())
 
     def test_failed_or_stopped_upload_never_reports_success_or_infers_chip(self):
         for stopped in (False, True):
@@ -158,7 +169,7 @@ class UbuntuLoggingChecks(unittest.TestCase):
             self.assertTrue(log.consume(line), line)
         self.assertIn("[3/4] Boot App", api.text())
         self.assertNotIn("[4/4] Firmware", api.text())
-        self.assertIn("ESP32 Information", api.text())
+        self.assertIn("Chip Information", api.text())
 
     def test_native_nonserial_programmer_does_not_claim_port_speed_or_esp_chip(self):
         info = {"platform": "ststm32", "board": "fixture", "framework": "cmsis",

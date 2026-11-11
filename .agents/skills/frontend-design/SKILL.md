@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: "Design MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short entrance motion and compact tab reveal, paper Developer Access dropdowns, stable spinner/badge layouts, responsive editor/terminal surfaces and restrained loading feedback."
+description: "Design MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces and restrained loading feedback."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -22,14 +22,19 @@ Floating editor surfaces (AI bar, its toggle, notices, the declaration list, the
 definition card and Monaco's own widgets) are glass: the per-theme `--popover`
 tint, backdrop blur, a lit top rim and soft shadow. Never use the opaque
 `--bg-dark`/`--hover-bg` blocks for them. Qt menus use GlassMenu. Entrance motion
-stays short (140-190 ms), moves children rather than native popup windows and
-switches off with Windows' animation setting or MCU_FLASHER_REDUCED_MOTION=1.
-Compact icon tool strips reveal only the selected tool's name.
+stays short (140-190 ms), never moves native popup windows and switches off with
+Windows' animation setting or MCU_FLASHER_REDUCED_MOTION=1. A dropdown hides its
+live rows before the first frame and animates one cached image of its resting
+state: fading live rows re-rendered every row each frame and stuttered, and
+starting after the first paint made it blink. Compact icon tool strips reveal
+only the selected tool's name.
 
 Developer Access dropdowns explicitly select paper popup mode in combo_popup.py:
 cream/white paper, black border, yellow selection and native list behavior.
-Workspace combos keep glass. Center severity inside its card row and reserve
-new/edit spinner space while hidden, aligning it vertically with footer actions.
+Workspace combos keep glass. Center severity inside its card row. New/Edit show
+progress inside the Save button, spinning in place of its icon, with the button
+reserving both labels' widths so nothing in the footer moves. Deleting a ticket
+removes only its card; never grey out or rebuild the whole list for it.
 Keep category removal feedback wrapped, drafts intact and sort/filter controls
 reachable in narrow windows.
 

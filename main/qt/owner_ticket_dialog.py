@@ -75,6 +75,22 @@ class _ServiceTask(QObject):
         Thread(target=self.run, name="developer-service", daemon=True).start()
 
 
+def _steady_label(action, text, labels):
+    """Change a button's label without changing its width."""
+    metrics = action.fontMetrics()
+    widest = max(metrics.horizontalAdvance(label) for label in labels)
+    current = metrics.horizontalAdvance(action.text())
+    if action.minimumWidth() < action.sizeHint().width() - current + widest:
+        action.setMinimumWidth(action.sizeHint().width() - current + widest)
+    action.setText(text)
+
+
+def _ticket_signature(ticket):
+    return tuple(str(ticket.get(key, "")) for key in (
+        "id", "title", "description", "status", "severity", "category", "author",
+        "created_at", "updated_at"))
+
+
 def _tickets_content_identical(t1_list, t2_list, parse_ts=None):
     if t1_list is t2_list:
         return True
@@ -166,6 +182,15 @@ class _TaskPortal(PortalDialog):
     def _set_busy(self, busy):
         if hasattr(self, "spinner") and self.spinner is not None:
             self.spinner.set_busy(busy)
+
+    def _spin_in_button(self, action):
+        """Show progress inside the action that started it, not in a slot beside it."""
+        from main.qt.circular_spinner import ButtonSpinner
+        previous = getattr(self, "spinner", None)
+        if isinstance(previous, QWidget):
+            previous.hide()
+            previous.deleteLater()
+        self.spinner = ButtonSpinner(action, color="#141414")
 
     def _remove_ticket_category(self, category):
         if self._task_name or self.service is None:
@@ -597,9 +622,9 @@ class CreateTicketDialog(_TaskPortal):
         footer.addStretch(1)
         self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.btn_cancel)
-        footer.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_save = button("Create ticket", self.backdrop, self._do_save, role="primary", vector="save")
         footer.addWidget(self.btn_save)
+        self._spin_in_button(self.btn_save)
         self.content.addLayout(footer)
         self.apply_theme(self._theme_name)
         clamp_window(self)
@@ -639,7 +664,7 @@ class CreateTicketDialog(_TaskPortal):
         self.btn_save.setEnabled(not busy)
         self.btn_cancel.setEnabled(not busy)
         self.fields.setEnabled(not busy)
-        self.btn_save.setText("Creating…" if busy else "Create ticket")
+        _steady_label(self.btn_save, "Creating…" if busy else "Create ticket", ("Create ticket", "Creating…"))
 
     def _add_ticket_category(self, category):
         if self._task_name:
@@ -727,9 +752,9 @@ class EditTicketDialog(_TaskPortal):
         footer.addStretch(1)
         self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.btn_cancel)
-        footer.addWidget(self.spinner, 0, Qt.AlignmentFlag.AlignVCenter)
         self.btn_save = button("Save changes", self.backdrop, self._do_save, role="primary", vector="save")
         footer.addWidget(self.btn_save)
+        self._spin_in_button(self.btn_save)
         self.content.addLayout(footer)
         self.apply_theme(self._theme_name)
         clamp_window(self)
@@ -775,7 +800,7 @@ class EditTicketDialog(_TaskPortal):
         self.btn_save.setEnabled(not busy)
         self.btn_cancel.setEnabled(not busy)
         self.fields.setEnabled(not busy)
-        self.btn_save.setText("Saving…" if busy else "Save changes")
+        _steady_label(self.btn_save, "Saving…" if busy else "Save changes", ("Save changes", "Saving…"))
 
     def _add_ticket_category(self, category):
         if self._task_name:
@@ -1097,6 +1122,10 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _set_busy(self, busy):
         super()._set_busy(busy)
+        if busy and self._task_name in ("delete", "update"):
+            # A card's own change runs quietly. Disabling the whole dashboard
+            # greyed every card and button, then restored them: a blink.
+            return
         ready = self.service is not None and not busy
         for control in (self.btn_unlock, self.btn_diagnose, self.btn_auth_cloud, self.chk_keep_signed_in,
                         self.btn_new, self.btn_cloud, self.btn_lock, self.btn_refresh, self.btn_save_new,
@@ -1675,28 +1704,71 @@ class OwnerTicketDialog(_TaskPortal):
         self._tickets_generation += 1
         self._render_tickets_list()
 
-    def _render_tickets_list(self):
-        # A list rebuilt by a remote change must not throw the reader back to the top.
+    def _filtered_tickets(self):
+        query = self._search_query.lower()
+        filtered = [ticket for ticket in self._tickets
+                    if (self._active_filter in ("All", "All Status") or ticket.get("status") == self._active_filter)
+                    and (self._active_category_filter in ("All", "All categories")
+                         or str(ticket.get("category", "")).casefold() == self._active_category_filter.casefold())
+                    and (not query or query in " ".join(str(ticket.get(key, "")) for key in ("title", "description", "category")).lower())]
+        return sort_tickets(filtered, self.sort_cb.currentText())
+
+    def _render_tickets_list(self, *, force=False):
+        """Show the filtered tickets, touching only the cards that changed.
+
+        Rebuilding every card for a deletion or an unchanged refresh made the
+        whole list blink; the reader's scroll position also jumped.
+        """
+        tickets = self._tickets
+        self._sync_category_options()
+        self._update_stats(tickets)
+        filtered = self._filtered_tickets()
+        rows = tuple(_ticket_signature(ticket) for ticket in filtered)
+        signature = (rows, bool(tickets))
+        previous = getattr(self, "_rendered_signature", None)
+        if not force and previous == signature:
+            return
+        if not force and previous is not None and rows and previous[1] == bool(tickets):
+            remaining = iter(rows)
+            expected = next(remaining, None)
+            removed = set()
+            for row in previous[0]:
+                if row == expected:
+                    expected = next(remaining, None)
+                else:
+                    removed.add(row[0])
+            if expected is None and removed:
+                # Only deletions: retire exactly those cards in place.
+                for index in reversed(range(self.cards_layout.count())):
+                    widget = self.cards_layout.itemAt(index).widget()
+                    if isinstance(widget, TicketCard) and str(widget.ticket.get("id", "")) in removed:
+                        self.cards_layout.takeAt(index)
+                        widget.hide()
+                        widget.deleteLater()
+                self._rendered_signature = signature
+                return
+        self._rendered_signature = signature
+        # Paint once, after the new cards are laid out and the reader's place restored.
+        frozen = getattr(self, "scroll_cards", None) or self.cards_container
         scrollbar = self.scroll_cards.verticalScrollBar() if hasattr(self, "scroll_cards") else None
         position = scrollbar.value() if scrollbar is not None else 0
-        if scrollbar is not None:
-            QTimer.singleShot(0, self, lambda: scrollbar.setValue(min(position, scrollbar.maximum())))
+        frozen.setUpdatesEnabled(False)
+
+        def reveal():
+            try:
+                if scrollbar is not None:
+                    scrollbar.setValue(min(position, scrollbar.maximum()))
+                frozen.setUpdatesEnabled(True)
+            except RuntimeError:
+                pass  # The portal closed before its first paint.
+
+        QTimer.singleShot(0, self, reveal)
         while self.cards_layout.count():
             item = self.cards_layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.hide()
                 widget.deleteLater()
-        tickets = self._tickets
-        self._sync_category_options()
-        self._update_stats(tickets)
-        query = self._search_query.lower()
-        filtered = [ticket for ticket in tickets
-                    if (self._active_filter in ("All", "All Status") or ticket.get("status") == self._active_filter)
-                    and (self._active_category_filter in ("All", "All categories")
-                         or str(ticket.get("category", "")).casefold() == self._active_category_filter.casefold())
-                    and (not query or query in " ".join(str(ticket.get(key, "")) for key in ("title", "description", "category")).lower())]
-        filtered = sort_tickets(filtered, self.sort_cb.currentText())
         if not filtered:
             empty = NeoCard(self.cards_container)
             box = QVBoxLayout(empty)
@@ -1770,6 +1842,8 @@ class OwnerTicketDialog(_TaskPortal):
                 old_status = t.get("status")
                 t["status"] = status
                 break
+        # The card already shows its new status; the next list change rebuilds.
+        self._rendered_signature = None
         self._update_stats(self._tickets)
 
         def update():
@@ -1788,7 +1862,7 @@ class OwnerTicketDialog(_TaskPortal):
                             t["status"] = old_status
                             break
                     self._update_stats(self._tickets)
-                    self._render_tickets_list()
+                    self._render_tickets_list(force=True)
                 QMessageBox.warning(self, "Update ticket", error or "The ticket could not be changed. Try again.")
             else:
                 if result and len(result) > 1 and isinstance(result[1], list):
@@ -1814,7 +1888,8 @@ class OwnerTicketDialog(_TaskPortal):
     def _on_ticket_deleted(self, ticket_id: str) -> None:
         try:
             self._tickets = [t for t in self._tickets if t.get("id") != ticket_id]
-            self._update_stats(self._tickets)
+            # A live refresh started before this deletion would bring the card back.
+            self._tickets_generation += 1
             self._render_tickets_list()
 
             def delete():

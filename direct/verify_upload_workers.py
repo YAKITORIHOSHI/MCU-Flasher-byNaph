@@ -49,7 +49,9 @@ class UploadWorkerChecks(unittest.TestCase):
                  "refresh_board_catalog", "update_skip_compile_availability", "stop_operation",
                  "_upload_status_key", "_append_upload_boot_hint",
                  "_finish_upload_connection_status", "_esptool_chip_mismatch",
-                 "_append_connecting_progress", "_upload_worker", "_platformio_build_environment", "_check_write_connection"}
+                 "_append_connecting_progress", "_upload_worker", "_platformio_build_environment", "_check_write_connection",
+                 "_serial_reset_family", "_run_reset_waveform", "_reset_on_live_monitor",
+                 "_apply_sketch_monitor_baud", "_monitor_restarts_upload"}
         cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
         cls.bases = []
         iterator = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
@@ -337,7 +339,13 @@ class UploadWorkerChecks(unittest.TestCase):
         self.assertFalse(self.api._upload_connection_pending)
         self.assert_upload_caller_completed(success=True)
         self.api._trigger_actual_board_reset.assert_called_once()
-        self.api._start_serial_monitor.assert_called_once()
+        # The worker attaches the monitor before it restarts the board, so the
+        # boot output is captured; the final resume then finds it running.
+        starts = self.api._start_serial_monitor.call_args_list
+        self.assertEqual(starts[0].kwargs, {"operation_handoff": True})
+        self.assertEqual(len(starts), 2)
+        # esptool leaves the chip in its bootloader for that monitor-owned restart.
+        self.assertEqual(options["env"].get("MCU_FLASHER_ESPTOOL_AFTER"), "no-reset")
         self.api._release_port_lines.assert_not_called()
 
     def test_successful_platformio_reset_is_not_pulsed_again(self):

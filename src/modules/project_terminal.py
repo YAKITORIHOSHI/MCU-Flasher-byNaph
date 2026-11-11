@@ -38,6 +38,8 @@ if __name__ == "__main__" and sys.platform != "win32":
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 ENV_SITE_PACKAGES = SCRIPT_DIR / "env" / "Lib" / "site-packages"
 XTERM_ASSET_DIR = SCRIPT_DIR / "src" / "assets" / "xterm"
+TERMINAL_LINKS_SCRIPT = SCRIPT_DIR / "src" / "editor" / "terminal_links.js"
+CLIPBOARD_LIMIT = 4_000_000
 if sys.platform == "win32" and ENV_SITE_PACKAGES.exists() and str(ENV_SITE_PACKAGES) not in sys.path:
     sys.path.insert(0, str(ENV_SITE_PACKAGES))
 if str(SCRIPT_DIR) not in sys.path:
@@ -194,6 +196,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
     <link rel="stylesheet" href="/assets/xterm/xterm.css" />
     <script src="/assets/xterm/xterm.js" onerror="window.xtermErr=true"></script>
     <script src="/assets/xterm/xterm-addon-fit.js" onerror="window.xtermErr=true"></script>
+    <script src="/assets/editor/terminal_links.js"></script>
 </head>
 <body>
     <div id="terminal-root">
@@ -262,6 +265,25 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             });
         }
 
+        function copyToClipboard(text) {
+            if (!text) return;
+            const fallbackCopy = () => {
+                const area = document.createElement("textarea");
+                area.value = text;
+                area.style.position = "fixed";
+                area.style.opacity = "0";
+                document.body.appendChild(area);
+                area.select();
+                try { document.execCommand("copy"); } catch (e) {}
+                area.remove();
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).catch(fallbackCopy);
+            } else {
+                fallbackCopy();
+            }
+        }
+
         function getOrCreateHost(id) {
             let host = hosts[id] || document.getElementById("term-" + id);
             if (!host) {
@@ -327,6 +349,18 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 const fit = new FitAddon.FitAddon();
                 term.loadAddon(fit);
                 term.open(host);
+                if (window.mcuEnhanceTerminal) {
+                    // Clickable links, Ctrl+C/Ctrl+V/Ctrl+Shift+C/V and Shift+Insert.
+                    window.mcuEnhanceTerminal(term, {
+                        ctrlVPastes: true,
+                        copyText: copyToClipboard,
+                        openLink: url => {
+                            if (socket && socket.readyState === WebSocket.OPEN) {
+                                socket.send(JSON.stringify({ type: "open_link", url }));
+                            }
+                        },
+                    });
+                }
                 // The hidden output scrollbar measures zero. xterm's fallback
                 // otherwise reserves 15px in FitAddon and leaves an empty strip.
                 const viewport = term.element.querySelector('.xterm-viewport');
@@ -487,6 +521,11 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                     if (term) writeOutput(message.shell, message.data || "");
                     return;
                 }
+                if (message.type === "paste") {
+                    const term = terminals[message.shell];
+                    if (term && message.data) { term.paste(message.data); term.focus(); }
+                    return;
+                }
             };
             socket.onclose = () => {
                 const term = terminals[activeShell];
@@ -494,21 +533,18 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             };
         }
 
-        document.addEventListener("keydown", event => {
+        // Right-click copies a selection, otherwise pastes, as Windows consoles do.
+        root.addEventListener("contextmenu", event => {
             const term = terminals[activeShell];
-            if (!term || !event.ctrlKey) return;
-            if (event.key.toLowerCase() === "c" && term.hasSelection()) {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                const value = term.getSelection();
-                try {
-                    if (term.copySelection) term.copySelection();
-                } catch (e) {}
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    navigator.clipboard.writeText(value).catch(() => {});
-                }
-                return;
+            if (!term) return;
+            event.preventDefault();
+            if (term.hasSelection()) {
+                copyToClipboard(term.getSelection());
+                term.clearSelection();
+            } else if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "paste_request", shell: activeShell }));
             }
+            term.focus();
         }, true);
         document.addEventListener("paste", event => {
             const term = terminals[activeShell];
@@ -758,6 +794,67 @@ def _find_free_pair(start_port: int = 8765) -> int:
     raise OSError("No free local terminal ports were available")
 
 
+def _web_link(url) -> str:
+    """Only complete http(s) URLs leave the terminal; nothing else is opened."""
+    text = str(url or "").strip()
+    if not 8 <= len(text) <= 8192 or any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        return ""
+    parts = urlsplit(text)
+    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+        return ""
+    return text
+
+
+def _open_web_link(url) -> bool:
+    link = _web_link(url)
+    if not link:
+        return False
+    import webbrowser
+    threading.Thread(target=webbrowser.open, args=(link,), kwargs={"new": 2},
+                     name="MCUTerminalLink", daemon=True).start()
+    return True
+
+
+def _read_windows_clipboard() -> str:
+    """Unicode text from the Windows clipboard, or "" when none is available."""
+    if sys.platform != "win32":
+        return ""
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = wintypes.LPVOID
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+    for _ in range(10):
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.02)  # Another program briefly holds the clipboard.
+    else:
+        return ""
+    try:
+        handle = user32.GetClipboardData(13)  # CF_UNICODETEXT
+        if not handle:
+            return ""
+        pointer = kernel32.GlobalLock(handle)
+        if not pointer:
+            return ""
+        try:
+            units = min(kernel32.GlobalSize(handle) // 2, CLIPBOARD_LIMIT)
+            return ctypes.wstring_at(pointer, units).split("\x00", 1)[0]
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+
+
 class ShellSession:
     pty: Any | None
     thread: Any | None
@@ -827,6 +924,10 @@ class ProjectTerminalServer:
         self._output_events = {}
         self._loop_thread = None
         self._output_limit = 128_000
+        # Shells that ended on their own (exit, Ctrl+D); the workspace closes their tabs.
+        self._exit_condition = threading.Condition()
+        self._exit_sequence = 0
+        self._exit_events = deque(maxlen=64)
 
     def _write_port_file(self, xterm: bool | None = None, ready: bool | None = None) -> None:
         if not self.port_file:
@@ -933,6 +1034,24 @@ class ProjectTerminalServer:
                 except Exception:
                     pass
 
+    def _record_exit(self, session_id: str) -> None:
+        with self._exit_condition:
+            self._exit_sequence += 1
+            self._exit_events.append((self._exit_sequence, session_id))
+            self._exit_condition.notify_all()
+
+    def wait_for_exits(self, after: int, timeout: float = 25.0) -> dict:
+        """Long-poll for shells that ended; returns at once when one already has."""
+        deadline = time.monotonic() + max(0.0, min(timeout, 60.0))
+        with self._exit_condition:
+            while self.running and self._exit_sequence <= after:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._exit_condition.wait(remaining)
+            exited = [sid for sequence, sid in self._exit_events if sequence > after]
+            return {"seq": self._exit_sequence, "exited": exited, "running": self.running}
+
     def _shell_worker(self, session: ShellSession, generation: int) -> None:
         kind = session.kind
         sid = session.session_id
@@ -959,6 +1078,7 @@ class ProjectTerminalServer:
         pty = None
         directory = None
         ready_candidate = None
+        started = False
         try:
             shell_env = _build_terminal_env(self.target_dir)
             cwd = self.target_dir
@@ -975,6 +1095,7 @@ class ProjectTerminalServer:
                     return
                 session.pty = pty
                 pty.setwinsize(*session.dimensions)
+            started = True
             probe = ""
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
             while is_current():
@@ -1024,6 +1145,10 @@ class ProjectTerminalServer:
                                     "data": f"\r\n[MCU Flasher] {exc}\r\n"})
             if current:
                 self.broadcast({"type": "status", "shell": sid, "running": False, "ready": False})
+                # Kill/restart advance the generation first, so only a shell that
+                # ended by itself after a successful start is reported.
+                if started and self.running and sid in self.sessions and not session.stop_event.is_set():
+                    self._record_exit(sid)
 
     def control(self, message: dict) -> dict:
         action = str(message.get("action", "")).lower()
@@ -1186,6 +1311,16 @@ class ProjectTerminalServer:
                         except Exception:
                             pass
                     continue
+                if message_type == "open_link":
+                    _open_web_link(message.get("url", ""))
+                    continue
+                if message_type == "paste_request":
+                    sid = str(message.get("shell", self.active_shell))
+                    if sid in self.sessions:
+                        text = await asyncio.get_running_loop().run_in_executor(None, _read_windows_clipboard)
+                        if text:
+                            await self._send(websocket, {"type": "paste", "shell": sid, "data": text})
+                    continue
                 if message_type == "resize":
                     try:
                         cols = max(10, min(1000, int(message.get("cols", 120))))
@@ -1238,6 +1373,7 @@ class ProjectTerminalServer:
                     "/assets/xterm/xterm.css": (XTERM_ASSET_DIR / "xterm.css", "text/css; charset=utf-8"),
                     "/assets/xterm/xterm.js": (XTERM_ASSET_DIR / "xterm.js", "application/javascript; charset=utf-8"),
                     "/assets/xterm/xterm-addon-fit.js": (XTERM_ASSET_DIR / "xterm-addon-fit.js", "application/javascript; charset=utf-8"),
+                    "/assets/editor/terminal_links.js": (TERMINAL_LINKS_SCRIPT, "application/javascript; charset=utf-8"),
                 }
                 asset = assets.get(path)
                 if asset and asset[0].is_file():
@@ -1251,6 +1387,14 @@ class ProjectTerminalServer:
                     return
                 if path == "/status":
                     self._write_json(owner.status())
+                    return
+                if path == "/events":
+                    from urllib.parse import parse_qs
+                    try:
+                        after = int((parse_qs(urlsplit(self.path).query).get("after") or ["0"])[0])
+                    except ValueError:
+                        after = 0
+                    self._write_json(owner.wait_for_exits(after))
                     return
                 self._write_json({"success": False, "error": "Not found"}, 404)
 
@@ -1298,6 +1442,8 @@ class ProjectTerminalServer:
 
     def stop(self) -> None:
         self.running = False
+        with self._exit_condition:
+            self._exit_condition.notify_all()
         for kind in self.sessions:
             self._stop_session(kind)
         if self.httpd:

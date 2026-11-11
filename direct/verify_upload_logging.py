@@ -77,13 +77,18 @@ class UploadPresentationChecks(unittest.TestCase):
         text = api.text()
         self.assertIn("115200 baud (board default)", text)
         self.assertNotIn("460800", text)
-        self.assertEqual(text.count("Connected to Arduino UNO"), 1)
+        # The board is named once, in the Upload Target box.
+        self.assertEqual(text.count("Connected to the bootloader"), 1)
+        self.assertEqual(text.count("Arduino UNO"), 1)
         for noisy in ("DEBUG:", "No dependencies", "AVAILABLE:", "reading input file", "avrdude done"):
             self.assertNotIn(noisy, text)
+        target = dict(api.boxes[0][1])
+        self.assertEqual(target["Port"], "COM99")
         summary = dict(api.boxes[-1][1])
-        self.assertEqual(summary["Upload Port"], "COM99 @ 115200 baud")
+        self.assertNotIn("Upload Port", summary, "The summary repeated the Upload Target box")
+        self.assertNotIn("Board", summary)
         self.assertEqual(summary["Result"], "Written and verified")
-        self.assertEqual(summary["Firmware"], "5168 bytes")
+        self.assertEqual(summary["Written"], "5168 bytes")
         bars = [row for row in api.logs() if row.get("progress_key", "").endswith(":upload-Writing")]
         self.assertTrue(any("50.0%" in row["text"] for row in bars))
         self.assertTrue(any("100.0%" in row["text"] for row in bars))
@@ -96,7 +101,7 @@ class UploadPresentationChecks(unittest.TestCase):
         log.start()
         self.assertTrue(log.consume("Overriding Baud Rate          : 57600"))
         log.finish(True, 1)
-        self.assertEqual(dict(api.boxes[-1][1])["Upload Port"], "COM99 @ 57600 baud")
+        self.assertEqual(dict(api.boxes[-1][1])["Upload Speed"], "57600 baud (reported by programmer)")
         self.assertIn("baud reported by programmer: 57600", api.text())
 
     def test_eeprom_counts_do_not_replace_firmware_or_prove_flash_verification(self):
@@ -109,7 +114,7 @@ class UploadPresentationChecks(unittest.TestCase):
             self.assertTrue(log.consume(line), line)
         log.finish(True, 1)
         summary = dict(api.boxes[-1][1])
-        self.assertEqual(summary["Firmware"], "5168 bytes")
+        self.assertEqual(summary["Written"], "5168 bytes")
         self.assertEqual(summary["Result"], "Uploader completed successfully")
         self.assertIn("Verifying EEPROM", api.text())
 
@@ -251,7 +256,8 @@ class WindowsAVRWorkerChecks(UploadWorkerChecks):
         self.assert_upload_caller_completed(success=True)
         boxes = {call.args[0]: dict(call.args[1]) for call in api._print_info_box.call_args_list}
         self.assertEqual(boxes["Upload Target"]["Upload Speed"], "115200 baud (board default)")
-        self.assertEqual(boxes["Upload Summary"]["Upload Port"], "COM99 @ 115200 baud")
+        self.assertEqual(boxes["Upload Target"]["Port"], "COM99")
+        self.assertIn("Restart", boxes["Upload Summary"])
         api._locate_soft_reset_fast_binaries.assert_not_called()
         self.assertFalse(any("460800" in row["text"] for row in self.console_messages()))
 
