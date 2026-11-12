@@ -569,6 +569,250 @@ class BootstrapRestartChecks(unittest.TestCase):
         self.assertIn("no interpreter", self.log[-1])
 
 
+
+class CloneProgressChecks(unittest.TestCase):
+    """A slow clone reports what git is doing, and never looks frozen or runs backwards."""
+
+    def setUp(self):
+        audit = ROOT / "temp" / "audit" / "app-update"
+        audit.mkdir(parents=True, exist_ok=True)
+        self.fixture = Path(tempfile.mkdtemp(prefix="clone-progress-", dir=audit))
+        self.addCleanup(shutil.rmtree, self.fixture, True)
+
+    def _fake_git(self, body: str) -> str:
+        program = self.fixture / "fake_git.py"
+        program.write_text(f"import sys, time\n{body}\n", encoding="utf-8")
+        # A shebang cannot hold the space this project's own path may contain.
+        script = self.fixture / "git"
+        script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{program}" "$@"\n', encoding="utf-8")
+        script.chmod(0o755)
+        return str(script)
+
+    def test_git_records_become_one_rising_bar(self):
+        parse = app_update.parse_git_progress
+        self.assertEqual(parse("remote: Counting objects:  50% (500/1000)"),
+                         ("GitHub is preparing the source", None, ""))
+        phase, percent, detail = parse("Receiving objects:  40% (400/1000), 6.40 MiB | 1.10 MiB/s")
+        self.assertEqual((phase, round(percent)), ("Downloading", 34))
+        self.assertEqual(detail, "6.40 MiB | 1.10 MiB/s")
+        self.assertEqual(round(parse("Resolving deltas: 100% (52/52), done.")[1]), 93)
+        self.assertEqual(parse("Updating files: 100% (964/964), done.")[1], 100.0)
+        self.assertIsNone(parse("Cloning into 'repository'..."))
+        self.assertEqual(app_update.progress_bar(50, 10, ascii_only=True), "[#####-----]")
+        self.assertEqual(app_update.progress_bar(None, 4, ascii_only=True), "[----]")
+        text = app_update.TransferProgress("Receiving objects", 42.4, "3.20 MiB | 1.10 MiB/s", 75).describe()
+        self.assertEqual(text, "Receiving objects · 42% · 3.20 MiB | 1.10 MiB/s · 1:15 elapsed")
+
+    @unittest.skipIf(os.name == "nt", "the fake git is a POSIX script")
+    def test_clone_streams_progress_and_heartbeats_while_github_is_silent(self):
+        git = self._fake_git(
+            "w = sys.stderr.write\n"
+            "w(\"Cloning into 'repository'...\\n\"); sys.stderr.flush(); time.sleep(1.4)\n"
+            "w('remote: Enumerating objects: 1000, done.\\n')\n"
+            "for n in (10, 55, 100):\n"
+            "    w(f'Receiving objects: {n:3d}% ({n*10}/1000), {n/10:.2f} MiB | 1.00 MiB/s\\r'); sys.stderr.flush(); time.sleep(0.3)\n"
+            "w('Receiving objects: 100% (1000/1000), 10.00 MiB | 1.00 MiB/s, done.\\n')\n"
+            "w('Resolving deltas: 100% (52/52), done.\\n'); w('Updating files: 100% (964/964), done.\\n')\n"
+        )
+        updates = []
+        with patch.object(app_update, "_git_executable", return_value=git):
+            app_update._clone_with_progress(["clone"], cwd=self.fixture, timeout=60,
+                                            progress=updates.append, cancelled=None)
+        self.assertEqual(updates[0].phase, "Connecting to GitHub")
+        # GitHub said nothing for over a second, yet the elapsed time kept moving.
+        quiet = [update for update in updates if update.percent is None]
+        self.assertGreaterEqual(len(quiet), 2)
+        self.assertGreater(quiet[-1].elapsed, quiet[0].elapsed)
+        percents = [update.percent for update in updates if update.percent is not None]
+        self.assertEqual(percents, sorted(percents))
+        self.assertTrue(any(0 < value < 85 for value in percents))
+        self.assertTrue(any("MiB/s" in update.detail for update in updates))
+        self.assertEqual((updates[-1].phase, updates[-1].percent), ("Source downloaded", 100.0))
+
+    @unittest.skipIf(os.name == "nt", "the fake git is a POSIX script")
+    def test_failed_clone_reports_gits_own_reason(self):
+        git = self._fake_git("sys.stderr.write('fatal: unable to access GitHub\\n'); sys.exit(128)")
+        with patch.object(app_update, "_git_executable", return_value=git), \
+                self.assertRaisesRegex(app_update.ApplicationUpdateError, "unable to access GitHub"):
+            app_update._clone_with_progress(["clone"], cwd=self.fixture, timeout=60, progress=None, cancelled=None)
+
+    @unittest.skipIf(os.name == "nt", "the fake git is a POSIX script")
+    def test_cancelled_clone_stops_git(self):
+        marker = self.fixture / "still-running"
+        git = self._fake_git(
+            f"time.sleep(30); open({str(marker)!r}, 'w').close()"
+        )
+        calls = [0]
+
+        def cancelled():
+            calls[0] += 1
+            return calls[0] > 3
+
+        with patch.object(app_update, "_git_executable", return_value=git), \
+                self.assertRaisesRegex(app_update.ApplicationUpdateError, "cancelled"):
+            app_update._clone_with_progress(["clone"], cwd=self.fixture, timeout=60, progress=None,
+                                            cancelled=cancelled)
+        self.assertFalse(marker.exists())
+
+    def test_ubuntu_terminal_shows_one_live_line(self):
+        import io
+        from direct.ubuntu.launch import TerminalProgress
+
+        class Terminal(io.StringIO):
+            encoding = "utf-8"
+
+            def isatty(self):
+                return True
+
+        stream = Terminal()
+        bar = TerminalProgress(stream, app_update)
+        bar.update(app_update.TransferProgress("Receiving objects", 40.0, "4.00 MiB | 1.00 MiB/s", 5))
+        bar.update(app_update.TransferProgress("Receiving objects", 80.0, "8.00 MiB | 1.00 MiB/s", 9))
+        bar.finish()
+        written = stream.getvalue()
+        self.assertEqual(written.count("\r"), 2)
+        self.assertTrue(written.endswith("\n"))
+        self.assertIn("80%", written)
+        self.assertIn("█", written)
+
+
+@unittest.skipUnless(shutil.which("git"), "Git is not installed")
+class IncrementalSourceChecks(unittest.TestCase):
+    """A kept blobless checkout downloads only the files that changed, with real Git.
+
+    A local bare repository stands in for GitHub with partial clone enabled, as
+    GitHub has it. Nothing here reaches the network.
+    """
+
+    def setUp(self):
+        audit = ROOT / "temp" / "audit" / "app-update"
+        audit.mkdir(parents=True, exist_ok=True)
+        self.fixture = Path(tempfile.mkdtemp(prefix="incremental-", dir=audit))
+        self.addCleanup(app_update._remove_tree, self.fixture)
+        work = self.fixture / "work"
+        self.git(None, "init", "-q", "-b", "main", str(work))
+        for relative in app_update.REQUIRED_SOURCE_FILES:
+            (work / relative).parent.mkdir(parents=True, exist_ok=True)
+            (work / relative).write_text(f"{relative} 1\n", encoding="utf-8")
+        (work / "large.bin").write_bytes(os.urandom(256 * 1024))
+        (work / "retired.py").write_text("old\n", encoding="utf-8")
+        self.first = self.commit(work, "first")
+        (work / "mcu_flash_gui.py").write_text("changed\n", encoding="utf-8")
+        (work / "retired.py").unlink()
+        self.second = self.commit(work, "second")
+        self.server = self.fixture / "server.git"
+        self.git(None, "clone", "-q", "--bare", str(work), str(self.server))
+        self.git(self.server, "config", "uploadpack.allowFilter", "true")
+        self.git(self.server, "config", "uploadpack.allowAnySHA1InWant", "true")
+        environment = app_update._git_environment()
+
+        def local_environment():
+            value = dict(environment)
+            value["GIT_ALLOW_PROTOCOL"] = "file"
+            return value
+
+        patcher = patch.multiple(app_update, REPOSITORY_URL=self.server.as_uri(),
+                                 _git_environment=local_environment)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cache = self.fixture / "state" / app_update.SOURCE_CACHE_DIRECTORY
+        self.cache.parent.mkdir(parents=True)
+
+    @staticmethod
+    def git(cwd, *arguments):
+        command = ["git", *(["-C", str(cwd)] if cwd else []), "-c", "user.name=Fixture",
+                   "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", *arguments]
+        return subprocess.run(command, check=True, capture_output=True, text=True,
+                              env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")).stdout
+
+    def commit(self, work, message):
+        self.git(work, "add", "-A")
+        self.git(work, "commit", "-q", "-m", message)
+        return self.git(work, "rev-parse", "HEAD").strip()
+
+    def stage(self, name):
+        stage = self.fixture / name
+        stage.mkdir()
+        return stage
+
+    def prepare(self, stage, commit):
+        updates, messages = [], []
+        checkout, names = app_update._prepare_git_source(
+            stage, app_update.SourceCandidate(commit, "main"), messages.append, updates.append, None, self.cache)
+        return checkout, names, updates, messages
+
+    def test_second_update_downloads_only_the_changed_file(self):
+        checkout, names, updates, _messages = self.prepare(self.stage("one"), self.first)
+        self.assertEqual(checkout.name, "repository")
+        self.assertIn("retired.py", names)
+        self.assertEqual((checkout / "mcu_flash_gui.py").read_text(encoding="utf-8"), "mcu_flash_gui.py 1\n")
+        self.assertTrue(any(update.phase == "Downloading 7 files" for update in updates))
+        app_update._keep_source_cache(checkout, self.cache)
+        self.assertTrue((self.cache / ".git").is_dir())
+
+        checkout, names, updates, messages = self.prepare(self.stage("two"), self.second)
+        self.assertIn("only what changed", messages[0])
+        self.assertFalse(self.cache.exists(), "the kept checkout is claimed while it is in use")
+        self.assertEqual((checkout / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
+        self.assertNotIn("retired.py", names)
+        self.assertFalse((checkout / "retired.py").exists())
+        # One changed file crossed the wire, not the 256 KiB that stayed the same.
+        self.assertTrue(any(update.phase == "Downloading 1 changed file" for update in updates))
+        percents = [update.percent for update in updates if update.percent is not None]
+        self.assertEqual(percents, sorted(percents))
+        self.assertEqual((updates[-1].phase, updates[-1].percent), ("Source downloaded", 100.0))
+
+    def test_a_tampered_kept_file_is_written_again_from_git(self):
+        checkout, _names, _updates, _messages = self.prepare(self.stage("one"), self.first)
+        (checkout / "src/modules/bootstrap.py").write_text("tampered\n", encoding="utf-8")
+        (checkout / "stray.py").write_text("stray\n", encoding="utf-8")
+        app_update._keep_source_cache(checkout, self.cache)
+        checkout, names, _updates, _messages = self.prepare(self.stage("two"), self.second)
+        self.assertEqual((checkout / "src/modules/bootstrap.py").read_text(encoding="utf-8"),
+                         "src/modules/bootstrap.py 1\n")
+        self.assertFalse((checkout / "stray.py").exists())
+        self.assertNotIn("stray.py", names)
+
+    def test_a_foreign_kept_checkout_falls_back_to_a_full_clone(self):
+        checkout, _names, _updates, _messages = self.prepare(self.stage("one"), self.first)
+        self.git(checkout, "remote", "set-url", "origin", "https://example.invalid/other.git")
+        app_update._keep_source_cache(checkout, self.cache)
+        checkout, names, _updates, messages = self.prepare(self.stage("two"), self.second)
+        self.assertEqual(checkout.name, "repository-full")
+        self.assertTrue(any("cloning the full revision" in message for message in messages))
+        self.assertEqual((checkout / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
+        self.assertNotIn("retired.py", names)
+
+    def test_a_server_without_partial_clone_still_updates(self):
+        self.git(self.server, "config", "uploadpack.allowFilter", "false")
+        checkout, names, _updates, _messages = self.prepare(self.stage("one"), self.second)
+        self.assertEqual((checkout / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
+        self.assertIn("large.bin", names)
+
+    def test_apply_keeps_a_verified_checkout_for_the_next_attempt(self):
+        install = self.fixture / "install"
+        install.mkdir()
+        for relative in app_update.REQUIRED_SOURCE_FILES:
+            (install / relative).parent.mkdir(parents=True, exist_ok=True)
+            (install / relative).write_text("installed\n", encoding="utf-8")
+        state = self.fixture / "user-state"
+        candidate = app_update.SourceCandidate(self.second, "main")
+        cache = app_update.update_state_path(install, state_base=state).parent / app_update.SOURCE_CACHE_DIRECTORY
+        with patch.object(app_update, "install_staged_source",
+                          side_effect=app_update.ApplicationUpdateError("install failed")):
+            with self.assertRaisesRegex(app_update.ApplicationUpdateError, "install failed"):
+                app_update.apply_source_update(install, candidate, state_base=state)
+        # The download was verified, so the retry reuses it instead of downloading again.
+        self.assertTrue((cache / ".git").is_dir())
+        self.assertEqual((install / "mcu_flash_gui.py").read_text(encoding="utf-8"), "installed\n")
+        messages = []
+        result = app_update.apply_source_update(install, candidate, state_base=state, report=messages.append)
+        self.assertIn("only what changed", messages[0])
+        self.assertEqual(result.strategy, "git-clone")
+        self.assertEqual((install / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
+        self.assertTrue((cache / ".git").is_dir())
+        self.assertEqual(list((cache.parent / "staging").iterdir()), [])
+
 class BootstrapSourceUpdateWiringChecks(unittest.TestCase):
     def test_bootstrap_checks_before_fast_launch_and_invalidates_warm_health_after_refresh(self):
         source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
@@ -588,6 +832,51 @@ class BootstrapSourceUpdateWiringChecks(unittest.TestCase):
         install_source = ast.get_source_segment(source, install) or ""
         self.assertIn("completed.wait()", install_source)
         self.assertIn("apply_source_update", install_source)
+
+    def test_bootstrap_window_shows_a_live_row_that_clears_before_the_next_message(self):
+        import threading
+        from src.modules import bootstrap
+        calls = []
+
+        class Window:
+            TOTAL_STEPS = 9
+
+            def __init__(self):
+                self._closed = False
+                self._step_index = 0
+                self._done = threading.Event()
+                self.root = SimpleNamespace(after=lambda _delay, callback: callback())
+
+            def __getattr__(self, name):
+                def record(*arguments, **_options):
+                    calls.append((name, *arguments))
+                    if name == "close_after_delay":
+                        self._done.set()
+                return record
+
+            def mainloop_until_done(self):
+                self._done.wait(10)
+
+        def apply(_root, _candidate, *, report, progress, cancelled):
+            self.assertFalse(cancelled())
+            report("Downloading only what changed…")
+            progress(app_update.TransferProgress("Downloading 2 changed files", 50.0, "1.00 MiB | 1.00 MiB/s", 3))
+            report("GitHub source update verified. Restarting MCU Flasher…")
+            return SimpleNamespace(candidate=SimpleNamespace(branch="main", commit="a" * 40),
+                                   strategy="git-clone", changed_files=2, preserved_files=1)
+
+        with patch.object(bootstrap, "BootstrapGUI", Window), patch.object(bootstrap, "_record_bootstrap_log"), \
+                patch.object(bootstrap, "_update_check_skip_reason", return_value=None), \
+                patch.object(app_update, "apply_source_update", side_effect=apply):
+            self.assertTrue(bootstrap._install_application_update(SimpleNamespace(branch="main", commit="a" * 40)))
+        names = [call[0] for call in calls]
+        row = calls[names.index("update_platformio_progress_block")][1]
+        self.assertIn("50%", row)
+        self.assertIn("█", row)
+        self.assertIn(("set_progress_percent", 50.0), calls)
+        # The live row goes away before the next line is written under it.
+        self.assertLess(names.index("clear_platformio_progress_block"),
+                        calls.index(("log_status", "GitHub source update verified. Restarting MCU Flasher…")))
 
 
 if __name__ == "__main__":

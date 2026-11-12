@@ -55,6 +55,12 @@ from main.core.log_colors import glass_inks
 # Space between a toolbar's contents and the edge of its sheet of glass.
 _BAR_SHEET_PADDING = 12
 _TINY_BAR_SHEET_PADDING = 6
+# The least space between the title, the build actions and the project actions.
+# Below this the three groups read as one crowded row, so a shorter layout is chosen.
+_BAR_GROUP_GAP = 12
+# Where there is room the build actions sit centered in the window, but never
+# closer than this to either neighbour; with less room the two gaps stay equal.
+_BAR_GROUP_GAP_WIDE = 48
 # The Controls row's margins and spacing around what it measures.
 _CONTROLS_CHROME = 50
 
@@ -440,6 +446,9 @@ class PrimaryToolbar(QToolBar):
             "btn-actions-dropdown",
             "#2d3748", "#3a4a60"
         )
+        # Every other action in this row carries its mark; a text-only button looked
+        # like a different kind of control. Not the Controls row's settings sliders.
+        self.btn_actions_dropdown.set_icon("details")
         self.btn_actions_dropdown.clicked.connect(self._toggle_actions_menu)
         self.btn_actions_dropdown.setVisible(False)
         ac_layout.addWidget(self.btn_actions_dropdown)
@@ -524,10 +533,14 @@ class PrimaryToolbar(QToolBar):
         left_w = self.logo.sizeHint().width()
         right_w = self.right_container.sizeHint().width()
         center_w = self.actions_container.sizeHint().width()
-        spare = max(16, tb_w - margins.left() - margins.right()
+        spare = max(2 * _BAR_GROUP_GAP, tb_w - margins.left() - margins.right()
                     - 4 * spacing - left_w - center_w - right_w)
         desired = round((tb_w - center_w) / 2 - margins.left() - left_w - 2 * spacing)
-        left = max(8, min(spare - 8, desired))
+        # Centering in the window wins only while both gaps stay comfortable. On a
+        # narrow window it squeezed the gap before Project to 8 pixels while the one
+        # after the title kept 30, so the actions looked pushed against Project.
+        least = min(spare // 2, _BAR_GROUP_GAP_WIDE)
+        left = max(least, min(spare - least, desired))
         changed = False
         for widget, width in ((self.sp_left, left), (self.sp_right, spare - left)):
             if widget.minimumWidth() != width or widget.maximumWidth() != width:
@@ -1028,14 +1041,14 @@ class PrimaryToolbar(QToolBar):
             margin_left = self.logo.contentsMargins().left()
             logo_frame = (self.logo.sizeHint().width() - margin_left
                           - self.logo.fontMetrics().horizontalAdvance(self.logo.text()))
-            chrome = desired_margins[0] + desired_margins[2] + 4 * spacing + 16 + logo_frame
+            chrome = desired_margins[0] + desired_margins[2] + 4 * spacing + 2 * _BAR_GROUP_GAP + logo_frame
             action_spacing = self.actions_container.layout().spacing()
             right_spacing = self.right_container.layout().spacing()
 
             def required(compact, sketch, resource_text, logo, tiny):
                 actions = [30 if tiny else self._button_width(button, labels[button]) for button in build]
                 if compact:
-                    actions.append(30 if tiny else self._button_width(self.btn_actions_dropdown, "Actions", plain_icon=True))
+                    actions.append(30 if tiny else self._button_width(self.btn_actions_dropdown, "Actions"))
                 else:
                     actions.extend(self._button_width(button, button.text()) for button in secondary[:2])
                     actions.append(max(0, self._action_sep.sizeHint().width()))
@@ -1108,7 +1121,6 @@ class PrimaryToolbar(QToolBar):
             if self.btn_download.styleSheet() != download_padding:
                 self.btn_download.setStyleSheet(download_padding)
             self.btn_actions_dropdown.setText("" if tiny else "Actions")
-            self.btn_actions_dropdown.setIcon(icon("settings") if tiny else QIcon())
             self.btn_actions_dropdown.setAccessibleName("More actions")
             minimum, maximum = (30, 30) if tiny else (0, 16777215)
             self.btn_actions_dropdown.setMinimumWidth(minimum)
@@ -2407,6 +2419,7 @@ class ControlsBar(QWidget):
                 self._grid.removeItem(group)
             for col in range(4):
                 self._grid.setColumnStretch(col, 0)
+                self._grid.setColumnMinimumWidth(col, 0)
             if mode in (1, 5):
                 for col, group in enumerate(groups):
                     self._grid.addLayout(group, 0, col)
@@ -2428,12 +2441,29 @@ class ControlsBar(QWidget):
                 self._grid.addLayout(groups[3], 2, 0, 1, 2)
                 self._grid.setColumnStretch(0, 1)
             else:
+                # Both rows reach both edges. The board row ends with the workspace
+                # options; the port field runs on to the upload speed, which sits flush
+                # right under the options button. In two plain columns the speed box
+                # floated in the middle of the options' width with nothing lined up.
                 self._grid.addLayout(groups[0], 0, 0)
-                self._grid.addLayout(groups[3], 0, 1)
-                self._grid.addLayout(groups[1], 1, 0)
-                self._grid.addLayout(groups[2], 1, 1)
+                self._grid.addLayout(groups[3], 0, 1, 1, 2)
+                self._grid.addLayout(groups[1], 1, 0, 1, 2)
+                self._grid.addLayout(groups[2], 1, 2, 1, 1, Qt.AlignmentFlag.AlignRight)
                 self._grid.setColumnStretch(0, 1)
             self._row_mode = mode
+        if mode == 4:
+            # Only the speed box's own width belongs to its column; the rest of the
+            # options' width goes to the port field beside it.
+            # Both columns are set outright: left to itself, Qt shares the options'
+            # spanning width between them and the speed box floats in its column again.
+            speed = groups[2].sizeHint().width()
+            between = max(0, groups[3].sizeHint().width() - speed - self._grid.horizontalSpacing())
+            if (self._grid.columnMinimumWidth(1), self._grid.columnMinimumWidth(2)) != (between, speed):
+                self._grid.setColumnMinimumWidth(1, between)
+                self._grid.setColumnMinimumWidth(2, speed)
+        port_maximum = 16777215 if mode == 4 else 420
+        if self.port_combo.maximumWidth() != port_maximum:
+            self.port_combo.setMaximumWidth(port_maximum)
         self.setFixedHeight(max(30 if short else 54, self._grid.sizeHint().height()))
 
     def _is_tiny(self, width: int) -> bool:

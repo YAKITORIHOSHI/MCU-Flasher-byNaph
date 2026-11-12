@@ -171,7 +171,7 @@ Python 3.10 or newer,
 four CPU cores, and enough space for native board toolchains are
 required. Plan at least 10 GB free for the default AVR/ESP32/ESP8266 Arduino
 plan, with 20 GB recommended; these are estimates, not measured peak usage or
-enforced thresholds. See [system requirements](../README.md#system-requirements).
+enforced thresholds. See [supported systems](../README.md#supported-systems).
 Ubuntu 24.04 and 26.04 are the compatibility workflow targets.
 The first-launch job uses each release's system Python, including Python 3.14
 on 26.04. Check the completed compatibility run for the revision being used;

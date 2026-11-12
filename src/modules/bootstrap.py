@@ -9964,7 +9964,31 @@ def _install_application_update(candidate) -> bool:
             # remain open. The worker never needs to call a widget directly.
             _record_bootstrap_log("UPDATE", "Bootstrap update view is no longer available.")
 
+    # This window has one stage, so its bar is the source update itself.
+    gui.TOTAL_STEPS = 1
+    gui._step_index = 1
+    showing = {"block": False}
+
+    def show_progress(update):
+        # A live row with a bar, the phase, the transfer rate and the elapsed time:
+        # a clone can take minutes on a slow link and must never look frozen.
+        row = f"  {app_update.progress_bar(update.percent, 28)}  {update.describe()}"
+        showing["block"] = True
+        gui.update_platformio_progress_block(row)
+        gui.set_status(f"Application update · {update.describe()}")
+        if update.percent is not None:
+            gui.set_progress_percent(update.percent)
+
+    def progress(update):
+        post(lambda update=update: show_progress(update))
+
+    def settle_progress():
+        if showing["block"]:
+            showing["block"] = False
+            gui.clear_platformio_progress_block()
+
     def report(message: str):
+        post(settle_progress)
         post(lambda message=message: gui.log_status(message))
 
     def worker():
@@ -9974,7 +9998,7 @@ def _install_application_update(candidate) -> bool:
         try:
             try:
                 installed = app_update.apply_source_update(
-                    SCRIPT_DIR, candidate, report=report,
+                    SCRIPT_DIR, candidate, report=report, progress=progress,
                     cancelled=lambda: gui._closed or bool(_update_check_skip_reason(gui)))
                 outcome["installed"] = True
                 outcome["result"] = installed
@@ -9989,6 +10013,7 @@ def _install_application_update(candidate) -> bool:
                 post(lambda: gui.close_after_delay(0.25))
             except Exception as exc:
                 outcome["error"] = str(exc)
+                post(settle_progress)
                 _record_bootstrap_log("UPDATE", f"Application update failed safely: {exc}")
                 post(lambda exc=exc: gui.log_warn(f"Application update was not installed: {exc}"))
                 post(lambda: gui.stop_spinner("Continuing with the installed application", ok=True))

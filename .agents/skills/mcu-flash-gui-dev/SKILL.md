@@ -1,9 +1,46 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 12 follow-up: small-screen toolbars, visible updates, faster Ubuntu launch
+
+Toolbars: on a half-width 1366×768 window the build actions sat 8 px from
+Project and 30 px from the title, Actions alone had no mark, and Controls' two-row
+short layout (mode 4) floated the upload speed in the middle of the options'
+column. `_BAR_GROUP_GAP` (12) is now part of every candidate's budget, so a crowded
+row picks a shorter title; `_balance_spacers` centres the actions only while both
+gaps reach `_BAR_GROUP_GAP_WIDE` (48) and otherwise splits the spare width evenly.
+Compact Actions carries `details`. Mode 4 uses three columns: the port spans two,
+the speed sits right-aligned in a column set to its own width, and the port field
+loses its 420 px cap there. Verify toolbar_sizing, responsive, controls and
+`verify_monitor_matrix.py --all`.
+
+Source updates: a shallow clone is about 16 MB, minutes on a slow link, and it ran
+silently (stderr captured), invisibly for All Apps launches. `apply_source_update`
+now keeps a verified blobless checkout in `<state>/source-cache`, claims it by
+rename, fetches the exact commit (`--filter=blob:none --depth 1`), lists missing
+contents with `rev-list --objects --missing=print` (no lazy fetch) and downloads
+only those with a `--stdin` fetch, then rewrites every file from Git's objects
+(`checkout --force` after clearing the tree, `clean -ffdx`). A depth-1 fetch alone
+re-sends the whole tree; measured, it moved 15 MB for a 33-file change. Any
+failure other than cancel or the deadline falls back to the plain shallow clone.
+`_git_with_progress` reads git's `--progress` records on a thread and reports
+`TransferProgress` (one rising bar across steps, friendly phase names, a 1 s
+elapsed-time heartbeat, owned process-group cancellation). Ubuntu shows a terminal
+bar (`TerminalProgress`) or, for a desktop launch, a zenity window
+(`DesktopProgress`; Cancel skips the update, a window that dies within a second is
+not a Cancel); Windows Bootstrap shows a live progress row. The cache is kept only
+after a verified install. Verify app_update (real-git `IncrementalSourceChecks`
+against a local bare server with partial clone) and ubuntu_launcher, whose
+zenity is always a recorder.
+
+Ubuntu launch: `main()` runs `host_preflight` first, then `runtime_problem` on a
+`BackgroundCheck` thread beside the GitHub check; it waits for that check before
+replacing files and asks again after an update. Installed-copy timings: update
+check about 1.1 s, runtime check 0.65 s, GUI to project selector 0.3 s.
 
 ## November 12 fixes: GUI stalls, AI review scope and interface size
 

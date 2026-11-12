@@ -323,7 +323,12 @@ When moving files into new subdirectories, always update all dependent imports,
 path references, and fallback logic in the same operation.
 
 Bootstrap source updates stage their clone/rollback material and commit record
-in per-user state, outside the application installation. They may replace only
+in per-user state, outside the application installation. A verified blobless
+checkout stays there as `source-cache` (beside `update-state.json`, at most 512 MB)
+so the next update downloads only the file contents it lacks; it is claimed by an
+atomic rename, every file is written again from Git's objects before use, and it is
+kept only after a verified install. It is owned state: never package it or copy it
+into an installation. They may replace only
 verified tracked application source files. Preserve `src/dbs` settings, user
 instructions, project/build caches, private runtimes, installers, catalog data
 and active launchers. A source checkout is managed by Git and must be skipped.

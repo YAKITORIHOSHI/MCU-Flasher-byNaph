@@ -29,6 +29,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, Callable, Iterable
@@ -60,6 +61,10 @@ MAX_ARCHIVE_FILES = 30_000
 MIN_FREE_SPACE_BYTES = 256 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 CLONE_TIMEOUT_SECONDS = 15 * 60
+# A verified blobless checkout kept between updates, beside the update record, so
+# an update downloads only the files that changed. Past this size it starts over.
+SOURCE_CACHE_DIRECTORY = "source-cache"
+MAX_SOURCE_CACHE_BYTES = 512 * 1024 * 1024
 ARCHIVE_TIMEOUT_SECONDS = 15 * 60
 # Each startup request gets this long. A launch normally makes two, and a window
 # appears only afterwards, so the launcher's whole check is bounded by the budget.
@@ -133,6 +138,77 @@ class _GitUnavailable(ApplicationUpdateError):
 
 class _UnknownRecordedCommit(ApplicationUpdateError):
     """GitHub has never seen the commit a copy records, so it cannot compare it."""
+
+
+# A shallow clone is about 16 MB, which a slow link needs minutes for. Git reports
+# its own phases; they are spread over one bar so it never runs back to zero.
+_CLONE_PHASES = {
+    "receiving objects": (0.0, 85.0, "Downloading"),
+    "resolving deltas": (85.0, 93.0, "Unpacking"),
+    "updating files": (93.0, 100.0, "Writing files"),
+    "checking out files": (93.0, 100.0, "Writing files"),
+}
+_GIT_PROGRESS = re.compile(
+    r"^(?:remote:\s*)?(?P<phase>[A-Za-z][A-Za-z ]*?):\s+(?:(?P<percent>\d{1,3})%\s*)?"
+    r"(?:\((?P<done>\d+)/(?P<total>\d+)\))?,?\s*(?P<rest>.*)$"
+)
+# Progress is reported at most this often, and at least this often while a phase
+# is quiet, so the elapsed time keeps moving even while GitHub prepares the pack.
+PROGRESS_INTERVAL_SECONDS = 0.25
+PROGRESS_HEARTBEAT_SECONDS = 1.0
+
+
+@dataclass(frozen=True)
+class TransferProgress:
+    """How far a source download has come, for a progress bar or a log line."""
+
+    phase: str
+    # Across the whole download, 0–100; None while nothing can be measured yet.
+    percent: float | None
+    detail: str = ""
+    elapsed: float = 0.0
+
+    def describe(self) -> str:
+        parts = [self.phase]
+        if self.percent is not None:
+            parts.append(f"{self.percent:.0f}%")
+        if self.detail:
+            parts.append(self.detail)
+        minutes, seconds = divmod(int(self.elapsed), 60)
+        parts.append(f"{minutes}:{seconds:02d} elapsed")
+        return " · ".join(parts)
+
+
+def progress_bar(percent: float | None, width: int = 24, *, ascii_only: bool = False) -> str:
+    """A fixed-width text bar; an unknown amount shows as an empty bar."""
+    full, empty = ("#", "-") if ascii_only else ("█", "░")
+    filled = 0 if percent is None else max(0, min(width, round(width * float(percent) / 100.0)))
+    return f"[{full * filled}{empty * (width - filled)}]"
+
+
+def parse_git_progress(line: str) -> tuple[str, float | None, str] | None:
+    """Read one of git's progress records as (phase, overall percent, detail)."""
+    match = _GIT_PROGRESS.match(line.strip())
+    if not match:
+        return None
+    key = match.group("phase").strip().casefold()
+    rest = match.group("rest").strip().rstrip(".").strip()
+    if rest.casefold().endswith("done"):
+        rest = rest[:-4].rstrip(", ").strip()
+    detail = rest
+    if match.group("done") and match.group("total") and not rest:
+        detail = f"{match.group('done')}/{match.group('total')}"
+    if key in _CLONE_PHASES:
+        if match.group("percent") is None:
+            return None
+        start, end, label = _CLONE_PHASES[key]
+        fraction = min(100, int(match.group("percent"))) / 100.0
+        return label, start + (end - start) * fraction, detail
+    if line.lstrip().startswith("remote:") and key in {
+            "enumerating objects", "counting objects", "compressing objects", "total"}:
+        # GitHub is still assembling the pack: nothing has arrived to measure yet.
+        return "GitHub is preparing the source", None, ""
+    return None
 
 
 @dataclass(frozen=True)
@@ -879,10 +955,7 @@ def install_staged_source(root: Path | str, source_root: Path | str, source_name
             pass
 
 
-def _run_git(arguments: list[str], *, cwd: Path, timeout: float) -> bytes:
-    git = shutil.which("git")
-    if not git:
-        raise _GitUnavailable("Git is not available for the preferred source clone.")
+def _git_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment.update({
         "GIT_TERMINAL_PROMPT": "0",
@@ -894,6 +967,19 @@ def _run_git(arguments: list[str], *, cwd: Path, timeout: float) -> bytes:
         "GIT_LFS_SKIP_SMUDGE": "1",
         "LC_ALL": "C",
     })
+    return environment
+
+
+def _git_executable() -> str:
+    git = shutil.which("git")
+    if not git:
+        raise _GitUnavailable("Git is not available for the preferred source clone.")
+    return git
+
+
+def _run_git(arguments: list[str], *, cwd: Path, timeout: float) -> bytes:
+    git = _git_executable()
+    environment = _git_environment()
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         completed = subprocess.run(
@@ -912,39 +998,410 @@ def _run_git(arguments: list[str], *, cwd: Path, timeout: float) -> bytes:
     return completed.stdout
 
 
+def _stop_git(process: subprocess.Popen) -> None:
+    """End the clone and the transport helpers it started, then reap it."""
+    if process.poll() is None:
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            else:
+                import signal
+                os.killpg(process.pid, signal.SIGTERM)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    import signal
+                    os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+class _Cancelled(ApplicationUpdateError):
+    """The person or a Skip Updates choice stopped the download; never retried."""
+
+
+def _git_with_progress(arguments: list[str], *, cwd: Path, deadline: float,
+                       progress: Callable[[TransferProgress], None] | None,
+                       cancelled: Callable[[], bool] | None, started: float | None = None,
+                       span: tuple[float, float] = (0.0, 100.0), phase: str = "Connecting to GitHub",
+                       stdin_data: bytes | None = None, operation: str = "clone",
+                       final: str | None = "Source downloaded") -> None:
+    """Run one git network or checkout command and pass on what it says while it works.
+
+    Git writes its progress to stderr, separated by carriage returns. It is read on
+    a thread so the deadline, cancellation and a steady elapsed-time heartbeat keep
+    working while GitHub is silent. ``span`` places this command's share on one bar
+    shared by every step of an update, so the bar never runs back towards zero.
+    """
+    import queue
+    import threading
+
+    git = _git_executable()
+    started = time.monotonic() if started is None else started
+    low, high = span
+    options: dict[str, Any] = {}
+    if os.name == "nt":
+        options["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    else:
+        options["start_new_session"] = True
+    if time.monotonic() >= deadline:
+        raise ApplicationUpdateError(f"The GitHub source {operation} ran out of time.")
+    try:
+        process = subprocess.Popen(
+            [git, *arguments], cwd=str(cwd), env=_git_environment(),
+            stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **options,
+        )
+    except FileNotFoundError as exc:
+        raise _GitUnavailable("Git is not available for the preferred source clone.") from exc
+    except OSError as exc:
+        raise ApplicationUpdateError(f"The GitHub source {operation} could not start: {exc}") from exc
+
+    chunks: "queue.Queue[bytes | None]" = queue.Queue()
+
+    def read_stderr() -> None:
+        try:
+            while True:
+                chunk = process.stderr.read1(4096) if hasattr(process.stderr, "read1") else process.stderr.read(4096)
+                if not chunk:
+                    break
+                chunks.put(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            chunks.put(None)
+
+    def write_stdin() -> None:
+        # A long object list must not wait on a full pipe while stderr is being read.
+        try:
+            process.stdin.write(stdin_data)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    reader = threading.Thread(target=read_stderr, name="MCUSourceUpdateProgress", daemon=True)
+    reader.start()
+    writer = None
+    if stdin_data is not None:
+        writer = threading.Thread(target=write_stdin, name="MCUSourceUpdateInput", daemon=True)
+        writer.start()
+    pending = ""
+    messages: list[str] = []
+    detail = ""
+    initial = phase
+    # A later step starts where the earlier ones left the bar.
+    percent: float | None = low if low > 0 else None
+    last_sent = 0.0
+    sent_state: tuple[str, int | None, str] | None = None
+
+    def send(force: bool = False) -> None:
+        nonlocal last_sent, sent_state
+        if progress is None:
+            return
+        now = time.monotonic()
+        state = (phase, None if percent is None else int(percent), detail)
+        due = now - last_sent >= (PROGRESS_INTERVAL_SECONDS if state != sent_state else PROGRESS_HEARTBEAT_SECONDS)
+        if not (force or due):
+            return
+        last_sent, sent_state = now, state
+        try:
+            progress(TransferProgress(phase, percent, detail, now - started))
+        except Exception:
+            pass  # A display failure must not stop or fail the download itself.
+
+    def consume(text: str) -> None:
+        nonlocal phase, percent, detail
+        parsed = parse_git_progress(text)
+        if parsed is None:
+            if text.strip():
+                messages.append(text.strip()[:300])
+                del messages[:-20]
+            return
+        new_phase, new_percent, new_detail = parsed
+        if new_percent is None and percent is not None:
+            return  # A late remote line must not empty a bar that has started filling.
+        if new_phase == "Downloading" and initial.startswith("Downloading"):
+            new_phase = initial  # "Downloading 33 changed files" says more than git's own name.
+        phase, detail = new_phase, new_detail
+        if new_percent is not None:
+            new_percent = low + (high - low) * new_percent / 100.0
+        percent = new_percent if new_percent is None or percent is None else max(percent, new_percent)
+
+    send(force=True)
+    finished = False
+    try:
+        while not finished:
+            if cancelled is not None and cancelled():
+                raise _Cancelled(f"The GitHub source {operation} was cancelled.")
+            if time.monotonic() >= deadline:
+                raise ApplicationUpdateError(
+                    f"The GitHub source {operation} did not finish within {CLONE_TIMEOUT_SECONDS // 60} minutes.")
+            try:
+                chunk = chunks.get(timeout=0.2)
+            except queue.Empty:
+                send()
+                continue
+            if chunk is None:
+                finished = True
+            else:
+                pending += chunk.decode("utf-8", errors="replace")
+            *complete, pending = re.split(r"[\r\n]", pending)
+            if finished:
+                complete.append(pending)
+                pending = ""
+            for text in complete:
+                consume(text)
+            send()
+        remaining = max(1.0, deadline - time.monotonic())
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            raise ApplicationUpdateError(f"The GitHub source {operation} could not finish in time.") from exc
+    except BaseException:
+        _stop_git(process)
+        raise
+    finally:
+        reader.join(timeout=2)
+        if writer is not None:
+            writer.join(timeout=2)
+        try:
+            process.stderr.close()
+        except OSError:
+            pass
+    if returncode != 0:
+        suffix = messages[-1] if messages else f"exit code {returncode}"
+        raise ApplicationUpdateError(f"The GitHub source {operation} failed: {suffix}")
+    if final:
+        phase, percent, detail = final, high, ""
+        send(force=True)
+
+
+def _clone_with_progress(arguments: list[str], *, cwd: Path, timeout: float,
+                         progress: Callable[[TransferProgress], None] | None,
+                         cancelled: Callable[[], bool] | None) -> None:
+    """One complete ``git clone --progress`` on its own bar."""
+    _git_with_progress(arguments, cwd=cwd, deadline=time.monotonic() + max(1.0, float(timeout)),
+                       progress=progress, cancelled=cancelled)
+
+
 def _canonical_remote(value: str) -> str:
     return value.strip().removesuffix("/").casefold()
 
 
-def _prepare_git_source(stage: Path, candidate: SourceCandidate,
-                        report: Callable[[str], None]) -> tuple[Path, list[str]]:
-    report("Cloning the verified GitHub source revision…")
-    hooks = stage / "empty-hooks"
-    hooks.mkdir()
-    checkout = stage / "repository"
-    _run_git([
-        "-c", f"core.hooksPath={hooks}", "clone", "--depth", "1", "--no-tags", "--single-branch",
-        "--branch", candidate.branch, REPOSITORY_URL, str(checkout),
-    ], cwd=stage, timeout=CLONE_TIMEOUT_SECONDS)
-    origin = _run_git(["-C", str(checkout), "remote", "get-url", "origin"], cwd=stage, timeout=30).decode("utf-8", errors="strict")
+def _remove_tree(path: Path) -> None:
+    """Remove a staging or cache folder, including Git's read-only pack files on Windows."""
+    def make_writable(function, name, _error):
+        try:
+            os.chmod(name, stat.S_IWRITE | stat.S_IREAD)
+            function(name)
+        except OSError:
+            pass
+
+    if not os.path.lexists(path):
+        return
+    if path.is_symlink() or not path.is_dir():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return
+    try:
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=make_writable)
+        else:
+            shutil.rmtree(path, onerror=make_writable)
+    except OSError:
+        pass
+
+
+def _tree_bytes(path: Path) -> int:
+    total = 0
+    for folder, _directories, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(folder, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def _verified_checkout(checkout: Path, candidate: SourceCandidate, cwd: Path) -> list[str]:
+    """Origin, exact commit and the tracked file list of a finished checkout."""
+    origin = _run_git(["-C", str(checkout), "remote", "get-url", "origin"], cwd=cwd, timeout=30).decode("utf-8", errors="strict")
     if _canonical_remote(origin) != _canonical_remote(REPOSITORY_URL):
         raise ApplicationUpdateError("The cloned GitHub source does not have the expected origin.")
-    revision = _run_git(["-C", str(checkout), "rev-parse", "HEAD"], cwd=stage, timeout=30).decode("ascii", errors="strict").strip().casefold()
+    revision = _run_git(["-C", str(checkout), "rev-parse", "HEAD"], cwd=cwd, timeout=30).decode("ascii", errors="strict").strip().casefold()
     if revision != candidate.commit:
         raise ApplicationUpdateError("The cloned GitHub source does not match the verified commit.")
-    raw_paths = _run_git(["-C", str(checkout), "ls-files", "-z"], cwd=stage, timeout=60)
+    raw_paths = _run_git(["-C", str(checkout), "ls-files", "-z"], cwd=cwd, timeout=60)
     try:
-        names = [part.decode("utf-8", errors="strict") for part in raw_paths.split(b"\0") if part]
+        return [part.decode("utf-8", errors="strict") for part in raw_paths.split(b"\0") if part]
     except UnicodeError as exc:
         raise ApplicationUpdateError("The cloned GitHub source has an invalid file name.") from exc
-    return checkout, names
+
+
+def _claim_source_cache(cache: Path, checkout: Path) -> bool:
+    """Take the kept checkout for this update; a second launcher simply clones afresh."""
+    try:
+        if cache.is_symlink() or not (cache / ".git").is_dir():
+            _remove_tree(cache)
+            return False
+        if _tree_bytes(cache / ".git") > MAX_SOURCE_CACHE_BYTES:
+            _remove_tree(cache)
+            return False
+        os.rename(cache, checkout)
+        return True
+    except OSError:
+        return False
+
+
+def _keep_source_cache(checkout: Path, cache: Path) -> None:
+    """Keep a verified checkout so the next update downloads only what changed."""
+    try:
+        if checkout.is_dir() and not os.path.lexists(cache):
+            os.rename(checkout, cache)
+    except OSError:
+        pass  # Only the next update's speed depends on this.
+
+
+def _cached_git_source(stage: Path, checkout: Path, hooks: Path, candidate: SourceCandidate, *,
+                       reused: bool, deadline: float, started: float,
+                       progress: Callable[[TransferProgress], None] | None,
+                       cancelled: Callable[[], bool] | None) -> list[str]:
+    """Bring a blobless checkout to the verified commit, downloading only missing files.
+
+    The checkout keeps every file's contents from earlier updates. A shallow fetch of
+    the new commit brings its folder listings (kilobytes), ``rev-list --missing``
+    names the file contents this copy lacks, and one fetch downloads just those.
+    The first update downloads every file once, about 16 MB; later ones only what
+    changed. Every step is a visible git progress record.
+    """
+    hook = ["-c", f"core.hooksPath={hooks}"]
+    in_checkout = ["-C", str(checkout), *hook]
+    common = dict(cwd=stage, deadline=deadline, progress=progress, cancelled=cancelled, started=started)
+    if reused:
+        origin = _run_git(["-C", str(checkout), "remote", "get-url", "origin"], cwd=stage, timeout=30)
+        promisor = _run_git(["-C", str(checkout), "config", "--get", "remote.origin.promisor"], cwd=stage, timeout=30)
+        if (_canonical_remote(origin.decode("utf-8", errors="replace")) != _canonical_remote(REPOSITORY_URL)
+                or promisor.strip() != b"true"):
+            raise ApplicationUpdateError("The kept source checkout is not a GitHub source checkout.")
+    else:
+        _git_with_progress([
+            *hook, "clone", "--progress", "--filter=blob:none", "--depth", "1", "--no-tags",
+            "--single-branch", "--no-checkout", "--branch", candidate.branch, REPOSITORY_URL, str(checkout),
+        ], span=(0.0, 3.0), final=None, operation="clone", **common)
+    # The exact verified commit, never whatever the branch has moved on to since.
+    _git_with_progress([
+        *in_checkout, "fetch", "--progress", "--filter=blob:none", "--depth", "1", "--no-tags",
+        "origin", candidate.commit,
+    ], span=(3.0, 6.0), phase="Reading the new revision", final=None, operation="update", **common)
+    listed = _run_git([*in_checkout, "rev-list", "--objects", "--missing=print", "--no-object-names",
+                       candidate.commit], cwd=stage, timeout=120)
+    missing = sorted({line[1:].strip() for line in listed.decode("ascii", errors="strict").splitlines()
+                      if line.startswith("?")})
+    if any(not _COMMIT.fullmatch(identifier) for identifier in missing):
+        raise ApplicationUpdateError("Git listed an invalid object identifier.")
+    if missing:
+        _git_with_progress([
+            *in_checkout, "-c", "fetch.negotiationAlgorithm=noop", "fetch", "--progress", "--no-tags",
+            "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "origin",
+        ], span=(6.0, 92.0), phase=f"Downloading {len(missing)}{' changed' if reused else ''} file{'' if len(missing) == 1 else 's'}", final=None,
+            operation="update", stdin_data="".join(f"{identifier}\n" for identifier in missing).encode("ascii"),
+            **common)
+    # Every file is written again from Git's own objects, so nothing left in a kept
+    # checkout can survive into the installation unnoticed.
+    for entry in checkout.iterdir():
+        if entry.name != ".git":
+            _remove_tree(entry)
+    _git_with_progress([*in_checkout, "checkout", "--progress", "--force", "--detach", candidate.commit],
+                       span=(92.0, 100.0), phase="Writing files", final="Source downloaded",
+                       operation="update", **common)
+    _run_git([*in_checkout, "clean", "-ffdxq"], cwd=stage, timeout=120)
+    return _verified_checkout(checkout, candidate, stage)
+
+
+def _prepare_git_source(stage: Path, candidate: SourceCandidate,
+                        report: Callable[[str], None],
+                        progress: Callable[[TransferProgress], None] | None = None,
+                        cancelled: Callable[[], bool] | None = None,
+                        cache: Path | None = None) -> tuple[Path, list[str]]:
+    hooks = stage / "empty-hooks"
+    hooks.mkdir()
+    started = time.monotonic()
+    deadline = started + CLONE_TIMEOUT_SECONDS
+    if cache is not None:
+        checkout = stage / "repository"
+        reused = _claim_source_cache(cache, checkout)
+        report("Downloading only what changed in the verified GitHub source revision…" if reused else
+               "Downloading the verified GitHub source revision (about 16 MB, once)…")
+        try:
+            return checkout, _cached_git_source(stage, checkout, hooks, candidate, reused=reused,
+                                                deadline=deadline, started=started,
+                                                progress=progress, cancelled=cancelled)
+        except (_GitUnavailable, _Cancelled):
+            raise
+        except ApplicationUpdateError as exc:
+            if cancelled is not None and cancelled():
+                raise _Cancelled("The GitHub source update was cancelled.") from exc
+            if time.monotonic() >= deadline:
+                raise
+            # A server without partial clone, an old Git or a damaged kept checkout:
+            # the plain shallow clone below is the long-proven path.
+            report(f"Incremental source download unavailable ({exc}); cloning the full revision…")
+            _remove_tree(checkout)
+    report("Cloning the verified GitHub source revision (about 16 MB)…")
+    checkout = stage / "repository-full"
+    _git_with_progress([
+        "-c", f"core.hooksPath={hooks}", "clone", "--progress", "--depth", "1", "--no-tags",
+        "--single-branch", "--branch", candidate.branch, REPOSITORY_URL, str(checkout),
+    ], cwd=stage, deadline=deadline, progress=progress, cancelled=cancelled, started=started)
+    return checkout, _verified_checkout(checkout, candidate, stage)
 
 
 def _download_source_archive(candidate: SourceCandidate, archive: Path, *, report: Callable[[str], None],
-                             opener: Callable[..., Any] = urlopen) -> None:
+                             opener: Callable[..., Any] = urlopen,
+                             progress: Callable[[TransferProgress], None] | None = None,
+                             cancelled: Callable[[], bool] | None = None) -> None:
     report("Git is unavailable; downloading the same verified GitHub source revision…")
     operation = "GitHub source download"
     deadline = _network_deadline(ARCHIVE_TIMEOUT_SECONDS, operation)
+    started = time.monotonic()
+    last_sent = 0.0
+
+    def send(total: int | None, force: bool = False) -> None:
+        nonlocal last_sent
+        now = time.monotonic()
+        if progress is None or not (force or now - last_sent >= PROGRESS_INTERVAL_SECONDS):
+            return
+        last_sent = now
+        megabytes = received / (1024 * 1024)
+        rate = megabytes / max(0.001, now - started)
+        # codeload streams without a length, so the amount received is what moves.
+        percent = min(100.0, received * 100.0 / total) if total else None
+        try:
+            progress(TransferProgress("Downloading the source archive", percent,
+                                      f"{megabytes:.2f} MiB | {rate:.2f} MiB/s", now - started))
+        except Exception:
+            pass
     request = Request(
         SOURCE_ARCHIVE_URL.format(commit=candidate.commit),
         headers={"Accept": "application/zip", "User-Agent": "MCU-Flasher-Bootstrap/11"},
@@ -959,8 +1416,12 @@ def _download_source_archive(candidate: SourceCandidate, archive: Path, *, repor
             length = response.headers.get("Content-Length") if getattr(response, "headers", None) else None
             if length and (not str(length).isdigit() or int(length) > MAX_ARCHIVE_BYTES):
                 raise ApplicationUpdateError("The GitHub source archive is too large.")
+            total = int(length) if length else None
+            send(total, force=True)
             with archive.open("xb") as stream:
                 while True:
+                    if cancelled is not None and cancelled():
+                        raise ApplicationUpdateError("The GitHub source download was cancelled.")
                     _ensure_network_time(deadline, operation)
                     chunk = response.read(DOWNLOAD_CHUNK_BYTES)
                     _ensure_network_time(deadline, operation)
@@ -972,6 +1433,8 @@ def _download_source_archive(candidate: SourceCandidate, archive: Path, *, repor
                     if received > MAX_ARCHIVE_BYTES:
                         raise ApplicationUpdateError("The GitHub source archive is too large.")
                     stream.write(chunk)
+                    send(total)
+            send(total, force=True)
     except HTTPError as exc:
         raise ApplicationUpdateError(f"GitHub could not download the source update ({exc.code}).") from exc
     except (URLError, OSError, TimeoutError) as exc:
@@ -1044,7 +1507,8 @@ def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
                         report: Callable[[str], None] | None = None,
                         state_base: Path | str | None = None,
                         opener: Callable[..., Any] = urlopen,
-                        cancelled: Callable[[], bool] | None = None) -> InstalledUpdate:
+                        cancelled: Callable[[], bool] | None = None,
+                        progress: Callable[[TransferProgress], None] | None = None) -> InstalledUpdate:
     """Stage a clone (or immutable archive fallback), verify it and refresh the app."""
     reason = update_skip_reason(root)
     if reason:
@@ -1065,20 +1529,27 @@ def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
             raise
         raise ApplicationUpdateError(f"The source update staging folder could not be created: {exc}") from exc
 
+    cache = state_file.parent / SOURCE_CACHE_DIRECTORY
+    verified_checkout: Path | None = None
     try:
         try:
-            source_root, names = _prepare_git_source(stage, candidate, report)
+            source_root, names = _prepare_git_source(stage, candidate, report, progress, cancelled, cache)
             strategy = "git-clone"
+            if source_root.name == "repository":
+                verified_checkout = source_root
         except _GitUnavailable:
             report("Clone unavailable; using GitHub's immutable source archive instead…")
             archive = stage / "source.zip"
-            _download_source_archive(candidate, archive, report=report, opener=opener)
+            _download_source_archive(candidate, archive, report=report, opener=opener,
+                                     progress=progress, cancelled=cancelled)
             source_root, names = _extract_source_archive(archive, stage)
             strategy = "github-source-archive"
         return install_staged_source(install_root, source_root, names, candidate, strategy=strategy,
                                      report=report, state_base=state_base, cancelled=cancelled)
     finally:
-        try:
-            shutil.rmtree(stage)
-        except OSError:
-            pass
+        # A checkout verified at the exact commit is kept even if installing failed
+        # (a locked file, say), so the retry needs no second download. Every use
+        # writes its files again from Git's objects.
+        if verified_checkout is not None:
+            _keep_source_cache(verified_checkout, cache)
+        _remove_tree(stage)

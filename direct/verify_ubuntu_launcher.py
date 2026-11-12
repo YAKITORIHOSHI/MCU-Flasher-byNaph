@@ -703,7 +703,13 @@ class LauncherChecks(unittest.TestCase):
                 patch.object(launch, "launch_workspace", side_effect=workspace):
             self.assertEqual(launch.main(["--project", "Sketch With Spaces"]), 0)
 
-        self.assertEqual(events, ["check", "apply", "restart", "runtime", "workspace"])
+        # The runtime check runs beside GitHub's answer, finishes before any file is
+        # replaced, and runs again for the replaced source before the workspace opens.
+        self.assertEqual([event for event in events if event != "runtime"],
+                         ["check", "apply", "restart", "workspace"])
+        self.assertEqual(events.count("runtime"), 2)
+        self.assertLess(events.index("runtime"), events.index("apply"))
+        self.assertEqual(events[-2:], ["runtime", "workspace"])
         self.assertEqual(update_check.call_args.args[0], self.root)
         self.assertEqual(update_apply.call_args.args[:2], (self.root, candidate))
         self.assertTrue(callable(update_apply.call_args.kwargs["report"]))
@@ -936,6 +942,114 @@ class LauncherChecks(unittest.TestCase):
             time.sleep(.02)
         self.assertTrue(receipt.is_file(), "The native desktop API launched its child without a receipt")
         self.assertEqual(receipt.read_text(), "launched")
+
+
+class UpdateProgressChecks(unittest.TestCase):
+    """An update from All Apps shows a window; checks run beside GitHub's answer.
+
+    zenity is always an owned recorder here: no real window may reach the desktop.
+    """
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        audit = ROOT / "temp/audit/ubuntu-launcher"
+        audit.mkdir(parents=True, exist_ok=True)
+        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit)))
+        self.stack.enter_context(patch.object(launch, "ROOT", self.root))
+        self.stack.enter_context(patch.object(launch.os, "execvpe", side_effect=OSError("fixture cannot exec")))
+        self.record = self.root / "zenity-input.txt"
+
+    def recorder(self, body=""):
+        script = self.root / "zenity"
+        script.write_text("#!/bin/sh\n" + body + f'cat > "{self.record}"\n', encoding="utf-8")
+        script.chmod(0o755)
+        self.stack.enter_context(patch.dict(os.environ, {"DISPLAY": ":fixture"}))
+        self.stack.enter_context(patch.object(launch.shutil, "which",
+                                              side_effect=lambda name: str(script) if name == "zenity" else None))
+        self.stack.enter_context(patch.object(launch.sys, "stdout", SimpleNamespace(
+            isatty=lambda: False, write=lambda _text: None, flush=lambda: None, encoding="utf-8")))
+
+    def test_desktop_update_reports_into_a_progress_window_that_closes_after_install(self):
+        from src.modules import app_update
+        self.recorder()
+        candidate = SimpleNamespace(branch="main", commit="a" * 40)
+
+        def apply(*_args, report, progress, cancelled, **_kwargs):
+            self.assertFalse(cancelled())
+            report("Downloading only what changed <now>…")
+            progress(app_update.TransferProgress("Downloading 3 changed files", 40.0, "1.00 MiB | 2.00 MiB/s", 4))
+            progress(app_update.TransferProgress("Source downloaded", 100.0, "", 6))
+            return SimpleNamespace(candidate=candidate, strategy="git-clone")
+
+        with patch("src.modules.app_update.apply_source_update", side_effect=apply):
+            self.assertTrue(launch.install_application_update(candidate, [], {}, desktop=True))
+        lines = self.record.read_text(encoding="utf-8").splitlines()
+        # The window closes at 100 only after the files are installed, never at the download's end.
+        self.assertEqual([line for line in lines if not line.startswith("#")], ["40", "99", "100"])
+        self.assertIn("# Downloading only what changed &lt;now&gt;…", lines)
+        self.assertTrue(any(line.startswith("# Downloading 3 changed files · 40%") for line in lines))
+        self.assertEqual(lines[-2], "# Update installed. Opening MCU Flasher…")
+
+    def test_cancel_in_the_window_skips_the_update_and_opens_the_installed_version(self):
+        from src.modules import app_update
+        # Shows the window for a moment, then the person presses Cancel.
+        self.recorder("sleep 1.3; exit 1\n")
+        candidate = SimpleNamespace(branch="main", commit="a" * 40)
+
+        def apply(*_args, cancelled, **_kwargs):
+            deadline = time.monotonic() + 10
+            while not cancelled():
+                self.assertLess(time.monotonic(), deadline, "Cancel was never noticed")
+                time.sleep(0.05)
+            raise app_update.ApplicationUpdateError("The GitHub source update was cancelled.")
+
+        with patch("src.modules.app_update.apply_source_update", side_effect=apply):
+            self.assertFalse(launch.install_application_update(candidate, [], {}, desktop=True))
+
+    def test_a_window_that_cannot_start_is_not_mistaken_for_cancel(self):
+        script = self.root / "zenity"
+        script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        script.chmod(0o755)
+        window = launch.DesktopProgress(str(script))
+        time.sleep(0.3)
+        self.assertFalse(window.cancelled())
+        window.finish()
+
+    def test_terminal_and_unattended_launches_never_open_a_window(self):
+        with patch.dict(os.environ, {"DISPLAY": ":fixture"}), \
+                patch.object(launch.shutil, "which", side_effect=AssertionError("zenity looked up")):
+            self.assertIsNone(launch.DesktopProgress.open(desktop=False))
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(launch.shutil, "which", side_effect=AssertionError("zenity looked up")):
+            self.assertIsNone(launch.DesktopProgress.open(desktop=True))
+
+    def test_runtime_check_runs_while_github_answers(self):
+        import threading
+        runtime_started = threading.Event()
+        overlapped = []
+
+        def runtime(_env):
+            runtime_started.set()
+            return None
+
+        def check(*_args, **_kwargs):
+            # Sequential checks would leave this waiting for the whole timeout.
+            overlapped.append(runtime_started.wait(5))
+            return SimpleNamespace(status="current", candidate=None, detail="")
+
+        with patch("direct.ubuntu.preflight.host_preflight"), \
+                patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \
+                patch.object(launch.os, "geteuid", return_value=1000), \
+                patch.object(launch.sys, "stdin", SimpleNamespace(isatty=lambda: True)), \
+                patch("src.modules.app_update.automatic_updates_enabled", return_value=True), \
+                patch("src.modules.app_update.check_for_update", side_effect=check), \
+                patch.object(launch, "runtime_problem", side_effect=runtime) as runtime_problem, \
+                patch.object(launch, "launch_workspace", return_value=0) as gui:
+            self.assertEqual(launch.main([]), 0)
+        self.assertEqual(overlapped, [True])
+        runtime_problem.assert_called_once()
+        gui.assert_called_once()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

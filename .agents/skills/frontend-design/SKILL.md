@@ -137,6 +137,16 @@ pane allocations for tool tabs and refresh after splitters/sidebars change them.
 Keep chrome compact through spacing before reducing text or usable targets.
 Use symmetric native action-toolbar insets so the bottom divider stays clear of
 buttons through resizing, theme changes and short-window layouts.
+Keep the title, build actions and project actions visibly separate groups: at
+least `_BAR_GROUP_GAP` (12) logical pixels between them, counted in every
+candidate's budget, so a crowded row picks a shorter title instead. Centre the
+build actions in the window only while both gaps stay at `_BAR_GROUP_GAP_WIDE`
+(48); a narrower window splits its spare width evenly, never 8 pixels on one side
+and 30 on the other. Every action in the row carries its mark, including compact
+Actions (`details`, distinct from the Controls Options sliders). In Controls'
+two-row short layout (mode 4) both rows reach both edges: the port field spans
+into the options' column and the upload speed sits flush right under the options
+button, with column widths set outright rather than left to a spanning item.
 Detach the existing action row and shortcuts with the editor, returning them
 above Controls on attachment; board/port Controls stay in the main workspace.
 Keep Ghost Sketch's temporary status clear. Explicit Save chooses an empty

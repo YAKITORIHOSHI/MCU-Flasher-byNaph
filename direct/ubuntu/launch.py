@@ -62,19 +62,175 @@ def available_application_update(arguments: list[str]):
         return None
 
 
+class TerminalProgress:
+    """One live progress line in a terminal, or occasional plain lines in a log.
+
+    A source clone can take minutes on a slow link. The bar, phase, transfer rate
+    and elapsed time keep moving so it never looks stuck.
+    """
+
+    LOG_INTERVAL_SECONDS = 10.0
+
+    def __init__(self, stream, app_update):
+        self._stream = stream
+        self._app_update = app_update
+        try:
+            self._live = bool(stream.isatty())
+        except (AttributeError, ValueError, OSError):
+            self._live = False
+        encoding = (getattr(stream, "encoding", "") or "").replace("-", "").casefold()
+        self._ascii = encoding != "utf8"
+        self._shown = False
+        self._width = 0
+        self._logged_at = 0.0
+        self._logged_phase = None
+
+    @property
+    def live(self) -> bool:
+        return self._live
+
+    def update(self, progress) -> None:
+        text = progress.describe()
+        try:
+            if self._live:
+                columns = shutil.get_terminal_size((100, 24)).columns
+                line = f"  {self._app_update.progress_bar(progress.percent, 24, ascii_only=self._ascii)} {text}"
+                line = line[:max(20, columns - 1)]
+                self._stream.write("\r" + line + " " * max(0, self._width - len(line)))
+                self._stream.flush()
+                self._width = len(line)
+                self._shown = True
+                return
+            now = time.monotonic()
+            if progress.phase != self._logged_phase or now - self._logged_at >= self.LOG_INTERVAL_SECONDS:
+                self._logged_phase, self._logged_at = progress.phase, now
+                print(f"  {text}", file=self._stream, flush=True)
+        except (OSError, ValueError):
+            self._live = False  # A closed terminal must not stop the update itself.
+
+    def finish(self) -> None:
+        if self._shown:
+            try:
+                self._stream.write("\n")
+                self._stream.flush()
+            except (OSError, ValueError):
+                pass
+        self._shown = False
+        self._width = 0
+
+
+class DesktopProgress:
+    """A small native progress window for an update started from All Apps.
+
+    A desktop launch has no terminal, so before this the download ran with nothing
+    on screen at all. zenity ships with the Ubuntu, Mint and Fedora desktops; its
+    Cancel skips this update and opens the installed version instead.
+    """
+
+    # zenity that ends this quickly never showed a window (no display, a broken
+    # theme): that is not a person pressing Cancel, so the update carries on.
+    STARTUP_FAILURE_SECONDS = 1.0
+
+    def __init__(self, zenity: str):
+        self._started = time.monotonic()
+        self._finished = False
+        self._process = subprocess.Popen(
+            [zenity, "--progress", "--title=MCU Flasher", "--width=520", "--percentage=0", "--auto-close",
+             "--text=Updating MCU Flasher from GitHub…"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", start_new_session=True,
+        )
+
+    @classmethod
+    def open(cls, *, desktop: bool):
+        if not desktop or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return None
+        zenity = shutil.which("zenity")
+        if not zenity:
+            return None
+        try:
+            return cls(zenity)
+        except OSError:
+            return None
+
+    def _write(self, text: str) -> None:
+        if self._finished or self._process.poll() is not None:
+            return
+        try:
+            self._process.stdin.write(text)
+            self._process.stdin.flush()
+        except (OSError, ValueError):
+            pass  # The window is only a view; the update never depends on it.
+
+    def update(self, progress) -> None:
+        import html
+        if progress.percent is not None:
+            # 100 closes the window, and installing the files still follows the download.
+            self._write(f"{min(99, int(progress.percent))}\n")
+        self._write(f"# {html.escape(progress.describe())}\n")
+
+    def message(self, text: str) -> None:
+        import html
+        self._write(f"# {html.escape(text)}\n")
+
+    def cancelled(self) -> bool:
+        code = self._process.poll()
+        return (not self._finished and code is not None
+                and time.monotonic() - self._started >= self.STARTUP_FAILURE_SECONDS)
+
+    def finish(self) -> None:
+        if self._finished:
+            return
+        self._write("100\n")
+        self._finished = True
+        try:
+            self._process.stdin.close()
+        except (OSError, ValueError):
+            pass
+        try:
+            self._process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self._process.terminate()
+            try:
+                self._process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+
+
 def install_application_update(candidate, arguments: list[str], env: dict[str, str],
-                               run_script: str = "direct/ubuntu/run.sh") -> bool:
+                               run_script: str = "direct/ubuntu/run.sh", *, desktop: bool = False) -> bool:
     """Refresh verified source before runtime checks, then re-exec the launcher."""
     from src.modules import app_update
 
+    bar = TerminalProgress(sys.stdout, app_update)
+    # A terminal shows its own live line; a double-clicked launch gets a window.
+    window = None if bar.live else DesktopProgress.open(desktop=desktop)
+
     def report(message: str) -> None:
+        bar.finish()
         print(message, flush=True)
+        if window is not None:
+            window.message(message)
+
+    def progress(update) -> None:
+        bar.update(update)
+        if window is not None:
+            window.update(update)
 
     try:
-        installed = app_update.apply_source_update(ROOT, candidate, report=report)
+        installed = app_update.apply_source_update(
+            ROOT, candidate, report=report, progress=progress,
+            cancelled=window.cancelled if window is not None else None)
     except Exception as exc:
+        bar.finish()
+        if window is not None:
+            window.finish()
         print(f"MCU Flasher source update was not installed: {exc}", file=sys.stderr)
         return False
+    bar.finish()
+    if window is not None:
+        window.message("Update installed. Opening MCU Flasher…")
+        window.finish()
 
     print(
         f"Installed GitHub source {installed.candidate.branch}@{installed.candidate.commit[:12]} "
@@ -116,6 +272,33 @@ def report_error(message: str, *, desktop: bool) -> None:
                             "--no-markup", "--text=" + message], check=False)
         except OSError:
             pass  # The same complete diagnostic is already on stderr.
+
+
+class BackgroundCheck:
+    """Run a read-only check on a thread while the GitHub update check waits on the network."""
+
+    def __init__(self, function, *arguments):
+        import threading
+        self._value = None
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, args=(function, *arguments),
+                                        name="MCULaunchCheck", daemon=True)
+        self._thread.start()
+
+    def _run(self, function, *arguments) -> None:
+        try:
+            self._value = function(*arguments)
+        except BaseException as exc:  # Raised again where the answer is used.
+            self._error = exc
+
+    def wait(self) -> None:
+        self._thread.join()
+
+    def result(self):
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return self._value
 
 
 def runtime_problem(env: dict[str, str]) -> str | None:
@@ -223,18 +406,37 @@ def main(argv=None) -> int:
         if args.install_shortcut and not args.check:
             from direct.ubuntu.install_desktop import main as install_shortcut
             return install_shortcut(["--install"])
+        from direct.ubuntu.preflight import MissingSystemDependencies, host_preflight
+
+        def host_check() -> str | None:
+            try:
+                host_preflight(require_display=not args.check)
+            except MissingSystemDependencies as missing:
+                if args.check:
+                    raise
+                return str(missing)
+            return None
+
+        # Native libraries come first (a tenth of a second): the Qt runtime is never
+        # validated on a host whose system prerequisites still need repair.
+        host_problem = host_check()
+        runtime_check = None
         if not args.check:
+            # The private runtime's check (about half a second of child processes) and
+            # GitHub's answer (one or two network round trips) used to run one after
+            # the other before any window could appear. Neither changes anything.
+            if not args.repair and host_problem is None:
+                runtime_check = BackgroundCheck(runtime_problem, env)
             candidate = available_application_update(arguments_in)
             if candidate is not None:
-                install_application_update(candidate, arguments_in, env)
-        from direct.ubuntu.preflight import MissingSystemDependencies, host_preflight
-        host_problem = None
-        try:
-            host_preflight(require_display=not args.check)
-        except MissingSystemDependencies as missing:
-            if args.check:
-                raise
-            host_problem = str(missing)
+                if runtime_check is not None:
+                    # Never replace source files under a check that is reading them.
+                    runtime_check.wait()
+                if install_application_update(candidate, arguments_in, env, desktop=desktop):
+                    # Normally the launcher has restarted by now. If it could not, the
+                    # earlier answers described the replaced source: ask again.
+                    runtime_check = None
+                    host_problem = host_check()
         if args.check:
             problem = runtime_problem(env)
             if problem:
@@ -250,7 +452,8 @@ def main(argv=None) -> int:
             arguments += ["--project", args.project or args.sketch]
         if args.new_window:
             arguments += ["--new-window"]
-        problem = host_problem or (f"Explicit {label} repair requested." if args.repair else runtime_problem(env))
+        problem = host_problem or (f"Explicit {label} repair requested." if args.repair else
+                                   runtime_check.result() if runtime_check is not None else runtime_problem(env))
         if problem:
             print(problem, file=sys.stderr)
             if desktop and not args.bootstrap_window:
