@@ -18,8 +18,10 @@ Installed copies update themselves from GitHub on their next launch; see
   frozen. On Ubuntu, a launch from All Apps shows a progress window whose
   **Cancel** opens the installed version instead.
 - **Updates download only what changed.** The first update downloads about
-  16 MB; later updates fetch only the changed files. Across three recent
-  updates that was 0.7 MB instead of 15 MB.
+  16 MB; later updates fetch only the changed files. Updating from the previous
+  version to this one took 13 files (0.4 MB, under 2 seconds) instead of 16 MB.
+- **A dropped connection no longer restarts the download.** The update tries
+  once more, then waits for the next launch and keeps what it already has.
 - **Faster start on Ubuntu.** The runtime check now runs while GitHub is being
   checked for updates, instead of after it.
 - **Toolbars on small screens.** At half-screen widths the title, build actions

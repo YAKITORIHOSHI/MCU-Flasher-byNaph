@@ -1034,6 +1034,22 @@ class _Cancelled(ApplicationUpdateError):
     """The person or a Skip Updates choice stopped the download; never retried."""
 
 
+class _NetworkFailure(ApplicationUpdateError):
+    """GitHub could not be reached. A full clone over the same link would fail too."""
+
+
+# What git says when the connection, not the repository, is the problem.
+_NETWORK_FAILURES = (
+    "could not resolve host", "failed to connect", "couldn't connect", "connection timed out",
+    "connection reset", "connection refused", "operation timed out", "network is unreachable",
+    "rpc failed", "early eof", "unexpected disconnect", "the remote end hung up", "http/2 stream",
+    # Whole phrases: a bare "ssl" also matches folder names such as /home/russlee.
+    "ssl certificate", "ssl connect", "ssl_read", "ssl_write", "openssl", "gnutls", "schannel",
+    "tls connection",
+)
+NETWORK_RETRY_DELAY_SECONDS = 2.0
+
+
 def _git_with_progress(arguments: list[str], *, cwd: Path, deadline: float,
                        progress: Callable[[TransferProgress], None] | None,
                        cancelled: Callable[[], bool] | None, started: float | None = None,
@@ -1139,7 +1155,7 @@ def _git_with_progress(arguments: list[str], *, cwd: Path, deadline: float,
         new_phase, new_percent, new_detail = parsed
         if new_percent is None and percent is not None:
             return  # A late remote line must not empty a bar that has started filling.
-        if new_phase == "Downloading" and initial.startswith("Downloading"):
+        if new_phase == "Downloading" and initial != "Connecting to GitHub":
             new_phase = initial  # "Downloading 33 changed files" says more than git's own name.
         phase, detail = new_phase, new_detail
         if new_percent is not None:
@@ -1189,7 +1205,9 @@ def _git_with_progress(arguments: list[str], *, cwd: Path, deadline: float,
             pass
     if returncode != 0:
         suffix = messages[-1] if messages else f"exit code {returncode}"
-        raise ApplicationUpdateError(f"The GitHub source {operation} failed: {suffix}")
+        failure = (_NetworkFailure if any(marker in message.casefold() for message in messages
+                                          for marker in _NETWORK_FAILURES) else ApplicationUpdateError)
+        raise failure(f"The GitHub source {operation} failed: {suffix}")
     if final:
         phase, percent, detail = final, high, ""
         send(force=True)
@@ -1283,6 +1301,19 @@ def _keep_source_cache(checkout: Path, cache: Path) -> None:
         pass  # Only the next update's speed depends on this.
 
 
+def _return_source_cache(checkout: Path, cache: Path, reused: bool) -> None:
+    """Put a kept checkout back after an interrupted update; its objects are intact.
+
+    Git writes fetched packs atomically, and every use writes the files again, so
+    a download cut off half way leaves nothing that the next update could trust.
+    A first download that never finished is simply discarded.
+    """
+    if reused:
+        _keep_source_cache(checkout, cache)
+    else:
+        _remove_tree(checkout)
+
+
 def _cached_git_source(stage: Path, checkout: Path, hooks: Path, candidate: SourceCandidate, *,
                        reused: bool, deadline: float, started: float,
                        progress: Callable[[TransferProgress], None] | None,
@@ -1353,21 +1384,45 @@ def _prepare_git_source(stage: Path, candidate: SourceCandidate,
         reused = _claim_source_cache(cache, checkout)
         report("Downloading only what changed in the verified GitHub source revision…" if reused else
                "Downloading the verified GitHub source revision (about 16 MB, once)…")
-        try:
-            return checkout, _cached_git_source(stage, checkout, hooks, candidate, reused=reused,
-                                                deadline=deadline, started=started,
-                                                progress=progress, cancelled=cancelled)
-        except (_GitUnavailable, _Cancelled):
-            raise
-        except ApplicationUpdateError as exc:
-            if cancelled is not None and cancelled():
-                raise _Cancelled("The GitHub source update was cancelled.") from exc
-            if time.monotonic() >= deadline:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return checkout, _cached_git_source(stage, checkout, hooks, candidate, reused=reused,
+                                                    deadline=deadline, started=started,
+                                                    progress=progress, cancelled=cancelled)
+            except (_GitUnavailable, _Cancelled):
+                _return_source_cache(checkout, cache, reused)
                 raise
-            # A server without partial clone, an old Git or a damaged kept checkout:
-            # the plain shallow clone below is the long-proven path.
-            report(f"Incremental source download unavailable ({exc}); cloning the full revision…")
-            _remove_tree(checkout)
+            except _NetworkFailure:
+                # A dropped connection is not a reason to download everything again over
+                # the same link: try the small download once more, then leave the update
+                # for the next launch and keep what was already downloaded.
+                # A first download whose clone finished goes on from what it has.
+                reused = (checkout / ".git").is_dir()
+                if attempt >= 2 or time.monotonic() + NETWORK_RETRY_DELAY_SECONDS >= deadline:
+                    _return_source_cache(checkout, cache, reused)
+                    raise
+                report("GitHub could not be reached; trying again…")
+                if not reused:
+                    _remove_tree(checkout)
+                pause = time.monotonic() + NETWORK_RETRY_DELAY_SECONDS
+                while time.monotonic() < pause:
+                    if cancelled is not None and cancelled():
+                        _return_source_cache(checkout, cache, reused)
+                        raise _Cancelled("The GitHub source update was cancelled.")
+                    time.sleep(0.1)
+            except ApplicationUpdateError as exc:
+                if cancelled is not None and cancelled():
+                    _return_source_cache(checkout, cache, reused)
+                    raise _Cancelled("The GitHub source update was cancelled.") from exc
+                if time.monotonic() >= deadline:
+                    raise
+                # A server without partial clone, an old Git or a damaged kept checkout:
+                # the plain shallow clone below is the long-proven path.
+                report(f"Incremental source download unavailable ({exc}); cloning the full revision…")
+                _remove_tree(checkout)
+                break
     report("Cloning the verified GitHub source revision (about 16 MB)…")
     checkout = stage / "repository-full"
     _git_with_progress([

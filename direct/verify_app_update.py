@@ -637,6 +637,19 @@ class CloneProgressChecks(unittest.TestCase):
             app_update._clone_with_progress(["clone"], cwd=self.fixture, timeout=60, progress=None, cancelled=None)
 
     @unittest.skipIf(os.name == "nt", "the fake git is a POSIX script")
+    def test_a_dropped_connection_is_told_apart_from_a_repository_problem(self):
+        unreachable = self._fake_git("sys.stderr.write(\"fatal: unable to access 'https://github.com/x.git/': "
+                                     "Could not resolve host: github.com\\n\"); sys.exit(128)")
+        with patch.object(app_update, "_git_executable", return_value=unreachable), \
+                self.assertRaises(app_update._NetworkFailure):
+            app_update._clone_with_progress(["clone"], cwd=self.fixture, timeout=60, progress=None, cancelled=None)
+        local = self._fake_git("sys.stderr.write(\"fatal: could not create work tree dir '/home/russlee/x'\\n\"); sys.exit(128)")
+        with patch.object(app_update, "_git_executable", return_value=local), \
+                self.assertRaises(app_update.ApplicationUpdateError) as caught:
+            app_update._clone_with_progress(["clone"], cwd=self.fixture, timeout=60, progress=None, cancelled=None)
+        self.assertNotIsInstance(caught.exception, app_update._NetworkFailure)
+
+    @unittest.skipIf(os.name == "nt", "the fake git is a POSIX script")
     def test_cancelled_clone_stops_git(self):
         marker = self.fixture / "still-running"
         git = self._fake_git(
@@ -782,6 +795,40 @@ class IncrementalSourceChecks(unittest.TestCase):
         self.assertTrue(any("cloning the full revision" in message for message in messages))
         self.assertEqual((checkout / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
         self.assertNotIn("retired.py", names)
+
+    def test_a_dropped_connection_retries_the_small_download_not_a_full_clone(self):
+        checkout, _names, _updates, _messages = self.prepare(self.stage("one"), self.first)
+        app_update._keep_source_cache(checkout, self.cache)
+        real = app_update._cached_git_source
+        attempts = []
+
+        def flaky(*arguments, **options):
+            attempts.append(options["reused"])
+            if len(attempts) == 1:
+                raise app_update._NetworkFailure("The GitHub source update failed: Could not resolve host")
+            return real(*arguments, **options)
+
+        with patch.object(app_update, "_cached_git_source", side_effect=flaky), \
+                patch.object(app_update, "NETWORK_RETRY_DELAY_SECONDS", 0.05):
+            checkout, names, _updates, messages = self.prepare(self.stage("two"), self.second)
+        self.assertEqual(attempts, [True, True])
+        self.assertEqual(checkout.name, "repository")
+        self.assertIn("GitHub could not be reached; trying again…", messages)
+        self.assertFalse(any("full revision" in message for message in messages))
+        self.assertNotIn("retired.py", names)
+
+    def test_github_unreachable_leaves_the_update_and_keeps_the_download(self):
+        checkout, _names, _updates, _messages = self.prepare(self.stage("one"), self.first)
+        app_update._keep_source_cache(checkout, self.cache)
+        failure = app_update._NetworkFailure("The GitHub source update failed: Could not resolve host")
+        with patch.object(app_update, "_cached_git_source", side_effect=failure) as attempt, \
+                patch.object(app_update, "_git_with_progress", side_effect=AssertionError("full clone")), \
+                patch.object(app_update, "NETWORK_RETRY_DELAY_SECONDS", 0.05), \
+                self.assertRaises(app_update._NetworkFailure):
+            self.prepare(self.stage("two"), self.second)
+        self.assertEqual(attempt.call_count, 2)
+        # What was downloaded before stays for the next launch.
+        self.assertTrue((self.cache / ".git").is_dir())
 
     def test_a_server_without_partial_clone_still_updates(self):
         self.git(self.server, "config", "uploadpack.allowFilter", "false")

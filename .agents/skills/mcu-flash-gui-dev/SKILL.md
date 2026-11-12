@@ -25,8 +25,13 @@ rename, fetches the exact commit (`--filter=blob:none --depth 1`), lists missing
 contents with `rev-list --objects --missing=print` (no lazy fetch) and downloads
 only those with a `--stdin` fetch, then rewrites every file from Git's objects
 (`checkout --force` after clearing the tree, `clean -ffdx`). A depth-1 fetch alone
-re-sends the whole tree; measured, it moved 15 MB for a 33-file change. Any
-failure other than cancel or the deadline falls back to the plain shallow clone.
+re-sends the whole tree; measured, it moved 15 MB for a 33-file change. Against
+GitHub, fe14fe3 → 18dd73e fetched 13 files (0.37 MB) in 1.7 s versus 97 s for the
+first download. Git's own wording classifies `_NetworkFailure` (DNS, connect, RPC,
+TLS phrases; never a bare "ssl", which matches folder names): the small download is
+retried once, then the update waits for the next launch and the kept checkout is
+returned. Only other failures fall back to the plain shallow clone, which a broken
+link would only repeat at 16 MB.
 `_git_with_progress` reads git's `--progress` records on a thread and reports
 `TransferProgress` (one rising bar across steps, friendly phase names, a 1 s
 elapsed-time heartbeat, owned process-group cancellation). Ubuntu shows a terminal
