@@ -1,9 +1,53 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, toolbar group spacing and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 12, later: Ubuntu Bootstrap window, updates without questions
+
+Why: an All Apps launch took about three minutes. The installed copy's own (old)
+updater cloned 16 MB silently; a second launch started 37 s later, found its
+checkout runtime missing libclang, opened a terminal and forwarded to the
+installed copy, which cloned the same 16 MB again. Steady-state launch is about
+1 s (runtime check 0.6 s beside a 0.5 s GitHub check).
+
+Updates: `_cached_git_source` lists the commit's files once (`_tree_files`).
+Paths an update preserves (`_never_installed`: installers, index_json, local
+settings, about 9 MB) are left out of the download and of the checkout (non-cone
+sparse patterns written to `.git/info/sparse-checkout`; `ls-files` still names
+them so `install_staged_source` preserves the local copies). Without a kept
+checkout, `_seed_installed_contents` hashes installed files and stores (`hash-object
+-w --no-filters --stdin-paths`) those whose bytes are the commit's own blob, so
+only changed files are fetched. Measured over this link: bedaaa3 → d4aceda 7.6 s
+(905 reused, 15 fetched) versus 68 s without the sparse exclusion and about 97 s
+for a full clone. `_exclusive_update` (flock/msvcrt on `update.lock` in the state
+folder) serializes `apply_source_update`; a waiting launch reports it, then
+returns `strategy="already-installed"` when the record names the candidate.
+
+Windows: `DEFAULT_SKIP_UPDATES = False`; `run_update_checks()` installs what it
+finds without `ask_update` (removed from `BootstrapGUI` and `BootstrapDialog`) or
+the restart message box. Skip Updates remains the opt-out, rechecked before each
+install. Verify bootstrap_updates and controls.
+
+Ubuntu window: `direct/ubuntu/bootstrap_window.py` runs `BootstrapDialog` on the
+private runtime (Skip Updates hidden) and displays JSON lines from the launcher:
+the dispatcher names plus `finish`, `cancellable`, `subtitle`. Closing works
+while cancellable (a download: the client sees the exit as Cancel after
+`STARTUP_FAILURE_SECONDS`) or after finish; a failure stays open; success closes
+after 700 ms; end of input closes. `direct/ubuntu/bootstrap_view.py`:
+`BootstrapWindow.open` (needs a display and `PySide6/QtWidgets.*so` in
+`.venv-linux`), `hand_over`/`adopt` keep it across the post-update exec through
+`MCU_FLASHER_BOOTSTRAP_WINDOW=fd:pid` (`os.waitpid` works because run.sh execs),
+`run_logged` runs setup.py with stdin closed (pkexec for apt), a run log in
+`logs/` and `── [i/n] Stage ──` headings from `setup.py`'s `announce`.
+`launch.main` adopts first, opens the window for an update or a repair, forwards
+a portable copy to `owned_installation_elsewhere()` by exec with `--desktop`, and
+falls back to the terminal only when no private Qt exists. Launcher fixtures must
+patch `owned_installation_elsewhere`, `BootstrapWindow.open` and `.adopt`: this
+account has a real installation. Verify ubuntu_launcher, app_update and
+`verify_ubuntu_bootstrap_window.py` (private runtime, offscreen, `--render-dir temp/...`).
 
 ## November 12 follow-up: small-screen toolbars, visible updates, faster Ubuntu launch
 

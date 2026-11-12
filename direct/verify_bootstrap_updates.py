@@ -145,7 +145,7 @@ class UpdateChecks(unittest.TestCase):
         self.distribution(self.target_site, "websockets", "17.1")
         # This fake installer intentionally does not update metadata: a zero
         # exit/result alone must not produce an 'upgraded' success message.
-        namespace["run_update_checks"](auto_update=True)
+        namespace["run_update_checks"]()
         self.assertTrue(any("not verified" in message for _, message in self.messages))
         self.assertFalse(any("upgraded and verified" in message for _, message in self.messages))
 
@@ -180,7 +180,7 @@ class UpdateChecks(unittest.TestCase):
             subprocess=SimpleNamespace(run=run, CREATE_NO_WINDOW=0),
             shutil=SimpleNamespace(which=lambda name: None))
         with patch.object(sys, "platform", "win32"):
-            namespace["run_update_checks"](auto_update=True)
+            namespace["run_update_checks"]()
         return runs, cached
 
     def test_arduino_cli_update_never_runs_core_upgrade_and_verifies_the_installed_cli(self):
@@ -243,7 +243,7 @@ class UpdateChecks(unittest.TestCase):
             check_python_update=lambda: {}, check_pio_update=lambda: {}, check_arduino_cli_update=lambda: {},
             check_pip_package_update=lambda name, *args: {"name": name, "update_available": False,
                 "error": "Conflicting websockets version metadata" if name == "websockets" else None})
-        self.assertEqual(namespace["run_update_checks"](auto_update=True), "incomplete")
+        self.assertEqual(namespace["run_update_checks"](), "incomplete")
         self.assertTrue(summary.call_args.args[0]["websockets"]["error"])
         self.assertTrue(any("incomplete for websockets" in message for _, message in self.messages))
         self.assertFalse(any("All utilities are up to date" in message for _, message in self.messages))
@@ -307,7 +307,7 @@ class UpdateChecks(unittest.TestCase):
 
         checks.side_effect = slow_check
         result = []
-        worker = threading.Thread(target=lambda: result.append(namespace["run_update_checks"](auto_update=True)))
+        worker = threading.Thread(target=lambda: result.append(namespace["run_update_checks"]()))
         worker.start()
         self.assertTrue(started.wait(1))
         skipped.set()
@@ -316,45 +316,41 @@ class UpdateChecks(unittest.TestCase):
         self.assertEqual(result, ["skipped"])
         namespace["_pip_upgrade"].assert_not_called()
 
-    def test_skip_after_accepting_prompt_prevents_installs(self):
+    def test_found_updates_install_without_asking(self):
+        # The GUI has no question to ask any more: an ask_update call would fail here.
+        gui = SimpleNamespace(log_section=Mock(), root=SimpleNamespace(after=Mock()))
+        namespace, _, _, summary = self.update_stage_fixture(gui, online=True)
+        summary.return_value = [{"name": "websockets", "installed": "17.1", "latest": "17.2"}]
+        namespace["_pip_installed_version"] = Mock(return_value="17.2")
+        namespace["_version_tuple"] = lambda value: tuple(int(part) for part in value.split("."))
+        self.assertEqual(namespace["run_update_checks"](), "updates_available")
+        namespace["_pip_upgrade"].assert_called_once_with("websockets")
+        namespace["ok"].assert_called_once_with("websockets upgraded and verified at 17.2")
+
+    def test_skip_chosen_during_installs_stops_the_remaining_ones(self):
         gui = SimpleNamespace(log_section=Mock(), root=SimpleNamespace(after=Mock()))
         namespace, _, _, summary = self.update_stage_fixture(gui, online=True)
         skipped = [False]
         namespace["_update_check_skip_reason"] = lambda: "live checkbox" if skipped[0] else None
-        summary.return_value = [{"name": "websockets", "installed": "17.1", "latest": "17.2"}]
+        summary.return_value = [{"name": "websockets", "installed": "17.1", "latest": "17.2"},
+                                {"name": "psutil", "installed": "7.0", "latest": "7.1"}]
+        namespace["_pip_installed_version"] = Mock(return_value=None)
 
-        def ask(_count):
+        def upgrade(_name):
             skipped[0] = True
             return True
 
-        gui.ask_update = ask
+        namespace["_pip_upgrade"].side_effect = upgrade
         self.assertEqual(namespace["run_update_checks"](), "skipped")
-        namespace["_pip_upgrade"].assert_not_called()
+        namespace["_pip_upgrade"].assert_called_once_with("websockets")
 
-    def test_skip_before_queued_prompt_prevents_a_stale_question(self):
-        source = ROOT / "src/modules/bootstrap.py"
-        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
-        gui_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "BootstrapGUI")
-        method = next(node for node in gui_class.body if isinstance(node, ast.FunctionDef) and node.name == "ask_update")
-        namespace = dict(threading=threading, sys=sys)
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
-        callbacks, answers = [], []
-        queued = threading.Event()
-
-        def after(_delay, callback):
-            callbacks.append(callback)
-            queued.set()
-
-        gui = SimpleNamespace(_app=object(), _window=Mock(), _closed=False, _skip_updates=False,
-                              root=SimpleNamespace(after=after))
-        worker = threading.Thread(target=lambda: answers.append(namespace["ask_update"](gui, 2)))
-        worker.start()
-        self.assertTrue(queued.wait(1))
-        gui._skip_updates = True
-        worker.join(1)
-        self.assertEqual(answers, [False])
-        callbacks[0]()
-        gui._window.ask_update.assert_not_called()
+    def test_updates_default_on_and_no_view_can_ask_first(self):
+        bootstrap = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
+        view = (ROOT / "src/modules/bootstrap_qt.py").read_text(encoding="utf-8-sig")
+        self.assertIn("DEFAULT_SKIP_UPDATES = False", bootstrap)
+        for source in (bootstrap, view):
+            self.assertNotIn("Would you like to install them now?", source)
+            self.assertNotIn("def ask_update", source)
 
     def test_update_target_display_expands_alias_without_changing_installer_target(self):
         namespace, _reachable, checks, _summary = self.update_stage_fixture(None, online=False)

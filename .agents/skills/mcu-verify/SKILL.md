@@ -5,6 +5,18 @@ description: "Run MCU Flasher hardware-free and isolated native CI checks, inclu
 
 # Verify MCU Flasher changes
 
+## Ubuntu Bootstrap window and update gates
+
+- `verify_ubuntu_bootstrap_window.py` runs the real Qt setup view offscreen with
+  the private runtime; `--render-dir temp/...` saves captures. It never runs setup.
+- `verify_ubuntu_launcher.py` `BootstrapWindowChecks` use recorder processes for
+  the window; every launcher fixture patches `owned_installation_elsewhere`,
+  `BootstrapWindow.open` and `.adopt` so nothing reaches the real installation.
+- `verify_app_update.py` `IncrementalSourceChecks` cover installed-file reuse,
+  never-installed paths and the one-update lock with real Git and a local bare
+  server; `verify_bootstrap_updates.py` and `verify_controls.py` check that no
+  view asks before installing updates.
+
 ## Upload, restart, monitor, ticket and terminal gates
 
 Run `direct/verify_upload_images.py` for nobuild flash images (real

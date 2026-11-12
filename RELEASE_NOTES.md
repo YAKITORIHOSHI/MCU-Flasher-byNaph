@@ -11,6 +11,24 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 12 (later) — Bootstrap window on Ubuntu, updates without questions
+
+- **Ubuntu has the Bootstrap window.** Updates, repairs and opening the app now
+  show the same Bootstrap window as Windows instead of a terminal or a small
+  progress box. Only the very first setup, before the app's runtime exists,
+  still uses a terminal.
+- **Updates no longer ask.** Updates are on by default and install without a
+  question on both systems. **Skip Updates** on Windows still turns them off.
+- **Much smaller updates.** An update reuses the files already installed and
+  never downloads the Windows driver installers or board catalogs it does not
+  replace. A typical update now takes seconds instead of minutes.
+- **No double downloads.** Opening MCU Flasher twice while an update is
+  downloading no longer downloads it twice; the second launch waits for the
+  first.
+- **A copied folder hands over to the installed app.** Launching an older
+  copy whose runtime needs repair now opens the installed app directly instead
+  of starting setup in a terminal.
+
 ## November 12 — Faster updates and small-screen toolbars
 
 - **Updates show their progress.** Downloading an update shows a progress bar,

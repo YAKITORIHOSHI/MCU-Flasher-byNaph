@@ -18,6 +18,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from direct.ubuntu.user_install import persistent_setup_root
+from direct.ubuntu.bootstrap_view import ENVIRONMENT_KEY, BootstrapWindow, run_logged
 
 
 def application_update_config() -> dict:
@@ -198,13 +199,24 @@ class DesktopProgress:
 
 
 def install_application_update(candidate, arguments: list[str], env: dict[str, str],
-                               run_script: str = "direct/ubuntu/run.sh", *, desktop: bool = False) -> bool:
-    """Refresh verified source before runtime checks, then re-exec the launcher."""
+                               run_script: str = "direct/ubuntu/run.sh", *, desktop: bool = False,
+                               window: BootstrapWindow | None = None) -> bool:
+    """Refresh verified source before runtime checks, then re-exec the launcher.
+
+    ``window`` is the Bootstrap window of a desktop launch. It stays open across the
+    restart, so the same window goes on to show any repair and the workspace opening.
+    Without one, a terminal shows a live line and a desktop launch gets zenity.
+    """
     from src.modules import app_update
 
     bar = TerminalProgress(sys.stdout, app_update)
-    # A terminal shows its own live line; a double-clicked launch gets a window.
-    window = None if bar.live else DesktopProgress.open(desktop=desktop)
+    bootstrap = window
+    if window is None:
+        window = None if bar.live else DesktopProgress.open(desktop=desktop)
+    else:
+        window.section("Updating MCU Flasher from GitHub")
+        # Closing the window skips this update and opens the installed version.
+        window.cancellable(True)
 
     def report(message: str) -> None:
         bar.finish()
@@ -223,12 +235,20 @@ def install_application_update(candidate, arguments: list[str], env: dict[str, s
             cancelled=window.cancelled if window is not None else None)
     except Exception as exc:
         bar.finish()
-        if window is not None:
+        if bootstrap is not None:
+            bootstrap.cancellable(False)
+            bootstrap.log(f"The update was not installed: {exc}", "warn")
+        elif window is not None:
             window.finish()
         print(f"MCU Flasher source update was not installed: {exc}", file=sys.stderr)
         return False
     bar.finish()
-    if window is not None:
+    if bootstrap is not None:
+        bootstrap.cancellable(False)
+        bootstrap.log("Update installed.", "ok")
+        bootstrap.status("Restarting MCU Flasher…")
+        bootstrap.hand_over(env)
+    elif window is not None:
         window.message("Update installed. Opening MCU Flasher…")
         window.finish()
 
@@ -244,6 +264,8 @@ def install_application_update(candidate, arguments: list[str], env: dict[str, s
     except OSError as exc:
         # Source replacement is complete and verified. Continue through the
         # currently loaded coordinator if the shell cannot be re-executed.
+        if bootstrap is not None:
+            bootstrap.take_back(env)
         print(f"MCU Flasher could not restart Bootstrap after the source update: {exc}",
               file=sys.stderr)
     return True
@@ -255,14 +277,19 @@ def clean_environment() -> dict[str, str]:
                 "PYTHONEXEPATH", "PIO_PYTHON_EXE", "PLATFORMIO_PYTHON_EXE", "PLATFORMIO_PENV_DIR",
                 "MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME",
                 "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX", "QT_PLUGIN_PATH",
-                "QT_QPA_PLATFORM_PLUGIN_PATH", "QML2_IMPORT_PATH"):
+                "QT_QPA_PLATFORM_PLUGIN_PATH", "QML2_IMPORT_PATH", ENVIRONMENT_KEY):
         env.pop(key, None)
     env["PYTHONNOUSERSITE"] = "1"
     return env
 
 
-def report_error(message: str, *, desktop: bool) -> None:
+def report_error(message: str, *, desktop: bool, window: BootstrapWindow | None = None) -> None:
     print(message, file=sys.stderr)
+    if window is not None and window.alive():
+        # The Bootstrap window keeps the error on screen until it is closed.
+        window.log(message, "fail")
+        window.finish(False, "MCU Flasher could not start. Correct the error above, then launch again.")
+        return
     if not desktop or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         return
     zenity = shutil.which("zenity")
@@ -355,9 +382,14 @@ def bootstrap_terminal(arguments: list[str], env: dict[str, str]) -> bool:
     return False
 
 
-def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool) -> int:
+def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool,
+                     window: BootstrapWindow | None = None) -> int:
     command = [str(ROOT / ".venv-linux/bin/python"), "-B", str(ROOT / "mcu_flash_gui.py"), *arguments]
+    if window is not None:
+        window.status("Opening MCU Flasher…")
     if not desktop:
+        if window is not None:
+            window.finish(True, "Opening MCU Flasher…")
         os.chdir(ROOT)
         os.execvpe(command[0], command, env)
     # Desktop launches have no terminal. Retain immediate failures in a local log
@@ -376,9 +408,52 @@ def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool
         with path.open("rb") as stream:
             stream.seek(max(0, path.stat().st_size - 4000))
             detail = stream.read().decode("utf-8", errors="replace")
-        report_error(f"MCU Flasher could not start.\n{detail}\nLaunch log: {path}", desktop=True)
+        report_error(f"MCU Flasher could not start.\n{detail}\nLaunch log: {path}", desktop=True, window=window)
         return process.returncode or 1
+    if window is not None:
+        window.finish(True, "MCU Flasher is open.")
     return 0
+
+
+def owned_installation_elsewhere() -> Path | None:
+    """The per-user installation, when this launch is a different (portable) copy.
+
+    A ZIP folder or checkout whose own runtime needs repair simply hands over to an
+    installation that already exists; that copy checks and repairs itself.
+    """
+    from src.modules.ubuntu_release import linux_distribution
+    from direct.ubuntu.user_install import installation_directory, is_owned_installation
+    try:
+        if linux_distribution().family != "ubuntu":
+            return None
+        destination = installation_directory()
+    except (OSError, RuntimeError):
+        return None
+    if destination == ROOT or not is_owned_installation(destination):
+        return None
+    return destination
+
+
+def forward_to_installation(installed: Path, arguments: list[str], env: dict[str, str], *,
+                            repair: bool, project: str | None, window: BootstrapWindow | None) -> int:
+    """Continue this desktop launch in the installed copy, keeping any open window."""
+    forwarded = list(arguments)
+    if project:
+        forwarded[1] = str(Path(project).absolute())
+    if repair:
+        forwarded.insert(0, "--repair")
+    command = [sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"), "--desktop", *forwarded]
+    if window is not None:
+        window.hand_over(env)
+    try:
+        os.chdir(installed)
+        os.execvpe(command[0], command, env)
+    except OSError:
+        if window is not None:
+            window.take_back(env)
+        # stdin is not a terminal, so the installed launcher still treats this as a desktop launch.
+        return subprocess.call(command, cwd=installed, env=env, stdin=subprocess.DEVNULL)
+    return 0  # Not reached: exec replaced this process.
 
 
 def main(argv=None) -> int:
@@ -400,12 +475,16 @@ def main(argv=None) -> int:
     args = parser.parse_args(arguments_in)
     desktop = not args.check and (args.bootstrap_window or (args.desktop and not sys.stdin.isatty()))
     env = clean_environment()
+    window: BootstrapWindow | None = None
     try:
         if not args.check and hasattr(os, "geteuid") and os.geteuid() == 0:
             raise RuntimeError(f"Run MCU Flasher as your normal {label} desktop account, without sudo.")
         if args.install_shortcut and not args.check:
             from direct.ubuntu.install_desktop import main as install_shortcut
             return install_shortcut(["--install"])
+        if not args.check:
+            # A launcher restarted after an update keeps the window that showed it.
+            window = BootstrapWindow.adopt(env)
         from direct.ubuntu.preflight import MissingSystemDependencies, host_preflight
 
         def host_check() -> str | None:
@@ -432,7 +511,9 @@ def main(argv=None) -> int:
                 if runtime_check is not None:
                     # Never replace source files under a check that is reading them.
                     runtime_check.wait()
-                if install_application_update(candidate, arguments_in, env, desktop=desktop):
+                if window is None and desktop and not args.bootstrap_window:
+                    window = BootstrapWindow.open(ROOT, env=env, subtitle="Updating from GitHub")
+                if install_application_update(candidate, arguments_in, env, desktop=desktop, window=window):
                     # Normally the launcher has restarted by now. If it could not, the
                     # earlier answers described the replaced source: ask again.
                     runtime_check = None
@@ -448,8 +529,9 @@ def main(argv=None) -> int:
         if not enforce_minimum_cpu_requirement():
             return 1
         arguments = []
-        if args.project or args.sketch:
-            arguments += ["--project", args.project or args.sketch]
+        project = args.project or args.sketch
+        if project:
+            arguments += ["--project", project]
         if args.new_window:
             arguments += ["--new-window"]
         problem = host_problem or (f"Explicit {label} repair requested." if args.repair else
@@ -457,18 +539,37 @@ def main(argv=None) -> int:
         if problem:
             print(problem, file=sys.stderr)
             if desktop and not args.bootstrap_window:
-                terminal_arguments = (["--repair"] if args.repair else []) + arguments
-                if bootstrap_terminal(terminal_arguments, env):
-                    return 0
-                raise RuntimeError("Bootstrap needs a terminal to display setup progress.\n"
-                                   "Open a terminal in the application folder and run:\n"
-                                   "bash direct/ubuntu/run.sh --repair")
-            print(f"Preparing {label} system prerequisites and the native private runtime.", flush=True)
-            installed = persistent_setup_root(ROOT)
+                installed = owned_installation_elsewhere()
+                if installed is not None:
+                    # This portable copy's runtime needs work, but the installed copy
+                    # checks and repairs itself: no terminal, no second setup.
+                    return forward_to_installation(installed, arguments, env, repair=args.repair,
+                                                   project=project, window=window)
+                if window is None:
+                    window = BootstrapWindow.open(ROOT, env=env, subtitle="Runtime setup · Prepare your workspace")
+                if window is None:
+                    # Before the private runtime has Qt (a first run), setup shows in a terminal.
+                    terminal_arguments = (["--repair"] if args.repair else []) + arguments
+                    if bootstrap_terminal(terminal_arguments, env):
+                        return 0
+                    raise RuntimeError("Bootstrap needs a terminal to display setup progress.\n"
+                                       "Open a terminal in the application folder and run:\n"
+                                       "bash direct/ubuntu/run.sh --repair")
+            preparing = f"Preparing {label} system prerequisites and the native private runtime."
+            print(preparing, flush=True)
+            if window is not None:
+                window.subtitle("Runtime setup · Prepare your workspace")
+                window.section("Preparing your workspace")
+                window.log(problem, "dim")
+                window.status(preparing)
+            installed = persistent_setup_root(ROOT, report=window.message if window is not None else print)
             if installed != ROOT:
+                if window is not None:
+                    return forward_to_installation(installed, arguments, env, repair=args.repair,
+                                                   project=project, window=window)
                 forwarded = list(arguments)
-                if args.project or args.sketch:
-                    forwarded[1] = str(Path(args.project or args.sketch).absolute())
+                if project:
+                    forwarded[1] = str(Path(project).absolute())
                 if args.repair:
                     forwarded.insert(0, "--repair")
                 # The installed launcher prepares its runtime at this final
@@ -476,10 +577,16 @@ def main(argv=None) -> int:
                 mode = ["--bootstrap-window"] if desktop else []
                 return subprocess.call([sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"),
                                         *mode, *forwarded], cwd=installed, env=env)
-            result = subprocess.call(["/usr/bin/python3", "-B", str(ROOT / "direct/ubuntu/setup.py")],
-                                     cwd=ROOT, env=env)
+            setup = ["/usr/bin/python3", "-B", str(ROOT / "direct/ubuntu/setup.py")]
+            if window is not None:
+                log_path = ROOT / "logs" / f"ubuntu-bootstrap-{time.strftime('%Y%m%d-%H%M%S')}.log"
+                result = run_logged(setup, cwd=ROOT, env=env, window=window, log_path=log_path)
+            else:
+                result = subprocess.call(setup, cwd=ROOT, env=env)
             if result:
-                if args.bootstrap_window:
+                if window is not None:
+                    window.finish(False, "Bootstrap failed. Correct the error above, then launch again.")
+                elif args.bootstrap_window:
                     print("\nBootstrap failed. Correct the error above, then launch again.", file=sys.stderr)
                     try:
                         input("Press Enter to close this setup window…")
@@ -493,11 +600,12 @@ def main(argv=None) -> int:
             problem = runtime_problem(env)
             if problem:
                 raise RuntimeError(problem)
-        return launch_workspace(arguments, env, desktop=desktop)
+            if window is not None:
+                window.log("The private runtime is ready.", "ok")
+        return launch_workspace(arguments, env, desktop=desktop, window=window)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        report_error(str(exc), desktop=desktop)
+        report_error(str(exc), desktop=desktop, window=window)
         return 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

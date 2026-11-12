@@ -11,6 +11,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ENV_DIR = ROOT / ".venv-linux"
 sys.path.insert(0, str(ROOT))
+# The Bootstrap window (direct/ubuntu/bootstrap_view.py) reads these headings.
+STAGE_TITLES = ("System prerequisites", "Private Python environment", "Python packages",
+                "Runtime check", "Arduino CLI", "OpenCode AI Assistant", "Board toolchains",
+                "Finishing setup")
+
+
+def announce(title: str) -> None:
+    print(f"── [{STAGE_TITLES.index(title) + 1}/{len(STAGE_TITLES)}] {title} ──", flush=True)
 
 
 def clean_native_bootstrap_environment() -> dict[str, str]:
@@ -97,6 +105,7 @@ def main(argv=None) -> int:
                                 *(sys.argv[1:] if argv is None else argv)], env=env, cwd=ROOT)
     stage = f"{label} prerequisites"
     try:
+        announce("System prerequisites")
         from direct.ubuntu.system_setup import ensure_system_dependencies
         ensure_system_dependencies(require_display=args.launch, env=env)
         stage = "persistent Ubuntu installation"
@@ -120,6 +129,7 @@ def main(argv=None) -> int:
                                                        record_runtime_architecture)
         architecture = host_architecture()
         stage = "private Python environment"
+        announce("Private Python environment")
         # Never clear a repaired environment or install into system Python.
         prepare_environment_directory(ENV_DIR)
         venv.EnvBuilder(with_pip=True, symlinks=True).create(ENV_DIR)
@@ -129,6 +139,7 @@ def main(argv=None) -> int:
             from direct.ubuntu.arm_qt5 import install_bridge
             install_bridge(private_site_packages(ENV_DIR))
         stage = "Python dependencies"
+        announce("Python packages")
         reinstall = ["--force-reinstall"] if force_reinstall else []
         if force_reinstall:
             print("This private runtime contains packages for another CPU architecture; replacing native wheels.", flush=True)
@@ -138,13 +149,16 @@ def main(argv=None) -> int:
                         "-r", str(ROOT / "direct/ubuntu/requirements.txt")], check=True, env=env, cwd=ROOT)
         record_runtime_architecture(ENV_DIR, architecture)
         stage = "native runtime validation"
+        announce("Runtime check")
         subprocess.run([str(python), "-c",
                         "from direct.ubuntu.preflight import runtime_preflight; runtime_preflight()"],
                        check=True, env=env, cwd=ROOT)
         stage = "native Arduino CLI"
+        announce("Arduino CLI")
         from direct.ubuntu.arduino_cli import ensure_arduino_cli
         ensure_arduino_cli(env=env)
         stage = "OpenCode AI Assistant"
+        announce("OpenCode AI Assistant")
         from direct.ubuntu.opencode_setup import ensure_opencode_cli
         ensure_opencode_cli(env=env)
         core = native_platformio_dir()
@@ -164,10 +178,12 @@ def main(argv=None) -> int:
             command += ["--coverage-only"]
         from src.modules.package_jobs import package_store_lease
         stage = "native board toolchains"
+        announce("Board toolchains")
         with package_store_lease(core, mode="prepare", wait=True,
                                  on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):
             subprocess.run(command, check=True, env=env, cwd=ROOT)
             finish_bootstrap(core)
+        announce("Finishing setup")
         from src.modules.default_board_folders import prepare_default_board_folders
         prepare_default_board_folders(python, env=env)
         if label == "Ubuntu":

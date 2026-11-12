@@ -75,7 +75,8 @@ has not yet been verified on physical hardware; see the
 
 On Ubuntu, Bootstrap installs the application for your account
 (`~/.local/share/mcu-flasher/application`) and adds **MCU Flasher** to All
-Apps; launch it from there afterwards. On macOS, the first open needs
+Apps; launch it from there afterwards. Later repairs and updates appear in the
+same Bootstrap window as on Windows; only the very first setup uses a terminal. On macOS, the first open needs
 Control-click → **Open**, because the app is not notarized.
 
 ## Everyday use
@@ -96,19 +97,19 @@ recovered, so a board is never left half-flashed.
 
 ## Updates
 
-On each launch, MCU Flasher checks GitHub for a newer version of the
-application source and installs it before opening. The first update downloads
-about 16 MB; later updates download only the files that changed. Progress is
-shown with a bar, the transfer rate and the elapsed time. On Ubuntu, a launch
-from All Apps shows a small progress window, and **Cancel** opens the installed
-version instead.
+On each launch, MCU Flasher checks GitHub for a newer version and installs it
+before opening, without asking first. Only the files that changed are
+downloaded; files already installed are reused. Progress is shown in the
+Bootstrap window with a bar, the transfer rate and the elapsed time. Closing the
+window during a download skips that update and opens the installed version.
 
 - Updates wait until every MCU Flasher window is closed.
 - Sketches, settings, build caches and private runtimes are never replaced.
 - An update never installs an older version. A failed update leaves the current
   version in place.
-- **Skip Updates** in the Windows Bootstrap window, or the environment variable
-  `MCU_FLASH_GUI_SKIP_UPDATES=1`, turns automatic updates off.
+- Two launches at once share one download instead of each fetching the update.
+- Updates are on by default. **Skip Updates** in the Windows Bootstrap window,
+  or the environment variable `MCU_FLASH_GUI_SKIP_UPDATES=1`, turns them off.
 - A Git checkout is never updated automatically; use `git pull`.
 
 ## Settings

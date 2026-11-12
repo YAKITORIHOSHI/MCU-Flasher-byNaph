@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional
 from PySide6.QtWidgets import (QApplication, QVBoxLayout, QHBoxLayout, QLabel,
-    QProgressBar, QPlainTextEdit, QCheckBox, QFrame, QSizePolicy, QPushButton, QStackedWidget, QWidget, QMessageBox)
+    QProgressBar, QPlainTextEdit, QCheckBox, QFrame, QSizePolicy, QPushButton, QStackedWidget, QWidget)
 from PySide6.QtCore import Qt, QTimer, Slot, QPointF
 from PySide6.QtGui import (QTextCursor, QTextCharFormat, QColor, QFont,
     QTextBlockUserData, QPainter, QPainterPath, QPen, QLinearGradient)
@@ -92,7 +92,6 @@ class BootstrapDialog(GlassDialog):
         self._gui = gui
         self._context = context
         self._allow_close = False
-        self._update_prompt = None
         self._live_block_start: Optional[int] = None
         self._live_block_len: int = 0
         self._live_block_type: Optional[str] = None
@@ -486,7 +485,7 @@ class BootstrapDialog(GlassDialog):
         self.skip_cb = QCheckBox("Skip Updates", footer)
         self.skip_cb.setChecked(bool(gui._skip_updates))
         self.skip_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.skip_cb.setToolTip("Skip optional online updates. Missing or broken required dependencies are still repaired.")
+        self.skip_cb.setToolTip("Updates install automatically. Check this to skip them; missing or broken required dependencies are still repaired.")
         self.skip_cb.toggled.connect(self._on_skip_toggled)
         options_row.addWidget(self.skip_cb)
         self.auto_scroll_cb = QCheckBox("Auto-Scroll", footer)
@@ -697,8 +696,6 @@ class BootstrapDialog(GlassDialog):
 
     def _on_skip_toggled(self, checked: bool):
         self._gui._skip_updates = checked
-        if checked and self._update_prompt is not None:
-            self._update_prompt.reject()
         try:
             c = self._context.load_config()
             c["skip_updates"] = checked
@@ -706,26 +703,6 @@ class BootstrapDialog(GlassDialog):
                 raise OSError("Configuration is not writable")
         except (OSError, TypeError, ValueError) as error:
             self._on_log(f"Skip Updates applies for this run but was not saved for next launch: {error}.", "warn")
-
-    def ask_update(self, count, completion):
-        """Create the prompt on Qt; its topmost flag lasts until dismissal."""
-        if self._gui._closed or self._gui._skip_updates:
-            completion(False)
-            return
-        prompt = QMessageBox(QMessageBox.Icon.Question, "Updates Available",
-            f"{count} update(s) are available for MCU Flash components.\n\nWould you like to install them now?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, self)
-        prompt.setDefaultButton(QMessageBox.StandardButton.No)
-        prompt.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-        prompt.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self._update_prompt = prompt
-
-        def finished(result):
-            self._update_prompt = None
-            completion(result == QMessageBox.StandardButton.Yes and not self._gui._skip_updates and not self._gui._closed)
-
-        prompt.finished.connect(finished)
-        prompt.open()
 
     def _on_autoscroll_toggled(self, checked: bool):
         self._follow.set_enabled(checked)

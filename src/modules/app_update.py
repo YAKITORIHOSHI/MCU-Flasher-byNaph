@@ -20,7 +20,9 @@ data remain in the existing installation and are never copied from GitHub.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+import errno
 import hashlib
 import json
 import os
@@ -977,7 +979,7 @@ def _git_executable() -> str:
     return git
 
 
-def _run_git(arguments: list[str], *, cwd: Path, timeout: float) -> bytes:
+def _run_git(arguments: list[str], *, cwd: Path, timeout: float, stdin_data: bytes | None = None) -> bytes:
     git = _git_executable()
     environment = _git_environment()
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
@@ -986,6 +988,7 @@ def _run_git(arguments: list[str], *, cwd: Path, timeout: float) -> bytes:
             [git, *arguments], cwd=str(cwd), env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=max(1.0, float(timeout)), check=False,
             creationflags=flags,
+            **({"input": stdin_data} if stdin_data is not None else {"stdin": subprocess.DEVNULL}),
         )
     except FileNotFoundError as exc:
         raise _GitUnavailable("Git is not available for the preferred source clone.") from exc
@@ -1314,16 +1317,111 @@ def _return_source_cache(checkout: Path, cache: Path, reused: bool) -> None:
         _remove_tree(checkout)
 
 
+MAX_SEED_FILE_BYTES = 64 * 1024 * 1024
+
+
+def _missing_objects(in_checkout: list[str], commit: str, stage: Path) -> list[str]:
+    listed = _run_git([*in_checkout, "rev-list", "--objects", "--missing=print", "--no-object-names",
+                       commit], cwd=stage, timeout=120)
+    missing = sorted({line[1:].strip() for line in listed.decode("ascii", errors="strict").splitlines()
+                      if line.startswith("?")})
+    if any(not _COMMIT.fullmatch(identifier) for identifier in missing):
+        raise ApplicationUpdateError("Git listed an invalid object identifier.")
+    return missing
+
+
+def _tree_files(in_checkout: list[str], commit: str, stage: Path) -> list[tuple[str, str]]:
+    """Every regular file of a commit as (object id, path), read from its trees only."""
+    listing = _run_git([*in_checkout, "ls-tree", "-r", "-z", "--full-tree", commit], cwd=stage, timeout=120)
+    files: list[tuple[str, str]] = []
+    for record in listing.split(b"\0"):
+        meta, _, raw_name = record.partition(b"\t")
+        fields = meta.split(b" ")
+        if len(fields) != 3 or fields[1] != b"blob":
+            continue
+        identifier = fields[2].decode("ascii", errors="strict")
+        if not _COMMIT.fullmatch(identifier):
+            raise ApplicationUpdateError("Git listed an invalid object identifier.")
+        try:
+            name = raw_name.decode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise ApplicationUpdateError("The GitHub source has an invalid file name.") from exc
+        files.append((identifier, name if fields[0] in (b"100644", b"100755") else ""))
+    return files
+
+
+def _never_installed(name: str) -> bool:
+    """Paths an update always leaves alone (installers, catalogs, local settings)."""
+    try:
+        return _preserve_local_path(_safe_relative(name))
+    except ApplicationUpdateError:
+        return False  # Refused, with its reason, when the staged source is installed.
+
+
+def _sparse_pattern(name: str) -> str:
+    escaped = "".join("\\" + character if character in "\\*?[" else character for character in name)
+    return f"!/{escaped}\n"
+
+
+def _seed_installed_contents(in_checkout: list[str], files: list[tuple[str, str]], installed: Path,
+                             missing: list[str], stage: Path,
+                             cancelled: Callable[[], bool] | None = None) -> int:
+    """Copy into a new checkout every file the installation already holds unchanged.
+
+    Without a kept checkout (the first update, or one installed by an older updater)
+    Git would otherwise download every file again, about 16 MB, although nearly all
+    of them are already on disk. A file counts only when its bytes hash to the exact
+    object the verified commit names, so nothing local can change what is installed;
+    anything else is simply downloaded. Returns how many files were reused.
+    """
+    wanted = set(missing)
+    matched: list[str] = []
+    total = 0
+    for identifier, name in files:
+        if not wanted:
+            break
+        if cancelled is not None and cancelled():
+            raise _Cancelled("The GitHub source update was cancelled.")
+        if identifier not in wanted or not name or "\n" in name or "\r" in name:
+            continue  # --stdin-paths reads one name per line.
+        try:
+            path = _safe_file_below(installed, _safe_relative(name))
+            size = path.stat().st_size
+            if size > MAX_SEED_FILE_BYTES or total + size > MAX_SOURCE_BYTES:
+                continue
+            digest = hashlib.new("sha1" if len(identifier) == 40 else "sha256")
+            digest.update(b"blob %d\0" % size)
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except (ApplicationUpdateError, OSError):
+            continue
+        if digest.hexdigest() == identifier:
+            matched.append(str(path))
+            total += size
+            wanted.discard(identifier)
+    if not matched:
+        return 0
+    # Git hashes each file again as it stores it: a file that changed in between
+    # becomes an unrelated object, and the commit's own still counts as missing.
+    _run_git([*in_checkout, "hash-object", "-w", "--no-filters", "--stdin-paths"], cwd=stage,
+             timeout=300, stdin_data="".join(f"{name}\n" for name in matched).encode("utf-8"))
+    return len(matched)
+
+
 def _cached_git_source(stage: Path, checkout: Path, hooks: Path, candidate: SourceCandidate, *,
                        reused: bool, deadline: float, started: float,
                        progress: Callable[[TransferProgress], None] | None,
-                       cancelled: Callable[[], bool] | None) -> list[str]:
+                       cancelled: Callable[[], bool] | None,
+                       installed: Path | None = None,
+                       report: Callable[[str], None] | None = None) -> list[str]:
     """Bring a blobless checkout to the verified commit, downloading only missing files.
 
     The checkout keeps every file's contents from earlier updates. A shallow fetch of
     the new commit brings its folder listings (kilobytes), ``rev-list --missing``
     names the file contents this copy lacks, and one fetch downloads just those.
-    The first update downloads every file once, about 16 MB; later ones only what
+    Without a kept checkout, files the installation already holds unchanged are
+    reused from disk (``installed``), so even the first update downloads only what
     changed. Every step is a visible git progress record.
     """
     hook = ["-c", f"core.hooksPath={hooks}"]
@@ -1345,17 +1443,37 @@ def _cached_git_source(stage: Path, checkout: Path, hooks: Path, candidate: Sour
         *in_checkout, "fetch", "--progress", "--filter=blob:none", "--depth", "1", "--no-tags",
         "origin", candidate.commit,
     ], span=(3.0, 6.0), phase="Reading the new revision", final=None, operation="update", **common)
-    listed = _run_git([*in_checkout, "rev-list", "--objects", "--missing=print", "--no-object-names",
-                       candidate.commit], cwd=stage, timeout=120)
-    missing = sorted({line[1:].strip() for line in listed.decode("ascii", errors="strict").splitlines()
-                      if line.startswith("?")})
-    if any(not _COMMIT.fullmatch(identifier) for identifier in missing):
-        raise ApplicationUpdateError("Git listed an invalid object identifier.")
+    files = _tree_files(in_checkout, candidate.commit, stage)
+    # Installers, catalogs and local settings are never installed by an update, so
+    # their contents (about 9 MB, mostly Windows driver installers) are neither
+    # downloaded nor written: a sparse checkout leaves them out.
+    kept = [name for _identifier, name in files if name and _never_installed(name)]
+    needed = {identifier for identifier, name in files if not (name and _never_installed(name))}
+    sparse = checkout / ".git" / "info" / "sparse-checkout"
+    sparse.parent.mkdir(parents=True, exist_ok=True)
+    sparse.write_text("/*\n" + "".join(_sparse_pattern(name) for name in kept), encoding="utf-8")
+    _run_git([*in_checkout, "config", "core.sparseCheckout", "true" if kept else "false"], cwd=stage, timeout=30)
+    _run_git([*in_checkout, "config", "core.sparseCheckoutCone", "false"], cwd=stage, timeout=30)
+    missing = [identifier for identifier in _missing_objects(in_checkout, candidate.commit, stage)
+               if identifier in needed]
+    seeded = 0
+    if missing and installed is not None:
+        try:
+            seeded = _seed_installed_contents(in_checkout, files, installed, missing, stage, cancelled)
+        except _Cancelled:
+            raise
+        except ApplicationUpdateError:
+            seeded = 0  # Only the download size depends on this.
+        if seeded:
+            missing = [identifier for identifier in _missing_objects(in_checkout, candidate.commit, stage)
+                       if identifier in needed]
+            if report is not None:
+                report(f"Reusing {seeded} unchanged file{'' if seeded == 1 else 's'} already installed.")
     if missing:
         _git_with_progress([
             *in_checkout, "-c", "fetch.negotiationAlgorithm=noop", "fetch", "--progress", "--no-tags",
             "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "origin",
-        ], span=(6.0, 92.0), phase=f"Downloading {len(missing)}{' changed' if reused else ''} file{'' if len(missing) == 1 else 's'}", final=None,
+        ], span=(6.0, 92.0), phase=f"Downloading {len(missing)}{' changed' if reused or seeded else ''} file{'' if len(missing) == 1 else 's'}", final=None,
             operation="update", stdin_data="".join(f"{identifier}\n" for identifier in missing).encode("ascii"),
             **common)
     # Every file is written again from Git's own objects, so nothing left in a kept
@@ -1374,7 +1492,8 @@ def _prepare_git_source(stage: Path, candidate: SourceCandidate,
                         report: Callable[[str], None],
                         progress: Callable[[TransferProgress], None] | None = None,
                         cancelled: Callable[[], bool] | None = None,
-                        cache: Path | None = None) -> tuple[Path, list[str]]:
+                        cache: Path | None = None,
+                        installed: Path | None = None) -> tuple[Path, list[str]]:
     hooks = stage / "empty-hooks"
     hooks.mkdir()
     started = time.monotonic()
@@ -1383,6 +1502,7 @@ def _prepare_git_source(stage: Path, candidate: SourceCandidate,
         checkout = stage / "repository"
         reused = _claim_source_cache(cache, checkout)
         report("Downloading only what changed in the verified GitHub source revision…" if reused else
+               "Reading the verified GitHub source revision…" if installed is not None else
                "Downloading the verified GitHub source revision (about 16 MB, once)…")
         attempt = 0
         while True:
@@ -1390,7 +1510,8 @@ def _prepare_git_source(stage: Path, candidate: SourceCandidate,
             try:
                 return checkout, _cached_git_source(stage, checkout, hooks, candidate, reused=reused,
                                                     deadline=deadline, started=started,
-                                                    progress=progress, cancelled=cancelled)
+                                                    progress=progress, cancelled=cancelled,
+                                                    installed=installed, report=report)
             except (_GitUnavailable, _Cancelled):
                 _return_source_cache(checkout, cache, reused)
                 raise
@@ -1558,6 +1679,65 @@ def _extract_source_archive(archive: Path, destination: Path) -> tuple[Path, lis
     return source_root, [relative.as_posix() for relative, _info in files]
 
 
+UPDATE_LOCK_FILE = "update.lock"
+UPDATE_LOCK_POLL_SECONDS = 0.25
+
+
+@contextmanager
+def _exclusive_update(state_directory: Path, *, report: Callable[[str], None],
+                      cancelled: Callable[[], bool] | None, timeout: float):
+    """One update of an installation at a time; a second launch waits for the first.
+
+    Two launches a few seconds apart used to download the same 16 MB side by side
+    and install it twice. The lock is released by the system if a launcher dies.
+    """
+    try:
+        state_directory.mkdir(parents=True, exist_ok=True)
+        stream = (state_directory / UPDATE_LOCK_FILE).open("a+b")
+    except OSError as exc:
+        raise ApplicationUpdateError(f"The source update lock could not be opened: {exc}") from exc
+    with stream:
+        if stream.tell() == 0:
+            stream.write(b"0")
+            stream.flush()
+        stream.seek(0)
+        deadline = time.monotonic() + timeout
+        announced = False
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise ApplicationUpdateError(f"The source update lock could not be taken: {exc}") from exc
+            if not announced:
+                report("Another MCU Flasher launch is installing this update; waiting for it…")
+                announced = True
+            if cancelled is not None and cancelled():
+                raise _Cancelled("The GitHub source update was cancelled.")
+            if time.monotonic() >= deadline:
+                raise ApplicationUpdateError("Another launch is still installing the source update.")
+            time.sleep(UPDATE_LOCK_POLL_SECONDS)
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass  # Closing the file releases it as well.
+
+
 def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
                         report: Callable[[str], None] | None = None,
                         state_base: Path | str | None = None,
@@ -1573,6 +1753,22 @@ def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
     install_root = _installation_root(root)
     report = report or (lambda _message: None)
     state_file = update_state_path(install_root, state_base=state_base)
+    with _exclusive_update(state_file.parent, report=report, cancelled=cancelled,
+                           timeout=CLONE_TIMEOUT_SECONDS + ARCHIVE_TIMEOUT_SECONDS):
+        if _recorded_commit(install_root) == candidate.commit:
+            # The launch this one waited for has just installed the same revision.
+            report("This update was installed by another launch.")
+            return InstalledUpdate(candidate, 0, 0, "already-installed")
+        return _apply_source_update_locked(install_root, candidate, report=report, state_file=state_file,
+                                           state_base=state_base, opener=opener, cancelled=cancelled,
+                                           progress=progress)
+
+
+def _apply_source_update_locked(install_root: Path, candidate: SourceCandidate, *,
+                                report: Callable[[str], None], state_file: Path,
+                                state_base: Path | str | None, opener: Callable[..., Any],
+                                cancelled: Callable[[], bool] | None,
+                                progress: Callable[[TransferProgress], None] | None) -> InstalledUpdate:
     try:
         stage_parent = state_file.parent / "staging"
         stage_parent.mkdir(parents=True, exist_ok=True)
@@ -1588,7 +1784,8 @@ def apply_source_update(root: Path | str, candidate: SourceCandidate, *,
     verified_checkout: Path | None = None
     try:
         try:
-            source_root, names = _prepare_git_source(stage, candidate, report, progress, cancelled, cache)
+            source_root, names = _prepare_git_source(stage, candidate, report, progress, cancelled, cache,
+                                                     installed=install_root)
             strategy = "git-clone"
             if source_root.name == "repository":
                 verified_checkout = source_root

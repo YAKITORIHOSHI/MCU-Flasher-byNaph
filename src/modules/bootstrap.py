@@ -119,7 +119,8 @@ BOOTSTRAP_CONFIG_FILE = (
     else SCRIPT_DIR / "bootstrap_config.json"
 )
 _ORIGINAL_PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
-DEFAULT_SKIP_UPDATES = True
+# Updates are on unless Skip Updates is chosen; they never ask first.
+DEFAULT_SKIP_UPDATES = False
 _BOOTSTRAP_LOG_LOCK = threading.Lock()
 _BOOTSTRAP_LOG_FILE = (
     SCRIPT_DIR
@@ -1667,41 +1668,6 @@ class BootstrapGUI:
     def stop_busy(self, restore_step: bool = True):
         self._busy_generation += 1
 
-    def ask_update(self, count: int) -> bool:
-        if self._app is not None:
-            # Update checks run on a worker. Keep the prompt and its lifetime on
-            # Qt, and keep a closed/Skip Updates setup from accepting stale work.
-            completed = threading.Event()
-            answer = [False]
-
-            def finish(accepted):
-                answer[0] = bool(accepted)
-                completed.set()
-
-            def show_prompt():
-                if not completed.is_set():
-                    self._window.ask_update(count, finish)
-
-            self.root.after(0, show_prompt)
-            while not completed.wait(0.1):
-                if self._closed or self._skip_updates:
-                    completed.set()
-                    return False
-            return answer[0]
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                res = ctypes.windll.user32.MessageBoxW(
-                    0,
-                    f"{count} update(s) are available for MCU Flash components.\n\nWould you like to install them now?",
-                    "Updates Available",
-                    0x50024,  # MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND
-                )
-                return res == 6  # IDYES
-            except Exception:
-                return False
-        return False
-
     def show_error(self, title: str, msg: str):
         if sys.platform == "win32":
             try:
@@ -2289,7 +2255,7 @@ def _render_update_summary_block(results: dict[str, dict], *, state_fallback: st
     return updates_found
 
 
-def run_update_checks(auto_update: bool = False):
+def run_update_checks():
     """
     Check all managed utilities for updates, using a small bounded worker pool.
 
@@ -2298,8 +2264,9 @@ def run_update_checks(auto_update: bool = False):
     environment's fresh metadata in process, without importing its packages or
     spawning a process for every version check.
 
-    If auto_update=True, upgrade pip packages automatically (arduino-cli
-    requires a manual MSI re-run, so we only notify for that one).
+    Updates it finds are installed straight away, without asking: they are
+    verified versions of components the app already uses. Skip Updates is the
+    only opt-out and is rechecked before each install.
     """
     if _gui:
         _gui.root.after(0, _gui.log_section, "Checking for updates")
@@ -2409,164 +2376,110 @@ def run_update_checks(auto_update: bool = False):
     python_updates   = [r for r in updates_found if r["name"] == "python"]
     opencode_updates = [r for r in updates_found if r["name"] == "opencode"]
 
-    if auto_update:
-        answer = "y"
-    elif _gui:
-        # GUI path: ask via modal dialog on the main thread
-        answer = "y" if _gui.ask_update(len(updates_found)) else "n"
-    else:
-        import threading
-        if threading.current_thread().name == "fast-path-update-check":
-            try:
-                import ctypes
-                res = ctypes.windll.user32.MessageBoxW(
-                    0,
-                    f"{len(updates_found)} update(s) are available for MCU Flash components.\n\n"
-                    "Would you like to install them now?",
-                    "Updates Available",
-                    0x50024,  # MB_YESNO | MB_ICONQUESTION | MB_TOPMOST | MB_SETFOREGROUND
-                )
-                answer = "y" if res == 6 else "n"
-            except Exception:
-                answer = "n"
-        else:
-            try:
-                answer = input(
-                    f"  {YELLOW}{RESET} {len(updates_found)} update(s) available. "
-                    f"Install now? [{GREEN}y{RESET}/{RED}n{RESET}]: "
-                ).strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                answer = "n"
-                dim("Update installation prompt dismissed.")
-
+    # Updates install without a question. Skip Updates is the only opt-out, and a
+    # change to it during the installs below still stops the remaining ones.
     if _update_check_skip_reason():
         warn("Optional updates skipped by the current Skip Updates choice.")
         return "skipped"
-    if answer == "y":
-        for r in pip_updates:
-            if _update_check_skip_reason():
-                warn("Remaining optional updates skipped by the current Skip Updates choice.")
-                return "skipped"
-            status(f"Upgrading {r['name']} {r['installed']} → {r['latest']}...")
-            if _pip_upgrade(r["name"]):
-                try:
-                    actual = _pip_installed_version(r["name"], r["name"])
-                    verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
-                except Exception as exc:
-                    actual, verified = None, False
-                    warn(f"Could not verify {r['name']} after update: {exc}")
-                if verified:
-                    ok(f"{r['name']} upgraded and verified at {actual}")
-                else:
-                    warn(f"{r['name']} update was not verified in {_get_target_python()} (found {actual or 'no version'}); continuing")
-            else:
-                warn(f"Failed to upgrade {r['name']} — continuing")
-
-        if python_updates:
-            if _update_check_skip_reason():
-                return "skipped"
-            r = python_updates[0]
-            if _install_python_update(r.get("package_id", "")):
-                # Purge old env virtual environment folder so the new Python version builds a fresh env
-                (SCRIPT_DIR / ".force_rebuild").touch()
-                try:
-                    shutil.rmtree(SCRIPT_DIR / "env", ignore_errors=True)
-                except Exception:
-                    pass
-
-                ok(f"Python updated ({r['installed']} → {r['latest']}). Purged old environment.")
-                
-                # Release single-instance lock slot before restarting
-                _release_bootstrap_slot()
-                
-                try:
-                    import ctypes
-                    ctypes.windll.user32.MessageBoxW(
-                        0,
-                        f"Python has been updated from {r['installed']} to {r['latest']}.\n\n"
-                        "The old environment was removed and the application will now restart automatically with the new Python version.",
-                        "Python Updated — Restarting",
-                        0x40,  # MB_ICONINFORMATION
-                    )
-                except Exception:
-                    pass
-                
-                # Relaunch runThisOnWindows.vbs and exit current process
-                vbs_launcher = SCRIPT_DIR / "direct" / "runThisOnWindows.vbs"
-                if not vbs_launcher.exists():
-                    vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
-                if vbs_launcher.exists():
-                    try:
-                        subprocess.Popen(["wscript.exe", str(vbs_launcher)], cwd=str(SCRIPT_DIR))
-                    except Exception:
-                        pass
-                os._exit(0)
-            else:
-                warn("Python was not updated; the existing environment will be kept.")
-
-        if cli_updates:
-            if _update_check_skip_reason():
-                return "skipped"
-            r = cli_updates[0]
-            # `arduino-cli upgrade` upgrades installed cores and libraries, never
-            # the CLI itself: it reported success while the version stayed put,
-            # so the same update was offered on every launch. Install the exact
-            # release, then believe only the version the executable reports.
-            msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
-            if sys.platform != "win32":
-                warn("arduino-cli updates are prepared by this system's own setup; no update was applied here.")
-            elif not _refresh_bundled_msi(r["latest"]):
-                warn(
-                    f"Could not download the arduino-cli {r['latest']} installer. Download manually:\n"
-                    f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
-                )
-            elif not _run_arduino_cli_msi(msi_path):
-                warn(
-                    f"MSI install failed. Download manually:\n"
-                    f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
-                )
-            else:
-                upgraded_path, found = _verified_arduino_cli_upgrade(r["latest"])
-                if upgraded_path:
-                    ok(f"arduino-cli upgraded and verified at {found} ({upgraded_path})")
-                else:
-                    warn(f"arduino-cli {r['latest']} was installed, but the executable found reports "
-                         f"{found or 'no version'}; the update will be offered again.")
-
-        if opencode_updates:
-            if _update_check_skip_reason():
-                return "skipped"
-            r = opencode_updates[0]
-            status(f"Upgrading OpenCode AI Assistant {r['installed']} → {r['latest']}...")
-            if _upgrade_opencode(r["latest"]):
-                try:
-                    actual = _opencode_installed_version()
-                    verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
-                except Exception as exc:
-                    actual, verified = None, False
-                    warn(f"Could not verify OpenCode AI Assistant after update: {exc}")
-                if verified:
-                    ok(f"OpenCode AI Assistant upgraded and verified at {actual}")
-                else:
-                    warn(f"OpenCode AI Assistant update was not verified (found {actual or 'no version'}); continuing")
-            else:
-                warn("Failed to upgrade OpenCode AI Assistant — continuing")
-        
-        import threading
-        if threading.current_thread().name == "fast-path-update-check":
+    status(f"Installing {len(updates_found)} update{'' if len(updates_found) == 1 else 's'}…")
+    for r in pip_updates:
+        if _update_check_skip_reason():
+            warn("Remaining optional updates skipped by the current Skip Updates choice.")
+            return "skipped"
+        status(f"Upgrading {r['name']} {r['installed']} → {r['latest']}...")
+        if _pip_upgrade(r["name"]):
             try:
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(
-                    0,
-                    "Updates for MCU Flash components have been installed successfully.\n\n"
-                    "Please restart the application to apply the updates.",
-                    "Updates Installed",
-                    0x40,  # MB_ICONINFORMATION
-                )
+                actual = _pip_installed_version(r["name"], r["name"])
+                verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
+            except Exception as exc:
+                actual, verified = None, False
+                warn(f"Could not verify {r['name']} after update: {exc}")
+            if verified:
+                ok(f"{r['name']} upgraded and verified at {actual}")
+            else:
+                warn(f"{r['name']} update was not verified in {_get_target_python()} (found {actual or 'no version'}); continuing")
+        else:
+            warn(f"Failed to upgrade {r['name']} — continuing")
+
+    if python_updates:
+        if _update_check_skip_reason():
+            return "skipped"
+        r = python_updates[0]
+        if _install_python_update(r.get("package_id", "")):
+            # Purge old env virtual environment folder so the new Python version builds a fresh env
+            (SCRIPT_DIR / ".force_rebuild").touch()
+            try:
+                shutil.rmtree(SCRIPT_DIR / "env", ignore_errors=True)
             except Exception:
                 pass
-    else:
-        status("Skipping updates.", DIM)
+
+            ok(f"Python updated ({r['installed']} → {r['latest']}). Purged old environment.")
+            
+            # Release single-instance lock slot before restarting
+            _release_bootstrap_slot()
+            # No dialog to dismiss: Bootstrap restarts by itself and shows its own window.
+            status("Restarting Bootstrap with the updated Python…")
+            
+            # Relaunch runThisOnWindows.vbs and exit current process
+            vbs_launcher = SCRIPT_DIR / "direct" / "runThisOnWindows.vbs"
+            if not vbs_launcher.exists():
+                vbs_launcher = SCRIPT_DIR / "runThisOnWindows.vbs"
+            if vbs_launcher.exists():
+                try:
+                    subprocess.Popen(["wscript.exe", str(vbs_launcher)], cwd=str(SCRIPT_DIR))
+                except Exception:
+                    pass
+            os._exit(0)
+        else:
+            warn("Python was not updated; the existing environment will be kept.")
+
+    if cli_updates:
+        if _update_check_skip_reason():
+            return "skipped"
+        r = cli_updates[0]
+        # `arduino-cli upgrade` upgrades installed cores and libraries, never
+        # the CLI itself: it reported success while the version stayed put,
+        # so the same update was offered on every launch. Install the exact
+        # release, then believe only the version the executable reports.
+        msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
+        if sys.platform != "win32":
+            warn("arduino-cli updates are prepared by this system's own setup; no update was applied here.")
+        elif not _refresh_bundled_msi(r["latest"]):
+            warn(
+                f"Could not download the arduino-cli {r['latest']} installer. Download manually:\n"
+                f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
+            )
+        elif not _run_arduino_cli_msi(msi_path):
+            warn(
+                f"MSI install failed. Download manually:\n"
+                f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
+            )
+        else:
+            upgraded_path, found = _verified_arduino_cli_upgrade(r["latest"])
+            if upgraded_path:
+                ok(f"arduino-cli upgraded and verified at {found} ({upgraded_path})")
+            else:
+                warn(f"arduino-cli {r['latest']} was installed, but the executable found reports "
+                     f"{found or 'no version'}; the update will be offered again.")
+
+    if opencode_updates:
+        if _update_check_skip_reason():
+            return "skipped"
+        r = opencode_updates[0]
+        status(f"Upgrading OpenCode AI Assistant {r['installed']} → {r['latest']}...")
+        if _upgrade_opencode(r["latest"]):
+            try:
+                actual = _opencode_installed_version()
+                verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
+            except Exception as exc:
+                actual, verified = None, False
+                warn(f"Could not verify OpenCode AI Assistant after update: {exc}")
+            if verified:
+                ok(f"OpenCode AI Assistant upgraded and verified at {actual}")
+            else:
+                warn(f"OpenCode AI Assistant update was not verified (found {actual or 'no version'}); continuing")
+        else:
+            warn("Failed to upgrade OpenCode AI Assistant — continuing")
 
     return "updates_available"
 
@@ -11268,7 +11181,7 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # An enabled update check uses a bounded pool of network requests,
         # not one Python subprocess per package. The skip policy and any
         # override are logged inside run_update_checks().
-        run_update_checks(auto_update=False)
+        run_update_checks()
 
         # ── Summary & launch ─────────────────────────────────────────
         def _finish():

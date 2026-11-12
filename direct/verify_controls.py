@@ -161,31 +161,20 @@ class ControlChecks(unittest.TestCase):
             self.assertIsNone(controls._settings_dialog)
             self.assertEqual(window.findChildren(settings_module.SettingsDialog), [])
 
-    def test_update_prompt_stays_on_top_and_skip_survives_failed_persistence(self):
-        from PySide6.QtTest import QTest
-        from PySide6.QtWidgets import QMessageBox
+    def test_updates_never_ask_and_skip_survives_failed_persistence(self):
         dialog, gui, namespace = bootstrap_fixture()
         self.own(dialog)
         namespace["save_bootstrap_config"].return_value = False
         dialog.skip_cb.setChecked(False)
         self.assertFalse(gui._skip_updates)
-        self.assertFalse(dialog.skip_cb.isChecked())
         dialog.show()
-        answers = []
-        dialog.ask_update(2, answers.append)
-        prompt = dialog._update_prompt
-        self.assertIsNotNone(prompt)
-        QTest.qWait(1100)  # The setup's initial elevation expires; the prompt's must not.
-        self.assertTrue(prompt.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
-        self.assertTrue(prompt.isVisible())
-        prompt.button(QMessageBox.StandardButton.No).click()
-        self.assertEqual(answers, [False])
+        # Updates install without a question; Skip Updates is the only control.
+        self.assertFalse(hasattr(dialog, "ask_update"))
+        self.assertIn("automatically", dialog.skip_cb.toolTip())
         dialog.skip_cb.setChecked(True)
         self.assertTrue(gui._skip_updates)
         self.assertTrue(dialog.skip_cb.isChecked())
-        dialog.ask_update(2, answers.append)
-        self.assertIsNone(dialog._update_prompt)
-        self.assertEqual(answers, [False, False])
+        self.assertIn("not saved for next launch", dialog.log_edit.toPlainText())
 
     def test_combo_lists_drop_from_their_field_with_theme_rows(self):
         """Lists opened over their combo, and a bare container sheet cleared their fill."""

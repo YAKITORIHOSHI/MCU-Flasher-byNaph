@@ -494,6 +494,10 @@ class LauncherChecks(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit)))
         self.stack.enter_context(patch.object(launch, "ROOT", self.root))
         self.stack.enter_context(patch.object(launch, "persistent_setup_root", return_value=self.root))
+        # Never hand a fixture launch to this account's real installation or open a real window.
+        self.stack.enter_context(patch.object(launch, "owned_installation_elsewhere", return_value=None))
+        self.stack.enter_context(patch.object(launch.BootstrapWindow, "open", return_value=None))
+        self.stack.enter_context(patch.object(launch.BootstrapWindow, "adopt", return_value=None))
         self.stack.enter_context(patch("direct.ubuntu.preflight.host_preflight"))
         self.stack.enter_context(patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True))
         self.stack.enter_context(patch.object(launch.os, "geteuid", return_value=1000))
@@ -767,7 +771,7 @@ class LauncherChecks(unittest.TestCase):
                 patch.object(launch, "report_error") as error, \
                 patch.object(launch.subprocess, "call", side_effect=AssertionError("Installer ran")):
             self.assertEqual(launch.main(["--desktop", "--check"]), 1)
-        error.assert_called_once_with("Missing Qt library", desktop=False)
+        error.assert_called_once_with("Missing Qt library", desktop=False, window=None)
 
     def test_desktop_first_run_opens_one_setup_terminal(self):
         with patch.object(launch.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
@@ -807,7 +811,7 @@ class LauncherChecks(unittest.TestCase):
                 patch.object(launch, "bootstrap_terminal", side_effect=AssertionError("Terminal opened")), \
                 patch.object(launch.subprocess, "call", side_effect=AssertionError("Setup invoked")):
             self.assertEqual(launch.main(["--desktop", "--check"]), 1)
-        error.assert_called_once_with(str(missing), desktop=False)
+        error.assert_called_once_with(str(missing), desktop=False, window=None)
 
     def test_check_takes_precedence_over_shortcut_registration_and_repair(self):
         with patch.object(launch, "runtime_problem", return_value=None), \
@@ -958,6 +962,9 @@ class UpdateProgressChecks(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit)))
         self.stack.enter_context(patch.object(launch, "ROOT", self.root))
         self.stack.enter_context(patch.object(launch.os, "execvpe", side_effect=OSError("fixture cannot exec")))
+        self.stack.enter_context(patch.object(launch, "owned_installation_elsewhere", return_value=None))
+        self.stack.enter_context(patch.object(launch.BootstrapWindow, "open", return_value=None))
+        self.stack.enter_context(patch.object(launch.BootstrapWindow, "adopt", return_value=None))
         self.record = self.root / "zenity-input.txt"
 
     def recorder(self, body=""):
@@ -1050,6 +1057,230 @@ class UpdateProgressChecks(unittest.TestCase):
         self.assertEqual(overlapped, [True])
         runtime_problem.assert_called_once()
         gui.assert_called_once()
+
+
+class _RecordedWindow:
+    """Stands in for the Bootstrap window; records what the launcher shows."""
+
+    def __init__(self):
+        self.events = []
+        self.finished = None
+        self.handed_over = False
+
+    def __getattr__(self, name):
+        if name in ("log", "section", "status", "set_progress", "subtitle", "cancellable", "message"):
+            return lambda *args: self.events.append((name, *args))
+        raise AttributeError(name)
+
+    def update(self, progress):
+        self.events.append(("update", progress.phase))
+
+    def cancelled(self):
+        return False
+
+    def alive(self):
+        return self.finished is None
+
+    def hand_over(self, env):
+        self.handed_over = True
+        env[launch.ENVIRONMENT_KEY] = "9:1"
+        return True
+
+    def take_back(self, env):
+        env.pop(launch.ENVIRONMENT_KEY, None)
+        self.handed_over = False
+
+    def finish(self, ok=True, text=""):
+        self.finished = (ok, text)
+
+
+class BootstrapWindowChecks(unittest.TestCase):
+    """Desktop launches show setup and updates in the Windows Bootstrap window.
+
+    No real window is ever opened: the window is a recorder process or object.
+    """
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        audit = ROOT / "temp/audit/ubuntu-launcher"
+        audit.mkdir(parents=True, exist_ok=True)
+        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(dir=audit)))
+        self.stack.enter_context(patch.object(launch, "ROOT", self.root))
+        self.stack.enter_context(patch.object(launch, "persistent_setup_root", return_value=self.root))
+        self.stack.enter_context(patch.object(launch, "owned_installation_elsewhere", return_value=None))
+        self.stack.enter_context(patch.object(launch.BootstrapWindow, "adopt", return_value=None))
+        self.stack.enter_context(patch("direct.ubuntu.preflight.host_preflight"))
+        self.stack.enter_context(patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True))
+        self.stack.enter_context(patch.object(launch.os, "geteuid", return_value=1000))
+        self.stack.enter_context(patch.object(launch.sys, "stdin", SimpleNamespace(isatty=lambda: False)))
+        self.stack.enter_context(patch.object(launch, "bootstrap_terminal",
+                                              side_effect=AssertionError("A terminal opened beside the window")))
+
+    def recorder(self):
+        record = self.root / "window-events.jsonl"
+        process = subprocess.Popen([sys.executable, "-c",
+                                    "import sys; open(sys.argv[1], 'w').write(sys.stdin.read())", str(record)],
+                                   stdin=subprocess.PIPE, text=True, encoding="utf-8")
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        return launch.BootstrapWindow(process.stdin, process.pid, process=process), process, record
+
+    @staticmethod
+    def events(record):
+        return [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+
+    def test_events_reach_the_window_as_json_lines_until_finish(self):
+        from src.modules import app_update
+        window, process, record = self.recorder()
+        window.section("Updating MCU Flasher from GitHub")
+        window.message("Downloading <only> what changed…")
+        window.update(app_update.TransferProgress("Downloading 3 changed files", 40.0, "", 4))
+        window.finish(True, "Opening MCU Flasher…")
+        window.log("after finish is never sent")
+        process.wait(timeout=10)
+        events = self.events(record)
+        self.assertEqual(events[0], {"event": "log", "args": ["Updating MCU Flasher from GitHub", "section"]})
+        self.assertIn({"event": "log", "args": ["Downloading <only> what changed…", "normal"]}, events)
+        self.assertIn({"event": "progress", "args": [40.0]}, events)
+        self.assertEqual(events[-1], {"event": "finish", "args": [True, "Opening MCU Flasher…"]})
+        self.assertFalse(window.cancelled())
+
+    def test_window_survives_the_restart_after_an_update(self):
+        window, process, record = self.recorder()
+        env = {}
+        self.assertTrue(window.hand_over(env))
+        descriptor, pid = (int(part) for part in env[launch.ENVIRONMENT_KEY].split(":"))
+        self.assertEqual(pid, process.pid)
+        # The restarted launcher is a new program in the same process; a child with the
+        # inherited descriptor stands in for it here.
+        adopter = ("import os, sys; sys.path.insert(0, sys.argv[1]); "
+                   "from direct.ubuntu.bootstrap_view import BootstrapWindow; "
+                   "window = BootstrapWindow.adopt({}); assert window is not None; "
+                   "assert os.environ.get('MCU_FLASHER_BOOTSTRAP_WINDOW') is None; "
+                   "window.log('adopted after restart', 'ok'); window.finish(True, 'Ready')")
+        subprocess.run([sys.executable, "-c", adopter, str(ROOT)], env=dict(os.environ, **env),
+                       pass_fds=(descriptor,), check=True, timeout=20)
+        window.take_back(env)
+        self.assertNotIn(launch.ENVIRONMENT_KEY, env)
+        window._stream.close()
+        process.wait(timeout=10)
+        events = self.events(record)
+        self.assertEqual(events[-2:], [{"event": "log", "args": ["adopted after restart", "ok"]},
+                                       {"event": "finish", "args": [True, "Ready"]}])
+
+    def test_closing_the_window_during_a_download_is_a_cancel(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.2)"],
+                                   stdin=subprocess.PIPE, text=True)
+        self.addCleanup(process.stdin.close)
+        window = launch.BootstrapWindow(process.stdin, process.pid, process=process)
+        process.wait(timeout=10)
+        # Gone within the startup time: it never appeared, so the update carries on.
+        self.assertFalse(window.cancelled())
+        window._started -= 10
+        self.assertTrue(window.cancelled())
+
+    def test_setup_output_is_shown_by_stage_and_kept_in_a_run_log(self):
+        window = _RecordedWindow()
+        child = ("print('── [2/8] Private Python environment ──'); "
+                 "print('\x1b[33mWARNING: slow mirror\x1b[0m'); "
+                 "import sys; print('Ubuntu Bootstrap failed during Python dependencies: no network', file=sys.stderr)")
+        log = self.root / "logs/bootstrap.log"
+        code = launch.run_logged([sys.executable, "-c", child], cwd=self.root, env=dict(os.environ),
+                                 window=window, log_path=log)
+        self.assertEqual(code, 0)
+        self.assertIn(("section", "Private Python environment"), window.events)
+        self.assertIn(("set_progress", 12.5), window.events)
+        self.assertIn(("log", "WARNING: slow mirror", "warn"), window.events)
+        self.assertIn(("log", "Ubuntu Bootstrap failed during Python dependencies: no network", "fail"), window.events)
+        self.assertIn("slow mirror", log.read_text(encoding="utf-8"))
+
+    def test_desktop_update_uses_the_window_and_hands_it_to_the_restarted_launcher(self):
+        candidate = SimpleNamespace(branch="main", commit="a" * 40)
+        window = _RecordedWindow()
+        handed = []
+
+        def apply(*_args, report, progress, cancelled, **_kwargs):
+            self.assertFalse(cancelled())
+            report("Downloading only what changed…")
+            return SimpleNamespace(candidate=candidate, strategy="git-clone")
+
+        def restart(*args):
+            handed.append(dict(args[2]))
+            raise OSError("fixture cannot exec")
+
+        with patch.object(launch.BootstrapWindow, "open", return_value=window) as opened, \
+                patch("src.modules.app_update.automatic_updates_enabled", return_value=True), \
+                patch("src.modules.app_update.check_for_update",
+                      return_value=SimpleNamespace(status="available", candidate=candidate, detail="")), \
+                patch("src.modules.app_update.apply_source_update", side_effect=apply), \
+                patch.object(launch.os, "execvpe", side_effect=restart), \
+                patch.object(launch, "runtime_problem", return_value=None), \
+                patch.object(launch, "launch_workspace", return_value=0) as gui:
+            self.assertEqual(launch.main(["--desktop"]), 0)
+        opened.assert_called_once()
+        self.assertEqual(handed[0][launch.ENVIRONMENT_KEY], "9:1")
+        self.assertIn(("cancellable", True), window.events)
+        self.assertIn(("message", "Downloading only what changed…"), window.events)
+        self.assertIn(("log", "Update installed.", "ok"), window.events)
+        # The exec failed, so this launcher keeps the window and opens the workspace with it.
+        self.assertFalse(window.handed_over)
+        self.assertIs(gui.call_args.kwargs["window"], window)
+
+    def test_desktop_repair_runs_setup_in_the_window_without_a_terminal(self):
+        window = _RecordedWindow()
+        with patch.object(launch.BootstrapWindow, "open", return_value=window), \
+                patch.object(launch, "runtime_problem", side_effect=["The LLVM parser is unavailable.", None]), \
+                patch.object(launch, "run_logged", return_value=0) as setup, \
+                patch.object(launch.subprocess, "call", side_effect=AssertionError("Setup ran outside the window")), \
+                patch.object(launch, "launch_workspace", return_value=0) as gui:
+            self.assertEqual(launch.main(["--desktop", "--project", "Sketch Ω"]), 0)
+        self.assertEqual(setup.call_args.args[0][-1], str(self.root / "direct/ubuntu/setup.py"))
+        self.assertIs(setup.call_args.kwargs["window"], window)
+        self.assertIn(("log", "The LLVM parser is unavailable.", "dim"), window.events)
+        self.assertEqual(gui.call_args.args[0], ["--project", "Sketch Ω"])
+        self.assertIs(gui.call_args.kwargs["window"], window)
+
+    def test_failed_setup_leaves_its_error_in_the_window_and_never_launches(self):
+        window = _RecordedWindow()
+        with patch.object(launch.BootstrapWindow, "open", return_value=window), \
+                patch.object(launch, "runtime_problem", return_value="Broken runtime"), \
+                patch.object(launch, "run_logged", return_value=4), \
+                patch.object(launch, "report_error", side_effect=AssertionError("A second error dialog")), \
+                patch.object(launch, "launch_workspace", side_effect=AssertionError("GUI launched")):
+            self.assertEqual(launch.main(["--desktop"]), 4)
+        self.assertEqual(window.finished[0], False)
+
+    def test_first_run_without_private_qt_still_uses_a_terminal(self):
+        with patch.object(launch.BootstrapWindow, "open", return_value=None), \
+                patch.object(launch, "runtime_problem", return_value="No runtime"), \
+                patch.object(launch, "bootstrap_terminal", return_value=True) as terminal, \
+                patch.object(launch, "launch_workspace", side_effect=AssertionError("GUI launched early")):
+            self.assertEqual(launch.main(["--desktop", "--repair"]), 0)
+        self.assertEqual(terminal.call_args.args[0], ["--repair"])
+
+    def test_portable_copy_with_a_stale_runtime_hands_over_to_the_installed_copy(self):
+        installed = self.root / "Installed Ω"
+        commands = []
+
+        def exec_installed(path, command, env):
+            commands.append((command, os.getcwd()))
+            raise SystemExit(0)
+
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        project = str(Path("Sketch $HOME").absolute())
+        installed.mkdir()
+        with patch.object(launch, "owned_installation_elsewhere", return_value=installed), \
+                patch.object(launch.BootstrapWindow, "open", side_effect=AssertionError("Window opened")), \
+                patch.object(launch, "runtime_problem", return_value="No module named 'clang'"), \
+                patch.object(launch.os, "execvpe", side_effect=exec_installed), \
+                patch.object(launch, "launch_workspace", side_effect=AssertionError("Portable copy launched")):
+            with self.assertRaises(SystemExit):
+                launch.main(["--desktop", "--project", "Sketch $HOME"])
+        command, directory = commands[0]
+        self.assertEqual(command[2:5], [str(installed / "direct/ubuntu/launch.py"), "--desktop", "--project"])
+        self.assertEqual(command[5], project)
+        self.assertEqual(Path(directory), installed)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

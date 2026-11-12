@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -121,7 +122,7 @@ class SourceUpdateChecks(unittest.TestCase):
     def test_skip_selected_after_source_staging_leaves_installation_untouched(self):
         skipped = [False]
 
-        def prepare(*_args):
+        def prepare(*_args, **_options):
             skipped[0] = True
             return self.source, self._source_names()
 
@@ -748,11 +749,103 @@ class IncrementalSourceChecks(unittest.TestCase):
         stage.mkdir()
         return stage
 
-    def prepare(self, stage, commit):
+    def prepare(self, stage, commit, installed=None):
         updates, messages = [], []
         checkout, names = app_update._prepare_git_source(
-            stage, app_update.SourceCandidate(commit, "main"), messages.append, updates.append, None, self.cache)
+            stage, app_update.SourceCandidate(commit, "main"), messages.append, updates.append, None, self.cache,
+            installed=installed)
         return checkout, names, updates, messages
+
+    def installed_copy(self, commit, name="installed"):
+        """An installation holding exactly ``commit``'s files, as an earlier update left it."""
+        install = self.fixture / name
+        install.mkdir()
+        archive = subprocess.run(["git", "-C", str(self.fixture / "work"), "archive", commit],
+                                 check=True, capture_output=True).stdout
+        subprocess.run(["tar", "-x", "-C", str(install)], input=archive, check=True)
+        return install
+
+    def test_first_update_reuses_unchanged_installed_files_instead_of_downloading_them(self):
+        install = self.installed_copy(self.first)
+        checkout, names, updates, messages = self.prepare(self.stage("one"), self.second, installed=install)
+        self.assertEqual(checkout.name, "repository")
+        # Six files (including the 256 KiB one) were already installed; one changed.
+        self.assertIn("Reusing 5 unchanged files already installed.", messages)
+        self.assertTrue(any(update.phase == "Downloading 1 changed file" for update in updates))
+        self.assertEqual((checkout / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
+        self.assertEqual((checkout / "large.bin").read_bytes(), (install / "large.bin").read_bytes())
+        self.assertNotIn("retired.py", names)
+
+    def test_a_locally_edited_installed_file_is_downloaded_not_reused(self):
+        install = self.installed_copy(self.first)
+        (install / "large.bin").write_bytes(b"edited locally")
+        checkout, _names, updates, messages = self.prepare(self.stage("one"), self.second, installed=install)
+        self.assertIn("Reusing 4 unchanged files already installed.", messages)
+        self.assertTrue(any(update.phase == "Downloading 2 changed files" for update in updates))
+        self.assertNotEqual((checkout / "large.bin").read_bytes(), b"edited locally")
+
+    def test_installers_and_catalogs_are_never_downloaded_or_written(self):
+        work = self.fixture / "work"
+        (work / "installers").mkdir()
+        (work / "installers/driver.exe").write_bytes(os.urandom(128 * 1024))
+        (work / "index_json").mkdir()
+        (work / "index_json/package_index.json").write_text("{}\n", encoding="utf-8")
+        third = self.commit(work, "third")
+        self.git(work, "push", "-q", str(self.server), "main")
+        checkout, names, updates, _messages = self.prepare(self.stage("one"), third)
+        # Git still lists them, so the installer knows to leave the local copies alone…
+        self.assertIn("installers/driver.exe", names)
+        # …but their contents never crossed the wire and nothing was written for them.
+        self.assertFalse((checkout / "installers").exists())
+        self.assertFalse((checkout / "index_json").exists())
+        self.assertTrue(any(update.phase == "Downloading 6 files" for update in updates))
+        blob = self.git(checkout, "rev-parse", f"{third}:installers/driver.exe").strip()
+        missing = subprocess.run(["git", "-C", str(checkout), "cat-file", "-e", blob],
+                                 capture_output=True, env=dict(os.environ, GIT_NO_LAZY_FETCH="1"))
+        self.assertNotEqual(missing.returncode, 0)
+        install = self.installed_copy(self.first, "install-protected")
+        (install / "installers").mkdir()
+        (install / "installers/driver.exe").write_bytes(b"local driver")
+        result = app_update.install_staged_source(install, checkout, names, app_update.SourceCandidate(third, "main"),
+                                                  strategy="git-clone", state_base=self.fixture / "user-state")
+        self.assertGreater(result.preserved_files, 0)
+        self.assertEqual((install / "installers/driver.exe").read_bytes(), b"local driver")
+        self.assertEqual((install / "mcu_flash_gui.py").read_text(encoding="utf-8"), "changed\n")
+
+    def test_a_second_launch_waits_for_the_first_update_instead_of_downloading_again(self):
+        import threading
+        install = self.installed_copy(self.first)
+        state = self.fixture / "user-state"
+        candidate = app_update.SourceCandidate(self.second, "main")
+        lock_directory = app_update.update_state_path(install, state_base=state).parent
+        holding, release, messages, results = threading.Event(), threading.Event(), [], []
+
+        def first_launch():
+            with app_update._exclusive_update(lock_directory, report=lambda _m: None, cancelled=None, timeout=30):
+                holding.set()
+                release.wait(10)
+                # The first launch finishes installing this very revision.
+                record = install / app_update.BUNDLED_REVISION_FILE
+                record.parent.mkdir(parents=True, exist_ok=True)
+                record.write_text(json.dumps({"repository": app_update.REPOSITORY, "commit": self.second}),
+                                  encoding="utf-8")
+
+        first = threading.Thread(target=first_launch)
+        first.start()
+        self.assertTrue(holding.wait(10))
+        second = threading.Thread(target=lambda: results.append(app_update.apply_source_update(
+            install, candidate, state_base=state, report=messages.append)))
+        with patch.object(app_update, "_prepare_git_source", side_effect=AssertionError("downloaded twice")):
+            second.start()
+            deadline = time.monotonic() + 10
+            while "Another MCU Flasher launch is installing this update; waiting for it…" not in messages:
+                self.assertLess(time.monotonic(), deadline, "the second launch did not wait")
+                time.sleep(0.02)
+            release.set()
+            first.join(10)
+            second.join(10)
+        self.assertEqual(results[0].strategy, "already-installed")
+        self.assertIn("This update was installed by another launch.", messages)
 
     def test_second_update_downloads_only_the_changed_file(self):
         checkout, names, updates, _messages = self.prepare(self.stage("one"), self.first)
