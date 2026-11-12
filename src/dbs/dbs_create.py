@@ -87,6 +87,56 @@ def _safe_replace_file(src: str, dst: str, max_retries: int = 5, backoff_ms: int
             # Windows permits truncating that staging file again.
             _set_windows_file_attributes(source, (original_source_attrs & ~0x01) or 0x80)
 
+def _make_record(category, level, title, message, details, notification_id) -> dict:
+    now = datetime.now()
+    ts_sec = int(time.time())
+    ms = now.microsecond // 1000
+    return {
+        "id": notification_id or f"notif_{ts_sec}_{ms}_{uuid4().hex}",
+        "timestamp": now.isoformat(timespec="seconds"),
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "category": category,
+        "level": level,
+        "title": title or category.replace("_", " ").title(),
+        "message": message,
+        "details": details or {}
+    }
+
+
+def _append_records(target_db: str, new_records: list, max_records: int = 500) -> bool:
+    """Read the history once, append every record and replace it atomically."""
+    _ensure_parent_dir(target_db)
+    with _DB_LOCK:
+        records = []
+        if os.path.exists(target_db):
+            try:
+                with open(target_db, "r", encoding="utf-8") as f:
+                    records = json.load(f)
+                    if not isinstance(records, list):
+                        records = []
+            except Exception:
+                records = []
+
+        records.extend(new_records)
+
+        # Enforce max storage limit (keep latest records)
+        if len(records) > max_records:
+            records = records[-max_records:]
+
+        try:
+            temp_path = target_db + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(records, f, indent=2, ensure_ascii=False)
+            if not _safe_replace_file(temp_path, target_db):
+                print(f"[dbs_create] Failed to save notification to {target_db}: file replacement failed")
+                return False
+        except Exception as e:
+            print(f"[dbs_create] Failed to save notification to {target_db}: {e}")
+            return False
+    return True
+
+
 def add_notification(
     category: str = "system",
     level: str = "info",
@@ -113,52 +163,110 @@ def add_notification(
     Returns:
         The persisted notification dictionary object, or None if saving fails.
     """
-    now = datetime.now()
-    ts_sec = int(time.time())
-    ms = now.microsecond // 1000
-
-    notif_id = notification_id or f"notif_{ts_sec}_{ms}_{uuid4().hex}"
-    record = {
-        "id": notif_id,
-        "timestamp": now.isoformat(timespec="seconds"),
-        "date": now.strftime("%Y-%m-%d"),
-        "time": now.strftime("%H:%M:%S"),
-        "category": category,
-        "level": level,
-        "title": title or category.replace("_", " ").title(),
-        "message": message,
-        "details": details or {}
-    }
-
+    record = _make_record(category, level, title, message, details, notification_id)
     target_db = _get_db_path(db_path)
-    _ensure_parent_dir(target_db)
+    return record if _append_records(target_db, [record], max_records) else None
 
-    with _DB_LOCK:
-        records = []
-        if os.path.exists(target_db):
+
+class _NotificationWriter:
+    """Persist notifications on one background thread.
+
+    Every notification used to read and rewrite its whole history file on the
+    thread that raised it, often the GUI thread; with a sharing lock held by
+    antivirus or a sync client, the replacement retries slept there for up to
+    750 ms. Queued records are batched per history file, so a burst costs one
+    rewrite. The queue is bounded; overflow is reported like a failed write.
+    """
+    LIMIT = 2000
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._queue = []
+        self._busy = False
+        self._thread = None
+
+    def submit(self, target_db, record, max_records, on_saved):
+        dropped = None
+        with self._condition:
+            if len(self._queue) >= self.LIMIT:
+                dropped = self._queue.pop(0)
+            self._queue.append((target_db, record, max_records, on_saved))
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._loop, daemon=True, name="MCU_NotificationWriter")
+                self._thread.start()
+            self._condition.notify_all()
+        if dropped is not None and callable(dropped[3]):
             try:
-                with open(target_db, "r", encoding="utf-8") as f:
-                    records = json.load(f)
-                    if not isinstance(records, list):
-                        records = []
+                dropped[3](False)
             except Exception:
-                records = []
+                pass
 
-        records.append(record)
+    def flush(self, timeout: float = 2.0) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._condition:
+            while self._queue or self._busy:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining)
+        return True
 
-        # Enforce max storage limit (keep latest records)
-        if len(records) > max_records:
-            records = records[-max_records:]
+    def _loop(self):
+        while True:
+            with self._condition:
+                while not self._queue:
+                    self._condition.wait()
+                batch, self._queue = self._queue[:500], self._queue[500:]
+                self._busy = True
+            groups = {}
+            for target_db, record, max_records, on_saved in batch:
+                group = groups.setdefault(target_db, {"records": [], "limit": max_records, "callbacks": []})
+                group["records"].append(record)
+                group["limit"] = max(group["limit"], max_records)
+                group["callbacks"].append(on_saved)
+            for target_db, group in groups.items():
+                try:
+                    saved = _append_records(target_db, group["records"], group["limit"])
+                except Exception:
+                    saved = False
+                for callback in group["callbacks"]:
+                    if callable(callback):
+                        try:
+                            callback(saved)
+                        except Exception:
+                            pass
+            with self._condition:
+                self._busy = False
+                self._condition.notify_all()
 
-        try:
-            temp_path = target_db + ".tmp"
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(records, f, indent=2, ensure_ascii=False)
-            if not _safe_replace_file(temp_path, target_db):
-                print(f"[dbs_create] Failed to save notification to {target_db}: file replacement failed")
-                return None
-        except Exception as e:
-            print(f"[dbs_create] Failed to save notification to {target_db}: {e}")
-            return None
 
+_WRITER = _NotificationWriter()
+
+
+def queue_notification(
+    category: str = "system",
+    level: str = "info",
+    title: str = "",
+    message: str = "",
+    details: dict | None = None,
+    max_records: int = 500,
+    db_path: str | Path | None = None,
+    notification_id: str | None = None,
+    on_saved=None,
+) -> dict:
+    """Create a record now and persist it in the background (never blocks the caller).
+
+    ``on_saved(bool)`` runs on the writer thread after the history file is written.
+    """
+    record = _make_record(category, level, title, message, details, notification_id)
+    _WRITER.submit(_get_db_path(db_path), record, max_records, on_saved)
     return record
+
+
+def flush_notifications(timeout: float = 2.0) -> bool:
+    """Wait for queued notifications to reach their history files."""
+    return _WRITER.flush(timeout)
+
+
+import atexit  # noqa: E402  (registered beside the writer it drains)
+atexit.register(flush_notifications)

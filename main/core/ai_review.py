@@ -38,6 +38,114 @@ from main.core.file_utils import (
     retry_transient_file_operation,
 )
 
+# A restored review whose file no longer holds the AI content it recorded was
+# changed while MCU Flasher was not watching this project (the app was closed
+# or the window showed another sketch). Those edits are outside its scope.
+DISMISSED_NOTE = ("The file changed while this project was not open in MCU Flasher, "
+                  "so that change is not reviewed.")
+
+
+class _JournalCommit:
+    """A caller's handle on one queued journal snapshot."""
+    __slots__ = ("event", "error")
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.error = ""
+
+    def wait(self, timeout: Optional[float] = 10.0) -> str:
+        if not self.event.wait(timeout):
+            return "The AI review journal is still being written. Try again."
+        return self.error
+
+
+class _JournalWriter:
+    """One background writer for every pending-review journal in this process.
+
+    Managers snapshot their state under their own lock; serializing it and the
+    two fsync'd replica writes happen here, so GUI calls never wait on storage
+    (antivirus/sync-root sharing locks, HDDs, USB sticks). A newer snapshot of
+    the same journal supersedes queued older ones and answers their callers.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._pending: dict[str, dict] = {}
+        self._active: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def submit(self, key: str, write, paths, data: dict, on_result) -> _JournalCommit:
+        commit = _JournalCommit()
+        with self._condition:
+            previous = self._pending.pop(key, None)
+            commits = (previous["commits"] if previous else []) + [commit]
+            self._pending[key] = {"write": write, "paths": paths, "data": data,
+                                  "on_result": on_result, "commits": commits}
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._loop, daemon=True,
+                                                name="MCU_AIReviewJournal")
+                self._thread.start()
+            self._condition.notify_all()
+        return commit
+
+    def flush(self, keys=None, timeout: float = 5.0) -> bool:
+        """Wait until the named (or all) journals have no queued or active write."""
+        wanted = None if keys is None else {str(key) for key in keys if key}
+        if wanted is not None and not wanted:
+            return True
+        deadline = time.monotonic() + max(0.0, timeout)
+
+        def busy():
+            names = set(self._pending)
+            if self._active is not None:
+                names.add(self._active)
+            return bool(names if wanted is None else names & wanted)
+
+        with self._condition:
+            while busy():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining)
+        return True
+
+    def _loop(self):
+        while True:
+            with self._condition:
+                while not self._pending:
+                    self._condition.wait()
+                key = next(iter(self._pending))
+                job = self._pending.pop(key)
+                self._active = key
+            error = ""
+            try:
+                # Backup first: it is the commit point that load() compares.
+                for path in job["paths"]:
+                    job["write"](path, job["data"])
+            except Exception as exc:
+                error = str(exc) or type(exc).__name__
+            try:
+                job["on_result"](error)
+            except Exception:
+                pass
+            for commit in job["commits"]:
+                commit.error = error
+                commit.event.set()
+            with self._condition:
+                self._active = None
+                self._condition.notify_all()
+
+
+_JOURNAL = _JournalWriter()
+
+
+def flush_review_journals(timeout: float = 3.0) -> bool:
+    return _JOURNAL.flush(timeout=timeout)
+
+
+import atexit  # noqa: E402  (registered beside the writer it drains)
+atexit.register(flush_review_journals)
+
 def build_ai_line_diff(before_content: str, after_content: str) -> dict:
     """Build compact ranges in the after-model, with separate deletion anchors.
 
@@ -185,9 +293,17 @@ class AIReviewManager:
         self._ai_review_journal_recovery_required: bool = False
         self._ai_review_state_path: Optional[Path] = None
         self._ai_changes: list[dict] = []
+        self._change_sizes: dict[tuple, int] = {}
         self._change_group = ""
         self._change_group_time = 0.0
         self.history_changed_callback = None
+        # Immutable copies published under the lock after every mutation. GUI
+        # reads (review lists, pending checks, AI Changes) use these and never
+        # wait for a watcher scan, a diff or a journal write holding the lock.
+        self._published_reviews: tuple = ()
+        self._published_snapshots: dict[str, dict] = {}
+        self._published_changes: tuple = ()
+        self._dismissed_on_load: list[dict] = []
 
         if self.project_dir:
             self.bind_project(self.project_dir)
@@ -257,17 +373,25 @@ class AIReviewManager:
             except Exception:
                 pass
 
+            # Rebinding the project this manager already watches (the window
+            # reloads it) keeps its reviews as they are: they were observed in
+            # this session, and a scan may still be settling a newer edit.
+            rebinding = self._ai_review_state_path is not None and self.project_dir == resolved
             self.project_dir = resolved
             self._pending_ai_edits = {}
             self._ai_decision_history = []
             self._ai_decision_redo = []
             self._ai_changes = []
+            self._change_sizes = {}
             self._change_group = ""
             self._change_group_time = 0.0
             self._ai_review_revision = 0
             self._ai_review_generation = 0
             self._ai_review_journal_error = ""
             self._ai_review_journal_recovery_required = False
+            if not rebinding:
+                # A rebind keeps the report of the first load until it is taken.
+                self._dismissed_on_load = []
 
             old_backup = self._ai_backup_store
             self._ai_backup_store = None
@@ -277,7 +401,8 @@ class AIReviewManager:
             except Exception:
                 self._ai_review_state_path = None
 
-            self._load_pending_ai_edits_locked()
+            self._load_pending_ai_edits_locked(reconcile=not rebinding)
+            dismissed = [] if rebinding else list(self._dismissed_on_load)
 
         if old_backup:
             try:
@@ -291,6 +416,19 @@ class AIReviewManager:
         except Exception as exc:
             print(f"[MCU Flasher] AI edit backup session could not start: {exc}")
             self._ai_backup_store = None
+        if self._ai_backup_store:
+            # Keep a recovery copy of each dismissed review's original text:
+            # with the review gone, Reject can no longer restore it.
+            for payload in dismissed:
+                try:
+                    self._ai_backup_store.record_edit(
+                        dict(payload, project=str(self.project_dir)), status="dismissed",
+                        decision_entry={"action": "dismissed", "appliedExists": payload.get("diskExists", False),
+                                        "appliedContent": payload.get("diskContent", ""),
+                                        "undoExists": payload.get("beforeExists", True),
+                                        "undoContent": payload.get("beforeContent", "")})
+                except Exception:
+                    pass
 
     def _ai_review_backup_path(self) -> Optional[Path]:
         sp = self._ai_review_state_path
@@ -337,35 +475,110 @@ class AIReviewManager:
             "changes": self._ai_changes,
         }
 
-    def _commit_pending_ai_edits_locked(self) -> None:
+    def _commit_pending_ai_edits_locked(self) -> Optional[_JournalCommit]:
+        """Queue a snapshot of the journal; the shared writer persists it.
+
+        The snapshot copies every record, so later mutations under the lock
+        cannot change what the writer serializes. Callers that must report
+        the outcome (history deletion) wait on the returned commit.
+        """
+        self._publish_locked()
         state_path = self._ai_review_state_path
         if not state_path:
-            return
+            return None
         backup_path = self._ai_review_backup_path()
         if not backup_path:
-            return
+            return None
 
         generation = max(
             self._ai_review_generation + 1,
             self._ai_review_revision,
         )
-        data = self._ai_review_state_data_locked(generation)
+        self._ai_review_generation = generation
+        data = {
+            "version": 3,
+            "generation": generation,
+            "revision": self._ai_review_revision,
+            "reviews": [dict(item) for item in self._pending_ai_edits.values()],
+            "changes": [dict(item) for item in self._ai_changes],
+        }
+        key = str(state_path)
 
-        # Backup-first ordering guarantees atomic durable persistence
+        def finished(error, key=key):
+            # A late result for a project this manager no longer shows is ignored.
+            if str(self._ai_review_state_path or "") != key:
+                return
+            self._ai_review_journal_error = error
+            if not error:
+                self._ai_review_journal_recovery_required = False
+
+        # Resolve the writer now: fixtures and callers may replace it per call.
+        return _JOURNAL.submit(key, self._write_journal_atomic, (backup_path, state_path), data, finished)
+
+    def _publish_locked(self) -> None:
+        keys = list(self._pending_ai_edits)
+        snapshots, reviews = {}, []
+        for index, key in enumerate(keys, 1):
+            snapshot = dict(self._pending_ai_edits[key])
+            snapshot["pendingCount"] = len(keys)
+            snapshot["reviewIndex"] = index
+            snapshot["fileName"] = Path(snapshot["path"]).name
+            snapshots[key] = snapshot
+            reviews.append({
+                "reviewId": snapshot.get("reviewId"),
+                "revision": snapshot.get("revision"),
+                "path": snapshot.get("path"),
+                "fileName": snapshot.get("fileName"),
+                "beforeExists": snapshot.get("beforeExists"),
+                "afterExists": snapshot.get("afterExists"),
+                "diff": snapshot.get("diff"),
+                "pendingCount": snapshot.get("pendingCount"),
+                "reviewIndex": snapshot.get("reviewIndex"),
+                "prompt": snapshot.get("prompt", ""),
+                "promptSource": snapshot.get("promptSource", "external"),
+                "promptSourceVersion": snapshot.get("promptSourceVersion", 0),
+                "promptSources": list(snapshot.get("promptSources", [])),
+            })
+        self._published_snapshots = snapshots
+        self._published_reviews = tuple(reviews)
+        self._published_changes = tuple(dict(item) for item in self._ai_changes)
+
+    def _review_still_on_disk(self, review: dict) -> tuple[bool, bool, str]:
+        """(matches, exists, text): does the file still hold the recorded AI result?
+
+        An unreadable file keeps its review: only evidence of a change drops one.
+        """
+        target = Path(str(review.get("path", "")))
         try:
-            self._write_journal_atomic(backup_path, data)
-            self._ai_review_generation = generation
-            self._write_journal_atomic(state_path, data)
-            self._ai_review_journal_error = ""
-            self._ai_review_journal_recovery_required = False
-        except Exception as exc:
-            self._ai_review_journal_error = str(exc)
+            text = self._read_text_exact(target)
+        except FileNotFoundError:
+            return not bool(review.get("afterExists", True)), False, ""
+        except OSError:
+            return True, True, ""
+        if not bool(review.get("afterExists", True)):
+            return False, True, text
+        return text == str(review.get("content", "")), True, text
 
-    def _load_pending_ai_edits_locked(self) -> None:
+    def take_dismissed_reviews(self) -> list[dict]:
+        """Reviews dropped at the last project load (file changed outside the app)."""
+        with self._pending_ai_lock:
+            dismissed, self._dismissed_on_load = self._dismissed_on_load, []
+        return [{"path": item.get("path", ""), "fileName": Path(str(item.get("path", ""))).name}
+                for item in dismissed]
+
+    def _load_pending_ai_edits_locked(self, reconcile: bool = True) -> None:
+        try:
+            self._load_journal_locked(reconcile)
+        finally:
+            self._publish_locked()
+
+    def _load_journal_locked(self, reconcile: bool) -> None:
         state_path = self._ai_review_state_path
         if not state_path or not state_path.parent.is_dir():
             return
         backup_path = self._ai_review_backup_path()
+        # A snapshot this process queued for the same journal must land first.
+        _JOURNAL.flush({str(state_path)}, timeout=5.0)
         candidates = [c for c in (state_path, backup_path) if c and c.exists()]
         if not candidates:
             return
@@ -420,21 +633,67 @@ class AIReviewManager:
             self._ai_review_generation = best["generation"]
             self._ai_changes = best["changes"]
             self._bound_changes_locked()
+            if reconcile:
+                self._dismiss_reviews_changed_outside_locked()
+
+    def _dismiss_reviews_changed_outside_locked(self) -> None:
+        """Drop restored reviews whose files changed while nothing watched them.
+
+        MCU Flasher reviews AI edits it observes while the project is open. A
+        file that no longer holds a restored review's AI result was edited
+        while the app was closed (or showed another project); presenting that
+        review would ask the user to judge edits the app never saw, and Reject
+        would overwrite them. The file is left exactly as it is.
+        """
+        dismissed = []
+        self._dismissed_on_load = []
+        for key, review in list(self._pending_ai_edits.items()):
+            matches, exists, text = self._review_still_on_disk(review)
+            if matches:
+                continue
+            self._pending_ai_edits.pop(key, None)
+            dismissed.append(dict(review, diskExists=exists, diskContent=text))
+        open_reviews = {str(item.get("reviewId", "")) for item in self._pending_ai_edits.values()}
+        changed = bool(dismissed)
+        for item in self._ai_changes:
+            # Cards still "pending" without a live review (including stale ones
+            # left by older journals) can no longer be decided.
+            if item.get("status", "pending") == "pending" and str(item.get("reviewId", "")) not in open_reviews:
+                item["status"] = "dismissed"
+                item["statusNote"] = DISMISSED_NOTE
+                changed = True
+        self._dismissed_on_load = dismissed
+        if changed:
+            self._next_ai_review_revision_locked()
+            self._commit_pending_ai_edits_locked()
 
     def _bound_changes_locked(self) -> None:
         self._ai_changes = self._ai_changes[-200:]
         total = 0
+        sizes = {}
         for index in range(len(self._ai_changes) - 1, -1, -1):
             item = self._ai_changes[index]
             for field in ("beforeContent", "content"):
-                value = str(item.get(field, ""))
+                value = item.get(field, "")
+                if not isinstance(value, str):
+                    value = str(value)
+                    item[field] = value
                 if len(value) > 60000:
                     item["previewTruncated"] = True
-                item[field] = value[:60000]
-            total += len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+                    item[field] = value[:60000]
+            # Serializing all 200 cards on every edit costs tens of
+            # milliseconds under the lock; a card's size only changes with it.
+            key = (item.get("id"), item.get("updatedAt"), item.get("status"), item.get("statusNote"),
+                   len(item.get("beforeContent", "")), len(item.get("content", "")), item.get("prompt"))
+            size = self._change_sizes.get(key)
+            if size is None:
+                size = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            sizes[key] = size
+            total += size
             if total > 4 * 1024 * 1024:
                 del self._ai_changes[:index + 1]
                 break
+        self._change_sizes = sizes
 
     def _history_changed(self) -> None:
         if callable(self.history_changed_callback):
@@ -444,21 +703,27 @@ class AIReviewManager:
                 pass
 
     def get_ai_changes(self) -> list[dict]:
-        with self._pending_ai_lock:
-            return [dict(item) for item in self._ai_changes]
+        # Lock-free: the GUI must not wait for a scan or journal write.
+        return [dict(item) for item in self._published_changes]
 
     def delete_ai_changes(self, change_id: str = "") -> dict:
-        """Remove display history only; pending reviews and recovery remain intact."""
+        """Remove display history only; pending reviews and recovery remain intact.
+
+        Runs on a worker: it waits for its own journal write to report failure.
+        """
         with self._pending_ai_lock:
             original = self._ai_changes
             self._ai_changes = [item for item in original if item.get("id") != change_id] if change_id else []
-            self._commit_pending_ai_edits_locked()
-            if self._ai_review_journal_error:
-                error = self._ai_review_journal_error
+            commit = self._commit_pending_ai_edits_locked()
+            error = commit.wait() if commit else ""
+            if error:
+                self._ai_review_journal_error = error
                 self._ai_changes = original
                 # Repair a successfully written first replica after a failed
                 # second write; report the original failure either way.
-                self._commit_pending_ai_edits_locked()
+                repair = self._commit_pending_ai_edits_locked()
+                if repair:
+                    repair.wait()
                 return {"success": False, "error": error}
         self._history_changed()
         return {"success": True}
@@ -532,117 +797,119 @@ class AIReviewManager:
         resolved_path = str(Path(path).resolve(strict=False))
         key = self._path_key(resolved_path)
 
-        with self._pending_ai_lock:
-            # A slow filesystem scan may finish after the workspace switched.
-            # Recheck under the same lock that bind_project uses, before any
-            # journal mutation; the earlier path check alone can race a switch.
-            if expected_project is not None and self.project_dir != expected_project:
-                return False
-            if expected_valid is not None and not expected_valid():
-                return False
-            if not self._path_is_in_project(resolved_path):
-                return False
-            existing = self._pending_ai_edits.get(key)
-            if existing:
-                original_content = str(existing.get("beforeContent", ""))
-                original_exists = bool(existing.get("beforeExists", True))
-                review_id = str(existing.get("reviewId") or key)
-            else:
-                original_content = before_content
-                original_exists = before_exists
-                review_id = f"{key}:{time.time_ns()}"
+        diff, diff_basis = None, None
+        for attempt in range(3):
+            with self._pending_ai_lock:
+                outcome = self._queue_snapshot_locked(
+                    key, resolved_path, before_content, after_content, before_exists, after_exists,
+                    expected_project, expected_valid, prompt_context, diff if diff_basis is not None else None,
+                    diff_basis, final=attempt == 2)
+            if not isinstance(outcome, tuple):
+                if outcome is True:
+                    self._history_changed()
+                return outcome
+            # A large source's diff takes time: compute it without the lock,
+            # then recheck that the review it extends has not changed meanwhile.
+            diff_basis = outcome
+            diff = build_ai_line_diff(outcome[1], after_content)
+        return False
 
-            # If user or AI reverted back to original, clear review
-            if existing and original_exists == after_exists and original_content == after_content:
-                self._pending_ai_edits.pop(key, None)
-                for item in self._ai_changes:
-                    if item.get("reviewId") == existing.get("reviewId"):
-                        item["status"] = "cancelled"
-                self._next_ai_review_revision_locked()
-                try:
-                    self._commit_pending_ai_edits_locked()
-                except Exception:
-                    pass
-                if self._ai_backup_store:
-                    try:
-                        self._ai_backup_store.mark_cancelled(existing)
-                    except Exception:
-                        pass
-                self._history_changed()
-                return "cancelled"
+    def _queue_snapshot_locked(self, key, resolved_path, before_content, after_content, before_exists,
+                               after_exists, expected_project, expected_valid, prompt_context,
+                               diff, diff_basis, final):
+        """One attempt under the lock: True/False/"cancelled", or a diff basis to compute."""
+        # A slow filesystem scan may finish after the workspace switched.
+        # Recheck under the same lock that bind_project uses, before any
+        # journal mutation; the earlier path check alone can race a switch.
+        if expected_project is not None and self.project_dir != expected_project:
+            return False
+        if expected_valid is not None and not expected_valid():
+            return False
+        if not self._path_is_in_project(resolved_path):
+            return False
+        existing = self._pending_ai_edits.get(key)
+        if existing:
+            original_content = str(existing.get("beforeContent", ""))
+            original_exists = bool(existing.get("beforeExists", True))
+            review_id = str(existing.get("reviewId") or key)
+        else:
+            original_content = before_content
+            original_exists = before_exists
+            review_id = f"{key}:{time.time_ns()}"
 
-            payload = {
-                "reviewId": review_id,
-                "revision": self._next_ai_review_revision_locked(),
-                "path": resolved_path,
-                "beforeContent": original_content,
-                "content": after_content,
-                "beforeExists": original_exists,
-                "afterExists": after_exists,
-                "diff": build_ai_line_diff(original_content, after_content),
-            }
-            if existing:
-                payload["prompt"] = existing.get("prompt", "")
-                payload["promptSources"] = (list(existing.get("promptSources", []))
-                    if existing.get("promptSourceVersion") == 1 else ["external"])
-            # Diff calculation can take time for a large source. If a manual
-            # save or project switch won meanwhile, do not start journal I/O.
-            if expected_valid is not None and not expected_valid():
-                return False
-            self._pending_ai_edits[key] = payload
-            self._record_change_locked(payload, before_content, prompt_context)
-            self._ai_decision_redo.clear()
+        # If user or AI reverted back to original, clear review
+        if existing and original_exists == after_exists and original_content == after_content:
+            self._pending_ai_edits.pop(key, None)
+            for item in self._ai_changes:
+                if item.get("reviewId") == existing.get("reviewId"):
+                    item["status"] = "cancelled"
+            self._next_ai_review_revision_locked()
             try:
                 self._commit_pending_ai_edits_locked()
             except Exception:
                 pass
-
             if self._ai_backup_store:
                 try:
-                    payload["project"] = str(self.project_dir or "")
-                    payload["backupFile"] = self._ai_backup_store.record_edit(
-                        payload, status="pending"
-                    )
+                    self._ai_backup_store.mark_cancelled(existing)
                 except Exception:
                     pass
-        self._history_changed()
+            self._history_changed()
+            return "cancelled"
+
+        basis = (str(existing.get("revision", "")) if existing else None, original_content)
+        if diff is None or diff_basis != basis:
+            if not final:
+                return basis
+            diff = build_ai_line_diff(original_content, after_content)
+
+        payload = {
+            "reviewId": review_id,
+            "revision": self._next_ai_review_revision_locked(),
+            "path": resolved_path,
+            "beforeContent": original_content,
+            "content": after_content,
+            "beforeExists": original_exists,
+            "afterExists": after_exists,
+            "diff": diff,
+        }
+        if existing:
+            payload["prompt"] = existing.get("prompt", "")
+            payload["promptSources"] = (list(existing.get("promptSources", []))
+                if existing.get("promptSourceVersion") == 1 else ["external"])
+        # If a manual save or project switch won meanwhile, do not start journal I/O.
+        if expected_valid is not None and not expected_valid():
+            return False
+        self._pending_ai_edits[key] = payload
+        self._record_change_locked(payload, before_content, prompt_context)
+        self._ai_decision_redo.clear()
+        if self._ai_backup_store:
+            try:
+                payload["project"] = str(self.project_dir or "")
+                payload["backupFile"] = self._ai_backup_store.record_edit(
+                    payload, status="pending"
+                )
+            except Exception:
+                pass
+        try:
+            self._commit_pending_ai_edits_locked()
+        except Exception:
+            pass
         return True
 
     def consume_ai_edit_snapshot(self, path: str) -> dict:
-        """Fetch active review snapshot for Monaco editor."""
-        with self._pending_ai_lock:
-            return self._snapshot_for_key_locked(self._path_key(path))
+        """Fetch active review snapshot for Monaco editor (lock-free published copy)."""
+        snapshot = self._published_snapshots.get(self._path_key(path))
+        return dict(snapshot) if snapshot else {}
 
     def get_ai_edit_reviews(self) -> list[dict]:
         """Return all pending reviews for JS navigation & status counters."""
-        with self._pending_ai_lock:
-            result = []
-            for key in self._pending_ai_edits:
-                snapshot = self._snapshot_for_key_locked(key)
-                result.append({
-                    "reviewId": snapshot.get("reviewId"),
-                    "revision": snapshot.get("revision"),
-                    "path": snapshot.get("path"),
-                    "fileName": snapshot.get("fileName"),
-                    "beforeExists": snapshot.get("beforeExists"),
-                    "afterExists": snapshot.get("afterExists"),
-                    "diff": snapshot.get("diff"),
-                    "pendingCount": snapshot.get("pendingCount"),
-                    "reviewIndex": snapshot.get("reviewIndex"),
-                    "prompt": snapshot.get("prompt", ""),
-                    "promptSource": snapshot.get("promptSource", "external"),
-                    "promptSourceVersion": snapshot.get("promptSourceVersion", 0),
-                    "promptSources": list(snapshot.get("promptSources", [])),
-                })
-            return result
+        return [dict(item) for item in self._published_reviews]
 
     def has_pending_ai_edit(self, path: str) -> bool:
-        with self._pending_ai_lock:
-            return self._path_key(path) in self._pending_ai_edits
+        return self._path_key(path) in self._published_snapshots
 
     def has_any_pending_ai_edits(self) -> bool:
-        with self._pending_ai_lock:
-            return bool(self._pending_ai_edits)
+        return bool(self._published_snapshots)
 
     def get_ai_review_journal_error(self) -> str:
         with self._pending_ai_lock:
@@ -847,6 +1114,9 @@ class AIReviewManager:
         return self._apply_ai_history_decision("redo", force=bool(force))
 
     def shutdown(self) -> None:
+        state_path = self._ai_review_state_path
+        if state_path:
+            _JOURNAL.flush({str(state_path)}, timeout=2.0)
         if self._ai_backup_store:
             try:
                 self._ai_backup_store.shutdown(timeout=1.0)

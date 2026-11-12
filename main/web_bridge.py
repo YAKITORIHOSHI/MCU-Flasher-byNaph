@@ -796,6 +796,11 @@ class MCUWebBackendAPI:
                 self.ai_review_manager.shutdown()
             except Exception:
                 pass
+        try:
+            from src.dbs.dbs_create import flush_notifications
+            flush_notifications(timeout=2.0)
+        except Exception:
+            pass
 
     def _get_qt_signals(self) -> Optional[Any]:
         """Return the Qt signal bus."""
@@ -806,6 +811,26 @@ class MCUWebBackendAPI:
     def set_window(self, window: Any):
         """Bind the pywebview window instance for JS event dispatching."""
         self._window = window
+
+    def _notification_history_path(self) -> Optional[str]:
+        """The open sketch's own history (what the Notifications tab reads), else the global store.
+
+        emit() runs on the GUI thread too, so the answer is cached per sketch.
+        """
+        sketch = getattr(self, "sketch_dir_path", None)
+        if not sketch:
+            return None
+        cached = getattr(self, "_notification_history_cache", None)
+        if cached and cached[0] == str(sketch):
+            return cached[1]
+        try:
+            from main.core.constants import PROJECT_BUILD_CACHE_DIR
+            target = (None if is_application_codebase_dir(sketch)
+                      else str(Path(sketch) / PROJECT_BUILD_CACHE_DIR / "dbs_notif.json"))
+        except Exception:
+            target = None
+        self._notification_history_cache = (str(sketch), target)
+        return target
 
     def emit(self, event_name: str, data: Any):
         """Dispatch a real-time event to the Qt UI and/or the JS frontend.
@@ -895,38 +920,42 @@ class MCUWebBackendAPI:
             except Exception:
                 pass
 
-        # Persistent notification storage
+        # Persistent notification storage: queued to one background writer, so
+        # a GUI-thread notification never reads or rewrites history on disk.
         if event_name == "notification" and isinstance(data, dict):
-            stored = None
+            def saved(ok, bus=bus):
+                if ok:
+                    self._notification_storage_failed = False
+                    return
+                if getattr(self, "_notification_storage_failed", False):
+                    return
+                self._notification_storage_failed = True
+                if bus is not None:
+                    # Dispatch directly so a storage warning cannot try to
+                    # persist itself and recursively generate more warnings.
+                    try:
+                        bus.notification.emit({
+                            "category": "system", "type": "warning",
+                            "id": "notif_" + uuid4().hex,
+                            "title": "Activity history not saved",
+                            "message": "Notifications remain visible, but could not be saved to activity history. Check that the project folder is writable.",
+                        })
+                    except Exception:
+                        pass
             try:
                 from src.dbs import dbs_create
-                stored = dbs_create.add_notification(
+                dbs_create.queue_notification(
                     category=data.get("category", "system"),
                     level=data.get("type", "info"),
                     title=data.get("title", "Notification"),
                     message=data.get("history_message", data["message"]),
                     details=data.get("details", {}),
                     notification_id=data["id"],
+                    db_path=self._notification_history_path(),
+                    on_saved=saved,
                 )
             except Exception:
-                pass
-            if stored is None:
-                if not getattr(self, "_notification_storage_failed", False):
-                    self._notification_storage_failed = True
-                    if bus is not None:
-                        # Dispatch directly so a storage warning cannot try to
-                        # persist itself and recursively generate more warnings.
-                        try:
-                            bus.notification.emit({
-                                "category": "system", "type": "warning",
-                                "id": "notif_" + uuid4().hex,
-                                "title": "Activity history not saved",
-                                "message": "Notifications remain visible, but could not be saved to activity history. Check that the project folder is writable.",
-                            })
-                        except Exception:
-                            pass
-            else:
-                self._notification_storage_failed = False
+                saved(False)
 
         # ── 2. pywebview JS dispatch (Monaco editor iframe) ────────────────
         if not self._window:
@@ -2689,6 +2718,18 @@ class MCUWebBackendAPI:
         # Bind AI review manager and watcher to the new sketch project
         if hasattr(self, "ai_review_manager") and self.ai_review_manager:
             self.ai_review_manager.bind_project(p)
+            take_dismissed = getattr(self.ai_review_manager, "take_dismissed_reviews", None)
+            dismissed = take_dismissed() if callable(take_dismissed) else []
+            if isinstance(dismissed, list) and dismissed:
+                names = ", ".join(item.get("fileName", "") for item in dismissed[:4])
+                if len(dismissed) > 4:
+                    names += f" and {len(dismissed) - 4} more"
+                self.emit("notification", {
+                    "title": "Earlier AI review closed",
+                    "message": (f"{names} changed while this project was not open in MCU Flasher. "
+                                "The file was kept as it is and that change is not reviewed."),
+                    "type": "info",
+                })
         if hasattr(self, "ai_watcher") and self.ai_watcher:
             self.ai_watcher.bind_project(p)
             reviews = self.ai_review_manager.get_ai_edit_reviews()

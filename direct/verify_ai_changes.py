@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QMouseEvent, QTextCursor
 from PySide6.QtWidgets import QApplication
-from main.core.ai_review import AIReviewManager, AIEditWatcher
+from main.core.ai_review import AIReviewManager, AIEditWatcher, DISMISSED_NOTE, flush_review_journals
 from main.qt.ai_changes_panel import AIChangesPanel, CodePreview
 from main.qt.console_panel import ConsolePanel
 from src.modules.ai_prompt_context import PromptInputTracker
@@ -33,6 +33,8 @@ class AIChangesChecks(unittest.TestCase):
         (ROOT / "temp/audit").mkdir(parents=True, exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(dir=ROOT / "temp/audit")
         self.addCleanup(self.temp.cleanup)
+        # Journals are written in the background; let them land before removal.
+        self.addCleanup(flush_review_journals)
         self.root = Path(self.temp.name)
         self.manager = AIReviewManager()
         self.manager.project_dir = self.root
@@ -241,6 +243,7 @@ class AIChangesChecks(unittest.TestCase):
 
     def test_combined_pending_file_retains_both_channel_sources(self):
         path = self.queue("Combined.cpp", prompt={"id": "cli", "prompt": "Terminal edit", "source": "cli", "sourceVersion": 1})
+        path.write_text("newer\n", encoding="utf-8")  # the watcher queues what it read from disk
         self.manager.queue_ai_edit_snapshot(path, "new\n", "newer\n",
             prompt_context={"id": "assistant", "prompt": "Assistant edit", "source": "assistant", "sourceVersion": 1})
         review = self.manager.consume_ai_edit_snapshot(str(path))
@@ -484,6 +487,174 @@ class AIChangesChecks(unittest.TestCase):
             self.assertEqual(requested, [panel._records[card.data(0, Qt.ItemDataRole.UserRole)]["path"]])
         finally:
             signals.ai_review_requested.disconnect(requested.append)
+            panel.close()
+            panel.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def reopen(self):
+        reopened = AIReviewManager()
+        reopened.project_dir = self.root
+        reopened._ai_review_state_path = self.manager._ai_review_state_path
+        reopened._load_pending_ai_edits_locked()
+        return reopened
+
+    def test_reviews_of_files_changed_while_closed_are_dismissed_without_touching_them(self):
+        kept = self.queue("Kept.ino", before="old\n", after="ai\n",
+                          prompt={"id": "p", "prompt": "Edit both", "source": "cli", "sourceVersion": 1})
+        changed = self.queue("Changed.cpp", before="old\n", after="ai\n",
+                             prompt={"id": "p", "prompt": "Edit both", "source": "cli", "sourceVersion": 1})
+        deleted = self.queue("Deleted.h", before="old\n", after="ai\n")
+        self.manager.shutdown()
+        # MCU Flasher is closed: another tool edits one file and removes another.
+        changed.write_text("edited while closed\n", encoding="utf-8")
+        deleted.unlink()
+        reopened = self.reopen()
+        self.assertEqual([Path(item["path"]).name for item in reopened.get_ai_edit_reviews()], ["Kept.ino"])
+        self.assertTrue(reopened.has_pending_ai_edit(str(kept)))
+        self.assertFalse(reopened.has_pending_ai_edit(str(changed)))
+        self.assertEqual(changed.read_text(encoding="utf-8"), "edited while closed\n")
+        self.assertFalse(deleted.exists())
+        self.assertEqual(sorted(item["fileName"] for item in reopened.take_dismissed_reviews()),
+                         ["Changed.cpp", "Deleted.h"])
+        statuses = {Path(item["path"]).name: item for item in reopened.get_ai_changes()}
+        self.assertEqual(statuses["Kept.ino"]["status"], "pending")
+        for name in ("Changed.cpp", "Deleted.h"):
+            self.assertEqual(statuses[name]["status"], "dismissed")
+            self.assertEqual(statuses[name]["statusNote"], DISMISSED_NOTE)
+        # The dismissal is durable: a later launch neither restores nor re-reports it.
+        reopened.shutdown()
+        again = self.reopen()
+        self.assertEqual(len(again.get_ai_edit_reviews()), 1)
+        self.assertEqual(again.take_dismissed_reviews(), [])
+        self.assertEqual(again.reject_ai_edit(str(changed))["success"], False)
+        self.assertEqual(changed.read_text(encoding="utf-8"), "edited while closed\n")
+
+    def test_dismissal_found_at_construction_is_still_reported_after_the_project_rebinds(self):
+        project = self.root / "Sketch"
+        project.mkdir()
+        first = AIReviewManager(project)
+        path = project / "Sketch.ino"
+        path.write_text("ai\n", encoding="utf-8")
+        self.assertTrue(first.queue_ai_edit_snapshot(path, "old\n", "ai\n"))
+        first.shutdown()
+        path.write_text("edited while closed\n", encoding="utf-8")
+        backend_manager = AIReviewManager(project)  # the backend binds at construction
+        self.addCleanup(backend_manager.shutdown)
+        backend_manager.bind_project(project)       # open_project binds the same sketch again
+        self.assertEqual([item["fileName"] for item in backend_manager.take_dismissed_reviews()], ["Sketch.ino"])
+        self.assertEqual(backend_manager.get_ai_edit_reviews(), [])
+        self.assertEqual(path.read_text(encoding="utf-8"), "edited while closed\n")
+
+    def test_rebinding_the_open_project_keeps_reviews_observed_this_session(self):
+        manager = AIReviewManager(self.root)
+        self.addCleanup(manager.shutdown)
+        path = self.root / "Live.ino"
+        path.write_text("ai\n", encoding="utf-8")
+        self.assertTrue(manager.queue_ai_edit_snapshot(path, "old\n", "ai\n"))
+        # A newer edit the watcher has not settled yet must not dismiss the review.
+        path.write_text("ai, then more\n", encoding="utf-8")
+        manager.bind_project(self.root)
+        self.assertTrue(manager.has_pending_ai_edit(str(path)))
+        self.assertEqual(manager.take_dismissed_reviews(), [])
+
+    def test_gui_reads_never_wait_for_the_review_lock(self):
+        path = self.queue("Busy.ino")
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with self.manager._pending_ai_lock:
+                held.set()
+                release.wait(5)
+
+        worker = threading.Thread(target=hold)
+        worker.start()
+        self.addCleanup(worker.join)
+        self.addCleanup(release.set)
+        self.assertTrue(held.wait(5))
+        results = []
+        reader = threading.Thread(target=lambda: results.append((
+            len(self.manager.get_ai_edit_reviews()), self.manager.has_pending_ai_edit(str(path)),
+            self.manager.has_any_pending_ai_edits(), len(self.manager.get_ai_changes()),
+            bool(self.manager.consume_ai_edit_snapshot(str(path))))))
+        reader.start()
+        reader.join(1.0)
+        self.assertFalse(reader.is_alive(), "A GUI read waited for the review lock")
+        self.assertEqual(results, [(1, True, True, 1, True)])
+
+    def test_journal_writes_happen_off_the_calling_thread(self):
+        from main.core import ai_review
+        writer_threads = []
+        original = self.manager._write_journal_atomic
+
+        def slow(path, data):
+            writer_threads.append(threading.current_thread().name)
+            import time
+            time.sleep(0.2)
+            return original(path, data)
+
+        with patch.object(self.manager, "_write_journal_atomic", side_effect=slow):
+            import time
+            started = time.monotonic()
+            self.queue("Slow.ino")
+            self.assertLess(time.monotonic() - started, 0.15, "Queueing a review waited for storage")
+            self.assertTrue(ai_review.flush_review_journals(5))
+        self.assertTrue(writer_threads)
+        self.assertTrue(all(name == "MCU_AIReviewJournal" for name in writer_threads))
+        self.assertEqual(len(self.reopen().get_ai_edit_reviews()), 1)
+
+    def test_history_panel_marks_large_appends_as_one_range(self):
+        # Below the 60,000-character preview bound, so neither side is truncated.
+        base = "".join(f"int h{i} = x * {i};\n" for i in range(2400))
+        self.queue("Large.cpp", before=base, after=base + "// appended\n")
+        old_ranges, new_ranges = AIChangesPanel._changed_ranges(base, base + "// appended\n")
+        self.assertEqual((old_ranges, new_ranges), ([], [(2400, 2401)]))
+        with patch("main.core.config.get_monitor_font_size", return_value=11):
+            panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
+        try:
+            self.assertEqual(len(panel._after.extraSelections()), 1)
+            self.assertEqual(len(panel._before.extraSelections()), 0)
+            selections = panel._after.extraSelections()
+            self.assertEqual(QTextCursor(selections[0].cursor).block().text(), "// appended")
+            # A multi-line change is one full-width selection spanning its lines.
+            changed = base.replace("x * 5;", "x * 50;").replace("x * 6;", "x * 60;")
+            self.assertEqual(AIChangesPanel._changed_ranges(base, changed), ([(5, 7)], [(5, 7)]))
+            panel._highlight(panel._after, [(5, 7)], panel._added)
+            selections = panel._after.extraSelections()
+            self.assertEqual(len(selections), 1)
+            selection = QTextCursor(selections[0].cursor)
+            document = panel._after.document()
+            self.assertEqual((document.findBlock(selection.selectionStart()).blockNumber(),
+                              document.findBlock(selection.selectionEnd()).blockNumber()), (5, 7))
+        finally:
+            panel.close()
+            panel.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_hidden_history_panel_defers_refreshes_until_shown(self):
+        self.queue("Shown.ino")
+        with patch("main.core.config.get_monitor_font_size", return_value=11):
+            panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
+        try:
+            with patch.object(self.manager, "get_ai_changes", wraps=self.manager.get_ai_changes) as reads:
+                for _ in range(5):
+                    panel._request_refresh()
+                APP.processEvents()
+                self.assertEqual(reads.call_count, 0, "A hidden panel rebuilt its history")
+                self.assertTrue(panel._stale)
+                panel.resize(700, 320)
+                panel.show()
+                deadline = __import__("time").monotonic() + 2
+                while panel._stale and __import__("time").monotonic() < deadline:
+                    APP.processEvents()
+                self.assertFalse(panel._stale)
+                self.assertEqual(reads.call_count, 1)
+                for _ in range(5):
+                    panel._request_refresh()
+                deadline = __import__("time").monotonic() + 2
+                while panel._refresh_timer.isActive() and __import__("time").monotonic() < deadline:
+                    APP.processEvents()
+                self.assertEqual(reads.call_count, 2, "Visible refresh bursts are coalesced")
+        finally:
             panel.close()
             panel.deleteLater()
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

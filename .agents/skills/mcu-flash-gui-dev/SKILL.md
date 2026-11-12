@@ -1,9 +1,59 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 12 fixes: GUI stalls, AI review scope and interface size
+
+Stalls: `direct/profile_gui_stalls.py` drives the real workspace (Ghost workflow
+fixture, real AI watcher and notification history, mocked hardware) and samples
+the GUI thread's stack whenever a 10 ms heartbeat is late; `STALL_SLOW_IO=0.06`
+delays fsync/replace like an HDD or sync-root lock. Run it with no display and
+compare per-phase totals in `temp/audit/gui-stalls/` before and after a change.
+It found: AI Changes rebuilding and highlighting every line on each edit/tab
+switch even while hidden; `emit("notification")` rewriting history on the GUI
+thread; and GUI reads waiting on `_pending_ai_lock` during journal fsyncs.
+
+Now: `AIReviewManager` publishes immutable snapshots under its lock
+(`_publish_locked`, called by every commit/load); `get_ai_edit_reviews`,
+`consume_ai_edit_snapshot`, `has_pending_ai_edit`, `has_any_pending_ai_edits` and
+`get_ai_changes` read them without the lock. `_commit_pending_ai_edits_locked`
+snapshots records and queues them on the shared `_JOURNAL` writer (backup, then
+state; newer snapshots supersede queued ones); it returns a commit whose
+`wait()` reports the error, which `delete_ai_changes` (a worker) uses. Loads
+flush that journal first; `shutdown()` and atexit flush. Large diffs are
+computed outside the lock and rechecked against the review revision. Notifications
+go through `dbs_create.queue_notification` (one batching writer, bounded queue,
+`on_saved` callback) to the open sketch's `.mcu_flasher_build_cache/dbs_notif.json`
+via `_notification_history_path()` (cached per sketch, no GUI-thread I/O);
+`clear_all_notifications` flushes first. Verifiers that mocked `add_notification`
+must also mock `queue_notification`. AI Changes uses `_request_refresh`
+(120 ms coalescing, deferred while hidden, `showEvent`/`refresh_if_stale`),
+skips unchanged tree/preview rebuilds and highlights `_changed_ranges` (common
+head/tail trimmed) with one full-width selection per range.
+
+AI review scope: reviews come from edits observed while the project is open.
+`_load_pending_ai_edits_locked(reconcile=True)` dismisses a restored review whose
+file no longer holds its recorded AI result (or is missing/reappeared), marks
+its cards and stale pending cards `dismissed` with `statusNote`, records a
+recovery copy in the backup store and reports it through
+`take_dismissed_reviews()` (open_project notifies). It never writes the file.
+Rebinding the project the manager already watches does not reconcile, so a
+settling edit cannot dismiss a live review. An unreadable file keeps its review.
+
+Interface size: Qt reads `QT_SCALE_FACTOR` once, so a saved size only applies to
+a new window. `prepare_interface_size` records `started_scale()`,
+`environment_override()` and `restart_can_apply()`. Settings labels Automatic
+with `automatic_scale_for(primaryScreen)` (a 24-inch 1080p monitor stays 100%),
+stores `interface_scale_auto` when Automatic is saved, and sets
+`interface_restart_requested` when the effective size differs from the started
+one. The toolbar then offers Restart now → `MCUMainWindow.restart_to_apply_interface_size`
+→ `_restart_through_bootstrap(repair=False)` → `restart_workspace.py --reopen`
+(normal launcher, `--desktop` on Ubuntu, macOS run.sh; other windows never block).
+Verify with ai_changes, notification_writes, projects, controls, interface_size
+and offline_mode.
 
 ## November 11 fixes: uploads, restarts, monitor, tickets, tiling and terminals
 

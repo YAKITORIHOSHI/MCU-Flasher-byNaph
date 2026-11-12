@@ -816,7 +816,9 @@ class MCUMainWindow(QMainWindow):
         # Switching tools moves nothing outside the tool pane: no pane budget,
         # toolbar or editor layout depends on which tab is showing.
         if widget is getattr(self, "_ai_changes_panel", None):
-            self._ai_changes_panel.refresh()
+            # Hidden history changes are deferred to its reveal; nothing else
+            # rebuilds the tree or its two previews on a tab switch.
+            self._ai_changes_panel.refresh_if_stale()
 
     def _apply_theme_to_panels(self, theme_name: str) -> None:
         """Panels start with fixed inks, so they need this at startup as well as on a change."""
@@ -1404,10 +1406,25 @@ class MCUMainWindow(QMainWindow):
         """Save the workspace and request host Bootstrap dependency repair."""
         self._restart_through_bootstrap()
 
-    def _restart_through_bootstrap(self, previous_mode=None) -> None:
-        """Save acknowledged editor bytes before handing restart to Bootstrap."""
-        from src.modules.offline_mode import transition_blocker
+    def restart_to_apply_interface_size(self) -> None:
+        """Save, close and reopen this project so Qt starts at the new interface size."""
+        self._restart_through_bootstrap(repair=False)
+
+    def _restart_through_bootstrap(self, previous_mode=None, repair=True) -> None:
+        """Save acknowledged editor bytes before handing restart to Bootstrap.
+
+        repair=False reopens the same project through the normal launcher; only
+        this window restarts, so other project windows do not block it.
+        """
+        from src.modules.offline_mode import transition_blocker as _transition_blocker
         import subprocess
+
+        def transition_blocker(backend):
+            if repair:
+                return _transition_blocker(backend)
+            if backend is not None and (getattr(backend, "is_busy", False) or getattr(backend, "active_operation", None)):
+                return "Wait for the current operation to finish before restarting."
+            return ""
 
         def failed(message="The sketch could not be saved. The workspace remains open."):
             self.setEnabled(True)
@@ -1430,14 +1447,15 @@ class MCUMainWindow(QMainWindow):
                         "MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_APP_ROOT", "PIP_NO_INDEX"):
                 environment.pop(key, None)
             command = [sys.executable, "-B", str(_project_root / "direct/restart_workspace.py"),
-                       "--parent", str(os.getpid()), "--project", str(getattr(self._backend, "sketch_dir_path", "") or "")]
+                       "--parent", str(os.getpid()), *([] if repair else ["--reopen"]),
+                       "--project", str(getattr(self._backend, "sketch_dir_path", "") or "")]
             options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {"start_new_session": True}
             try:
                 child = subprocess.Popen(command, cwd=_project_root, env=environment,
                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL, **options)
             except OSError as exc:
-                failed(f"Bootstrap restart could not start: {exc}")
+                failed(f"{'Bootstrap restart' if repair else 'The restart'} could not start: {exc}")
                 return
             def close_after_handoff():
                 if child.poll() is not None:

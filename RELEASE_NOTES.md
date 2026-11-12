@@ -6,10 +6,40 @@
 > **Architecture:** Native PySide6 (Qt) · Offline Monaco · Asynchronous WebBridge<br>
 > **Toolchain:** PlatformIO / SCons · Selective Arduino CLI support<br>
 > **GitHub Release Published:** October 23, 2026<br>
-> **Notes Updated:** November 11, 2026<br>
+> **Notes Updated:** November 12, 2026<br>
 > **Cloud Verification Baseline:** [`7a58479`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commit/7a584794f9c9028e921b57c719c9645e8eb9748d)
 
 ---
+
+## November 12 Fixes: Responsiveness, AI Review Scope and Interface Size
+
+- **No more sudden freezes while an assistant edits:** Measured in the real
+  workspace, the AI Changes tab rebuilt itself and highlighted every line of a
+  large file on each AI edit, tab switch, Accept and theme change, even while
+  hidden (up to 0.8 s each). It now refreshes once per burst, only while
+  visible, and highlights each changed range, so appending a line to a
+  3,000-line file marks one line.
+- **Storage never blocks the window:** Every notification used to read and
+  rewrite its whole history file on the GUI thread (up to 0.75 s while
+  antivirus or a sync client held the file), and review checks waited for the
+  AI-review journal's disk writes (up to 1.4 s on slow storage). Both now
+  write in the background; on an emulated slow disk, AI edits, Accept/Reject
+  and notification bursts went from 2.5–3.5 s of freezing to none.
+- **Notification history is per sketch again:** Since September notifications
+  went to one global file instead of the sketch's own
+  `.mcu_flasher_build_cache/dbs_notif.json`, so the Notifications tab and
+  troubleshooting assistants saw no history. They are saved per sketch again.
+- **AI review covers only what MCU Flasher saw:** A review left pending when the
+  window closed returns only if the file still holds that exact AI result. If
+  the file was changed while MCU Flasher was closed, the review is closed as
+  Dismissed, the file is left untouched (Reject can no longer overwrite those
+  edits), and a notification says which file. Compile and Upload are no longer
+  held up by such reviews.
+- **Interface size you can see:** Settings now shows what Automatic picks on the
+  current display (an ordinary 24-inch 1080p monitor stays at 100%, which is
+  why Automatic looked like it did nothing). Choosing another size and saving
+  offers **Restart now**, which saves the sketch and reopens the window at that
+  size, on Ubuntu and Windows alike.
 
 ## November 11 Fixes: Complete Uploads, Visible Restarts, Terminals and Tiling
 

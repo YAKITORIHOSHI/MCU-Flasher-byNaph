@@ -150,6 +150,38 @@ class LifecycleChecks(unittest.TestCase):
             self.assertEqual(size.interface_choice(), value)
 
 
+class SettingsChecks(unittest.TestCase):
+    """Settings says what Automatic picks here and offers a restart when the size changes."""
+
+    def setUp(self):
+        self.addCleanup(os.environ.pop, "QT_SCALE_FACTOR", None)
+        os.environ.pop("QT_SCALE_FACTOR", None)
+        self.stored = {"shared": {}, "instances": {}}
+        patch.object(config, "_load_raw_config", side_effect=lambda *a, **k: self.stored).start()
+        patch.object(config, "_save_raw_config", return_value=True).start()
+        self.addCleanup(patch.stopall)
+        self.addCleanup(size._STARTED.update, dict(size._STARTED))
+
+    def screen(self, width, height, inches, ratio):
+        return LifecycleChecks.Screen(width, height, inches, ratio)
+
+    def test_started_scale_and_override_are_recorded(self):
+        self.stored["shared"]["interface_size"] = 1.25
+        size.prepare_interface_size()
+        self.assertEqual((size.started_scale(), size.environment_override(), size.restart_can_apply()),
+                         (1.25, False, True))
+        os.environ["QT_SCALE_FACTOR"] = "1.5"
+        size.prepare_interface_size()
+        self.assertEqual((size.started_scale(), size.environment_override(), size.restart_can_apply()),
+                         (1.5, True, False))
+
+    def test_automatic_is_measured_in_native_units_whatever_this_window_started_at(self):
+        # A 13-inch 1080p laptop: Automatic is 125% whether Qt shows it at 100% or 125%.
+        self.assertEqual(size.automatic_scale_for(self.screen(1920, 1032, 165, 1), 1.0), 1.25)
+        self.assertEqual(size.automatic_scale_for(self.screen(1536, 826, 132, 1.25), 1.25), 1.25)
+        # The user's 24-inch 1080p monitor: Automatic leaves it at 100%.
+        self.assertEqual(size.automatic_scale_for(self.screen(1920, 1048, 92, 1), 1.0), 1.0)
+
 class RealProcessChecks(unittest.TestCase):
     CHILD = """
 import os, sys

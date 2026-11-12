@@ -440,7 +440,11 @@ scene showing through, dark enough that text keeps its contrast at the scene's b
 Windows the embedded terminal and assistant are native windows, so they stay solid. **Settings >
 Appearance > Interface size** defaults to Automatic: it enlarges the interface on small
 high-resolution screens and large screens at a low display scale, and tightens it on small
-screens at a high display scale. It applies the next time a window opens.
+screens at a high display scale; an ordinary monitor (such as a 24-inch 1080p display at 100%)
+stays at 100%, and the list says what Automatic picks on the current display. Qt reads the
+size when a window starts, so saving a different size offers **Restart now**, which saves the
+sketch and reopens this window at the new size; other windows change when they next open. A
+`QT_SCALE_FACTOR` already set in the environment takes precedence, and Settings says so.
 The editor and every tool pane extend to the central workspace edges, while
 controls and text retain their inner reading padding and splitters remain usable.
 Source tabs retain dirty indicators and drag ordering; arrow keys, Home and End
@@ -1192,6 +1196,9 @@ background worker; stale results from another project are discarded. Live
 notifications follow the active filter, and failed Clear operations retain
 history and show an error. Failed history writes show a transient warning;
 notification replacement keeps the previous database intact on failure.
+Notifications are saved to the open sketch's `.mcu_flasher_build_cache/dbs_notif.json`
+(the history the Notifications tab shows) by one background writer that batches
+bursts, so raising a notification never reads or rewrites history on the GUI thread.
 Status timers belong to the
 window; older notifications and short actions cannot erase a newer action's
 status. Instance settings and shared theme preferences are saved in one
@@ -1953,6 +1960,16 @@ Whenever a new pending AI edit is detected, its review bar automatically opens
 with Accept and Reject available, even if an earlier AI history bar was hidden.
 Hiding the history bar remains a per-session preference until the next pending
 review needs a decision.
+MCU Flasher reviews AI edits it observes while the project is open. A review left
+pending when the window closed comes back only if its file still holds exactly that
+AI result. If the file changed while MCU Flasher was closed (or the window showed
+another project), the review is closed as **Dismissed**, the file is kept exactly as
+it is, a notification names it, and a recovery copy of its original text stays in
+the AI edit backups; those outside edits are the user's to check.
+Review state, AI Changes and Accept/Reject never wait on storage: the window reads
+published snapshots, the review journal is written by one background writer, and
+the AI Changes tab refreshes once per burst and only while visible, highlighting each
+changed range rather than every line of a large file.
 
 The embedded editor preserves Monaco models and dirty buffers while docking,
 showing, resizing and changing themes. Resize notifications are coalesced to one

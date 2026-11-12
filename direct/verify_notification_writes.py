@@ -138,6 +138,66 @@ class NotificationWriteChecks(unittest.TestCase):
         self.assertIsInstance(record, dict)
         self.assertEqual(target.stat().st_file_attributes & 0x03, 0x02)
 
+    def test_queued_notifications_never_block_the_caller_and_batch_one_rewrite(self):
+        import threading
+        import time
+        gate = threading.Event()
+        real = dbs_create._append_records
+        writes = []
+
+        def slow(target, records, limit=500):
+            gate.wait(5)  # a sharing lock held by antivirus or a sync client
+            writes.append([record["message"] for record in records])
+            return real(target, records, limit)
+
+        results = []
+        with patch.object(dbs_create, "_append_records", side_effect=slow):
+            started = time.monotonic()
+            first = dbs_create.queue_notification(message="first", db_path=self.database,
+                                                  notification_id="live-1", on_saved=results.append)
+            # The first write is now waiting; these queue behind it as one batch.
+            time.sleep(0.05)
+            for index in range(2, 5):
+                dbs_create.queue_notification(message=f"n{index}", db_path=self.database, on_saved=results.append)
+            self.assertLess(time.monotonic() - started, 0.5, "Queueing waited for storage")
+            self.assertEqual(first["id"], "live-1")
+            gate.set()
+            self.assertTrue(dbs_create.flush_notifications(5))
+        self.assertEqual(writes, [["first"], ["n2", "n3", "n4"]])
+        self.assertEqual(results, [True] * 4)
+        stored = json.loads(self.database.read_text(encoding="utf-8"))
+        self.assertEqual([item["message"] for item in stored][-4:], ["first", "n2", "n3", "n4"])
+        self.assertEqual(stored[0], self.original[0])
+
+    def test_failed_queued_write_reports_failure_and_preserves_history(self):
+        results = []
+        with patch.object(dbs_create, "_safe_replace_file", return_value=False):
+            dbs_create.queue_notification(message="Unsaved", db_path=self.database, on_saved=results.append)
+            self.assertTrue(dbs_create.flush_notifications(5))
+        self.assertEqual(results, [False])
+        self.assertEqual(self.database.read_bytes(), self.before)
+
+    def test_clear_lands_after_notifications_raised_before_it(self):
+        dbs_create.queue_notification(message="Raised before clear", db_path=self.database)
+        self.assertTrue(dbs_delete.clear_all_notifications(db_path=self.database))
+        self.assertTrue(dbs_create.flush_notifications(5))
+        self.assertEqual(json.loads(self.database.read_text(encoding="utf-8")), [])
+
+    def test_workspace_notifications_go_to_the_open_sketch_history(self):
+        from main import web_bridge
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api._qt_signals, api._window = None, None
+        sketch = self.database.parent / "Blink"
+        sketch.mkdir()
+        api.sketch_dir_path = sketch
+        api.emit("notification", {"title": "Compiled", "message": "Firmware built", "type": "success"})
+        self.assertTrue(dbs_create.flush_notifications(5))
+        history = sketch / ".mcu_flasher_build_cache" / "dbs_notif.json"
+        stored = json.loads(history.read_text(encoding="utf-8"))
+        self.assertEqual([(item["title"], item["level"]) for item in stored], [("Compiled", "success")])
+        api.sketch_dir_path = None
+        self.assertIsNone(api._notification_history_path(), "Without a sketch the global store is used")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

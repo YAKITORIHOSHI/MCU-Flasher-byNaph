@@ -2031,11 +2031,36 @@ class ControlsBar(QWidget):
                 window = self.window()
                 if hasattr(window, "restart_for_offline_mode"):
                     window.restart_for_offline_mode(dlg.offline_mode_previous)
+            elif result == dlg.DialogCode.Accepted and getattr(dlg, "interface_restart_requested", False):
+                # Ask on a clean event-loop turn, never inside the dialog's own close.
+                QTimer.singleShot(0, self, self._offer_interface_restart)
 
         dlg.finished.connect(finished)
         # Keep the main Qt loop running; never nest exec() inside a popup's
         # native close/mouse event. The owned dialog remains window-modal.
         dlg.open()
+
+    def _offer_interface_restart(self) -> None:
+        """Qt reads its scale factor at start-up: offer to reopen this window at the new size."""
+        window = self.window()
+        if not hasattr(window, "restart_to_apply_interface_size"):
+            return
+        from PySide6.QtWidgets import QMessageBox
+        if getattr(self._backend, "is_ghost_sketch", False) is True:
+            QMessageBox.information(window, "Interface size saved",
+                                    "Save this Ghost Sketch to a folder first; the new interface size applies "
+                                    "to every window opened after that.")
+            return
+        box = QMessageBox(QMessageBox.Icon.Question, "Apply the new interface size?",
+                          "The interface size takes effect when a window starts. Save your sketch and "
+                          "reopen this window at the new size now?\n\nOther open project windows change "
+                          "size the next time they open.", QMessageBox.StandardButton.NoButton, window)
+        restart = box.addButton("Restart now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(restart)
+        box.exec()
+        if box.clickedButton() is restart and not self._is_busy():
+            window.restart_to_apply_interface_size()
 
     def _toggle_ai_panel(self, checked: bool) -> None:
         self.btn_ai.set_icon("ai")

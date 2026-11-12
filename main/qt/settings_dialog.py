@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
 )
 from main.qt.glass import GlassDialog
 from main.qt.theme import group_title_room
-from main.qt.interface_size import INTERFACE_SIZES, interface_choice
+from main.qt.interface_size import (INTERFACE_SIZES, interface_choice, automatic_scale_for, effective_scale,
+                                    started_scale, environment_override, restart_can_apply)
 from main.qt.icons import ActionButton as QPushButton
 
 from main.core.constants import board_reset_capabilities
@@ -48,6 +49,10 @@ from main.qt.responsive import fit_dialog, ScreenWatcher
 
 
 from main.qt.icons import IconLabel as QLabel
+
+def _percent(scale: float) -> str:
+    return f"{scale * 100:g}%"
+
 
 class SettingsDialog(GlassDialog):
     """
@@ -71,6 +76,10 @@ class SettingsDialog(GlassDialog):
         self._shared = self._raw_cfg.get("shared", {})
         self.offline_mode_restart_requested = False
         self.offline_mode_previous = self._shared.get("offline_enabled") is True
+        # The interface size is Qt's start-up factor: a change needs this window restarted.
+        self.interface_restart_requested = False
+        self._interface_restart_pending = False
+        self._auto_here = self._automatic_here()
 
         self._build_ui()
         self._screen_watcher = ScreenWatcher(self, lambda _screen: self._adapt_rows())
@@ -414,15 +423,28 @@ class SettingsDialog(GlassDialog):
         size_row.addWidget(size_label)
         self.size_combo = QComboBox()
         for label, value in INTERFACE_SIZES:
+            if value == "auto" and self._auto_here is not None:
+                # Say what Automatic picks here: on an ordinary monitor it is 100%.
+                label = f"Automatic ({_percent(self._auto_here)} on this display)"
             self.size_combo.addItem(label, userData=value)
         self.size_combo.setCurrentIndex(max(0, self.size_combo.findData(interface_choice())))
-        self.size_combo.setToolTip("Automatic enlarges the interface on small, high-resolution screens and "
-                                   "tightens it on small screens at a high display scale.")
+        # The Automatic label names this display's choice; it may elide on a
+        # narrow screen (the list shows it whole) instead of widening Settings.
+        self.size_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.size_combo.setMinimumContentsLength(14)
+        size_tip = ("Automatic enlarges the interface on small, high-resolution screens and "
+                    "tightens it on small screens at a high display scale; other monitors stay at 100%. "
+                    "Choose a size to set it yourself.")
+        if environment_override():
+            size_tip += ("\n\nQT_SCALE_FACTOR is set in this session's environment, so it decides the size "
+                         "and this setting has no effect until it is removed.")
+        self.size_combo.setToolTip(size_tip)
         size_row.addWidget(self.size_combo, stretch=1)
         tv.addLayout(size_row)
 
         theme_note = QLabel("Theme changes apply across the main UI, editor and terminal right away. "
-                            "Interface size applies the next time a window opens.")
+                            "A new interface size applies when the window restarts; Save offers to do that now."
+                            + (" QT_SCALE_FACTOR in the environment currently overrides it." if environment_override() else ""))
         theme_note.setProperty("role", "dim")
         theme_note.setWordWrap(True)
         tv.addWidget(theme_note)
@@ -664,7 +686,8 @@ class SettingsDialog(GlassDialog):
 
         # Finish scroll setup
         self.scroll.setWidget(container)
-        self._form_rows = [(cpu_row, cpu_lbl), (font_row, font_lbl), (theme_row, theme_lbl), (ed_row, ed_lbl)]
+        self._form_rows = [(cpu_row, cpu_lbl), (font_row, font_lbl), (theme_row, theme_lbl), (ed_row, ed_lbl),
+                           (size_row, size_label)]
         self._autosave_row, self._reset_row = as_row, btn_row
         self._adapt_rows()
         outer_layout.addWidget(self.scroll, stretch=1)
@@ -861,6 +884,15 @@ class SettingsDialog(GlassDialog):
             self.accept()
 
 
+    @staticmethod
+    def _automatic_here():
+        try:
+            from PySide6.QtGui import QGuiApplication
+            screen = QGuiApplication.primaryScreen()
+            return automatic_scale_for(screen) if screen is not None else None
+        except Exception:
+            return None
+
     def _save_and_apply(self, *, show_progress: bool = False) -> None:
         """Persist all settings and emit console log confirmations.
 
@@ -938,7 +970,15 @@ class SettingsDialog(GlassDialog):
 
         data["shared"]["theme_mode"] = saved_mode
         data["shared"]["theme_follow_system"] = follow_sys
-        data["shared"]["interface_size"] = self.size_combo.currentData()
+        size_choice = self.size_combo.currentData()
+        data["shared"]["interface_size"] = size_choice
+        if size_choice == "auto" and self._auto_here is not None:
+            # Record this display's choice now, so the next window starts at it
+            # instead of measuring first and applying only the launch after.
+            data["shared"]["interface_scale_auto"] = self._auto_here
+        wanted = (self._auto_here if size_choice == "auto" and self._auto_here is not None
+                  else effective_scale(size_choice))
+        self._interface_restart_pending = restart_can_apply() and abs(wanted - started_scale()) > 1e-6
 
         # Preserve legacy editor_mode data; the Qt workspace uses offline Monaco
         # with an automatic resource profile and has no alternative engine.
@@ -994,6 +1034,7 @@ class SettingsDialog(GlassDialog):
             return
         self.offline_mode_restart_requested = mode_changed
         self.offline_mode_previous = current_offline
+        self.interface_restart_requested = self._interface_restart_pending and not mode_changed
 
         from main.core.theme import Theme
         Theme.apply_theme(active_theme)

@@ -6,7 +6,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor, QFont, QPainter
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTreeWidget,
     QTreeWidgetItem, QSplitter, QPlainTextEdit, QMessageBox, QTextEdit, QHeaderView,
@@ -111,8 +111,17 @@ class AIChangesPanel(QWidget):
         self.setObjectName("ai-changes-panel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._records = {}
+        self._records_signature = None
+        self._preview_key = None
+        self._stale = False
         self._busy = False
         self._closed = False
+        # History changes arrive in bursts while an assistant edits several
+        # files. Coalesce them, and refresh a hidden panel only when it shows.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(120)
+        self._refresh_timer.timeout.connect(self.refresh)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
         header = QHBoxLayout()
@@ -162,9 +171,9 @@ class AIChangesPanel(QWidget):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
         layout.addWidget(splitter, 1)
-        signals.ai_changes_updated.connect(self.refresh)
-        signals.ai_review_resolved.connect(self.refresh)
-        signals.project_updated.connect(self.refresh)
+        signals.ai_changes_updated.connect(self._request_refresh)
+        signals.ai_review_resolved.connect(self._request_refresh)
+        signals.project_updated.connect(self._request_refresh)
         self._deleted.connect(self._finish_delete, Qt.ConnectionType.QueuedConnection)
         self.apply_theme()
         self.refresh()
@@ -192,12 +201,39 @@ class AIChangesPanel(QWidget):
                   and record["promptSourceVersion"] == 1 else "external")
         return {"cli": "CLI", "assistant": "Assistant", "mixed": "Mixed sources"}.get(source, "Unknown source")
 
+    def _request_refresh(self, *_):
+        if not self.isVisible():
+            self._stale = True
+            return
+        self._refresh_timer.start()
+
+    def refresh_if_stale(self):
+        if self._stale:
+            self.refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._stale:
+            self._refresh_timer.start(0)
+
     def refresh(self, *_):
+        self._refresh_timer.stop()
+        self._stale = False
         manager = getattr(self._backend, "ai_review_manager", None)
+        records = manager.get_ai_changes() if manager else []
+        signature = tuple((item.get("id"), item.get("updatedAt"), item.get("status"), item.get("statusNote"),
+                           item.get("groupId"), item.get("prompt")) for item in records)
+        if signature == self._records_signature and self._tree.topLevelItemCount() == len(
+                {item.get("groupId", "") for item in records}):
+            # Same cards: keep the tree, its scroll position and selection.
+            self._records = {item["id"]: item for item in records}
+            self._select(self._tree.currentItem())
+            return
+        self._records_signature = signature
         selected = self._selected_id()
         self._tree.blockSignals(True)
         self._tree.clear()
-        self._records = {item["id"]: item for item in manager.get_ai_changes()} if manager else {}
+        self._records = {item["id"]: item for item in records}
         groups = {}
         target = None
         for record in reversed(list(self._records.values())):
@@ -217,6 +253,8 @@ class AIChangesPanel(QWidget):
             card = QTreeWidgetItem([f"{Path(record['path']).name}\n{edited}", decision])
             card.setData(0, Qt.ItemDataRole.UserRole, record["id"])
             tooltip = f"{record['path']}\nEdited: {edited}\nDecision: {decision}\nSource: {self._prompt_title(record)}"
+            if record.get("statusNote"):
+                tooltip += f"\n{record['statusNote']}"
             card.setToolTip(0, tooltip)
             card.setToolTip(1, tooltip)
             groups[group_id].addChild(card)
@@ -237,41 +275,92 @@ class AIChangesPanel(QWidget):
     def _select(self, item=None, *_):
         record = self._records.get(item.data(0, Qt.ItemDataRole.UserRole), {}) if item else {}
         before, after = str(record.get("beforeContent", "")), str(record.get("content", ""))
+        self._delete.setEnabled(bool(record) and not self._busy)
+        manager = getattr(self._backend, "ai_review_manager", None)
+        self._review.setEnabled(bool(record and manager and manager.has_pending_ai_edit(record["path"])))
+        added, removed = getattr(self, "_added", None), getattr(self, "_removed", None)
+        key = (record.get("id"), record.get("updatedAt"), len(before), len(after), hash(before), hash(after),
+               added.name(QColor.NameFormat.HexArgb) if added is not None else "",
+               removed.name(QColor.NameFormat.HexArgb) if removed is not None else "")
+        if key == self._preview_key:
+            return
+        self._preview_key = key
         if self._before.toPlainText() != before:
             self._before.setPlainText(before)
         if self._after.toPlainText() != after:
             self._after.setPlainText(after)
-        self._delete.setEnabled(bool(record) and not self._busy)
-        manager = getattr(self._backend, "ai_review_manager", None)
-        self._review.setEnabled(bool(record and manager and manager.has_pending_ai_edit(record["path"])))
-        old_rows, new_rows = [], []
-        old_lines, new_lines = before.splitlines(), after.splitlines()
-        if len(old_lines) + len(new_lines) <= 2000:
-            opcodes = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes()
-        else:
-            opcodes = [("replace", 0, len(old_lines), 0, len(new_lines))]
-        for kind, i1, i2, j1, j2 in opcodes:
-            if kind != "equal":
-                old_rows.extend(range(i1, i2))
-                new_rows.extend(range(j1, j2))
-        self._highlight(self._before, old_rows, self._removed)
-        self._highlight(self._after, new_rows, self._added)
+        old_ranges, new_ranges = self._changed_ranges(before, after)
+        self._highlight(self._before, old_ranges, removed)
+        self._highlight(self._after, new_ranges, added)
         tip = "Preview truncated; use Review file for the complete edit." if record.get("previewTruncated") else ""
         self._before.setToolTip(tip)
         self._after.setToolTip(tip)
 
     @staticmethod
-    def _highlight(view, rows, color):
-        selections = []
-        for row in rows[:4000]:
-            block = view.document().findBlockByNumber(row)
-            if not block.isValid():
+    def _changed_ranges(before, after):
+        """Changed line ranges [(start, end)) on each side.
+
+        The common head and tail are trimmed first, so an appended line in a
+        3,000-line file marks one line instead of the whole file, and the
+        matcher only ever sees the bounded changed middle.
+        """
+        old_lines, new_lines = before.splitlines(), after.splitlines()
+        prefix, limit = 0, min(len(old_lines), len(new_lines))
+        while prefix < limit and old_lines[prefix] == new_lines[prefix]:
+            prefix += 1
+        old_end, new_end = len(old_lines), len(new_lines)
+        while old_end > prefix and new_end > prefix and old_lines[old_end - 1] == new_lines[new_end - 1]:
+            old_end -= 1
+            new_end -= 1
+        middle_old, middle_new = old_lines[prefix:old_end], new_lines[prefix:new_end]
+        if len(middle_old) + len(middle_new) <= 2000:
+            opcodes = difflib.SequenceMatcher(None, middle_old, middle_new, autojunk=False).get_opcodes()
+        else:
+            opcodes = [("replace", 0, len(middle_old), 0, len(middle_new))]
+        old_ranges, new_ranges = [], []
+        for kind, i1, i2, j1, j2 in opcodes:
+            if kind == "equal":
                 continue
+            if i2 > i1:
+                old_ranges.append((prefix + i1, prefix + i2))
+            if j2 > j1:
+                new_ranges.append((prefix + j1, prefix + j2))
+        return old_ranges, new_ranges
+
+    @staticmethod
+    def _highlight(view, ranges, color):
+        """One full-width selection per changed range, not one per line."""
+        selections = []
+        if color is None:
+            view.setExtraSelections(selections)
+            return
+        document = view.document()
+        final_position = max(0, document.characterCount() - 1)
+
+        def add(cursor):
             selected = QTextEdit.ExtraSelection()
-            selected.cursor = QTextCursor(block)
+            selected.cursor = cursor
             selected.format.setBackground(QColor(color))
             selected.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
             selections.append(selected)
+
+        for start, end in ranges[:500]:
+            first = document.findBlockByNumber(start)
+            if not first.isValid():
+                continue
+            last = document.findBlockByNumber(end - 1)
+            if not last.isValid():
+                last = document.lastBlock()
+            cursor = QTextCursor(first)
+            if last.blockNumber() > first.blockNumber():
+                # Through the last line's newline, so Qt paints that line full width too.
+                cursor.setPosition(min(last.position() + last.length(), final_position),
+                                   QTextCursor.MoveMode.KeepAnchor)
+                add(cursor)
+                if last == document.lastBlock():
+                    add(QTextCursor(last))  # the final line has no newline to select
+            else:
+                add(cursor)  # a collapsed cursor marks its whole line
         view.setExtraSelections(selections)
 
     def _review_selected(self):

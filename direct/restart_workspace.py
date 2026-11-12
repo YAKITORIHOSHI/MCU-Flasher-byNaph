@@ -1,4 +1,4 @@
-"""Wait for a saved workspace to exit, then reopen through its host Bootstrap."""
+"""Wait for a saved workspace to exit, then reopen it: through host Bootstrap repair, or as a plain relaunch."""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +10,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def restart(parent_pid, project=""):
+def restart(parent_pid, project="", reopen=False):
+    """reopen=True relaunches normally (a new interface size); otherwise Bootstrap --repair."""
     import psutil
     try:
         parent = psutil.Process(int(parent_pid))
@@ -25,11 +26,17 @@ def restart(parent_pid, project=""):
         environment.pop(key, None)
     if sys.platform == "win32":
         system = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/wscript.exe"
-        command = [str(system), str(ROOT / "direct/windows/run.vbs"), "--repair"]
+        command = [str(system), str(ROOT / "direct/windows/run.vbs")]
         options = {"creationflags": subprocess.CREATE_NO_WINDOW}
-    else:
-        command = ["bash", str(ROOT / "direct/ubuntu/run.sh"), "--repair"]
+    elif reopen and sys.platform == "darwin":
+        command = ["bash", str(ROOT / "direct/macos/run.sh")]
         options = {"start_new_session": True}
+    else:
+        # A relaunch from the desktop shows refusals the way its menu entry does.
+        command = ["bash", str(ROOT / "direct/ubuntu/run.sh")] + (["--desktop"] if reopen else [])
+        options = {"start_new_session": True}
+    if not reopen:
+        command.append("--repair")
     if project:
         command.extend(("--project", str(project)))
     subprocess.Popen(command, cwd=ROOT, env=environment, stdin=subprocess.DEVNULL,
@@ -41,5 +48,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--parent", type=int, required=True)
     parser.add_argument("--project", default="")
+    parser.add_argument("--reopen", action="store_true", help="Relaunch normally instead of repairing")
     arguments = parser.parse_args()
-    raise SystemExit(restart(arguments.parent, arguments.project))
+    raise SystemExit(restart(arguments.parent, arguments.project, arguments.reopen))

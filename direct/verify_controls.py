@@ -91,6 +91,7 @@ class ControlChecks(unittest.TestCase):
         self.save = self.stack.enter_context(patch.object(settings_module, "_save_raw_config", return_value=True))
         self.stack.enter_context(patch.object(settings_module, "get_editor_auto_pairs", return_value=True))
         self.stack.enter_context(patch("src.dbs.dbs_create.add_notification"))
+        self.stack.enter_context(patch("src.dbs.dbs_create.queue_notification"))
         self.stack.enter_context(patch.object(QMessageBox, "warning"))
         self.stack.enter_context(patch.object(QMessageBox, "critical"))
         self.question = self.stack.enter_context(patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes))
@@ -387,6 +388,36 @@ class ControlChecks(unittest.TestCase):
             self.assertLessEqual(dialog.cb_offline.width(), dialog.scroll.viewport().width())
             if RENDER_DIR:
                 self.assertTrue(dialog.grab().save(str(RENDER_DIR / f"settings-offline-{theme}.png")))
+
+    def test_settings_names_automatics_choice_and_offers_restart_only_for_a_new_size(self):
+        from main.qt import interface_size
+        self.addCleanup(interface_size._STARTED.update, dict(interface_size._STARTED))
+        interface_size._STARTED.update(factor=1.0, external=False, prepared=True)
+        cases = (("Larger (125%)", 1.0, True), ("Normal (100%)", 1.0, False),
+                 ("Automatic", 1.125, True), ("Automatic", 1.0, False))
+        for label, automatic, expected in cases:
+            with self.subTest(label=label, automatic=automatic), \
+                    patch.object(settings_module, "automatic_scale_for", return_value=automatic), \
+                    patch.object(settings_module.SettingsDialog, "accept"):
+                dialog = self.settings()
+                self.assertEqual(dialog.size_combo.itemText(0), f"Automatic ({automatic * 100:g}% on this display)")
+                dialog.size_combo.setCurrentIndex(next(index for index in range(dialog.size_combo.count())
+                                                       if dialog.size_combo.itemText(index).startswith(label)))
+                self.save.reset_mock()
+                dialog._save_and_apply()
+                saved = self.save.call_args.args[0]["shared"]
+                self.assertEqual(saved["interface_size"], dialog.size_combo.currentData())
+                if label == "Automatic":
+                    self.assertEqual(saved["interface_scale_auto"], automatic, "the next window starts at it")
+                self.assertEqual(dialog.interface_restart_requested, expected)
+        # QT_SCALE_FACTOR from the environment decides; Settings says so and never restarts for it.
+        interface_size._STARTED.update(factor=1.5, external=True, prepared=True)
+        with patch.object(settings_module.SettingsDialog, "accept"):
+            dialog = self.settings()
+            self.assertIn("QT_SCALE_FACTOR", dialog.size_combo.toolTip())
+            dialog.size_combo.setCurrentIndex(dialog.size_combo.findData(1.25))
+            dialog._save_and_apply()
+            self.assertFalse(dialog.interface_restart_requested)
 
     def test_settings_history_failure_keeps_saved_preferences_and_reports_warning(self):
         dialog = self.settings()

@@ -388,7 +388,8 @@ class RestartChecks(unittest.TestCase):
         tree = ast.parse(source.read_text(encoding="utf-8-sig"))
         window_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MCUMainWindow")
         methods = [node for node in window_class.body if isinstance(node, ast.FunctionDef) and node.name in
-                   {"restart_for_offline_mode", "restart_for_runtime_repair", "_restart_through_bootstrap"}]
+                   {"restart_for_offline_mode", "restart_for_runtime_repair", "restart_to_apply_interface_size",
+                    "_restart_through_bootstrap"}]
         exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), "exec"), self.scope)
         self.window._restart_through_bootstrap = lambda **kwargs: self.scope["_restart_through_bootstrap"](self.window, **kwargs)
 
@@ -506,6 +507,43 @@ class RestartChecks(unittest.TestCase):
                 self.assertTrue(launch.call_args.kwargs["start_new_session"])
             for key in ("MCU_FLASHER_WORKSPACE_RUNTIME", "MCU_FLASHER_OFFLINE_RUNTIME", "PIP_NO_INDEX"):
                 self.assertNotIn(key, launch.call_args.kwargs["env"])
+
+    def test_interface_size_restart_reopens_this_project_without_repair_despite_other_windows(self):
+        self.blocker.return_value = "Close the other MCU Flasher project windows before changing offline mode."
+        self.scope["restart_to_apply_interface_size"](self.window)
+        self.launch.assert_not_called()
+        self.acknowledge()
+        command = self.launch.call_args.args[0]
+        self.assertEqual(command[2], str(self.root / "direct/restart_workspace.py"))
+        self.assertIn("--reopen", command)
+        self.assertEqual(command[-2:], ["--project", str(self.root / "Sketch With Spaces")])
+        self.timers.pop()()
+        self.window.close.assert_called_once()
+        self.save.assert_not_called()
+        self.warning.assert_not_called()
+
+    def test_interface_size_restart_still_waits_for_operations(self):
+        self.window._is_busy.return_value = True
+        self.scope["restart_to_apply_interface_size"](self.window)
+        self.window._editor_panel.trigger_save_all.assert_not_called()
+        self.launch.assert_not_called()
+        self.warning.assert_called_once()
+
+    def test_restart_helper_reopen_relaunches_normally_on_each_host(self):
+        import psutil
+        for host, script in (("win32", "direct/windows/run.vbs"), ("linux", "direct/ubuntu/run.sh"),
+                             ("darwin", "direct/macos/run.sh")):
+            helper = self.helper()
+            helper.sys = SimpleNamespace(platform=host)
+            parent = SimpleNamespace(wait=Mock())
+            with patch.object(psutil, "Process", return_value=parent), \
+                    patch.object(helper.subprocess, "Popen") as launch:
+                self.assertEqual(helper.restart(123, "Sketch", reopen=True), 0)
+            command = launch.call_args.args[0]
+            self.assertNotIn("--repair", command)
+            self.assertEqual(command[1], str(self.root / script))
+            self.assertEqual(command[-2:], ["--project", "Sketch"])
+            self.assertEqual("--desktop" in command, host == "linux")
 
     def test_restart_helper_timeout_does_not_start_bootstrap(self):
         import psutil

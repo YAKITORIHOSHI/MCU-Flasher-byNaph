@@ -470,9 +470,13 @@ class ProjectChecks(unittest.TestCase):
         bus = Mock()
         api._qt_signals, api._window = bus, None
         notice = {"type": "info", "title": "Original notice", "message": "Still visible"}
-        with patch("src.dbs.dbs_create.add_notification", side_effect=[None, None, {"id": "stored"}, None]) as create:
+        from src.dbs import dbs_create
+        # History is written by a background writer; flush between notices so
+        # each one is its own write and the outage/recovery order is exact.
+        with patch("src.dbs.dbs_create._append_records", side_effect=[False, False, True, False]) as create:
             for _ in range(4):
                 api.emit("notification", notice)
+                self.assertTrue(dbs_create.flush_notifications(5))
         self.assertEqual(create.call_count, 4, "Warnings must never persist recursively")
         delivered = [call.args[0] for call in bus.notification.emit.call_args_list]
         original_notices = [payload for payload in delivered if payload.get("title") == notice["title"]]
@@ -480,7 +484,7 @@ class ProjectChecks(unittest.TestCase):
         self.assertNotIn("id", notice, "Dispatch must not mutate the caller's event")
         self.assertEqual(len({payload["id"] for payload in original_notices}), 4)
         for payload, call in zip(original_notices, create.call_args_list):
-            self.assertEqual(payload["id"], call.kwargs["notification_id"])
+            self.assertEqual([payload["id"]], [record["id"] for record in call.args[1]])
         warnings = [payload for payload in delivered if payload.get("type") == "warning"]
         self.assertEqual(len(warnings), 2, "Warn once per outage, rearm after a successful write")
         self.assertIn("Activity history", warnings[0]["title"])

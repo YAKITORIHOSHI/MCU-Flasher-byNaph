@@ -49,6 +49,7 @@ class ToolbarSizingChecks(unittest.TestCase):
         self.addCleanup(Theme.apply_theme, old_theme)
         self.stack.enter_context(patch("main.core.config.load_gui_config", return_value={}))
         self.stack.enter_context(patch("src.dbs.dbs_create.add_notification"))
+        self.stack.enter_context(patch("src.dbs.dbs_create.queue_notification"))
         self.backend = PreviewBackend()
         self.window = QMainWindow()
         self.window.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)

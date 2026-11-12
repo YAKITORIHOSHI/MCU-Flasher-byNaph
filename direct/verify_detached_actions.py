@@ -127,6 +127,9 @@ class DetachedActionChecks(unittest.TestCase):
         self.notifications = patch("src.dbs.dbs_create.add_notification")
         self.notifications.start()
         self.addCleanup(self.notifications.stop)
+        self.queued_notifications = patch("src.dbs.dbs_create.queue_notification")
+        self.queued_notifications.start()
+        self.addCleanup(self.queued_notifications.stop)
         self.old_theme = Theme.active_theme
         Theme.apply_theme("default")
         APP.setStyleSheet(build_stylesheet("default"))

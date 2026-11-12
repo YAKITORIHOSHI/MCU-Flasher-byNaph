@@ -109,6 +109,7 @@ class GhostWorkflowChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(file_utils, "hide_internal_project_metadata"))
         self.stack.enter_context(patch.object(web_bridge, "hide_internal_project_metadata"))
         self.stack.enter_context(patch("src.dbs.dbs_create.add_notification", return_value={"id": "fixture"}))
+        self.stack.enter_context(patch("src.dbs.dbs_create.queue_notification", return_value={"id": "fixture"}))
         self.stack.enter_context(patch("src.modules.ubuntu_download_manager.quit_if_last_workspace"))
         self.stack.enter_context(patch("src.syntax_checker.analyze_cpp_syntax", return_value=[]))
         for target in ("main.qt.responsive.work_area", "main.qt.main_window.work_area"):

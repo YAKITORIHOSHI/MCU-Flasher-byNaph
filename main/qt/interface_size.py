@@ -15,6 +15,9 @@ INTERFACE_SIZES = (("Automatic", "auto"), ("Compact (87.5%)", .875), ("Normal (1
                    ("Large (112.5%)", 1.125), ("Larger (125%)", 1.25), ("Largest (150%)", 1.5))
 _CHOICES = {value for _label, value in INTERFACE_SIZES}
 _VARIABLE = "QT_SCALE_FACTOR"
+# What this process started with: the factor Qt applies, and whether the
+# environment (a person or a verifier) chose it instead of the setting.
+_STARTED = {"factor": 1.0, "external": False, "prepared": False}
 
 
 def _shared() -> dict:
@@ -31,11 +34,9 @@ def interface_choice() -> object:
     return choice if choice in _CHOICES else "auto"
 
 
-def prepare_interface_size() -> float:
-    """Call just before creating the QApplication. Returns the factor to pass to settle."""
-    if _VARIABLE in os.environ:
-        return 0.0  # Whoever set it decides: a person, or a verifier emulating a monitor.
-    choice = interface_choice()
+def effective_scale(choice: object = None) -> float:
+    """The factor a window opened now would use for this choice (default: the saved one)."""
+    choice = interface_choice() if choice is None else choice
     if choice == "auto":
         try:
             choice = float(_shared().get("interface_scale_auto", 1.0))
@@ -43,9 +44,46 @@ def prepare_interface_size() -> float:
             choice = 1.0
         if choice not in _CHOICES:
             choice = 1.0
+    return float(choice)
+
+
+def started_scale() -> float:
+    """The interface factor this process is running at."""
+    return float(_STARTED["factor"])
+
+
+def environment_override() -> bool:
+    """True when QT_SCALE_FACTOR came from the environment, so the setting cannot apply."""
+    return bool(_STARTED["external"])
+
+
+def restart_can_apply() -> bool:
+    """This process started through prepare_interface_size, so a restart applies the setting."""
+    return bool(_STARTED["prepared"]) and not environment_override()
+
+
+def prepare_interface_size() -> float:
+    """Call just before creating the QApplication. Returns the factor to pass to settle."""
+    if _VARIABLE in os.environ:
+        # Whoever set it decides: a person, or a verifier emulating a monitor.
+        try:
+            _STARTED.update(factor=float(os.environ[_VARIABLE]), external=True, prepared=True)
+        except ValueError:
+            _STARTED.update(factor=1.0, external=True, prepared=True)
+        return 0.0
+    choice = effective_scale()
     if choice != 1.0:
         os.environ[_VARIABLE] = str(choice)
+    _STARTED.update(factor=choice, external=False, prepared=True)
     return float(choice)
+
+
+def automatic_scale_for(screen, applied: float | None = None) -> float:
+    """What Automatic chooses for this screen, measured in this process's logical units."""
+    applied = started_scale() if applied is None else applied
+    area = screen.availableGeometry()
+    return interface_scale(area.width() * applied, area.height() * applied,
+                           screen.physicalDotsPerInch() * applied, screen.devicePixelRatio() / applied)
 
 
 def settle_interface_size(app, applied: float) -> None:
@@ -56,9 +94,7 @@ def settle_interface_size(app, applied: float) -> None:
     screen = app.primaryScreen()
     if screen is None or interface_choice() != "auto":
         return
-    area = screen.availableGeometry()
-    wanted = interface_scale(area.width() * applied, area.height() * applied,
-                             screen.physicalDotsPerInch() * applied, screen.devicePixelRatio() / applied)
+    wanted = automatic_scale_for(screen, applied)
     if wanted != _shared().get("interface_scale_auto", 1.0):
         from main.core.config import _load_raw_config, _save_raw_config
         try:

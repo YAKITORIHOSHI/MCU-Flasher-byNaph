@@ -1,11 +1,13 @@
 import json
 import os
 from pathlib import Path
-from .dbs_create import _DB_LOCK, _get_db_path, _safe_replace_file
+from .dbs_create import _DB_LOCK, _get_db_path, _safe_replace_file, flush_notifications
 
 def clear_all_notifications(db_path: str | Path | None = None) -> bool:
     """Clear all records from target notification database."""
     target_db = _get_db_path(db_path)
+    # Records raised before the clear must not land after it and reappear.
+    flush_notifications(timeout=2.0)
     with _DB_LOCK:
         try:
             temp_path = target_db + ".tmp"
