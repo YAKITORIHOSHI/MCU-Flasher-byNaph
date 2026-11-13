@@ -51,6 +51,7 @@ jobs:
           rustup override set stable
           exit $LASTEXITCODE
       - uses: actions/cache@v4
+        id: rust-cache
         with:
           path: |
             ~/.cargo/registry
@@ -88,3 +89,11 @@ jobs:
           name: lite-windows-native-python-${{ matrix.python }}
           path: LITE-MODE/temp/windows-native
           if-no-files-found: warn
+      - uses: actions/cache/save@v4
+        if: always() && steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            LITE-MODE/target
+          key: lite-windows-${{ hashFiles('LITE-MODE/Cargo.lock') }}

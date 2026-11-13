@@ -207,6 +207,9 @@ def main():
             child_state = base / "protocol-state"
             program = (
                 "import sys; sys.path.insert(0, sys.argv[1]); "
+                # Host admission is checked above. The protocol fixture must not
+                # depend on the hosted VM's physical/logical CPU topology.
+                "import psutil; psutil.cpu_count=lambda logical=True: 4; "
                 "import serial.tools.list_ports; serial.tools.list_ports.comports=lambda: []; "
                 "import main.web_bridge; main.web_bridge.MCUWebBackendAPI._scan_ports=lambda self: []; "
                 "import worker; worker.main()"
@@ -214,7 +217,8 @@ def main():
             child_env = dict(os.environ, MCU_LITE_STATE=str(child_state))
             child = subprocess.run([sys.executable, "-B", "-u", "-c", program, str(ROOT / "python")],
                 env=child_env, input='{"cmd":"status","id":101}\ninvalid-json\n{"cmd":"shutdown","id":102}\n',
-                capture_output=True, text=True, timeout=20, check=True)
+                capture_output=True, text=True, timeout=20, check=False)
+            assert child.returncode == 0, f"Worker fixture exited {child.returncode}:\n{child.stdout}\n{child.stderr}"
             frames = [json.loads(line) for line in child.stdout.splitlines()]
             check(any(frame["event"] == "ready" for frame in frames), "real worker startup publishes a protocol handshake")
             acknowledgements = [frame["data"]["id"] for frame in frames if frame["event"] == "ack"]
