@@ -5,7 +5,7 @@
     "python_worker": 48,
     "python_history_search": 25,
     "python_preparation": 25,
-    "developer_process": 16,
+    "developer_process": 20,
     "clippy": "-D warnings clean",
     "fmt": "clean"
   },
@@ -14,7 +14,8 @@
     "five logo releases survive input batching and layout retries",
     "owned helper ready acknowledgement and Windows foreground permission",
     "accepted standalone portal close, raw daemon stdin to prevent shutdown crash",
-    "tracked Cargo.lock for locked builds"
+    "tracked Cargo.lock for locked builds",
+    "verified Windows venv redirector descendants supply the actual GUI PID"
   ],
   "native_windows": "CI qualification pending; local Windows build is cross-compiled",
   "physical_USB": "not accessed",

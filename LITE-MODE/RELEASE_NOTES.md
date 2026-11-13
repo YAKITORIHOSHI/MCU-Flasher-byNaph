@@ -10,6 +10,8 @@ Windows interaction repair:
   releases; prevent duplicate counting during a layout retry.
 - Reuse the current main Developer Access portal with a startup acknowledgement,
   an owned Windows foreground permission handoff, and useful startup diagnostics.
+- Resolve Windows venv redirectors to the verified GUI child PID for readiness
+  and foreground permission; reject unrelated processes and ASFW_ANY.
 - Close the standalone helper on an accepted portal close. Read its narrow command
   protocol without a buffered-stdin daemon lock during Python shutdown.
 - Add Windows CI for real helper processes and native portal layouts at

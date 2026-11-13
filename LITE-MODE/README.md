@@ -101,6 +101,8 @@ between clicks, then pause. This opens the main application's existing ticket
 portal in an owned helper window; another gesture brings that window forward.
 The helper acknowledges window startup before activation; on Windows, Lite
 permits only its owned helper to take focus while Lite owns the foreground.
+Windows virtual-environment redirectors are resolved to their verified owned
+GUI child, so readiness and focus use the actual portal PID.
 Startup failures and slow startup appear in the Build monitor, and an accepted
 portal close ends the standalone helper cleanly. Batched pointer releases and
 layout retries preserve the exact five-click count. A gesture during Python

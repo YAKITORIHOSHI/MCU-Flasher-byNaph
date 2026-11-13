@@ -13,6 +13,7 @@ edit. Keep private state, runtimes, installers and development scratch excluded.
 Legacy ZIPs retain the reviewed copy list with Lite included. Verify user_install
 and release_sources in owned fixtures; never infer ownership by scanning arbitrary
 user folders. Commit Lite's supplied native launchers, keep their bytes/modes, and
+keep Lite Cargo.lock tracked for --locked builds, and
 exclude its development evidence from public ZIPs through export-ignore.
 
 ## Atomic source access and persistent Ubuntu installation

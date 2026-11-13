@@ -15,7 +15,8 @@ bounded truncation, recent grouping and explicit Select Board confirmation.
 Count completed logo pointer releases once per egui frame, including batched
 input and layout retries. Reuse the current main portal in an owned private
 helper with readiness acknowledgement, exact-PID Windows foreground permission
-only while Lite is foreground, and accepted-close shutdown without buffered
+only while Lite is foreground (resolve venv redirectors to a verified owned GUI
+child), and accepted-close shutdown without buffered
 stdin daemon locks. Verify actual helper processes with mocked accounts/vault/
 network, fractional-scale row geometry and the isolated Lite Windows workflow.
 Native Windows Server evidence does not qualify Windows 11 or physical USB.

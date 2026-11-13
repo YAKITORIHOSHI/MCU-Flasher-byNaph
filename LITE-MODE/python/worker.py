@@ -26,6 +26,28 @@ SOURCE_EXTENSIONS = {".ino", ".h", ".hpp", ".cpp", ".c"}
 MAX_FRAME = 256 * 1024
 
 
+def owned_portal_pid(process, pid):
+    """Windows venv python.exe may be a redirector, not the GUI's real PID."""
+    if type(pid) is not int or not 0 < pid < 0xFFFFFFFF:
+        return False
+    if pid == process.pid:
+        return True
+    if sys.platform != "win32":
+        return False
+    import psutil
+    try:
+        current = psutil.Process(pid)
+        for _ in range(8):
+            current = current.parent()
+            if current is None:
+                break
+            if current.pid == process.pid:
+                return True
+    except psutil.Error:
+        pass
+    return False
+
+
 def host_check():
     if sys.platform == "win32":
         if platform.machine().lower() not in {"amd64", "x86_64"}:
@@ -187,6 +209,7 @@ class Worker:
         self.catalog_thread = None
         self.developer_process = None
         self.developer_ready = False
+        self.developer_pid = None
         self.closing = False
         self.cancel = threading.Event()
         self.last_ports = []
@@ -521,7 +544,7 @@ class Worker:
         process = self.developer_process
         if process is not None and process.poll() is None:
             if self.developer_ready:
-                self.output.send("developer:ready", {"pid": process.pid})
+                self.output.send("developer:ready", {"pid": self.developer_pid})
             return
         log_path = self.state / "developer-access.log"
         log = log_path.open("wb")
@@ -535,6 +558,7 @@ class Worker:
             raise
         self.developer_process = process
         self.developer_ready = False
+        self.developer_pid = None
         self.output.send("developer:status", True)
         self.log("Opening Developer Access...", "info")
 
@@ -550,10 +574,13 @@ class Worker:
             line = process.stdout.readline(256)
             try:
                 frame = json.loads(line)
-                if frame == {"event": "ready", "pid": process.pid} and process.poll() is None:
+                if (isinstance(frame, dict) and set(frame) == {"event", "pid"}
+                        and frame["event"] == "ready" and process.poll() is None
+                        and owned_portal_pid(process, frame["pid"])):
+                    self.developer_pid = frame["pid"]
                     self.developer_ready = True
                     notice.cancel()
-                    self.output.send("developer:ready", {"pid": process.pid})
+                    self.output.send("developer:ready", {"pid": self.developer_pid})
                     self.log("Developer Access is ready.", "info")
             except (ValueError, TypeError):
                 pass
@@ -566,6 +593,7 @@ class Worker:
             log.close()
             if self.developer_process is process:
                 self.developer_ready = False
+                self.developer_pid = None
                 self.output.send("developer:status", False)
             if result and not self.closing:
                 self.output.send("error", {"message": f"Developer Access could not start. Details: {log_path}"})

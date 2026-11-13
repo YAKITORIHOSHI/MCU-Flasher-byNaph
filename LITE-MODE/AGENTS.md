@@ -57,6 +57,7 @@ Access portal in an owned helper. Keep its authentication gate, Lite-only cache
 and credential namespace, single-window activation and graceful closing. Count ordered pointer releases
 once per frame, including batched events and layout retries. Wait for the helper's
 ready acknowledgement before the exact-PID Windows foreground permission handoff;
+validate an owned descendant when Windows venv Python redirects;
 never grant ASFW_ANY or take focus from another app. Close accepted standalone
 portals cleanly; their daemon command reader must not hold a buffered stdin lock. Never
 launch the real portal, accounts, vault or network in fixtures; use the real UI

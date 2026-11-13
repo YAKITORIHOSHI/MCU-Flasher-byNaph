@@ -6,7 +6,7 @@
 Thirteen Rust checks cover actual logo pointer events (including five releases in
 one frame and a discarded layout pass), the main-style board picker at five
 fractional scales, readiness and stable streaming monitors. All 98 existing
-Python checks pass. Sixteen Developer Access checks now run the actual helper
+Python checks pass. Twenty Developer Access checks now run the actual helper
 entry point in a separate process with fixture accounts and blocked vault/network:
 ready acknowledgement, literal activation, one window, responsive authentication
 and clean close. This exposed and fixed a buffered-stdin shutdown crash.

@@ -1,3 +1,7 @@
+PASS direct helper PID is recognized
+PASS Windows venv redirector's owned GUI child is recognized
+PASS an unrelated Windows process cannot receive portal focus permission
+PASS ASFW_ANY cannot pass the helper PID gate
 PASS real portal initializes through the existing service adapter
 PASS portal login card completes its queued responsive layout
 PASS five-click entry still requires the main authentication gate
@@ -15,4 +19,4 @@ PASS literal activation reaches the real responsive authentication dialog
 PASS helper accepts graceful close and exits cleanly
 PASS failed portal launch leaves build controls available
 
-16 Developer Access checks passed. No real network, vault or device access; native windows only on isolated CI.
+20 Developer Access checks passed. No real network, vault or device access; native windows only on isolated CI.

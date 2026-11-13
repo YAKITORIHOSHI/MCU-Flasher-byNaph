@@ -10,11 +10,12 @@ import sys
 import tempfile
 import time
 from unittest.mock import Mock, patch
+import psutil  # Resolve the native process backend before simulated host policies.
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 from isolation import child_setup, environment
-from worker import ORIGINAL, Worker, snapshot_engine
+from worker import ORIGINAL, Worker, snapshot_engine, owned_portal_pid
 
 
 def child_fixture():
@@ -87,6 +88,15 @@ def main():
         assert value, name
         checks.append(name)
         print("PASS", name, flush=True)
+
+    process = Mock(pid=100)
+    check(owned_portal_pid(process, 100), "direct helper PID is recognized")
+    with patch("sys.platform", "win32"), patch("psutil.Process") as inspect:
+        inspect.return_value.parent.return_value = Mock(pid=100)
+        check(owned_portal_pid(process, 200), "Windows venv redirector's owned GUI child is recognized")
+        inspect.return_value.parent.return_value = None
+        check(not owned_portal_pid(process, 300), "an unrelated Windows process cannot receive portal focus permission")
+        check(not owned_portal_pid(process, 0xFFFFFFFF), "ASFW_ANY cannot pass the helper PID gate")
 
     with tempfile.TemporaryDirectory(dir=ROOT / "temp", prefix="developer-verify-") as temporary:
         state = Path(temporary) / "state"

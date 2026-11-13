@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from unittest.mock import patch
+import psutil  # Load the native backend before host-policy fixtures change sys.platform.
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
