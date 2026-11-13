@@ -18,7 +18,8 @@ Installed copies update themselves from GitHub on their next launch; see
 - Preserve five logo clicks batched in one frame and avoid counting layout retries.
   Add Developer Access startup acknowledgement, an owned Windows focus handoff,
   startup diagnostics and clean standalone helper shutdown.
-- Add native Windows CI and fractional-scale checks. Keep Lite's existing colorway,
+- Native Windows Server 2025 CI passes on Python 3.11/3.14: widget/input checks,
+  the real portal at 100–200 percent, and worker/history/preparation checks. Keep Lite's existing colorway,
   authentication, automatic preparation and exact-board firmware reuse.
 
 ## November 13 — Isolated Lite workbench and complete Bootstrap sources
@@ -30,8 +31,9 @@ Installed copies update themselves from GitHub on their next launch; see
 - Bootstrap now carries Lite and future public application files automatically
   from tracked checkout files or the release's generated source manifest, while
   excluding private state, runtimes and development scratch.
-- Lite supports Ubuntu and Windows. Windows Lite is cross-built; native Windows
-  interaction and physical USB qualification remain pending.
+- Lite supports Ubuntu and Windows. Windows release executables are cross-built;
+  native Server widget/portal/worker checks pass. Windows 11, native Rust rendering
+  and physical USB qualification remain manual gates.
 
 ## November 13 — Assistant loading and Developer Access tickets
 

@@ -14,9 +14,14 @@ and clean close. This exposed and fixed a buffered-stdin shutdown crash.
 Both supplied launchers are rebuilt. Strict Clippy, formatting and main runtime
 checks pass. Owned Xvfb captures cover the revised picker and existing themes.
 The Lite Windows workflow runs Rust natively and the real Qt helper at five scales
-on Python 3.11/3.14. Its results will be recorded separately; a cross-build and
-headless geometry checks do not qualify Windows desktop interactions. Windows 11
-and physical USB remain separate gates. See evidence/windows-repair-2026-11-13.json.
+on Python 3.11/3.14. Both jobs passed on Windows Server 2025:
+13 Rust checks, strict Clippy, 47 worker checks, 25 history/readiness checks and
+23 preparation checks per runtime (three symlink cases require privileges the
+runner lacks). All ten real portal launches passed startup, activation, auth
+layout and clean close; each reported itself active, including at 200%.
+See [the native run](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43453179689)
+and evidence/windows-repair-native-2026-11-13.json. Windows 11, the native Rust
+renderer/driver interaction and physical USB remain separate manual gates. See evidence/windows-repair-2026-11-13.json.
 
 ## Consistent colors
 

@@ -14,7 +14,7 @@ Windows interaction repair:
   and foreground permission; reject unrelated processes and ASFW_ANY.
 - Close the standalone helper on an accepted portal close. Read its narrow command
   protocol without a buffered-stdin daemon lock during Python shutdown.
-- Add Windows CI for real helper processes and native portal layouts at
+- Windows Server 2025 CI passes for real helper processes and native portal layouts at
   100/125/150/175/200 percent, plus Rust input/layout and worker regressions.
 - Include Cargo.lock in source installs and archives for reproducible --locked builds.
 - Preserve the shared paper/charcoal/yellow colorway and main authentication rules.

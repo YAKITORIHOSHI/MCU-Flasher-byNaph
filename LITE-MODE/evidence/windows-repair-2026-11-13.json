@@ -17,7 +17,11 @@
     "tracked Cargo.lock for locked builds",
     "verified Windows venv redirector descendants supply the actual GUI PID"
   ],
-  "native_windows": "CI qualification pending; local Windows build is cross-compiled",
+  "native_windows": {
+    "result": "passed",
+    "run_url": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43453179689",
+    "details": "windows-repair-native-2026-11-13.json"
+  },
   "physical_USB": "not accessed",
   "artifacts": {
     "UBUNTU": {

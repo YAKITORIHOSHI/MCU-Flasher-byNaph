@@ -241,3 +241,10 @@ Git checkouts copy tracked application files; public ZIPs carry a generated
 without another folder-list edit. Private state, runtimes, caches and development
 scratch stay outside that inventory; older ZIPs retain a reviewed fallback.
 The main source updater already accepts new tracked application paths.
+
+
+Windows verification: [Server 2025 CI](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43453179689)
+passes Rust widget/input checks and real Developer Access processes at five
+scales on Python 3.11/Qt 6.11 and Python 3.14/Qt 6.12. See VERIFICATION.md for
+exact coverage; Windows 11, the native Rust renderer/driver and USB hardware
+checks remain manual gates.
