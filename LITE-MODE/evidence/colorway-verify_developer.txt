@@ -1,0 +1,15 @@
+PASS real portal initializes through the existing service adapter
+PASS portal login card completes its queued responsive layout
+PASS five-click entry still requires the main authentication gate
+PASS passwords stay masked in the reused portal
+PASS Developer Access uses Lite's own native icon
+PASS saved credentials have a Lite-only vault namespace
+PASS local portal state is private to Lite
+PASS reused portal artwork is present in the private snapshot
+PASS repeated gestures foreground one portal without starting duplicates
+PASS existing portal receives only the literal activation command
+PASS entry launches the dedicated helper rather than the main workspace
+PASS portal child inherits Lite isolation
+PASS a failed portal launch leaves build controls available
+
+13 Developer Access checks passed. No real network, vault, desktop or device access.

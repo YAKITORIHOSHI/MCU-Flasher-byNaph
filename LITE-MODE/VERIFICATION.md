@@ -1,5 +1,18 @@
 # Lite verification — 2026-11-13
 
+## Consistent colors
+
+- One theme drives all fields, combos and menus. A Rust check opens a real
+  dropdown in both themes and asserts the shared surface/outline, hover without
+  box changes, and at least 4.5:1 contrast for text on every surface and button tone.
+- 9 Rust checks, strict Clippy, formatting and 111 Python checks (48 base,
+  25 preparation, 25 history/search, 13 Developer Access) pass. 11 previews were
+  rendered on an owned Xvfb display.
+- Both launchers are rebuilt (Ubuntu with the glibc 2.39 floor). Native Windows
+  and physical USB qualification remain pending.
+
+See `evidence/colorway-2026-11-13.json`.
+
 ## Active labels, colored controls, Developer Access and Bootstrap inclusion
 
 - Mode labels/SVGs now describe the active theme; the tooltip names the switch.

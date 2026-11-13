@@ -43,8 +43,10 @@ Light is the launch default; the SVG Light/Dark button changes visuals without
 reinitializing fonts, logs or selections. Keep Status and USB Port in separate
 fixed-height containers.
 The mode label/icon describe the active theme; its tooltip names the switch.
-Connection has mint/teal backing and readable yellow/coral/blue/green input accents.
-Keep popup inks readable when accent fills override native widget visuals.
+One color role each: yellow = primary action or selected tab, coral = Stop,
+Disconnect and errors, everything else the shared surface with an ink outline.
+Fields, combos and menus use the global theme; never give one control its own
+accent fill. Raised buttons come from `button()` and tabs from `tab()`.
 Five completed logo clicks and an 800 ms pause open the existing main Developer
 Access portal in an owned helper. Keep its authentication gate, Lite-only cache
 and credential namespace, single-window activation and graceful closing. Never

@@ -15,13 +15,21 @@ const WHITE: Color32 = Color32::from_rgb(255, 253, 246);
 const YELLOW: Color32 = Color32::from_rgb(245, 220, 72);
 const GREEN: Color32 = Color32::from_rgb(179, 231, 172);
 const CORAL: Color32 = Color32::from_rgb(255, 174, 151);
-const BLUE: Color32 = Color32::from_rgb(157, 211, 246);
 const MUTED: Color32 = Color32::from_rgb(89, 94, 88);
 const TERMINAL: Color32 = Color32::from_rgb(26, 30, 28);
 const LIMIT: usize = 4000;
 
 fn log_columns(text: &str) -> usize {
     text.split('\t').map(UnicodeWidthStr::width).sum::<usize>() + text.matches('\t').count() * 4
+}
+
+/// One role per color: yellow marks the primary action or the selected item,
+/// coral marks stopping or an error, everything else is the paper surface.
+#[derive(Clone, Copy, PartialEq)]
+enum Tone {
+    Primary,
+    Secondary,
+    Danger,
 }
 
 #[derive(Clone, Copy)]
@@ -31,8 +39,12 @@ struct Palette {
     ink: Color32,
     muted: Color32,
     border: Color32,
+    shadow: Color32,
     terminal: Color32,
-    connection: Color32,
+    track: Color32,
+    handle: Color32,
+    highlight: Color32,
+    disabled: Color32,
     dark: bool,
 }
 
@@ -49,8 +61,12 @@ impl Palette {
                 ink: Color32::from_rgb(239, 242, 234),
                 muted: Color32::from_rgb(180, 190, 182),
                 border: Color32::from_rgb(108, 118, 110),
+                shadow: Color32::from_rgb(8, 10, 9),
                 terminal: TERMINAL,
-                connection: Color32::from_rgb(25, 66, 54),
+                track: Color32::from_rgb(46, 52, 48),
+                handle: Color32::from_rgb(94, 102, 96),
+                highlight: Color32::from_rgb(87, 75, 26),
+                disabled: Color32::from_rgb(50, 56, 52),
                 dark,
             }
         } else {
@@ -60,10 +76,23 @@ impl Palette {
                 ink: INK,
                 muted: MUTED,
                 border: INK,
+                shadow: INK,
                 terminal: WHITE,
-                connection: Color32::from_rgb(194, 235, 219),
+                track: Color32::from_rgb(234, 231, 219),
+                handle: Color32::from_rgb(178, 175, 160),
+                highlight: Color32::from_rgb(251, 237, 166),
+                disabled: Color32::from_rgb(229, 227, 216),
                 dark,
             }
+        }
+    }
+
+    /// Fill, ink and outline for a button of this tone.
+    fn tone(self, tone: Tone) -> (Color32, Color32, Color32) {
+        match tone {
+            Tone::Primary => (YELLOW, INK, INK),
+            Tone::Danger => (CORAL, INK, INK),
+            Tone::Secondary => (self.surface, self.ink, self.border),
         }
     }
 
@@ -81,25 +110,22 @@ impl Palette {
     }
 }
 
-fn connection_colors(ui: &mut egui::Ui, fill: Color32) {
-    let visuals = ui.visuals_mut();
-    visuals.override_text_color = Some(INK);
-    visuals.window_fill = fill;
-    visuals.selection.bg_fill = GREEN;
-    visuals.selection.stroke = Stroke::new(1.0_f32, INK);
-    for state in [
-        &mut visuals.widgets.inactive,
-        &mut visuals.widgets.hovered,
-        &mut visuals.widgets.active,
-        &mut visuals.widgets.open,
-    ] {
-        state.bg_fill = fill;
-        state.weak_bg_fill = fill;
-        state.bg_stroke = Stroke::new(1.5_f32, INK);
-        state.fg_stroke = Stroke::new(1.5_f32, INK);
-    }
-    visuals.widgets.hovered.bg_fill = fill.gamma_multiply(0.92);
-    visuals.widgets.hovered.weak_bg_fill = fill.gamma_multiply(0.92);
+fn bold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("bold".into()))
+}
+
+fn heading(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).font(bold(18.0)));
+}
+
+/// Small uppercase caption shared by Connection fields and the status boxes.
+fn caption(ui: &mut egui::Ui, text: &str) {
+    let palette = Palette::from_context(ui.ctx());
+    ui.label(
+        RichText::new(text.to_uppercase())
+            .font(bold(10.5))
+            .color(palette.muted),
+    );
 }
 
 #[derive(Default)]
@@ -167,28 +193,38 @@ pub fn app_icon() -> egui::IconData {
     egui::IconData::default()
 }
 
-fn button(
-    ui: &mut egui::Ui,
-    label: &str,
-    image: &str,
-    fill: Color32,
-    size: Vec2,
-) -> egui::Response {
+fn button(ui: &mut egui::Ui, label: &str, image: &str, tone: Tone, size: Vec2) -> egui::Response {
+    let palette = Palette::from_context(ui.ctx());
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
     response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
     });
-    let active = response.is_pointer_button_down_on();
-    let offset = if active { 3.0 } else { 0.0 };
+    let enabled = ui.is_enabled();
     let rect = rect.shrink2(egui::vec2(2.0, 3.0));
-    ui.painter()
-        .rect_filled(rect.translate(egui::vec2(3.0, 3.0)), 0, INK);
-    let rect = rect.translate(egui::vec2(offset, offset));
-    let fill = if !ui.is_enabled() {
-        Color32::from_rgb(215, 214, 201)
-    } else if response.hovered() {
-        fill.gamma_multiply(0.94)
+    let (fill, ink, outline) = if enabled {
+        palette.tone(tone)
+    } else {
+        (palette.disabled, palette.muted, palette.border)
+    };
+    // Raised buttons sit on a hard shadow and press into it; disabled ones lie flat.
+    let rect = if enabled {
+        ui.painter()
+            .rect_filled(rect.translate(egui::vec2(3.0, 3.0)), 0, palette.shadow);
+        if response.is_pointer_button_down_on() {
+            rect.translate(egui::vec2(3.0, 3.0))
+        } else {
+            rect
+        }
+    } else {
+        rect
+    };
+    let fill = if enabled && response.hovered() {
+        if tone == Tone::Secondary {
+            palette.highlight
+        } else {
+            fill.lerp_to_gamma(INK, 0.07)
+        }
     } else {
         fill
     };
@@ -196,42 +232,111 @@ fn button(
         rect,
         0,
         fill,
-        Stroke::new(2.0_f32, INK),
+        Stroke::new(2.0_f32, outline),
         egui::StrokeKind::Inside,
     );
+    let font = bold(if size.y < 36.0 { 13.0 } else { 15.0 });
+    let icon_size = if image.is_empty() {
+        0.0
+    } else if size.y < 36.0 {
+        16.0
+    } else {
+        20.0
+    };
     let text_width = if label.is_empty() {
         0.0
     } else {
         ui.painter()
-            .layout_no_wrap(
-                label.to_owned(),
-                FontId::new(15.0, FontFamily::Name("bold".into())),
-                INK,
-            )
+            .layout_no_wrap(label.to_owned(), font.clone(), ink)
             .size()
             .x
-            + 10.0
     };
-    let left = rect.center().x - (20.0 + text_width) * 0.5;
-    egui::Image::new(icon(image)).paint_at(
-        ui,
-        egui::Rect::from_center_size(
-            egui::pos2(left + 10.0, rect.center().y),
-            egui::vec2(20.0, 20.0),
-        ),
-    );
+    let gap = if icon_size > 0.0 && !label.is_empty() {
+        8.0
+    } else {
+        0.0
+    };
+    let left = rect.center().x - (icon_size + gap + text_width) * 0.5;
+    if icon_size > 0.0 {
+        egui::Image::new(icon(image)).tint(ink).paint_at(
+            ui,
+            egui::Rect::from_center_size(
+                egui::pos2(left + icon_size * 0.5, rect.center().y),
+                egui::vec2(icon_size, icon_size),
+            ),
+        );
+    }
     if !label.is_empty() {
         ui.painter().text(
-            egui::pos2(left + 30.0, rect.center().y),
+            egui::pos2(left + icon_size + gap, rect.center().y),
             Align2::LEFT_CENTER,
             label,
-            FontId::new(15.0, FontFamily::Name("bold".into())),
-            INK,
+            font,
+            ink,
         );
     }
     response
 }
 
+/// A secondary button that opens a menu below itself.
+fn menu_button(ui: &mut egui::Ui, label: &str, size: Vec2, contents: impl FnOnce(&mut egui::Ui)) {
+    let response = button(ui, label, "", Tone::Secondary, size);
+    egui::Popup::menu(&response)
+        .width(size.x.max(240.0))
+        .show(|ui| {
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 5.0);
+            contents(ui);
+        });
+}
+
+/// Monitor and Resources tabs: equal boxes, the selected one filled yellow.
+fn tab(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    let palette = Palette::from_context(ui.ctx());
+    let font = bold(14.0);
+    let width = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), palette.ink)
+        .size()
+        .x;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width + 26.0, 32.0), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            label,
+        )
+    });
+    let (fill, ink, outline) = if selected {
+        (YELLOW, INK, INK)
+    } else if response.hovered() {
+        (palette.highlight, palette.ink, palette.border)
+    } else {
+        (palette.surface, palette.ink, palette.border)
+    };
+    ui.painter().rect(
+        rect,
+        0,
+        fill,
+        Stroke::new(2.0_f32, outline),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter()
+        .text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
+    response
+}
+
+fn hard_shadow(palette: Palette, offset: i8) -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: [offset, offset],
+        blur: 0,
+        spread: 0,
+        color: palette.shadow,
+    }
+}
+
+/// Workspace cards are surface sheets; dialogs sit on paper.
 fn card(ctx: &egui::Context, fill: Color32) -> egui::Frame {
     let palette = Palette::from_context(ctx);
     egui::Frame::new()
@@ -242,12 +347,7 @@ fn card(ctx: &egui::Context, fill: Color32) -> egui::Frame {
         })
         .stroke(Stroke::new(2.0_f32, palette.border))
         .inner_margin(12)
-        .shadow(egui::epaint::Shadow {
-            offset: [4, 4],
-            blur: 0,
-            spread: 0,
-            color: INK,
-        })
+        .shadow(hard_shadow(palette, 4))
 }
 
 fn status_box(ui: &mut egui::Ui, label: &str, value: &str, width: f32) {
@@ -259,7 +359,7 @@ fn status_box(ui: &mut egui::Ui, label: &str, value: &str, width: f32) {
         .show(ui, |ui| {
             ui.set_width((width - 16.0).max(50.0));
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(label).size(10.0).color(palette.muted));
+            caption(ui, label);
             ui.add(egui::Label::new(RichText::new(value).size(12.0)).truncate())
                 .on_hover_text(value);
         });
@@ -792,11 +892,11 @@ impl LiteApp {
             .default_width(520.0).frame(card(ctx, PAPER)).show(ctx, |ui| {
                 ui.label("Select a folder with .ino, .cpp or .c files at its root.");
                 ui.add_space(12.0);
-                ui.add(egui::TextEdit::singleline(&mut self.project_input).hint_text("Full sketch folder path").desired_width(f32::INFINITY));
+                ui.add(egui::TextEdit::singleline(&mut self.project_input).hint_text("Full sketch folder path").margin(egui::vec2(6.0, 6.0)).desired_width(f32::INFINITY));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(!self.picker_busy, |ui| {
-                        if button(ui, "Browse", "folder", WHITE, egui::vec2(124.0, 40.0)).clicked() {
+                        if button(ui, "Browse", "folder", Tone::Secondary, egui::vec2(124.0, 40.0)).clicked() {
                             self.picker_busy = true;
                             let tx = self.folder_tx.clone(); let ctx = ctx.clone();
                             std::thread::spawn(move || {
@@ -806,7 +906,7 @@ impl LiteApp {
                         }
                     });
                     ui.add_enabled_ui(!self.project_input.trim().is_empty() && self.idle(), |ui| {
-                        if button(ui, "Open sketch", "folder", YELLOW, egui::vec2(155.0, 40.0)).clicked() {
+                        if button(ui, "Open sketch", "folder", Tone::Primary, egui::vec2(155.0, 40.0)).clicked() {
                             self.pending = true;
                             self.send(json!({"cmd": "project", "path": self.project_input.trim()}));
                         }
@@ -844,6 +944,7 @@ impl LiteApp {
                     .add(
                         egui::TextEdit::singleline(&mut self.board_query)
                             .hint_text("Search name, board ID, MCU, vendor or framework")
+                            .margin(egui::vec2(6.0, 6.0))
                             .desired_width(f32::INFINITY),
                     )
                     .changed()
@@ -923,8 +1024,9 @@ impl LiteApp {
             .max_height((ctx.content_rect().height() - 40.0).max(260.0))
             .default_width(640.0).default_height(420.0).frame(card(ctx, PAPER)).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.resource_tab, false, "Libraries");
-                    ui.selectable_value(&mut self.resource_tab, true, "Boards");
+                    for (boards, label) in [(false, "Libraries"), (true, "Boards")] {
+                        if tab(ui, self.resource_tab == boards, label).clicked() { self.resource_tab = boards; }
+                    }
                 });
                 ui.add_space(14.0);
                 ui.add_enabled_ui(self.idle(), |ui| {
@@ -935,15 +1037,15 @@ impl LiteApp {
                         ui.label(RichText::new("Uses PlatformIO board packages. An internet connection is required.").small().color(palette.muted));
                         ui.add_space(16.0);
                         ui.horizontal_wrapped(|ui| {
-                            if button(ui, "Choose board", "board", WHITE, egui::vec2(162.0, 42.0)).clicked() { self.board_dialog = true; }
+                            if button(ui, "Choose board", "board", Tone::Secondary, egui::vec2(162.0, 40.0)).clicked() { self.board_dialog = true; }
                             ui.add_enabled_ui(!self.board.is_empty(), |ui| {
-                                if button(ui, "Prepare selected board", "resources", GREEN, egui::vec2(222.0, 42.0)).clicked() { self.action("board_install"); }
+                                if button(ui, "Prepare selected board", "resources", Tone::Primary, egui::vec2(222.0, 40.0)).clicked() { self.action("board_install"); }
                             });
                         });
                     } else {
                         ui.horizontal(|ui| {
-                            let enter = ui.add(egui::TextEdit::singleline(&mut self.library_query).hint_text("Search PlatformIO libraries").desired_width((ui.available_width() - 112.0).max(100.0)));
-                            if button(ui, "Search", "resources", YELLOW, egui::vec2(104.0, 38.0)).clicked() || (enter.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                            let enter = ui.add(egui::TextEdit::singleline(&mut self.library_query).hint_text("Search PlatformIO libraries").margin(egui::vec2(6.0, 6.0)).desired_width((ui.available_width() - 112.0).max(100.0)));
+                            if button(ui, "Search", "", Tone::Primary, egui::vec2(104.0, 36.0)).clicked() || (enter.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                                 self.pending = true; self.send(json!({"cmd": "library_search", "query": self.library_query}));
                             }
                         });
@@ -952,13 +1054,13 @@ impl LiteApp {
                         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                             if self.libraries.is_empty() { ui.label("Search for a library to see its publisher, description and latest version."); }
                             for library in &self.libraries {
-                                egui::Frame::new().stroke(Stroke::new(1.0_f32, palette.border)).fill(palette.surface).inner_margin(12).show(ui, |ui| {
+                                egui::Frame::new().stroke(Stroke::new(2.0_f32, palette.border)).fill(palette.surface).inner_margin(12).show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     ui.label(RichText::new(&library.name).family(FontFamily::Name("bold".into())).size(17.0));
                                     ui.label(RichText::new(format!("{} / {}", library.owner, library.version)).small().color(palette.muted));
                                     ui.label(&library.description);
                                     ui.add_space(6.0);
-                                    if button(ui, "Install", "resources", GREEN, egui::vec2(115.0, 36.0)).clicked() { install = Some(library.spec.clone()); }
+                                    if button(ui, "Install", "resources", Tone::Primary, egui::vec2(115.0, 36.0)).clicked() { install = Some(library.spec.clone()); }
                                 });
                                 ui.add_space(8.0);
                             }
@@ -966,7 +1068,7 @@ impl LiteApp {
                         if let Some(spec) = install { self.pending = true; self.send(json!({"cmd": "library_install", "spec": spec})); }
                     }
                 });
-                if self.resource_busy { ui.add_space(14.0); ui.label("Working. Download and install output appears in the Build monitor."); if ui.button("Cancel resource operation").clicked() { self.send(json!({"cmd": "stop"})); } }
+                if self.resource_busy { ui.add_space(14.0); ui.label("Working. Download and install output appears in the Build monitor."); if button(ui, "Cancel resource operation", "stop", Tone::Danger, egui::vec2(250.0, 36.0)).clicked() { self.send(json!({"cmd": "stop"})); } }
                 ui.add_space(10.0); ui.label(RichText::new("Downloads belong to Lite. Clean keeps installed libraries and board tools.").small().color(palette.muted));
             });
         self.resources_open = open;
@@ -977,34 +1079,26 @@ impl LiteApp {
         ui.add_enabled_ui(self.idle(), |ui| {
             card(ui.ctx(), WHITE).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new("Sketch")
-                        .family(FontFamily::Name("bold".into()))
-                        .size(18.0),
-                );
-                ui.add_space(6.0);
+                heading(ui, "Sketch");
+                ui.add_space(4.0);
                 let name = std::path::Path::new(&self.source)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "No sketch open".into());
-                ui.label(
-                    RichText::new(name)
-                        .size(20.0)
-                        .family(FontFamily::Name("bold".into())),
-                )
-                .on_hover_text(&self.source);
+                ui.label(RichText::new(name).font(bold(17.0)))
+                    .on_hover_text(&self.source);
                 ui.label(
                     RichText::new(format!("{} source files", self.files.len()))
-                        .small()
+                        .size(12.0)
                         .color(palette.muted),
                 );
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 if button(
                     ui,
                     "Open sketch",
                     "folder",
-                    YELLOW,
-                    egui::vec2(ui.available_width(), 36.0),
+                    Tone::Primary,
+                    egui::vec2(ui.available_width(), 40.0),
                 )
                 .clicked()
                 {
@@ -1012,22 +1106,27 @@ impl LiteApp {
                 }
                 let mut recent = None;
                 ui.add_enabled_ui(!self.recent_projects.is_empty(), |ui| {
-                    ui.menu_button("Recent sketches", |ui| {
-                        ui.set_max_width(360.0);
-                        for path in &self.recent_projects {
-                            let name = std::path::Path::new(path)
-                                .file_name()
-                                .map(|name| name.to_string_lossy())
-                                .unwrap_or_default();
-                            if ui
-                                .add(egui::Button::new(format!("{name}\n{path}")).wrap())
-                                .clicked()
-                            {
-                                recent = Some(path.clone());
-                                ui.close();
+                    menu_button(
+                        ui,
+                        "Recent sketches",
+                        egui::vec2(ui.available_width(), 36.0),
+                        |ui| {
+                            ui.set_max_width(360.0);
+                            for path in &self.recent_projects {
+                                let name = std::path::Path::new(path)
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy())
+                                    .unwrap_or_default();
+                                if ui
+                                    .add(egui::Button::new(format!("{name}\n{path}")).wrap())
+                                    .clicked()
+                                {
+                                    recent = Some(path.clone());
+                                    ui.close();
+                                }
                             }
-                        }
-                    });
+                        },
+                    );
                 });
                 if let Some(path) = recent {
                     self.open_recent_project(path);
@@ -1063,236 +1162,200 @@ impl LiteApp {
                     }
                 }
             });
-            ui.add_space(8.0);
-            card(ui.ctx(), WHITE)
-                .fill(palette.connection)
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(
-                        RichText::new("Connection")
-                            .family(FontFamily::Name("bold".into()))
-                            .background_color(YELLOW)
-                            .color(INK)
-                            .size(18.0),
-                    );
-                    ui.add_space(8.0);
-                    ui.label("Board");
-                    let board_label = if self.board.is_empty() {
-                        "Choose board"
-                    } else {
-                        &self.board
-                    };
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 35.0],
-                            egui::Button::new(RichText::new(board_label).color(INK))
-                                .wrap()
-                                .fill(YELLOW),
-                        )
-                        .clicked()
-                    {
-                        self.board_dialog = true;
-                    }
-                    let mut recent = None;
-                    ui.add_enabled_ui(!self.recent_boards.is_empty(), |ui| {
-                        ui.menu_button("Recent boards", |ui| {
+            ui.add_space(10.0);
+            card(ui.ctx(), WHITE).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                heading(ui, "Connection");
+                ui.add_space(6.0);
+                caption(ui, "Board");
+                let board_label = if self.board.is_empty() {
+                    RichText::new("Choose board").color(palette.muted)
+                } else {
+                    RichText::new(&self.board)
+                };
+                if ui
+                    .add(
+                        egui::Button::new(board_label)
+                            .wrap()
+                            .min_size(egui::vec2(ui.available_width(), 32.0)),
+                    )
+                    .on_hover_text("Search the board catalog")
+                    .clicked()
+                {
+                    self.board_dialog = true;
+                }
+                let mut recent = None;
+                ui.add_enabled_ui(!self.recent_boards.is_empty(), |ui| {
+                    menu_button(
+                        ui,
+                        "Recent boards",
+                        egui::vec2(ui.available_width(), 36.0),
+                        |ui| {
                             for name in &self.recent_boards {
                                 if ui.add(egui::Button::new(name).wrap()).clicked() {
                                     recent = Some(name.clone());
                                     ui.close();
                                 }
                             }
-                        });
-                    });
-                    if let Some(name) = recent {
-                        self.choose_board(name);
-                    }
-                    if !self.frameworks.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label("Framework");
-                        let previous = self.framework.clone();
-                        ui.scope(|ui| {
-                            connection_colors(ui, YELLOW);
-                            egui::ComboBox::from_id_salt("framework")
-                                .popup_style(egui::style::StyleModifier::from(
-                                    ui.style().as_ref().clone(),
-                                ))
-                                .width(ui.available_width() - 8.0)
-                                .selected_text(&self.framework)
-                                .show_ui(ui, |ui| {
-                                    for name in &self.frameworks {
-                                        ui.selectable_value(
-                                            &mut self.framework,
-                                            name.clone(),
-                                            name,
-                                        );
-                                    }
-                                });
-                        });
-                        if previous != self.framework {
-                            self.send(json!({"cmd": "framework", "value": self.framework}));
-                        }
-                    }
+                        },
+                    );
+                });
+                if let Some(name) = recent {
+                    self.choose_board(name);
+                }
+                if !self.frameworks.is_empty() {
                     ui.add_space(6.0);
-                    ui.label("Serial port");
-                    let previous = self.port.clone();
-                    ui.scope(|ui| {
-                        connection_colors(ui, CORAL);
-                        egui::ComboBox::from_id_salt("port")
-                            .popup_style(egui::style::StyleModifier::from(
-                                ui.style().as_ref().clone(),
-                            ))
-                            .width(ui.available_width() - 8.0)
-                            .selected_text(if self.port.is_empty() {
-                                "Select port"
-                            } else {
-                                &self.port
-                            })
+                    caption(ui, "Framework");
+                    let previous = self.framework.clone();
+                    egui::ComboBox::from_id_salt("framework")
+                        .width(ui.available_width())
+                        .selected_text(&self.framework)
+                        .show_ui(ui, |ui| {
+                            for name in &self.frameworks {
+                                ui.selectable_value(&mut self.framework, name.clone(), name);
+                            }
+                        });
+                    if previous != self.framework {
+                        self.send(json!({"cmd": "framework", "value": self.framework}));
+                    }
+                }
+                ui.add_space(6.0);
+                caption(ui, "Serial port");
+                let previous = self.port.clone();
+                egui::ComboBox::from_id_salt("port")
+                    .width(ui.available_width())
+                    .selected_text(if self.port.is_empty() {
+                        RichText::new("Select port").color(palette.muted)
+                    } else {
+                        RichText::new(&self.port)
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.port, String::new(), "No port");
+                        for port in &self.ports {
+                            ui.selectable_value(&mut self.port, port.device.clone(), &port.device)
+                                .on_hover_text(&port.description);
+                        }
+                    });
+                if previous != self.port {
+                    self.pending = true;
+                    self.send(json!({"cmd": "port", "value": self.port}));
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        caption(ui, "Monitor baud");
+                        let old = self.baud;
+                        egui::ComboBox::from_id_salt("baud")
+                            .width(width)
+                            .selected_text(self.baud.to_string())
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.port, String::new(), "No port");
-                                for port in &self.ports {
-                                    ui.selectable_value(
-                                        &mut self.port,
-                                        port.device.clone(),
-                                        &port.device,
-                                    )
-                                    .on_hover_text(&port.description);
+                                for rate in [
+                                    300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880,
+                                    115200, 230400, 250000, 460800, 921600,
+                                ] {
+                                    ui.selectable_value(&mut self.baud, rate, rate.to_string());
                                 }
                             });
-                    });
-                    if previous != self.port {
-                        self.pending = true;
-                        self.send(json!({"cmd": "port", "value": self.port}));
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        let width = (ui.available_width() - 12.0) / 2.0;
-                        ui.vertical(|ui| {
-                            ui.set_width(width);
-                            ui.label("Monitor baud");
-                            let old = self.baud;
-                            ui.scope(|ui| {
-                                connection_colors(ui, BLUE);
-                                egui::ComboBox::from_id_salt("baud")
-                                    .popup_style(egui::style::StyleModifier::from(
-                                        ui.style().as_ref().clone(),
-                                    ))
-                                    .width(width - 12.0)
-                                    .selected_text(self.baud.to_string())
-                                    .show_ui(ui, |ui| {
-                                        for rate in [
-                                            300, 1200, 2400, 4800, 9600, 19200, 38400, 57600,
-                                            74880, 115200, 230400, 250000, 460800, 921600,
-                                        ] {
-                                            ui.selectable_value(
-                                                &mut self.baud,
-                                                rate,
-                                                rate.to_string(),
-                                            );
-                                        }
-                                    });
-                            });
-                            if self.baud != old {
-                                self.send(json!({"cmd": "baud", "value": self.baud}));
-                            }
-                        });
-                        ui.vertical(|ui| {
-                            ui.set_width(width);
-                            ui.label("Upload speed");
-                            let old = self.speed;
-                            ui.scope(|ui| {
-                                connection_colors(ui, GREEN);
-                                egui::ComboBox::from_id_salt("speed")
-                                    .popup_style(egui::style::StyleModifier::from(
-                                        ui.style().as_ref().clone(),
-                                    ))
-                                    .width(width - 12.0)
-                                    .selected_text(self.speed.to_string())
-                                    .show_ui(ui, |ui| {
-                                        for rate in
-                                            [9600, 19200, 57600, 115200, 230400, 460800, 921600]
-                                        {
-                                            ui.selectable_value(
-                                                &mut self.speed,
-                                                rate,
-                                                rate.to_string(),
-                                            );
-                                        }
-                                    });
-                            });
-                            if self.speed != old {
-                                self.send(json!({"cmd": "upload_speed", "value": self.speed}));
-                            }
-                        });
-                    });
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.add_enabled_ui(!self.port.is_empty(), |ui| {
-                            if button(
-                                ui,
-                                if self.connected {
-                                    "Disconnect"
-                                } else {
-                                    "Connect"
-                                },
-                                "serial",
-                                GREEN,
-                                egui::vec2((ui.available_width() - 48.0).max(100.0), 40.0),
-                            )
-                            .clicked()
-                            {
-                                self.send(json!({"cmd": "monitor", "connect": !self.connected}));
-                            }
-                        });
-                        if button(ui, "", "refresh", WHITE, egui::vec2(38.0, 40.0))
-                            .on_hover_text("Refresh ports")
-                            .clicked()
-                        {
-                            self.send(json!({"cmd": "ports"}));
+                        if self.baud != old {
+                            self.send(json!({"cmd": "baud", "value": self.baud}));
                         }
                     });
-                    self.serial_input(ui);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        caption(ui, "Upload speed");
+                        let old = self.speed;
+                        egui::ComboBox::from_id_salt("speed")
+                            .width(width)
+                            .selected_text(self.speed.to_string())
+                            .show_ui(ui, |ui| {
+                                for rate in [9600, 19200, 57600, 115200, 230400, 460800, 921600] {
+                                    ui.selectable_value(&mut self.speed, rate, rate.to_string());
+                                }
+                            });
+                        if self.speed != old {
+                            self.send(json!({"cmd": "upload_speed", "value": self.speed}));
+                        }
+                    });
                 });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(!self.port.is_empty(), |ui| {
+                        let (label, tone) = if self.connected {
+                            ("Disconnect", Tone::Danger)
+                        } else {
+                            ("Connect", Tone::Primary)
+                        };
+                        if button(
+                            ui,
+                            label,
+                            "serial",
+                            tone,
+                            egui::vec2((ui.available_width() - 48.0).max(100.0), 40.0),
+                        )
+                        .clicked()
+                        {
+                            self.send(json!({"cmd": "monitor", "connect": !self.connected}));
+                        }
+                    });
+                    if button(ui, "", "refresh", Tone::Secondary, egui::vec2(40.0, 40.0))
+                        .on_hover_text("Refresh ports")
+                        .clicked()
+                    {
+                        self.send(json!({"cmd": "ports"}));
+                    }
+                });
+                self.serial_input(ui);
+            });
         });
     }
 
     fn serial_input(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
-        ui.label("Send to device");
+        caption(ui, "Send to device");
         ui.add_enabled_ui(self.connected, |ui| {
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.send_text)
                     .hint_text("Serial message")
+                    .margin(egui::vec2(6.0, 6.0))
                     .desired_width(ui.available_width()),
             );
             let enter =
                 response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.scope(|ui| {
-                    connection_colors(ui, CORAL);
-                    egui::ComboBox::from_id_salt("line-ending")
-                        .popup_style(egui::style::StyleModifier::from(
-                            ui.style().as_ref().clone(),
-                        ))
-                        .width(106.0)
-                        .selected_text(match self.line_ending.as_str() {
-                            "both" => "CR + LF",
-                            "nl" => "LF",
-                            "cr" => "CR",
-                            _ => "No ending",
-                        })
-                        .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                ("both", "CR + LF"),
-                                ("nl", "LF"),
-                                ("cr", "CR"),
-                                ("none", "No ending"),
-                            ] {
-                                ui.selectable_value(&mut self.line_ending, value.into(), label);
-                            }
-                        });
-                });
-                if ui.button("Send").clicked() || enter {
+                let send_width = 76.0;
+                egui::ComboBox::from_id_salt("line-ending")
+                    .width(
+                        (ui.available_width() - send_width - ui.spacing().item_spacing.x).max(90.0),
+                    )
+                    .selected_text(match self.line_ending.as_str() {
+                        "both" => "CR + LF",
+                        "nl" => "LF",
+                        "cr" => "CR",
+                        _ => "No ending",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            ("both", "CR + LF"),
+                            ("nl", "LF"),
+                            ("cr", "CR"),
+                            ("none", "No ending"),
+                        ] {
+                            ui.selectable_value(&mut self.line_ending, value.into(), label);
+                        }
+                    });
+                if button(
+                    ui,
+                    "Send",
+                    "",
+                    Tone::Secondary,
+                    egui::vec2(send_width, 36.0),
+                )
+                .clicked()
+                    || enter
+                {
                     self.send(
                         json!({"cmd": "send", "text": self.send_text, "ending": self.line_ending}),
                     );
@@ -1305,14 +1368,14 @@ impl LiteApp {
     }
 
     fn monitor_tools(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Clear").clicked() {
+        if button(ui, "Clear", "", Tone::Secondary, egui::vec2(70.0, 34.0)).clicked() {
             if self.serial_tab {
                 self.serial_log = Log::default();
             } else {
                 self.build_log = Log::default();
             }
         }
-        if ui.button("Copy").clicked() {
+        if button(ui, "Copy", "", Tone::Secondary, egui::vec2(70.0, 34.0)).clicked() {
             ui.ctx().copy_text(if self.serial_tab {
                 self.serial_log.text()
             } else {
@@ -1332,13 +1395,9 @@ impl LiteApp {
         let narrow = ui.available_width() < 570.0;
         ui.horizontal(|ui| {
             for (serial, label) in [(false, "Build monitor"), (true, "Serial monitor")] {
-                ui.selectable_value(
-                    &mut self.serial_tab,
-                    serial,
-                    RichText::new(label)
-                        .size(15.0)
-                        .family(FontFamily::Name("bold".into())),
-                );
+                if tab(ui, self.serial_tab == serial, label).clicked() {
+                    self.serial_tab = serial;
+                }
             }
             if !narrow {
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -1374,6 +1433,12 @@ impl LiteApp {
             .inner_margin(10)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                // Quiet scrollbars: a muted handle on a tinted track, ink on hover.
+                let visuals = ui.visuals_mut();
+                visuals.extreme_bg_color = palette.track;
+                visuals.widgets.inactive.fg_stroke.color = palette.handle;
+                visuals.widgets.hovered.fg_stroke.color = palette.ink;
+                visuals.widgets.active.fg_stroke.color = palette.ink;
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.spacing_mut().scroll.floating = false;
                 let row_height = ui.text_style_height(&egui::TextStyle::Monospace).ceil() + 2.0;
@@ -1602,7 +1667,7 @@ impl eframe::App for LiteApp {
                                 "Light mode"
                             },
                             if palette.dark { "moon" } else { "sun" },
-                            YELLOW,
+                            Tone::Secondary,
                             egui::vec2(144.0, 38.0),
                         )
                         .on_hover_text(if palette.dark {
@@ -1624,18 +1689,18 @@ impl eframe::App for LiteApp {
                 let compile_problem = self.action_problem(false);
                 let upload_problem = self.action_problem(true);
                 ui.add_enabled_ui(compile_problem.is_none(), |ui| {
-                    if button(ui, "Compile", "compile", YELLOW, egui::vec2(136.0, 40.0)).on_disabled_hover_text(compile_problem.unwrap_or("")).clicked() { self.action("compile"); }
+                    if button(ui, "Compile", "compile", Tone::Primary, egui::vec2(136.0, 40.0)).on_disabled_hover_text(compile_problem.unwrap_or("")).clicked() { self.action("compile"); }
                 });
                 ui.add_enabled_ui(upload_problem.is_none(), |ui| {
-                    if button(ui, "Upload", "upload", GREEN, egui::vec2(136.0, 40.0)).on_disabled_hover_text(upload_problem.unwrap_or("")).clicked() { self.action("upload"); }
+                    if button(ui, "Upload", "upload", Tone::Primary, egui::vec2(136.0, 40.0)).on_disabled_hover_text(upload_problem.unwrap_or("")).clicked() { self.action("upload"); }
                 });
-                ui.add_enabled_ui(idle && !self.source.is_empty(), |ui| { if button(ui, "Clean", "clean", WHITE, egui::vec2(104.0, 40.0)).clicked() { self.action("clean"); } });
-                ui.add_enabled_ui(idle, |ui| { if button(ui, "Resources", "resources", CORAL, egui::vec2(146.0, 40.0)).clicked() { self.resources_open = true; } });
-                if (self.busy || self.resource_busy) && button(ui, "Stop", "stop", CORAL, egui::vec2(104.0, 40.0)).on_hover_text("Stops compilation or downloads; active firmware writes are protected").clicked() { self.send(json!({"cmd": "stop"})); }
+                ui.add_enabled_ui(idle && !self.source.is_empty(), |ui| { if button(ui, "Clean", "clean", Tone::Secondary, egui::vec2(104.0, 40.0)).clicked() { self.action("clean"); } });
+                ui.add_enabled_ui(idle, |ui| { if button(ui, "Resources", "resources", Tone::Secondary, egui::vec2(146.0, 40.0)).clicked() { self.resources_open = true; } });
+                if (self.busy || self.resource_busy) && button(ui, "Stop", "stop", Tone::Danger, egui::vec2(104.0, 40.0)).on_hover_text("Stops compilation or downloads; active firmware writes are protected").clicked() { self.send(json!({"cmd": "stop"})); }
             });
             ui.add_space(8.0);
             if !self.error.is_empty() {
-                egui::Frame::new().fill(CORAL).stroke(Stroke::new(2.0_f32, INK)).inner_margin(10).show(ui, |ui| { ui.visuals_mut().override_text_color = Some(INK); ui.horizontal_wrapped(|ui| { ui.label(&self.error); if ui.small_button("Dismiss").clicked() { self.error.clear(); } }); });
+                egui::Frame::new().fill(CORAL).stroke(Stroke::new(2.0_f32, INK)).shadow(hard_shadow(palette, 3)).inner_margin(10).show(ui, |ui| { ui.set_width(ui.available_width()); ui.horizontal_wrapped(|ui| { ui.label(RichText::new(&self.error).color(INK)); if button(ui, "Dismiss", "", Tone::Secondary, egui::vec2(92.0, 32.0)).clicked() { self.error.clear(); } }); });
                 ui.add_space(12.0);
             }
             let available = ui.available_rect_before_wrap();
@@ -1695,15 +1760,19 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     visuals.override_text_color = Some(palette.ink);
     visuals.panel_fill = palette.paper;
     visuals.window_fill = palette.paper;
+    visuals.extreme_bg_color = palette.surface;
+    visuals.text_edit_bg_color = Some(palette.surface);
+    visuals.faint_bg_color = palette.track;
     visuals.window_stroke = Stroke::new(2.0_f32, palette.border);
     visuals.window_corner_radius = egui::CornerRadius::ZERO;
     visuals.menu_corner_radius = egui::CornerRadius::ZERO;
-    visuals.selection.bg_fill = if dark {
-        Color32::from_rgb(87, 75, 26)
-    } else {
-        YELLOW
-    };
-    visuals.selection.stroke = Stroke::new(1.0_f32, palette.ink);
+    visuals.window_shadow = hard_shadow(palette, 4);
+    visuals.popup_shadow = hard_shadow(palette, 3);
+    visuals.hyperlink_color = palette.ink;
+    // Fields, menus and selections share one surface, one outline and one
+    // highlight; hover and selection change color only, never the box.
+    visuals.selection.bg_fill = if dark { palette.highlight } else { YELLOW };
+    visuals.selection.stroke = Stroke::new(1.5_f32, palette.ink);
     for widgets in [
         &mut visuals.widgets.noninteractive,
         &mut visuals.widgets.inactive,
@@ -1712,23 +1781,26 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
         &mut visuals.widgets.open,
     ] {
         widgets.corner_radius = egui::CornerRadius::ZERO;
-        widgets.bg_stroke = Stroke::new(1.5_f32, palette.border);
+        widgets.bg_stroke = Stroke::new(2.0_f32, palette.border);
         widgets.fg_stroke = Stroke::new(1.5_f32, palette.ink);
+        widgets.bg_fill = palette.surface;
+        widgets.weak_bg_fill = palette.surface;
         widgets.expansion = 0.0;
     }
-    visuals.widgets.inactive.bg_fill = palette.surface;
-    visuals.widgets.hovered.bg_fill = visuals.selection.bg_fill;
-    visuals.widgets.active.bg_fill = if dark {
-        Color32::from_rgb(43, 74, 47)
-    } else {
-        GREEN
-    };
-    visuals.widgets.open.bg_fill = visuals.selection.bg_fill;
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, palette.border);
+    visuals.widgets.noninteractive.bg_fill = palette.paper;
+    for widgets in [&mut visuals.widgets.hovered, &mut visuals.widgets.open] {
+        widgets.bg_fill = palette.highlight;
+        widgets.weak_bg_fill = palette.highlight;
+    }
+    visuals.widgets.active.bg_fill = visuals.selection.bg_fill;
+    visuals.widgets.active.weak_bg_fill = visuals.selection.bg_fill;
     style.visuals = visuals;
     style.animation_time = 0.0;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 7.0);
-    style.spacing.interact_size = egui::vec2(36.0, 30.0);
+    style.spacing.interact_size = egui::vec2(36.0, 32.0);
+    style.spacing.combo_height = 320.0;
     style.text_styles.insert(
         egui::TextStyle::Body,
         FontId::new(14.0, FontFamily::Proportional),
@@ -1736,6 +1808,9 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     style
         .text_styles
         .insert(egui::TextStyle::Monospace, FontId::monospace(13.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, bold(17.0));
     style.text_styles.insert(
         egui::TextStyle::Button,
         FontId::new(14.0, FontFamily::Proportional),
@@ -1747,12 +1822,54 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
 mod verification {
     use super::*;
 
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        fn light(color: Color32) -> f32 {
+            let c = color.to_array().map(|c| {
+                let c = c as f32 / 255.0;
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+        }
+        let (a, b) = (light(a), light(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
     #[test]
-    fn connection_popup_retains_readable_accent_material_in_both_modes() {
+    fn controls_share_one_readable_material_in_both_modes() {
         for dark in [false, true] {
             let ctx = egui::Context::default();
             configure(&ctx);
             apply_theme(&ctx, dark);
+            let palette = Palette::new(dark);
+            let visuals = ctx.style().visuals.clone();
+            // Every field, menu and combo uses the same surface and outline;
+            // only hover/selection add the single highlight color.
+            for state in [&visuals.widgets.inactive, &visuals.widgets.active] {
+                assert_eq!(state.bg_stroke, Stroke::new(2.0_f32, palette.border));
+            }
+            assert_eq!(visuals.widgets.inactive.weak_bg_fill, palette.surface);
+            assert_eq!(visuals.widgets.hovered.weak_bg_fill, palette.highlight);
+            assert_eq!(
+                visuals.widgets.hovered.bg_stroke, visuals.widgets.inactive.bg_stroke,
+                "Hover must not change a field's box"
+            );
+            for background in [
+                palette.paper,
+                palette.surface,
+                palette.highlight,
+                visuals.selection.bg_fill,
+            ] {
+                assert!(contrast(palette.ink, background) >= 4.5);
+            }
+            assert!(contrast(palette.muted, palette.surface) >= 4.5);
+            for tone in [Tone::Primary, Tone::Secondary, Tone::Danger] {
+                let (fill, ink, _) = palette.tone(tone);
+                assert!(contrast(ink, fill) >= 4.5, "Button ink must stay readable");
+            }
             let mut rect = egui::Rect::NOTHING;
             let mut opened = false;
             for frame in 0..4 {
@@ -1781,21 +1898,15 @@ mod verification {
                     },
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            ui.scope(|ui| {
-                                connection_colors(ui, CORAL);
-                                let response = egui::ComboBox::from_id_salt("fixture-port")
-                                    .popup_style(egui::style::StyleModifier::from(
-                                        ui.style().as_ref().clone(),
-                                    ))
-                                    .selected_text("Select port")
-                                    .show_ui(ui, |ui| {
-                                        opened = true;
-                                        assert_eq!(ui.visuals().override_text_color, Some(INK));
-                                        assert_eq!(ui.visuals().window_fill, CORAL);
-                                        ui.label("Fixture port");
-                                    });
-                                rect = response.response.rect;
-                            });
+                            let response = egui::ComboBox::from_id_salt("fixture-port")
+                                .selected_text("Select port")
+                                .show_ui(ui, |ui| {
+                                    opened = true;
+                                    assert_eq!(ui.visuals().override_text_color, Some(palette.ink));
+                                    assert!(contrast(palette.ink, ui.visuals().window_fill) >= 4.5);
+                                    ui.label("Fixture port");
+                                });
+                            rect = response.response.rect;
                         });
                     },
                 );
@@ -1898,20 +2009,8 @@ mod verification {
                 LogTone::Success,
                 LogTone::Dim,
             ] {
-                fn light(color: Color32) -> f32 {
-                    let c = color.to_array().map(|c| {
-                        let c = c as f32 / 255.0;
-                        if c <= 0.04045 {
-                            c / 12.92
-                        } else {
-                            ((c + 0.055) / 1.055).powf(2.4)
-                        }
-                    });
-                    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
-                }
-                let (a, b) = (light(palette.log_color(tone)), light(palette.terminal));
                 assert!(
-                    (a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5,
+                    contrast(palette.log_color(tone), palette.terminal) >= 4.5,
                     "Log colors must remain readable in either theme"
                 );
             }

@@ -1,6 +1,6 @@
 ---
 name: lite-workbench
-description: Develop isolated Rust MCU Flasher Lite active-theme labels, colorful controls, five-click Developer Access reuse, compact status, history/search and automatic board-specific tool/build reuse without editing the original application.
+description: Develop isolated Rust MCU Flasher Lite active-theme labels, one-role colors, five-click Developer Access reuse, compact status, history/search and automatic board-specific tool/build reuse without editing the original application.
 ---
 
 # Lite workbench
@@ -26,7 +26,9 @@ content widths through streaming; Follow must preserve manual scrollback.
 Light is the launch default; switch the complete palette without reloading fonts
 or losing logs/selections. Status and USB Port own separate fixed-height frames.
 Theme labels and SVGs describe the active mode; tooltips describe the switch.
-Keep Connection's mint/teal panel and colored inputs/popups readable in both modes.
+Give each color one role: yellow primary/selected, coral stop/error, surface
+for everything else. Cards, fields and menus share one surface and outline;
+SVG icons are white strokes tinted with the button's ink.
 Use exactly five logo click releases plus an 800 ms pause for Developer Access.
 Reuse the main portal and security service in a separate owned helper, with
 Lite-only cache/vault namespaces. Keep one portal per worker and never terminate

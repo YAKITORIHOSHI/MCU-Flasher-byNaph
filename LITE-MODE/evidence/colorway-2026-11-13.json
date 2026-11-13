@@ -1,0 +1,131 @@
+{
+ "created_at": "2026-11-13T20:03:15+08:00",
+ "features": [
+  "one role per color: yellow primary/selected, coral stop/error, shared surface otherwise",
+  "Connection panel and fields use the shared surface; accent-filled combos removed",
+  "custom raised buttons for recent menus, Copy, Clear, Send, Dismiss; shared tabs for monitors and Resources",
+  "white-stroke SVG icons tinted with button ink in both themes",
+  "bold dialog titles, padded search fields, softer monitor scrollbar"
+ ],
+ "checks": {
+  "rust": 9,
+  "clippy": "-D warnings clean",
+  "fmt": "clean",
+  "python": {
+   "verify": 48,
+   "verify_preparation": 25,
+   "verify_history_search": 25,
+   "verify_developer": 13
+  },
+  "gui_captures": 11,
+  "capture_display": "owned Xvfb via -displayfd, no user display",
+  "physical_hardware": "not accessed"
+ },
+ "captures": [
+  {
+   "name": "light",
+   "bytes": 128100
+  },
+  {
+   "name": "dark",
+   "bytes": 124137
+  },
+  {
+   "name": "compact-dark",
+   "bytes": 87615
+  },
+  {
+   "name": "compact",
+   "bytes": 90462
+  },
+  {
+   "name": "serial",
+   "bytes": 109603
+  },
+  {
+   "name": "dark-serial",
+   "bytes": 106828
+  },
+  {
+   "name": "sketch-link",
+   "bytes": 127727
+  },
+  {
+   "name": "dark-resources",
+   "bytes": 100677
+  },
+  {
+   "name": "recent-projects",
+   "bytes": 117724
+  },
+  {
+   "name": "recent-boards",
+   "bytes": 122202
+  },
+  {
+   "name": "compact-resources",
+   "bytes": 62844
+  }
+ ],
+ "artifacts": {
+  "UBUNTU": {
+   "bytes": 10813152,
+   "sha256": "ceebdfbdb8d1b091a0a9f3bb549804a3cf5d66e9208e68201d2dfda36d2e2325"
+  },
+  "WINDOWS.exe": {
+   "bytes": 6211584,
+   "sha256": "dc770131c86897152406eb0c78e0f85c9ff9e7ba6fc7d3e63fc8cc37a64a3977"
+  },
+  "assets/preview.png": {
+   "bytes": 128100,
+   "sha256": "98254f5a77c1a1a82646b3560928ee9371f52a31b6e0e24f154217d6bdb4c0ce"
+  },
+  "assets/preview-dark.png": {
+   "bytes": 124137,
+   "sha256": "cff0910e41c328de099f73829ff8bbef7f4f4b09cf9b124c5394cb6188e15dc5"
+  }
+ },
+ "build": {
+  "UBUNTU": "cargo zigbuild --locked --release --target x86_64-unknown-linux-gnu.2.39",
+  "WINDOWS.exe": "cargo build --locked --release --target x86_64-pc-windows-gnu (mingw-w64 linker)"
+ },
+ "logs": {
+  "LITE-MODE/evidence/colorway-clippy.txt": {
+   "bytes": 190,
+   "sha256": "7f2082fd312b2829eb4a4dcefbce64695844e52642b95b60d1dd44935a29acba"
+  },
+  "LITE-MODE/evidence/colorway-rust-tests.txt": {
+   "bytes": 1152,
+   "sha256": "f9e93fc38759efcf5769e9e204b5237ebe846bed2ca3e7d4011f34d03749a569"
+  },
+  "LITE-MODE/evidence/colorway-ubuntu-build.txt": {
+   "bytes": 181,
+   "sha256": "435f96419d6746b16b18d1f52dc4b7c47bb4c54400424aa9cc30dc25560054d4"
+  },
+  "LITE-MODE/evidence/colorway-verify.txt": {
+   "bytes": 2780,
+   "sha256": "49d64c2783c086035befad1191c798c622a4ca9554b9605ff0fc2ebef91dfbe0"
+  },
+  "LITE-MODE/evidence/colorway-verify_developer.txt": {
+   "bytes": 852,
+   "sha256": "c2602328575eed4fbfbf9027612564b8e8562ce7ddb3c67b2ea144132b013f0a"
+  },
+  "LITE-MODE/evidence/colorway-verify_history_search.txt": {
+   "bytes": 1507,
+   "sha256": "5f1ad04b1a5ed6deb4d36db0ff130c85e577e5cff9f495f2dcfbfaca5abbd67b"
+  },
+  "LITE-MODE/evidence/colorway-verify_preparation.txt": {
+   "bytes": 1846,
+   "sha256": "ac6f381a60eb3fb47c7fa9d71ec137f79d985528abaf310d184f7654e7717276"
+  },
+  "LITE-MODE/evidence/colorway-windows-build.txt": {
+   "bytes": 180,
+   "sha256": "cb1ebfd812258fed33c355ee0f06f624bbf806fd0f8420d0a2f365e004f36385"
+  }
+ },
+ "main_changes": "none",
+ "pending": [
+  "native Windows execution",
+  "physical USB upload/serial"
+ ]
+}

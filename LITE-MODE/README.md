@@ -84,9 +84,10 @@ including monitor colors and dialogs. Light is the default at every launch.
 Theme changes retain selections, logs and scroll positions. Status and USB port
 details have separate bordered containers. The compact header and controls leave
 the remaining height to the monitor; there are no promotional banners or footer.
-Connection uses a mint/teal panel with yellow board/framework fields, coral port
-controls, blue monitor baud and green upload speed. Popups keep readable ink on
-their accent fills in both themes.
+Colors have one meaning each: yellow marks primary actions (Compile, Upload,
+Open sketch, Connect) and the selected tab, coral marks Stop, Disconnect and
+errors, and everything else uses the same paper surface and ink outline. Fields
+and menus share one style and highlight on hover in both themes.
 
 **Developer Access:** click the logo exactly five times, with less than 800 ms
 between clicks, then pause. This opens the main application's existing ticket

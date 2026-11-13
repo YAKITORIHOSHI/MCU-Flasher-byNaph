@@ -1,5 +1,14 @@
 # Lite 0.1.0 — 2026-11-13
 
+Consistent colors:
+
+- Each color now has one meaning. Yellow marks primary actions and the
+  selected tab, coral marks Stop, Disconnect and errors, and everything else uses
+  one paper surface with an ink outline. The mint Connection panel and its
+  coral, blue and green fields are gone.
+- Recent sketches/boards, Copy, Clear, Send and Dismiss now match the other
+  buttons, and icons follow the theme's ink in Light and Dark.
+
 Access and color follow-up:
 
 - Theme labels/icons now show the active mode. Light shows Light mode; Dark shows
