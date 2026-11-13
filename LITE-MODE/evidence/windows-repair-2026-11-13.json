@@ -1,7 +1,7 @@
 {
   "date": "2026-11-13",
   "local_checks": {
-    "rust": 12,
+    "rust": 13,
     "python_worker": 48,
     "python_history_search": 25,
     "python_preparation": 25,
@@ -21,11 +21,11 @@
   "artifacts": {
     "UBUNTU": {
       "bytes": 10782048,
-      "sha256": "8d780814f2d3c69e238c5f992d338e3771055b2bc38e78a2534b668afc2d0c41"
+      "sha256": "91cd2bf02f99ecdb0013b7fe6082e4477872237cb7424e75a61492acc8da6a54"
     },
     "WINDOWS.exe": {
       "bytes": 6195712,
-      "sha256": "5bd5ea49bb407cb8bf83de507babe0eb66134e91ad76b70f62b382a08fce39d6"
+      "sha256": "05b80e216a8cf1747526ac2c0aceab3e0a7ca6cf8628e0fedbd1d1d6c940257e"
     },
     "Cargo.lock": {
       "bytes": 96063,

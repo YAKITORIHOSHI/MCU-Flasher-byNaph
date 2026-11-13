@@ -36,6 +36,7 @@ def tree_hash(root):
 
 
 def main():
+    (ROOT / "temp").mkdir(exist_ok=True)
     checks = []
     def check(condition, name):
         assert condition, name

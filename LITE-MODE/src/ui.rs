@@ -837,6 +837,10 @@ impl LiteApp {
         self.ready && !self.busy && !self.pending && !self.resource_busy
     }
 
+    fn take_developer_request(&mut self, now: Instant) -> bool {
+        self.ready && !self.offline_preview && self.logo_gesture.take_ready(now)
+    }
+
     fn action_problem(&self, upload: bool) -> Option<&'static str> {
         if !self.ready {
             Some("Wait for Python tools to start")
@@ -1855,7 +1859,7 @@ impl eframe::App for LiteApp {
             self.pending = true;
             self.send(json!({"cmd": "project", "path": path}));
         }
-        if self.logo_gesture.take_ready(Instant::now()) && self.ready && !self.offline_preview {
+        if self.take_developer_request(Instant::now()) {
             self.send(json!({"cmd": "developer_access"}));
         }
         let palette = Palette::from_context(ctx);
@@ -2047,6 +2051,23 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
 #[cfg(test)]
 mod verification {
     use super::*;
+
+    #[test]
+    fn startup_does_not_discard_the_developer_gesture() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.offline_preview = false;
+        app.ready = false;
+        let start = Instant::now();
+        for n in 0..5 {
+            app.logo_gesture
+                .click(start + Duration::from_millis(n * 100));
+        }
+        assert!(!app.take_developer_request(start + Duration::from_secs(2)));
+        app.ready = true;
+        assert!(app.take_developer_request(start + Duration::from_secs(3)));
+        assert!(!app.take_developer_request(start + Duration::from_secs(4)));
+    }
 
     fn fixture_boards(app: &mut LiteApp) {
         app.boards = [

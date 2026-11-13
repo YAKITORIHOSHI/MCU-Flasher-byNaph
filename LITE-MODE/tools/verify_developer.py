@@ -5,6 +5,7 @@ import json
 import subprocess
 import argparse
 import os
+import platform
 import sys
 import tempfile
 import time
@@ -56,6 +57,7 @@ def child_fixture():
                     "activated": True, "auth_gate": dialog.stack.currentWidget() == dialog.auth_page,
                     "width": dialog.auth_card.width(), "qt": qVersion(), "platform": sys.platform,
                     "qpa": QApplication.platformName(), "native": native,
+                    "os": platform.platform(), "python": sys.version,
                     "active": QApplication.activeWindow() is dialog,
                 }))
             QTimer.singleShot(400, report)
@@ -78,6 +80,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--render-dir", type=Path)
     args = parser.parse_args()
+    (ROOT / "temp").mkdir(exist_ok=True)
     checks = []
 
     def check(value, name):

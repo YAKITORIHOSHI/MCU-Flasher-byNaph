@@ -103,7 +103,8 @@ The helper acknowledges window startup before activation; on Windows, Lite
 permits only its owned helper to take focus while Lite owns the foreground.
 Startup failures and slow startup appear in the Build monitor, and an accepted
 portal close ends the standalone helper cleanly. Batched pointer releases and
-layout retries preserve the exact five-click count.
+layout retries preserve the exact five-click count. A gesture during Python
+startup is retained until the helper can be started.
 The normal account/local-key authentication remains required. Lite keeps local
 portal data and saved credentials in its own namespace, while using the same
 built-in cloud provider and account rules. The main workspace is not launched.

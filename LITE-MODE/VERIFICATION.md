@@ -3,7 +3,7 @@
 
 ## Windows interaction repair
 
-Twelve Rust checks cover actual logo pointer events (including five releases in
+Thirteen Rust checks cover actual logo pointer events (including five releases in
 one frame and a discarded layout pass), the main-style board picker at five
 fractional scales, readiness and stable streaming monitors. All 98 existing
 Python checks pass. Sixteen Developer Access checks now run the actual helper
