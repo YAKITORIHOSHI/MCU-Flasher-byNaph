@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: "Design MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces and restrained loading feedback."
+description: "Design MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -37,6 +37,12 @@ reserving both labels' widths so nothing in the footer moves. Deleting a ticket
 removes only its card; never grey out or rebuild the whole list for it.
 Keep category removal feedback wrapped, drafts intact and sort/filter controls
 reachable in narrow windows.
+
+Assistant startup shows no elapsed-time counter; retain its static phase trace
+and slow-start help. New ticket opens only its dedicated dialog, with no inline
+form or provisional card in the dashboard. Add a card after creation succeeds;
+cancelled and failed drafts leave the list intact. A failed cloud delete
+restores its card and gives clear feedback.
 
 
 ## Short native window budgets

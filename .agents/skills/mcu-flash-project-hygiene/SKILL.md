@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, dated source-revision records, package publication and public release integrity."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
@@ -65,6 +65,14 @@ Serial Monitor setting. Verify payloads with a mocked metadata queue in
 `direct/verify_upload_logging.py`; do not generate them against live projects.
 
 ## Preserve ownership boundaries
+
+Developer ticket caches stay partitioned by verified provider and account.
+Successful cloud snapshots, including null/empty, retire remotely deleted rows;
+network failures preserve the cache. Only explicit unsent creations carry the
+private `_pending_create` cache marker; never send it to Firebase or show it in
+UI data. Clear it after cloud acknowledgement. Serialize cache reconciliation
+with mutations and require cloud-delete acknowledgement before removing the
+local row. Verify with mocked HTTP and disposable account caches only.
 
 The configured source container (normally `Documents/_MCUFlasherByNaph_src`)
 contains `Boards`, `Libs` and `Cloud`. Treat `Cloud/<sketch name>` sources as

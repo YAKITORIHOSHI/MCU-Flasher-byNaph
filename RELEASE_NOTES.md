@@ -1,6 +1,6 @@
 # MCU Flasher by Naph — Release Notes
 
-**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 12, 2026
+**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 13, 2026
 
 **Platforms:** Windows 10/11 (AMD64) · Ubuntu 24.04+ (amd64, ARM64) ·
 Linux Mint 22.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
@@ -10,6 +10,17 @@ Installed copies update themselves from GitHub on their next launch; see
 [commit log](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commits/main).
 
 ---
+
+## November 13 — Assistant loading and Developer Access tickets
+
+- **Quieter Assistant startup.** Removed the elapsed-time counter from the
+  loading screen. Help for a slow start and startup output remain available.
+- **No ghost ticket when creating.** New ticket opens one dedicated form;
+  a card appears only after **Create ticket** succeeds. Cancelling adds nothing.
+- **Ticket deletions reach other devices.** A stale cache no longer brings
+  deleted tickets back, including after deleting the last ticket. A failed
+  cloud deletion restores its card and reports the failure. Tickets created
+  while disconnected remain available to sync when the connection returns.
 
 ## November 12 (later) — Bootstrap window on Ubuntu, updates without questions
 

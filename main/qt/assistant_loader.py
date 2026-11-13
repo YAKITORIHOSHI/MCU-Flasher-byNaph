@@ -18,7 +18,6 @@ from main.qt.glass import paint_cover
 from main.qt.icons import icon
 from main.qt.theme import glass_tokens
 
-SHOW_ELAPSED_AFTER_SECONDS = 5
 SLOW_AFTER_SECONDS = 15
 _STEPS = 3
 
@@ -84,7 +83,7 @@ class AssistantLoader(QFrame):
         self._started_at = 0.0
         self._error = False
         self._clock = QTimer(self)
-        self._clock.setInterval(1000)
+        self._clock.setSingleShot(True)
         self._clock.timeout.connect(self._tick)
         self._build_ui()
         self.apply_theme("default")
@@ -182,18 +181,17 @@ class AssistantLoader(QFrame):
         self.retry_button.setVisible(error)
         self._trace.setVisible(loading and self.height() >= 110)
         self._tick()
-        if loading and self.isVisible():
-            self._clock.start()
-        elif not loading:
-            self._clock.stop()
 
     def _tick(self) -> None:
-        elapsed = int(time.monotonic() - self._started_at) if self._loading else 0
-        slow = elapsed >= SLOW_AFTER_SECONDS
-        self.status.setText(f"{self._status_text} ({elapsed} s)"
-                            if elapsed >= SHOW_ELAPSED_AFTER_SECONDS else self._status_text)
+        elapsed = time.monotonic() - self._started_at if self._loading else 0
+        slow = self._loading and elapsed >= SLOW_AFTER_SECONDS
+        self.status.setText(self._status_text)
         self._hint.setVisible(slow)
         self.reveal_button.setVisible(slow and self._can_reveal)
+        if self._loading and self.isVisible() and not slow:
+            self._clock.start(max(1, int((SLOW_AFTER_SECONDS - elapsed) * 1000)))
+        else:
+            self._clock.stop()
 
     # ── Native events ────────────────────────────────────────────────────────
 
@@ -201,7 +199,6 @@ class AssistantLoader(QFrame):
         super().showEvent(event)
         if self._loading:
             self._tick()
-            self._clock.start()
 
     def hideEvent(self, event) -> None:
         self._clock.stop()

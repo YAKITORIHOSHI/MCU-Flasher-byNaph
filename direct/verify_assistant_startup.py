@@ -629,7 +629,7 @@ class LoaderChecks(unittest.TestCase):
         self.pump()
         self.assertFalse(widget._clock.isActive(), "An idle screen needs no timer")
         widget.show_progress("Loading your workspace…", 2)
-        self.assertEqual(widget._clock.interval(), 1000, "Only a once-a-second elapsed label may tick")
+        self.assertTrue(widget._clock.isSingleShot(), "Slow-start help needs only one wakeup")
         self.assertTrue(widget._clock.isActive())
         widget.hide()
         self.assertFalse(widget._clock.isActive(), "A hidden cover must not wake the application")
@@ -638,7 +638,7 @@ class LoaderChecks(unittest.TestCase):
         widget.finish()
         self.assertFalse(widget._clock.isActive())
 
-    def test_elapsed_and_slow_help_appear_only_when_earned(self):
+    def test_status_never_shows_elapsed_time_and_slow_help_still_works(self):
         widget = self.loader()
         widget.resize(400, 360)
         widget.show()
@@ -648,22 +648,26 @@ class LoaderChecks(unittest.TestCase):
         self.assertFalse(widget.reveal_button.isVisible())
         widget._started_at -= 7
         widget._tick()
-        self.assertEqual(widget.status.text(), "Loading your workspace… (7 s)")
+        self.assertEqual(widget.status.text(), "Loading your workspace…")
         self.assertFalse(widget.reveal_button.isVisible())
         widget._started_at -= 10
         widget._tick()
         self.pump()
         self.assertTrue(widget.reveal_button.isVisible())
         self.assertTrue(widget._hint.isVisible())
+        self.assertEqual(widget.status.text(), "Loading your workspace…")
+        self.assertFalse(widget._clock.isActive(), "Visible help needs no repeating timer")
         pressed = []
         widget.reveal_requested.connect(lambda: pressed.append(True))
         widget.reveal_button.click()
         self.assertEqual(pressed, [True])
         widget.show_progress("Starting a fresh OpenCode session…", 1)
-        self.assertIn("(17 s)", widget.status.text(), "One start keeps one clock across its phases")
+        self.assertEqual(widget.status.text(), "Starting a fresh OpenCode session…")
+        self.assertTrue(widget._hint.isVisible(), "Slow-start help survives a phase change")
         widget.finish()
         widget.show_progress("Starting a fresh OpenCode session…", 1)
         self.assertEqual(widget.status.text(), "Starting a fresh OpenCode session…", "A new start begins a new clock")
+        self.assertFalse(widget._hint.isVisible())
 
     def test_windows_panel_has_no_reveal_before_there_is_anything_to_show(self):
         widget = self.loader(can_reveal=False)

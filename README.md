@@ -29,8 +29,11 @@ terminals and an optional AI assistant in one window.
   and Cloud sketches synced to your account. Each project can open in its own
   window.
 - **Terminals and AI:** PowerShell and CMD on Windows, Bash on Linux, plus an
-  embedded OpenCode assistant. Its file edits are highlighted for you to accept
-  or reject.
+  embedded OpenCode assistant with a quiet loading screen and no elapsed-time
+  counter. Its file edits are highlighted for you to accept or reject.
+- **Developer Access:** Private issue tickets shared across your signed-in
+  devices. New tickets appear after **Create ticket** succeeds; cancelled drafts
+  add nothing. Deletions sync across devices, including an empty ticket list.
 - **Resources:** Browse, download and prepare board packages and Arduino
   libraries. Soft and Hard Reset recovery reflash a board to a known state.
 - **Interface:** Glass Dark, Frosted Light and Solarized Dark themes, an

@@ -644,6 +644,8 @@ class CreateTicketDialog(_TaskPortal):
             super().keyPressEvent(event)
 
     def _do_save(self) -> None:
+        if self._task_name:
+            return
         title = self.txt_title.text().strip()
         if not title:
             QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
@@ -1128,8 +1130,8 @@ class OwnerTicketDialog(_TaskPortal):
             return
         ready = self.service is not None and not busy
         for control in (self.btn_unlock, self.btn_diagnose, self.btn_auth_cloud, self.chk_keep_signed_in,
-                        self.btn_new, self.btn_cloud, self.btn_lock, self.btn_refresh, self.btn_save_new,
-                        self.cards_container, self.new_fields):
+                        self.btn_new, self.btn_cloud, self.btn_lock, self.btn_refresh,
+                        self.cards_container):
             control.setEnabled(ready)
         self.btn_unlock.setText("Signing in…" if busy and self._task_name in ("authenticate", "initialize")
                                 else "Sign in")
@@ -1479,30 +1481,6 @@ class OwnerTicketDialog(_TaskPortal):
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        # In-place form_card (retained strictly for test backward compatibility, hidden)
-        self.form_card = NeoCard(body, accent=True)
-        form = QVBoxLayout(self.form_card)
-        form.setContentsMargins(20, 20, 20, 20)
-        form.setSpacing(16)
-        form.addWidget(label("New ticket", self.form_card, "title"))
-        self._cached_new_fields = TicketFields(self.form_card, categories=self._category_options())
-        self._cached_new_fields.category_add_requested.connect(self._add_ticket_category)
-        self._cached_new_fields.category_remove_requested.connect(self._remove_ticket_category)
-        form.addWidget(self._cached_new_fields)
-        self._cached_new_title = self._cached_new_fields.title
-        self._cached_new_category = self._cached_new_fields.category
-        self._cached_new_sev = self._cached_new_fields.severity
-        self._cached_new_status = self._cached_new_fields.status
-        self._cached_new_desc = self._cached_new_fields.description
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        footer.addWidget(button("Cancel", self.form_card, self.form_card.hide, role="quiet"))
-        self._cached_btn_save_new = button("Create ticket", self.form_card, self._do_save_new_ticket, role="primary", vector="save")
-        footer.addWidget(self._cached_btn_save_new)
-        form.addLayout(footer)
-        self.form_card.hide()
-        layout.addWidget(self.form_card)
-
         # 6. Ticket cards container with balanced symmetric margins (12, 6, 12, 12) (B6)
         self.cards_container = QWidget(body)
         self.cards_layout = QVBoxLayout(self.cards_container)
@@ -1550,8 +1528,6 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _sync_category_options(self, selected=None):
         categories = self._category_options()
-        if hasattr(self, "new_fields"):
-            self.new_fields.set_categories(categories, current=selected)
         if not hasattr(self, "category_filter"):
             return
         previous = self.category_filter.currentText()
@@ -1568,121 +1544,6 @@ class OwnerTicketDialog(_TaskPortal):
         self.category_filter.setToolTip(current)
         self.category_filter.blockSignals(False)
         self._active_category_filter = current
-
-    def _add_ticket_category(self, category):
-        if self._task_name or self.service is None:
-            return
-        self._pending_category = category
-        self._run_task("category", lambda: self.service.add_ticket_category(category), self._category_added)
-
-    def _category_added(self, result, error):
-        if error or not result:
-            self.new_fields.show_category_feedback(
-                error or "The category could not be saved. Try again.", "fail")
-            return
-        ok, message, categories = result
-        categories = list(categories or self._category_options())
-        self._config["ticket_categories"] = categories
-        selected = next((value for value in categories
-                         if value.casefold() == self._pending_category.casefold()), None)
-        self._sync_category_options(selected=selected)
-        if ok:
-            self.new_fields.category_input.clear()
-        self.new_fields.show_category_feedback(message, "ok" if ok else "warn")
-
-    @property
-    def new_fields(self):
-        return getattr(self, "_cached_new_fields", None)
-
-    @new_fields.setter
-    def new_fields(self, val):
-        self._cached_new_fields = val
-
-    @property
-    def new_title(self):
-        return getattr(self, "_cached_new_title", None)
-
-    @new_title.setter
-    def new_title(self, val):
-        self._cached_new_title = val
-
-    @property
-    def new_desc(self):
-        return getattr(self, "_cached_new_desc", None)
-
-    @new_desc.setter
-    def new_desc(self, val):
-        self._cached_new_desc = val
-
-    @property
-    def new_category(self):
-        return getattr(self, "_cached_new_category", None)
-
-    @new_category.setter
-    def new_category(self, val):
-        self._cached_new_category = val
-
-    @property
-    def new_sev(self):
-        return getattr(self, "_cached_new_sev", None)
-
-    @new_sev.setter
-    def new_sev(self, val):
-        self._cached_new_sev = val
-
-    @property
-    def new_status(self):
-        return getattr(self, "_cached_new_status", None)
-
-    @new_status.setter
-    def new_status(self, val):
-        self._cached_new_status = val
-
-    @property
-    def btn_save_new(self):
-        return getattr(self, "_cached_btn_save_new", None)
-
-    @btn_save_new.setter
-    def btn_save_new(self, val):
-        self._cached_btn_save_new = val
-
-    def _toggle_new_ticket_form(self):
-        return self._open_create_ticket_modal()
-
-    def _do_save_new_ticket(self) -> None:
-        if self._task_name:
-            return
-        self.form_card.setVisible(False)
-        if getattr(self, "_active_create_dialog", None) is not None and self._active_create_dialog.isVisible():
-            self._active_create_dialog.accept()
-        try:
-            title = self.new_title.text().strip() if self.new_title else ""
-            if not title:
-                QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
-                return
-
-            cat = self.new_category.currentText() if self.new_category else "General"
-            sev = self.new_sev.currentText() if self.new_sev else "Medium"
-            st = self.new_status.currentText() if self.new_status else "Open"
-            desc = self.new_desc.toPlainText().strip() if self.new_desc else ""
-
-            def create():
-                ticket = self.service.create_ticket(title=title, category=cat, severity=sev, description=desc, status=st)
-                return ticket, self.service.get_tickets()
-            self._run_task("create", create, self._created)
-        except Exception:
-            QMessageBox.warning(self, "Create ticket", "The ticket could not be created. Your draft is still here.")
-
-    def _created(self, result, error):
-        if not error and result and result[0]:
-            self._tickets = result[1]
-            self._tickets_generation += 1
-            self.new_title.clear()
-            self.new_desc.clear()
-            self.form_card.setVisible(False)
-            self._render_tickets_list()
-        else:
-            QMessageBox.warning(self, "Create ticket", error or "The ticket could not be created. Your draft is still here.")
 
     def _update_stats(self, tickets):
         values = [len(tickets), sum(t.get("severity") == "Critical" for t in tickets),
@@ -1802,34 +1663,24 @@ class OwnerTicketDialog(_TaskPortal):
             pass
 
     def _on_modal_ticket_created(self, ticket=None):
-        if hasattr(self, "form_card"):
-            self.form_card.setVisible(False)
         self._refresh_tickets_list()
 
     def _open_create_ticket_modal(self) -> CreateTicketDialog:
-        self.form_card.setVisible(True)
-        if hasattr(self, "new_title"):
-            self.new_title.setFocus()
-            QTimer.singleShot(0, self, lambda: self.scroll.ensureWidgetVisible(self.new_title))
+        existing = getattr(self, "_active_create_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            return existing
         dlg = CreateTicketDialog(parent=self, service=self.service,
                                  categories=self._category_options(),
                                  on_created=self._on_modal_ticket_created)
         dlg.categories_updated.connect(self._categories_updated)
-        dlg.accepted.connect(self._refresh_tickets_list)
         self._active_create_dialog = dlg
         if not self.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
             dlg.show()
         return dlg
 
     def open_create_ticket_dialog(self) -> CreateTicketDialog:
-        dlg = CreateTicketDialog(parent=self, service=self.service,
-                                 categories=self._category_options(),
-                                 on_created=self._on_modal_ticket_created)
-        dlg.categories_updated.connect(self._categories_updated)
-        dlg.accepted.connect(self._refresh_tickets_list)
-        self._active_create_dialog = dlg
-        dlg.show()
-        return dlg
+        return self._open_create_ticket_modal()
 
     def _categories_updated(self, categories):
         self._config["ticket_categories"] = list(categories or CATEGORIES)
@@ -1877,16 +1728,21 @@ class OwnerTicketDialog(_TaskPortal):
 
         self._run_task("update", update, on_complete)
 
-    def _ticket_mutated(self, result, error):
+    def _ticket_deleted(self, result, error, removed):
         if not error and result:
             self._tickets = result[1]
             self._tickets_generation += 1
             self._render_tickets_list()
+        elif removed is not None and not any(t.get("id") == removed.get("id") for t in self._tickets):
+            self._tickets.append(removed)
+            self._tickets_generation += 1
+            self._render_tickets_list()
         if error or not result or not result[0]:
-            QMessageBox.warning(self, "Update ticket", error or "The ticket could not be changed. Try again.")
+            QMessageBox.warning(self, "Delete ticket", error or "The ticket could not be deleted. Check your connection and try again.")
 
     def _on_ticket_deleted(self, ticket_id: str) -> None:
         try:
+            removed = next((dict(t) for t in self._tickets if t.get("id") == ticket_id), None)
             self._tickets = [t for t in self._tickets if t.get("id") != ticket_id]
             # A live refresh started before this deletion would bring the card back.
             self._tickets_generation += 1
@@ -1899,7 +1755,7 @@ class OwnerTicketDialog(_TaskPortal):
                 if not isinstance(res, list):
                     res = self.service.get_tickets()
                 return ok, res
-            self._run_task("delete", delete, self._ticket_mutated)
+            self._run_task("delete", delete, lambda result, error: self._ticket_deleted(result, error, removed))
         except Exception:
             pass
 

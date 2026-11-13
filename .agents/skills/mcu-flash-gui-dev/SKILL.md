@@ -1,9 +1,31 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 13: Assistant loading and ticket creation/deletion
+
+AssistantLoader shows plain status text without elapsed seconds. Its single-shot
+timer only schedules slow-start help; preserve that help, startup-output access
+and the parsed-screen readiness gate.
+
+Developer Access creates tickets only in CreateTicketDialog. Do not reintroduce
+the inline dashboard form or create a card before a successful save. Ignore
+duplicate save submissions while the request is active. The portal verifier
+must drive the real dedicated dialog, including cancellation and failed saves.
+
+Successful ticket snapshots, including Firebase null, honor remote removals.
+Only a cloud creation explicitly marked `_pending_create` in its account cache
+may be missing remotely and still sync. Strip that marker from UI/HTTP data and
+clear it after acknowledgement. Reads/merges, create, update and delete share
+the serialized ticket-change lock; never launch detached cache-upload threads.
+Cloud deletion requires a successful server response before removing its cache
+row; failed requests keep the cache and restore the card with a warning. Verify
+owner_ticket_service (two-device and last-ticket deletion, pending creations),
+owner_tickets (dedicated forms, draft/cancel/save/card behavior) and
+assistant_startup with isolated persistence, vault and HTTP fixtures.
 
 ## November 12, later: Ubuntu Bootstrap window, updates without questions
 

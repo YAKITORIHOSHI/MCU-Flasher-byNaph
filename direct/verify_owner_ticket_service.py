@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import io
 import json
 import socket
@@ -12,6 +13,7 @@ import unittest
 import urllib.error
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +42,91 @@ class Response:
 
 
 class OwnerTicketServiceChecks(unittest.TestCase):
+    def cache_for(self, service, tickets):
+        cache = copy.deepcopy(tickets)
+        service._read_local_tickets = Mock(side_effect=lambda: copy.deepcopy(cache))
+        def save(values):
+            cache[:] = copy.deepcopy(values)
+            return True
+        service._save_local_tickets = Mock(side_effect=save)
+        return cache
+
+    def test_other_device_honors_deletions_including_the_last_ticket_without_reuploading(self):
+        self.cloud_response()
+        self.assertTrue(self.service.authenticate("developer@example.com", "fixture-cloud-password")[0])
+        for last_ticket in (False, True):
+            with self.subTest(last_ticket=last_ticket):
+                deleted = {"id": "delete-me", "title": "Deleted on another device",
+                           "updated_at": "2026-11-13T01:00:00Z"}
+                keep = {"id": "keep-me", "title": "Keep this ticket"}
+                tickets = [deleted] if last_ticket else [deleted, keep]
+                remote = {ticket["id"]: copy.deepcopy(ticket) for ticket in tickets}
+                first = self.service
+                second = copy.copy(first)
+                self.cache_for(first, tickets)
+                second_cache = self.cache_for(second, tickets)
+                # Even a newer cached timestamp cannot undo a remote removal.
+                second_cache[0]["updated_at"] = "2099-01-01T00:00:00Z"
+                methods = []
+                def request(req, **_kwargs):
+                    method = req.get_method()
+                    methods.append(method)
+                    if method == "DELETE":
+                        remote.pop(urlsplit(req.full_url).path.rsplit("/", 1)[-1][:-5], None)
+                        return Response(None, 204)
+                    self.assertEqual(method, "GET", "A cache refresh must never resurrect a deleted ticket")
+                    return Response(copy.deepcopy(remote) or None)
+                self.http.side_effect = request
+                self.assertTrue(first.delete_ticket("delete-me"))
+                expected = [] if last_ticket else [keep]
+                self.assertEqual(second.get_tickets(), expected)
+                self.assertEqual(second_cache, expected)
+                self.assertEqual(second.get_tickets(), expected)
+                self.assertEqual(methods, ["DELETE", "GET", "GET"])
+
+    def test_failed_cloud_deletion_preserves_cache_and_reports_failure(self):
+        self.cloud_response()
+        self.assertTrue(self.service.authenticate("developer@example.com", "fixture-cloud-password")[0])
+        ticket = {"id": "keep-me", "title": "Deletion not confirmed"}
+        cache = self.cache_for(self.service, [ticket])
+        self.http.side_effect = TimeoutError("fixture offline")
+        self.assertFalse(self.service.delete_ticket("keep-me"))
+        self.assertEqual(cache, [ticket])
+        self.service._save_local_tickets.assert_not_called()
+        self.assertEqual(self.service.get_tickets(), [ticket], "A failed read is not an empty cloud snapshot")
+
+    def test_disconnected_creation_retries_but_acknowledged_tickets_stay_deleted(self):
+        self.cloud_response()
+        self.assertTrue(self.service.authenticate("developer@example.com", "fixture-cloud-password")[0])
+        cache = self.cache_for(self.service, [])
+        self.http.side_effect = TimeoutError("fixture offline")
+        created = self.service.create_ticket("Created while disconnected")
+        self.assertTrue(created)
+        self.assertNotIn(owner._PENDING_CREATE, created)
+        self.assertTrue(cache[0][owner._PENDING_CREATE])
+        # Another service instance represents reopening the account with the
+        # persisted cache. An unrelated old cache row is never an unsent draft.
+        reopened = copy.copy(self.service)
+        cache = self.cache_for(reopened, cache + [{"id": "old-deleted", "title": "Old cache"}])
+        remote, writes = {}, []
+        def request(req, **_kwargs):
+            if req.get_method() == "GET":
+                return Response(copy.deepcopy(remote) or None)
+            self.assertEqual(req.get_method(), "PUT")
+            ticket = json.loads(req.data)
+            self.assertNotIn(owner._PENDING_CREATE, ticket)
+            writes.append(ticket)
+            remote[ticket["id"]] = ticket
+            return Response(ticket)
+        self.http.side_effect = request
+        self.assertEqual(reopened.get_tickets(), [created])
+        self.assertEqual(writes, [created])
+        self.assertEqual(cache, [created])
+        remote.clear()  # A different device deletes it after its creation synced.
+        self.assertEqual(reopened.get_tickets(), [])
+        self.assertEqual(cache, [])
+        self.assertEqual(writes, [created])
+
     def test_removed_category_cannot_return_through_a_stale_create_or_edit_draft(self):
         saved = {"ticket_categories": ["Removed fixture", "Current fixture"]}
         tickets = [{"id": "current", "title": "Keep title", "category": "General Defect"}]

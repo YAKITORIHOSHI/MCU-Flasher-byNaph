@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-windows-maintainer
-description: "Windows MCU Flasher maintainer for passive monitoring, deliberate resets, rounded glass compact menus, responsive Settings, sample find/navigation, update choices, UNC CMD sessions and steady OpenCode columns."
+description: "Windows MCU Flasher maintainer for passive monitoring, deliberate resets, rounded glass compact menus, responsive Settings, sample find/navigation, update choices, UNC CMD sessions, steady OpenCode columns and Developer Access ticket deletion."
 tools: [read, edit, search, execute]
 ---
 
@@ -12,6 +12,7 @@ Ground every conclusion in the current source and preserve user projects and har
 - Work in `main/mcu_flash_gui.py` (and `main/` modular package), `mcu_flash_gui.py`, Windows launchers (`launcher.py`, `runThisOnWindows.vbs`), Windows helpers (`win_subprocess_hide.py`, `bootstrap.py`), and focused tests when the request authorizes implementation.
 - Do not run a real flash, upload, reset, destructive Clean, installer, or COM port operation during automated verification.
 - Preserve unrelated working-tree changes. Never delete or rewrite a user sketch to test app behavior.
+- Keep Assistant loading free of elapsed-time counters while retaining slow-start help. Developer Access opens one dedicated create form and adds a card only after success. Honor cloud ticket removals, including null snapshots; only explicit unsent creations may sync from missing cache rows. Serialize reconciliation with mutations and restore/report unconfirmed cloud deletions. Verify assistant_startup, owner_ticket_service and owner_tickets with isolated accounts and mocked HTTP.
 - Normal monitor open/reconnect/close requests no DTR/RTS reset. Complete and check intentional resets in the backend, never a delayed GUI timer. Keep hidden assistants idle on local/cloud project opens and OpenCode beside the attached editor/monitors at compact widths. Apply shared cached glass popup material to every combo, and scope terminal card styles to their object names.
 - CMD uses a local supervisor, environment-bound quoted pushd and popd. Forced-close cleanup may release only its recorded new drive still mapped to the same share. Embedded Windows child titles include their PID; never attach another project's child. Verify with `direct/verify_monitor_connection.py`, `verify_cmd_directory.py` and `verify_combo_popups.py`, plus native runtime/layout/ConPTY coverage.
 - Compact Actions/Options share cached glass and antialiased alpha corners, without opaque native shadows or binary masks. Destroy the popup before dispatching dialog actions. Settings owns one window-modal `open()`, deletes on close and exposes an editable autosave delay without spin arrows. Verify native heartbeat, typing, modal ownership and repeated closing in `verify_controls` at every scale.

@@ -20,7 +20,6 @@ import hmac
 import secrets
 import socket
 import threading
-from threading import Thread
 import urllib.request
 import urllib.error
 import unicodedata
@@ -63,6 +62,8 @@ _STREAM_READ_TIMEOUT = 75.0
 _STREAM_LINE_LIMIT = 64 * 1024
 _POLL_INTERVAL = 30.0
 _TICKET_CHANGE_LOCK = threading.RLock()
+# Private cache marker: only an explicitly unsent creation may be absent remotely.
+_PENDING_CREATE = "_pending_create"
 
 
 def _serialized_ticket_change(function):
@@ -833,45 +834,33 @@ class OwnerTicketService:
     def _merge_local_and_remote(
         self, local_tickets: List[Dict[str, Any]], remote_tickets: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Timestamp-based last-write-wins merge to reconcile local and remote tickets."""
-        merged: Dict[str, Dict[str, Any]] = {}
-        for t in local_tickets:
-            if isinstance(t, dict) and t.get("id"):
-                merged[str(t["id"])] = dict(t)
+        """Honor remote removals while preserving explicit, unsent local creations.
 
-        needs_push: List[Dict[str, Any]] = []
-
-        for r in remote_tickets:
-            if not isinstance(r, dict) or not r.get("id"):
-                continue
-            rid = str(r["id"])
-            if rid not in merged:
-                merged[rid] = dict(r)
+        A cached ticket missing from a successful cloud snapshot was deleted on
+        another device. Re-uploading every missing cache row resurrected it.
+        Sync runs inside the serialized worker, never in a detached writer that
+        could publish an old snapshot after a later deletion.
+        """
+        local = {str(t["id"]): dict(t) for t in local_tickets if isinstance(t, dict) and t.get("id")}
+        merged = {str(t["id"]): dict(t) for t in remote_tickets if isinstance(t, dict) and t.get("id")}
+        for ticket_id, cached in local.items():
+            remote = merged.get(ticket_id)
+            if remote is None:
+                if cached.get(_PENDING_CREATE) is not True:
+                    continue
             else:
-                loc = merged[rid]
-                loc_ts = max(self._parse_timestamp(loc.get("updated_at")), self._parse_timestamp(loc.get("created_at")))
-                rem_ts = max(self._parse_timestamp(r.get("updated_at")), self._parse_timestamp(r.get("created_at")))
-                if loc_ts >= rem_ts:
-                    # Local version is newer or equal: retain local edits and queue cloud sync if strictly newer
-                    if loc_ts > rem_ts:
-                        needs_push.append(loc)
-                else:
-                    merged[rid] = dict(r)
-
-        remote_ids = {str(r.get("id")) for r in remote_tickets if isinstance(r, dict) and r.get("id")}
-        for lid, loc in merged.items():
-            if lid not in remote_ids:
-                needs_push.append(loc)
-
-        if needs_push and self.is_cloud_authenticated:
-            for item in needs_push:
-                try:
-                    Thread(target=lambda t=item: self._push_to_firebase(t), daemon=True).start()
-                except Exception:
-                    pass
-
+                local_time = max(self._parse_timestamp(cached.get("updated_at")), self._parse_timestamp(cached.get("created_at")))
+                remote_time = max(self._parse_timestamp(remote.get("updated_at")), self._parse_timestamp(remote.get("created_at")))
+                if local_time <= remote_time:
+                    # The server also acknowledges an earlier creation whose
+                    # reply was lost, without sending it again.
+                    continue
+            if self.is_cloud_authenticated and self._push_to_firebase(cached):
+                cached.pop(_PENDING_CREATE, None)
+            merged[ticket_id] = cached
         return list(merged.values())
 
+    @_serialized_ticket_change
     def get_tickets(self) -> List[Dict[str, Any]]:
         """Retrieve list of issue tickets from Firebase (if online) or local storage."""
         try:
@@ -907,7 +896,9 @@ class OwnerTicketService:
                                 return self._sort_tickets(merged)
                             elif raw is None:
                                 self._active_root_collection = root
-                                return self._sort_tickets(self._read_local_tickets())
+                                merged = self._merge_local_and_remote(self._read_local_tickets(), [])
+                                self._save_local_tickets(merged)
+                                return self._sort_tickets(merged)
                     except urllib.error.HTTPError as e:
                         e.close()
                         if e.code == 401 and not token_refreshed:
@@ -937,7 +928,9 @@ class OwnerTicketService:
                                                 return self._sort_tickets(merged)
                                             elif raw is None:
                                                 self._active_root_collection = root
-                                                return self._sort_tickets(self._read_local_tickets())
+                                                merged = self._merge_local_and_remote(self._read_local_tickets(), [])
+                                                self._save_local_tickets(merged)
+                                                return self._sort_tickets(merged)
                                     except Exception:
                                         pass
                                 continue
@@ -983,24 +976,25 @@ class OwnerTicketService:
                 "created_at": now_iso,
                 "updated_at": now_iso,
             }
+            if self.is_cloud_authenticated:
+                ticket[_PENDING_CREATE] = True
 
             # 1. Update local storage immediately
-            try:
-                tickets.insert(0, ticket)
-                if self._save_local_tickets(tickets) is False:
-                    return {}
-            except Exception:
-                pass
+            tickets.insert(0, ticket)
+            if self._save_local_tickets(tickets) is False:
+                return {}
 
             # 2. Sync to Firebase if configured and online
             try:
                 cfg = self.get_config()
                 if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                    self._push_to_firebase(ticket)
+                    if self._push_to_firebase(ticket):
+                        ticket.pop(_PENDING_CREATE, None)
+                        self._save_local_tickets(tickets)
             except Exception:
                 pass
 
-            return ticket
+            return {key: value for key, value in ticket.items() if key != _PENDING_CREATE}
         except Exception:
             return {}
 
@@ -1032,7 +1026,8 @@ class OwnerTicketService:
                 try:
                     cfg = self.get_config()
                     if target_ticket and self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                        self._patch_to_firebase(ticket_id, target_ticket)
+                        if self._patch_to_firebase(ticket_id, target_ticket) and target_ticket.pop(_PENDING_CREATE, None):
+                            self._save_local_tickets(tickets)
                 except Exception:
                     pass
                 return True
@@ -1040,6 +1035,7 @@ class OwnerTicketService:
         except Exception:
             return False
 
+    @_serialized_ticket_change
     def delete_ticket(self, ticket_id: str) -> bool:
         """Delete an issue ticket by ID."""
         try:
@@ -1048,15 +1044,11 @@ class OwnerTicketService:
             tickets = [t for t in tickets if t.get("id") != ticket_id]
 
             if len(tickets) != initial_len:
-                if self._save_local_tickets(tickets) is False:
-                    return False
-                try:
-                    cfg = self.get_config()
-                    if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
-                        self._delete_from_firebase(ticket_id)
-                except Exception:
-                    pass
-                return True
+                cfg = self.get_config()
+                if self.is_cloud_authenticated and cfg.get("use_firebase") and cfg.get("firebase_database_url"):
+                    if not self._delete_from_firebase(ticket_id):
+                        return False
+                return self._save_local_tickets(tickets) is not False
             return False
         except Exception:
             return False
@@ -1111,9 +1103,11 @@ class OwnerTicketService:
                     pass
 
     def _sort_tickets(self, tickets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return sort_tickets(tickets)
+        return sort_tickets([{key: value for key, value in ticket.items() if key != _PENDING_CREATE}
+                             for ticket in tickets if isinstance(ticket, dict)])
 
-    def _push_to_firebase(self, ticket: Dict[str, Any]) -> None:
+    def _push_to_firebase(self, ticket: Dict[str, Any]) -> bool:
+        ticket = {key: value for key, value in ticket.items() if key != _PENDING_CREATE}
         try:
             cfg = self.get_config()
             candidates: List[str] = []
@@ -1137,7 +1131,7 @@ class OwnerTicketService:
                     with _open_firebase_request(req, timeout=4.0) as resp:
                         if resp.status in (200, 204):
                             self._active_root_collection = root
-                            return
+                            return True
                 except urllib.error.HTTPError as e:
                     if e.code == 401 and not token_refreshed:
                         ok, _ = self.refresh_id_token()
@@ -1156,7 +1150,7 @@ class OwnerTicketService:
                                     with _open_firebase_request(req, timeout=4.0) as resp2:
                                         if resp2.status in (200, 204):
                                             self._active_root_collection = root
-                                            return
+                                            return True
                                 except Exception:
                                     pass
                     if e.code in (401, 403, 404):
@@ -1166,8 +1160,10 @@ class OwnerTicketService:
                     break
         except Exception:
             pass
+        return False
 
-    def _patch_to_firebase(self, ticket_id: str, updates: Dict[str, Any]) -> None:
+    def _patch_to_firebase(self, ticket_id: str, updates: Dict[str, Any]) -> bool:
+        updates = {key: value for key, value in updates.items() if key != _PENDING_CREATE}
         try:
             cfg = self.get_config()
             candidates: List[str] = []
@@ -1191,7 +1187,7 @@ class OwnerTicketService:
                     with _open_firebase_request(req, timeout=4.0) as resp:
                         if resp.status in (200, 204):
                             self._active_root_collection = root
-                            return
+                            return True
                 except urllib.error.HTTPError as e:
                     if e.code == 401 and not token_refreshed:
                         ok, _ = self.refresh_id_token()
@@ -1209,7 +1205,7 @@ class OwnerTicketService:
                                     with _open_firebase_request(req, timeout=4.0) as resp2:
                                         if resp2.status in (200, 204):
                                             self._active_root_collection = root
-                                            return
+                                            return True
                                 except Exception:
                                     pass
                     if e.code in (401, 403, 404):
@@ -1219,8 +1215,9 @@ class OwnerTicketService:
                     break
         except Exception:
             pass
+        return False
 
-    def _delete_from_firebase(self, ticket_id: str) -> None:
+    def _delete_from_firebase(self, ticket_id: str) -> bool:
         try:
             cfg = self.get_config()
             candidates: List[str] = []
@@ -1239,7 +1236,7 @@ class OwnerTicketService:
                     with _open_firebase_request(req, timeout=4.0) as resp:
                         if resp.status in (200, 204):
                             self._active_root_collection = root
-                            return
+                            return True
                 except urllib.error.HTTPError as e:
                     if e.code == 401 and not token_refreshed:
                         ok, _ = self.refresh_id_token()
@@ -1252,7 +1249,7 @@ class OwnerTicketService:
                                     with _open_firebase_request(req, timeout=4.0) as resp2:
                                         if resp2.status in (200, 204):
                                             self._active_root_collection = root
-                                            return
+                                            return True
                                 except Exception:
                                     pass
                     if e.code in (401, 403, 404):
@@ -1262,6 +1259,7 @@ class OwnerTicketService:
                     break
         except Exception:
             pass
+        return False
 
     def test_firebase_connection(self) -> tuple[bool, str]:
         """Probe the fixed endpoint without credentials or database content."""

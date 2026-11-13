@@ -137,6 +137,14 @@ class PortalChecks(unittest.TestCase):
         settle(self.dialog)
         self.assertEqual(self.dialog.stack.currentIndex(), 1)
 
+    def open_create(self, size=None):
+        self.dialog.btn_new.click()
+        create = self.dialog._active_create_dialog
+        self.addCleanup(create.deleteLater)
+        self.addCleanup(create.close)
+        show(create, size)
+        return create
+
     def settle_logo_gesture(self, toolbar):
         # A fixed 850 ms sleep races the native 800 ms timer on a busy/high-DPI
         # Windows runner. Wait for the actual gesture deadline, with a bound.
@@ -284,26 +292,26 @@ class PortalChecks(unittest.TestCase):
         capture(edit, "edit-long-code-compact")
         edit.close()
         show(self.dialog)
-        self.dialog.btn_new.click()
-        self.dialog.new_title.setText(ticket["title"])
-        self.dialog.new_desc.setPlainText(literal)
-        self.dialog.new_desc.setFocus()
-        cursor = self.dialog.new_desc.textCursor()
+        create = self.open_create()
+        create.txt_title.setText(ticket["title"])
+        create.txt_desc.setPlainText(literal)
+        create.txt_desc.setFocus()
+        cursor = create.txt_desc.textCursor()
         cursor.setPosition(10)
         cursor.setPosition(30, QTextCursor.MoveMode.KeepAnchor)
-        self.dialog.new_desc.setTextCursor(cursor)
-        original = self.dialog.new_desc
+        create.txt_desc.setTextCursor(cursor)
+        original = create.txt_desc
         for size in ((880, 740), (380, 520), (360, 420), (880, 740)):
-            self.dialog.resize(*size)
+            create.resize(*size)
             pump()
-            self.assert_scroll_width(self.dialog.scroll)
-            self.assert_wrapped_text(self.dialog.new_desc, fully_visible=False)
-            self.assertIs(self.dialog.new_desc, original)
-            self.assertEqual(self.dialog.new_desc.toPlainText(), literal)
-            self.assertEqual(self.dialog.new_title.text(), ticket["title"])
-            self.assertEqual(self.dialog.new_desc.textCursor().anchor(), 10)
-            self.assertEqual(self.dialog.new_desc.textCursor().position(), 30)
-            self.assertTrue(self.dialog.new_desc.hasFocus())
+            self.assert_scroll_width(create.scroll)
+            self.assert_wrapped_text(create.txt_desc, fully_visible=False)
+            self.assertIs(create.txt_desc, original)
+            self.assertEqual(create.txt_desc.toPlainText(), literal)
+            self.assertEqual(create.txt_title.text(), ticket["title"])
+            self.assertEqual(create.txt_desc.textCursor().anchor(), 10)
+            self.assertEqual(create.txt_desc.textCursor().position(), 30)
+            self.assertTrue(create.txt_desc.hasFocus())
         self.service.update_ticket.assert_not_called()
         self.service.create_ticket.assert_not_called()
 
@@ -456,6 +464,67 @@ class PortalChecks(unittest.TestCase):
                                           for i in range(self.dialog.cards_layout.count()))
                               if isinstance(w, portal.TicketCard)]), 2)
 
+    def test_new_ticket_does_not_add_a_card_until_creation_completes_and_cancel_adds_nothing(self):
+        self.sign_in()
+        cards = tuple(self.dialog.cards_container.findChildren(portal.TicketCard))
+        snapshot = copy.deepcopy(self.dialog._tickets)
+        create = self.open_create()
+        self.assertEqual(tuple(self.dialog.cards_container.findChildren(portal.TicketCard)), cards)
+        self.assertEqual(self.dialog.scroll.findChildren(portal.TicketFields), [])
+        self.assertEqual(self.dialog._tickets, snapshot)
+        create.txt_title.setText("Cancelled draft")
+        create.btn_cancel.click()
+        settle(create)
+        self.service.create_ticket.assert_not_called()
+        self.assertEqual(self.dialog._tickets, snapshot)
+        create = self.open_create()
+        self.service.create_ticket.return_value = {}
+        create.txt_title.setText("Failed draft")
+        create.txt_desc.setPlainText("Keep these notes")
+        with patch.object(QMessageBox, "critical") as warning:
+            create.btn_save.click()
+            settle(create)
+        warning.assert_called_once()
+        self.assertTrue(create.isVisible())
+        self.assertEqual(create.txt_title.text(), "Failed draft")
+        self.assertEqual(create.txt_desc.toPlainText(), "Keep these notes")
+        self.assertEqual(self.dialog._tickets, snapshot)
+        create.btn_cancel.click()
+        self.service.create_ticket.reset_mock()
+        create = self.open_create()
+        created = dict(TICKETS[0], id="new-fixture", title="Confirmed ticket")
+        release = Event()
+        self.addCleanup(release.set)
+        def save(**_kwargs):
+            if not release.wait(3):
+                raise AssertionError("The fixture did not release creation")
+            self.tickets.insert(0, created)
+            return created
+        self.service.create_ticket.side_effect = save
+        create.txt_title.setText(created["title"])
+        create.btn_save.click()
+        self.assertTrue(create._task_name)
+        create._do_save()  # A repeated keyboard submission cannot queue a duplicate.
+        self.assertEqual(self.dialog._tickets, snapshot)
+        self.assertEqual(tuple(self.dialog.cards_container.findChildren(portal.TicketCard)), cards)
+        release.set()
+        settle(create)
+        settle(self.dialog)
+        self.service.create_ticket.assert_called_once()
+        self.assertEqual([ticket["id"] for ticket in self.dialog._tickets],
+                         ["new-fixture", "fixture-1", "fixture-2", "fixture-3"])
+
+    def test_failed_deletion_restores_the_card_and_reports_it(self):
+        self.sign_in()
+        self.service.delete_ticket.side_effect = None
+        self.service.delete_ticket.return_value = False
+        with patch.object(QMessageBox, "warning") as warning:
+            self.dialog._on_ticket_deleted("fixture-2")
+            settle(self.dialog)
+        warning.assert_called_once()
+        self.assertIn("fixture-2", [ticket["id"] for ticket in self.dialog._tickets])
+        self.assertEqual(self.dialog.stat_total.findChild(QLabel, "val-label").text(), "3")
+
     def test_search_filter_create_edit_and_delete_routes(self):
         self.sign_in()
         self.assertEqual(self.dialog.stat_total.findChild(QLabel, "val-label").text(), "3")
@@ -476,16 +545,17 @@ class PortalChecks(unittest.TestCase):
         self.dialog.search_input.clear()
         self.dialog.filter_cb.setCurrentText("Resolved")
         self.assertEqual(self.dialog.cards_layout.itemAt(0).widget().ticket["id"], "fixture-3")
-        self.dialog.btn_new.click()
-        self.dialog.new_title.setText("Preserve draft")
-        self.dialog.new_desc.setPlainText("Reproduction steps\\nFixture notes")
-        self.dialog.new_category.setCurrentText("Serial Monitor")
-        self.dialog.btn_save_new.click()
+        create = self.open_create()
+        create.txt_title.setText("Preserve draft")
+        create.txt_desc.setPlainText("Reproduction steps\\nFixture notes")
+        create.cb_category.setCurrentText("Serial Monitor")
+        create.btn_save.click()
+        settle(create)
         settle(self.dialog)
         self.service.create_ticket.assert_called_once_with(
             title="Preserve draft", category="Serial Monitor", severity="Medium",
             description="Reproduction steps\\nFixture notes", status="Open")
-        self.assertTrue(self.dialog.form_card.isHidden())
+        self.assertEqual(create.result(), QDialog.DialogCode.Accepted)
         ticket = dict(TICKETS[0], category="Custom category", title="<plain title>")
         edit = portal.EditTicketDialog(ticket, self.service, self.dialog)
         show(edit)
@@ -502,23 +572,24 @@ class PortalChecks(unittest.TestCase):
 
     def test_theme_preserves_drafts_focus_and_static_card_cache(self):
         self.sign_in()
-        self.dialog.btn_new.click()
-        self.dialog.new_title.setText("Unfinished report")
-        self.dialog.new_desc.setPlainText("Keep these notes")
-        self.dialog.new_title.setFocus()
+        create = self.open_create()
+        create.txt_title.setText("Unfinished report")
+        create.txt_desc.setPlainText("Keep these notes")
+        create.txt_title.setFocus()
         for mode in ("light", "solarized_dark", "default"):
             Theme.apply_theme(mode)
             APP.setStyleSheet(build_stylesheet(mode))
             self.dialog.apply_theme(mode)
             pump()
-            self.assertEqual(self.dialog.new_title.text(), "Unfinished report")
-            self.assertEqual(self.dialog.new_desc.toPlainText(), "Keep these notes")
-            self.assertTrue(self.dialog.new_title.hasFocus())
-            self.assertFalse(self.dialog.form_card.isHidden())
-            self.dialog.form_card.grab()
-            cached = self.dialog.form_card._cached_surface
-            self.dialog.form_card.grab()
-            self.assertIs(self.dialog.form_card._cached_surface, cached)
+            self.assertEqual(create.txt_title.text(), "Unfinished report")
+            self.assertEqual(create.txt_desc.toPlainText(), "Keep these notes")
+            self.assertTrue(create.txt_title.hasFocus())
+            self.assertTrue(create.isVisible())
+            card = create.fields.parentWidget()
+            card.grab()
+            cached = card._cached_surface
+            card.grab()
+            self.assertIs(card._cached_surface, cached)
         self.assertIsNone(self.dialog.auth_card.graphicsEffect())
 
     def test_cloud_connection_is_fixed_and_retry_keeps_local_access_controls(self):
@@ -716,8 +787,8 @@ class PortalChecks(unittest.TestCase):
 
     def test_category_creation_preserves_draft_and_filters_snapshot_categories(self):
         self.sign_in()
-        self.dialog.btn_new.click()
-        fields = self.dialog.new_fields
+        create = self.open_create()
+        fields = create.fields
         fields.title.setText("Keep my title")
         fields.description.setPlainText("Keep my notes")
         category = "Bluetooth / BLE"
@@ -727,7 +798,7 @@ class PortalChecks(unittest.TestCase):
         self.service.add_ticket_category.side_effect = add_category
         fields.category_input.setText(category)
         fields.btn_add_category.click()
-        settle(self.dialog)
+        settle(create)
         self.service.add_ticket_category.assert_called_once_with(category)
         self.assertEqual(fields.category.currentText(), category)
         self.assertEqual(fields.category_input.text(), "")
@@ -743,13 +814,13 @@ class PortalChecks(unittest.TestCase):
         self.service.add_ticket_category.return_value = (False, "Category could not be saved", self.dialog._category_options())
         fields.category_input.setText("Unsaved category")
         fields.btn_add_category.click()
-        settle(self.dialog)
+        settle(create)
         self.assertEqual(fields.category_input.text(), "Unsaved category")
         self.assertEqual(fields.title.text(), "Keep my title")
 
     def test_category_feedback_keeps_create_and_edit_classifications_aligned(self):
         self.sign_in()
-        self.dialog.btn_new.click()
+        create = self.open_create()
         edit = portal.EditTicketDialog(TICKETS[0], self.service, self.dialog)
         self.addCleanup(edit.close)
         self.addCleanup(edit.deleteLater)
@@ -758,7 +829,7 @@ class PortalChecks(unittest.TestCase):
                     ("Category saved.", "ok"),
                     ("The category could not be saved. Your draft is still here. " * 5, "fail"))
         for name, window, fields, scroll in (
-                ("create", self.dialog, self.dialog.new_fields, self.dialog.scroll),
+                ("create", create, create.fields, create.scroll),
                 ("edit", edit, edit.fields, edit.scroll)):
             show(window)
             fields.title.setText("Keep this draft")
@@ -1074,7 +1145,6 @@ class PortalChecks(unittest.TestCase):
             APP.setStyleSheet(build_stylesheet(mode))
             self.dialog.apply_theme(mode)
             self.dialog.resize(880, 740)
-            self.dialog.form_card.hide()
             self.dialog.scroll.verticalScrollBar().setValue(0)
             pump()
             capture(self.dialog, "tickets-" + mode)
@@ -1102,15 +1172,15 @@ class PortalChecks(unittest.TestCase):
         self.assertLessEqual(self.dialog.minimumSizeHint().width(), 380)
         self.assertEqual(self.dialog.stats_grid._columns, 2)
         capture(self.dialog, "tickets-compact")
-        self.dialog.btn_new.click()
-        self.dialog.new_title.setText("A draft on a small screen")
+        create = self.open_create()
+        create.resize(380, 420)
+        create.txt_title.setText("A draft on a small screen")
         pump()
-        self.dialog.scroll.ensureWidgetVisible(self.dialog.btn_save_new)
-        pump()
-        self.assertEqual(self.dialog.new_fields.classifications._columns, 1)
-        point = self.dialog.btn_save_new.mapTo(self.dialog.scroll.viewport(), self.dialog.btn_save_new.rect().center())
-        self.assertTrue(self.dialog.scroll.viewport().rect().contains(point))
-        capture(self.dialog, "create-compact")
+        self.assertEqual(create.fields.classifications._columns, 1)
+        point = create.btn_save.mapTo(create, create.btn_save.rect().center())
+        self.assertTrue(create.rect().contains(point))
+        capture(create, "create-compact")
+        create.close()
         self.dialog.stack.setCurrentWidget(self.dialog.auth_page)
         pump()
         self.dialog.auth_scroll.ensureWidgetVisible(self.dialog.btn_unlock)
@@ -1151,8 +1221,8 @@ class PortalChecks(unittest.TestCase):
 
     def test_every_developer_surface_retains_neobrutalism_across_workspace_themes(self):
         self.sign_in()
-        self.dialog.btn_new.click()
-        self.dialog.new_title.setText("Keep this draft")
+        create = self.open_create()
+        create.txt_title.setText("Keep this draft")
         edit = portal.EditTicketDialog(TICKETS[0], self.service, self.dialog)
         settings = portal.FirebaseSettingsDialog(self.service, self.dialog)
         for child in (edit, settings):
@@ -1164,7 +1234,7 @@ class PortalChecks(unittest.TestCase):
             APP.setStyleSheet(build_stylesheet(mode))
             self.dialog.apply_theme(mode)
             pump()
-            for surface in (self.dialog, edit, settings):
+            for surface in (self.dialog, create, edit, settings):
                 self.assertIsInstance(surface, PortalDialog)
                 self.assertNotIsInstance(surface.backdrop, GlassWorkspace)
                 self.assertEqual(surface.backdrop.palette().color(QPalette.ColorRole.Window).name(), "#fffdf5")
@@ -1174,10 +1244,10 @@ class PortalChecks(unittest.TestCase):
                 for action in surface.findChildren(portal.QPushButton):
                     if action.isEnabled():
                         self.assertEqual(action.palette().color(QPalette.ColorRole.ButtonText).name(), "#141414")
-            self.assertEqual(self.dialog.new_title.text(), "Keep this draft")
+            self.assertEqual(create.txt_title.text(), "Keep this draft")
         settings.close()
         edit.close()
-        self.dialog.form_card.hide()
+        create.close()
         self.dialog._tickets = []
         self.dialog._render_tickets_list()
         pump()

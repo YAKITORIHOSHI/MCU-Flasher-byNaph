@@ -1,9 +1,16 @@
 ---
 name: mcu-verify
-description: "Run MCU Flasher hardware-free and isolated native CI checks, including keyboard routing, semantic navigation, pairing, save races and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Run MCU Flasher hardware-free and isolated native CI checks, including keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
+
+Ticket deletion checks use two service instances with independent caches and a
+mocked shared cloud: cover partial and final deletion, no resurrection, failed
+delete acknowledgement and unsent creation retry. Portal checks must use the
+dedicated CreateTicketDialog, asserting unchanged cards before success and on
+cancel/failure, plus restoration after a failed deletion. Assistant loading
+checks assert unchanged status text over time and retained slow-start help.
 
 ## Ubuntu Bootstrap window and update gates
 
