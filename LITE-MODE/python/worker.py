@@ -186,6 +186,7 @@ class Worker:
         self.process = None
         self.catalog_thread = None
         self.developer_process = None
+        self.developer_ready = False
         self.closing = False
         self.cancel = threading.Event()
         self.last_ports = []
@@ -519,34 +520,67 @@ class Worker:
     def open_developer_access(self):
         process = self.developer_process
         if process is not None and process.poll() is None:
-            try:
-                process.stdin.write(b"activate\n")
-                process.stdin.flush()
-                self.output.send("developer:status", True)
-                return
-            except (BrokenPipeError, OSError):
-                raise RuntimeError("Developer Access is closing. Retry the five-click gesture.") from None
+            if self.developer_ready:
+                self.output.send("developer:ready", {"pid": process.pid})
+            return
         log_path = self.state / "developer-access.log"
         log = log_path.open("wb")
         try:
             command = [sys.executable, "-B", str(LITE / "python/developer.py")]
             options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {"start_new_session": True}
             process = subprocess.Popen(command, env=environment(self.state), cwd=self.state / "engine",
-                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log, **options)
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, **options)
         except Exception:
             log.close()
             raise
         self.developer_process = process
+        self.developer_ready = False
         self.output.send("developer:status", True)
+        self.log("Opening Developer Access...", "info")
+
+        def startup_slow():
+            if self.developer_process is process and process.poll() is None and not self.developer_ready:
+                self.output.send("error", {"message": f"Developer Access is taking longer to open. Details: {log_path}"})
+
+        notice = threading.Timer(20, startup_slow)
+        notice.daemon = True
+        notice.start()
+
+        def read_ready():
+            line = process.stdout.readline(256)
+            try:
+                frame = json.loads(line)
+                if frame == {"event": "ready", "pid": process.pid} and process.poll() is None:
+                    self.developer_ready = True
+                    notice.cancel()
+                    self.output.send("developer:ready", {"pid": process.pid})
+                    self.log("Developer Access is ready.", "info")
+            except (ValueError, TypeError):
+                pass
+
+        threading.Thread(target=read_ready, name="LiteDeveloperReady", daemon=True).start()
 
         def watch():
             result = process.wait()
+            notice.cancel()
             log.close()
-            self.output.send("developer:status", False)
+            if self.developer_process is process:
+                self.developer_ready = False
+                self.output.send("developer:status", False)
             if result and not self.closing:
                 self.output.send("error", {"message": f"Developer Access could not start. Details: {log_path}"})
 
         threading.Thread(target=watch, name="LiteDeveloperAccess", daemon=True).start()
+
+    def activate_developer_access(self):
+        process = self.developer_process
+        if process is None or process.poll() is not None or not self.developer_ready:
+            raise RuntimeError("Developer Access is not ready. Retry the five-click gesture.")
+        try:
+            process.stdin.write(b"activate\n")
+            process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            raise RuntimeError("Developer Access is closing. Retry the five-click gesture.") from None
 
     def _dispatch(self, request):
         cmd = request.get("cmd")
@@ -571,6 +605,9 @@ class Worker:
             return True
         if cmd == "developer_access":
             self.open_developer_access()
+            return True
+        if cmd == "developer_activate":
+            self.activate_developer_access()
             return True
         if cmd == "boards":
             query = str(request.get("query", ""))[:200]

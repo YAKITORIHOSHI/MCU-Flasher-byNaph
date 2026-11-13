@@ -47,11 +47,23 @@ One color role each: yellow = primary action or selected tab, coral = Stop,
 Disconnect and errors, everything else the shared surface with an ink outline.
 Fields, combos and menus use the global theme; never give one control its own
 accent fill. Raised buttons come from `button()` and tabs from `tab()`.
+Board rows match the main picker: 48 logical pixels, left-aligned title/subtitle,
+full-width hit areas, bounded truncation with tooltips and deduplicated recents.
+Click selects a candidate; Select Board, Enter or double-click confirms, arrows
+navigate and Escape cancels. Preserve the configured target until confirmation.
+Verify compact and wide windows at 100/125/150/175/200 percent.
 Five completed logo clicks and an 800 ms pause open the existing main Developer
 Access portal in an owned helper. Keep its authentication gate, Lite-only cache
-and credential namespace, single-window activation and graceful closing. Never
+and credential namespace, single-window activation and graceful closing. Count ordered pointer releases
+once per frame, including batched events and layout retries. Wait for the helper's
+ready acknowledgement before the exact-PID Windows foreground permission handoff;
+never grant ASFW_ANY or take focus from another app. Close accepted standalone
+portals cleanly; their daemon command reader must not hold a buffered stdin lock. Never
 launch the real portal, accounts, vault or network in fixtures; use the real UI
-with injected fixture services through tools/verify_developer.py.
+with injected fixture services through tools/verify_developer.py. Its subprocess
+fixture exercises the real helper entry point and literal activation/close;
+native display is allowed only on isolated Actions runners. Keep the Windows
+workflow and evidence distinct from Windows 11 and physical USB qualification.
 Avoid promotional banners, footer slogans and unused
 monitor reservations. Serial send controls stay in Connection.
 Source filename links open the original source directory via the native file

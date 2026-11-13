@@ -1,10 +1,24 @@
 ---
 name: frontend-design
-description: "Design MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain Lite board rows, exact logo gestures and owned Windows Developer Access alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+## Lite Windows interactions
+
+Lite remains a separate Rust/egui application in LITE-MODE, with its existing
+paper/charcoal/yellow neobrutalism rather than the main workspace's glass.
+Use the main board picker's 48-pixel logical rows, left-aligned title/subtitle,
+bounded truncation, recent grouping and explicit Select Board confirmation.
+Count completed logo pointer releases once per egui frame, including batched
+input and layout retries. Reuse the current main portal in an owned private
+helper with readiness acknowledgement, exact-PID Windows foreground permission
+only while Lite is foreground, and accepted-close shutdown without buffered
+stdin daemon locks. Verify actual helper processes with mocked accounts/vault/
+network, fractional-scale row geometry and the isolated Lite Windows workflow.
+Native Windows Server evidence does not qualify Windows 11 or physical USB.
 
 ## Terminal close controls and portal details
 

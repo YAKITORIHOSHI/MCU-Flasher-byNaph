@@ -1,5 +1,23 @@
 # Lite verification — 2026-11-13
 
+
+## Windows interaction repair
+
+Twelve Rust checks cover actual logo pointer events (including five releases in
+one frame and a discarded layout pass), the main-style board picker at five
+fractional scales, readiness and stable streaming monitors. All 98 existing
+Python checks pass. Sixteen Developer Access checks now run the actual helper
+entry point in a separate process with fixture accounts and blocked vault/network:
+ready acknowledgement, literal activation, one window, responsive authentication
+and clean close. This exposed and fixed a buffered-stdin shutdown crash.
+
+Both supplied launchers are rebuilt. Strict Clippy, formatting and main runtime
+checks pass. Owned Xvfb captures cover the revised picker and existing themes.
+The Lite Windows workflow runs Rust natively and the real Qt helper at five scales
+on Python 3.11/3.12. Its results will be recorded separately; a cross-build and
+headless geometry checks do not qualify Windows desktop interactions. Windows 11
+and physical USB remain separate gates. See evidence/windows-repair-2026-11-13.json.
+
 ## Consistent colors
 
 - One theme drives all fields, combos and menus. A Rust check opens a real

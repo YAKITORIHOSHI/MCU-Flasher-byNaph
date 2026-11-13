@@ -84,6 +84,8 @@ Control-click → **Open**, because the app is not notarized.
 
 **Lite:** `LITE-MODE/` contains the separate Rust workbench for Ubuntu and Windows.
 Open its `UBUNTU` or `WINDOWS.exe` launcher; it reuses the prepared Python tools.
+Lite's board picker follows the main app's rows and confirmation controls; its
+five-click Developer Access opens the existing authenticated portal.
 See [Lite's guide](LITE-MODE/README.md). Bootstrap includes Lite and future public
 application folders automatically: checkouts use tracked files, and release ZIPs
 carry a generated source manifest. Private settings, caches and build scratch

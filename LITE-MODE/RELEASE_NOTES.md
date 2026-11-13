@@ -1,5 +1,22 @@
 # Lite 0.1.0 — 2026-11-13
 
+
+Windows interaction repair:
+
+- Match the main board picker: 48-pixel left-aligned rows, bounded/truncated
+  titles and subtitles, deduplicated recents, candidate selection, Select Board,
+  double-click/Enter confirmation, arrow navigation and Escape cancellation.
+- Count every completed logo click even when a slow native frame batches several
+  releases; prevent duplicate counting during a layout retry.
+- Reuse the current main Developer Access portal with a startup acknowledgement,
+  an owned Windows foreground permission handoff, and useful startup diagnostics.
+- Close the standalone helper on an accepted portal close. Read its narrow command
+  protocol without a buffered-stdin daemon lock during Python shutdown.
+- Add Windows CI for real helper processes and native portal layouts at
+  100/125/150/175/200 percent, plus Rust input/layout and worker regressions.
+- Include Cargo.lock in source installs and archives for reproducible --locked builds.
+- Preserve the shared paper/charcoal/yellow colorway and main authentication rules.
+
 Consistent colors:
 
 - Each color now has one meaning. Yellow marks primary actions and the

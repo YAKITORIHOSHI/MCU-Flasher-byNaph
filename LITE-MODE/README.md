@@ -79,6 +79,13 @@ native executables.
    port does not open it; Connect uses the main app's passive serial connection.
    Baud changes request no reset. Upload retains the backend's monitor handoff.
 
+The board picker follows the main app: equal-height, left-aligned rows, a
+Recent boards group without duplicate entries, and a separate **Select Board**
+action. Click a row to inspect the candidate; confirm with Select Board, Enter,
+or a double-click. Up/Down navigates and Escape cancels. Long names truncate
+with the full target available on hover; the list and footer stay within the
+window at fractional display scales.
+
 The header's **Light mode / Dark mode** button names the active theme and changes the complete interface,
 including monitor colors and dialogs. Light is the default at every launch.
 Theme changes retain selections, logs and scroll positions. Status and USB port
@@ -92,6 +99,11 @@ and menus share one style and highlight on hover in both themes.
 **Developer Access:** click the logo exactly five times, with less than 800 ms
 between clicks, then pause. This opens the main application's existing ticket
 portal in an owned helper window; another gesture brings that window forward.
+The helper acknowledges window startup before activation; on Windows, Lite
+permits only its owned helper to take focus while Lite owns the foreground.
+Startup failures and slow startup appear in the Build monitor, and an accepted
+portal close ends the standalone helper cleanly. Batched pointer releases and
+layout retries preserve the exact five-click count.
 The normal account/local-key authentication remains required. Lite keeps local
 portal data and saved credentials in its own namespace, while using the same
 built-in cloud provider and account rules. The main workspace is not launched.

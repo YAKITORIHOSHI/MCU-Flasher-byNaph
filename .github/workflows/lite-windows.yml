@@ -1,0 +1,83 @@
+name: Lite Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'LITE-MODE/**'
+      - '!LITE-MODE/*.md'
+      - '!LITE-MODE/evidence/**'
+      - '!LITE-MODE/UBUNTU'
+      - '!LITE-MODE/WINDOWS.exe'
+      - '!LITE-MODE/assets/preview*.png'
+      - '.github/workflows/lite-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      LITE_VERIFY_NATIVE: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Private fixture runtime
+        shell: pwsh
+        run: |
+          python -m venv LITE-MODE/.venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & LITE-MODE/.venv/Scripts/python.exe -m pip install -r LITE-MODE/requirements.txt
+          exit $LASTEXITCODE
+      - name: Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set stable
+          exit $LASTEXITCODE
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            LITE-MODE/target
+          key: lite-windows-${{ hashFiles('LITE-MODE/Cargo.lock') }}
+      - name: Windows widget input and layout matrix
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path LITE-MODE/Cargo.toml -j 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path LITE-MODE/Cargo.toml --all-targets -j 4 -- -D warnings
+          exit $LASTEXITCODE
+      - name: Real Windows Developer Access helper at display scales
+        shell: pwsh
+        run: |
+          foreach ($scale in @('1', '1.25', '1.5', '1.75', '2')) {
+            $env:QT_SCALE_FACTOR = $scale
+            & LITE-MODE/.venv/Scripts/python.exe -B LITE-MODE/tools/verify_developer.py --render-dir "LITE-MODE/temp/windows-native/$scale"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: History, search, preparation and worker isolation
+        shell: pwsh
+        run: |
+          foreach ($verifier in @('verify', 'verify_history_search', 'verify_preparation')) {
+            & LITE-MODE/.venv/Scripts/python.exe -B "LITE-MODE/tools/$verifier.py"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: lite-windows-native-python-${{ matrix.python }}
+          path: LITE-MODE/temp/windows-native
+          if-no-files-found: warn

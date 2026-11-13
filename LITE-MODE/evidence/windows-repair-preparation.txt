@@ -1,0 +1,28 @@
+/usr/bin/xdg-user-dir: 3: test: /home/natsuki/Downloads/PROJECT: unexpected operator
+PASS upload dependency selection includes the optional AVR uploader
+PASS all compatible requirements are reused without network installation
+PASS first preparation reports the newly copied closure
+PASS the missing-upload-package reproduction is repaired before dispatch
+PASS a prepared target performs no repeated copies or downloads
+PASS main package files remain byte-for-byte unchanged
+PASS legacy shared packages are never claimed by generating metadata
+PASS reused package files are independent copies, not links to the main app
+PASS foreign-host package payloads are excluded from reuse
+PASS incompatible uploader versions are excluded from reuse
+PASS unrelated incomplete main packages do not prevent compatible uploader reuse
+PASS interrupted reuse stages can never masquerade as installed packages
+PASS only a missing compatible requirement goes through private installation
+PASS internal native package links can be reused
+PASS copied package links resolve inside Lite, never to original files
+PASS main Linux store discovery uses the original XDG base before redirection
+PASS main Windows store discovery uses the original application root
+PASS failed preparation releases ownership without attempting an upload
+PASS preparation owns the action through the entire tool check
+PASS target changes remain locked throughout preparation
+PASS Stop during preparation prevents any upload or replay
+PASS successful automatic preparation hands off exactly one upload
+PASS Stop after handoff reaches the backend's active-operation protection
+PASS Lite does not direct users to absent main-workspace tabs
+PASS compiler diagnostics are retained even when they contain a main-tab name
+
+25 preparation checks passed. No network requests or physical device access.

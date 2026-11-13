@@ -1,9 +1,23 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain Lite board rows, exact logo gestures and owned Windows Developer Access alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## Lite Windows interactions
+
+Lite remains a separate Rust/egui application in LITE-MODE, with its existing
+paper/charcoal/yellow neobrutalism rather than the main workspace's glass.
+Use the main board picker's 48-pixel logical rows, left-aligned title/subtitle,
+bounded truncation, recent grouping and explicit Select Board confirmation.
+Count completed logo pointer releases once per egui frame, including batched
+input and layout retries. Reuse the current main portal in an owned private
+helper with readiness acknowledgement, exact-PID Windows foreground permission
+only while Lite is foreground, and accepted-close shutdown without buffered
+stdin daemon locks. Verify actual helper processes with mocked accounts/vault/
+network, fractional-scale row geometry and the isolated Lite Windows workflow.
+Native Windows Server evidence does not qualify Windows 11 or physical USB.
 
 ## November 13: Assistant loading and ticket creation/deletion
 

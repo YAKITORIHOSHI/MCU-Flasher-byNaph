@@ -132,6 +132,8 @@ fn caption(ui: &mut egui::Ui, text: &str) {
 struct LogoGesture {
     count: usize,
     last: Option<Instant>,
+    pointer_armed: bool,
+    pointer_frame: Option<u64>,
 }
 
 impl LogoGesture {
@@ -172,6 +174,104 @@ fn icon(name: &str) -> egui::ImageSource<'static> {
         "moon" => egui::include_image!("../assets/moon.svg"),
         _ => egui::include_image!("../assets/lite.svg"),
     }
+}
+
+fn logo_button(ui: &mut egui::Ui, gesture: &mut LogoGesture, now: Instant) -> egui::Response {
+    let response = ui
+        .add(
+            egui::Image::new(icon("lite"))
+                .fit_to_exact_size(egui::vec2(38.0, 38.0))
+                .sense(Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    // Native hosts may deliver several releases in one rendered frame.
+    // Response::clicked is only a boolean, and a layout retry sees the same
+    // input again. Process the ordered pointer events once per frame instead.
+    let frame = ui.ctx().cumulative_frame_nr();
+    if gesture.pointer_frame != Some(frame) {
+        gesture.pointer_frame = Some(frame);
+        let events = ui.input(|input| input.events.clone());
+        {
+            for event in &events {
+                match event {
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        ..
+                    } => {
+                        let inside = ui.is_enabled()
+                            && response.rect.contains(*pos)
+                            && ui.ctx().layer_id_at(*pos) == Some(ui.layer_id());
+                        if *pressed {
+                            gesture.pointer_armed = inside;
+                        } else {
+                            if gesture.pointer_armed && inside {
+                                gesture.click(now);
+                            }
+                            gesture.pointer_armed = false;
+                        }
+                    }
+                    egui::Event::PointerGone => gesture.pointer_armed = false,
+                    _ => {}
+                }
+            }
+        }
+    }
+    response
+}
+
+const BOARD_ROW_HEIGHT: f32 = 48.0;
+
+fn board_row(ui: &mut egui::Ui, name: &str, detail: &str, selected: bool) -> egui::Response {
+    let palette = Palette::from_context(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), BOARD_ROW_HEIGHT),
+        Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        let fill = if selected {
+            ui.visuals().selection.bg_fill
+        } else if response.hovered() {
+            palette.highlight
+        } else {
+            palette.surface
+        };
+        ui.painter().rect_filled(rect, 0, fill);
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            0,
+            Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, palette.border),
+            egui::StrokeKind::Inside,
+        );
+        let width = (rect.width() - 20.0).max(1.0);
+        for (text, font, color, top) in [
+            (name, bold(14.0), palette.ink, 6.0),
+            (detail, FontId::proportional(11.0), palette.muted, 28.0),
+        ] {
+            let galley = egui::WidgetText::from(RichText::new(text).font(font).color(color))
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Truncate),
+                    width,
+                    egui::TextStyle::Body,
+                );
+            ui.painter()
+                .with_clip_rect(rect.intersect(ui.clip_rect()))
+                .galley(rect.min + egui::vec2(10.0, top), galley, color);
+        }
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            name,
+        )
+    });
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("{name}\n{detail}"))
 }
 
 pub fn app_icon() -> egui::IconData {
@@ -514,6 +614,8 @@ pub struct LiteApp {
     board: String,
     platform: String,
     board_dialog: bool,
+    board_candidate: String,
+    board_focus_search: bool,
     board_query: String,
     board_query_at: Instant,
     board_sent: String,
@@ -558,6 +660,10 @@ pub struct LiteApp {
     monitor_text_origins: Vec<f32>,
     #[cfg(test)]
     monitor_offset: Vec2,
+    #[cfg(test)]
+    board_geometry: Option<egui::Rect>,
+    #[cfg(test)]
+    board_rows: Vec<(String, egui::Rect)>,
 }
 
 impl LiteApp {
@@ -594,6 +700,8 @@ impl LiteApp {
             board: String::new(),
             platform: String::new(),
             board_dialog: false,
+            board_candidate: String::new(),
+            board_focus_search: false,
             board_query: String::new(),
             board_query_at: Instant::now(),
             board_sent: "\0".into(),
@@ -642,6 +750,10 @@ impl LiteApp {
             monitor_text_origins: vec![],
             #[cfg(test)]
             monitor_offset: Vec2::ZERO,
+            #[cfg(test)]
+            board_geometry: None,
+            #[cfg(test)]
+            board_rows: Vec::new(),
         };
         app.build_log.push("MCU Flasher / Lite\nOpen a sketch folder, select its exact board, then Compile or Upload.", "info", true);
         if offline_preview {
@@ -662,6 +774,17 @@ impl LiteApp {
             app.resources_open = std::env::args().any(|arg| arg == "--preview-resources");
             app.project_dialog = std::env::args().any(|arg| arg == "--preview-projects");
             app.board_dialog = std::env::args().any(|arg| arg == "--preview-boards");
+            if app.board_dialog {
+                app.boards = [
+                    ("Arduino Uno [atmelavr:uno]", "atmelavr", "ATmega328P"),
+                    ("Arduino Nano ATmega328 [atmelavr:nanoatmega328]", "atmelavr", "ATmega328P"),
+                    ("ESP32 Development Board [espressif32:esp32dev]", "espressif32", "ESP32"),
+                    ("Long vendor and product name to demonstrate stable board rows [ststm32:example]", "ststm32", "STM32"),
+                ].map(|(name, platform, mcu)| Board {
+                    name: name.into(), platform: platform.into(), mcu: mcu.into(),
+                }).to_vec();
+                app.board_total = app.boards.len();
+            }
             if std::env::args().any(|arg| arg == "--preview-recents") {
                 app.recent_projects =
                     vec!["/preview/WeatherStation".into(), "/preview/MySketch".into()];
@@ -765,6 +888,12 @@ impl LiteApp {
         self.board_dialog = false;
     }
 
+    fn open_board_picker(&mut self) {
+        self.board_candidate = self.board.clone();
+        self.board_focus_search = true;
+        self.board_dialog = true;
+    }
+
     fn event(&mut self, event: Event) {
         let data = event.data;
         let text = |key: &str| data[key].as_str().unwrap_or("").to_owned();
@@ -865,6 +994,12 @@ impl LiteApp {
                 self.phase = format!("Installed {}", text("spec"));
             }
             "developer:status" => self.developer_open = data.as_bool().unwrap_or(false),
+            "developer:ready" => {
+                if let Some(pid) = data["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()) {
+                    crate::desktop::allow_portal_activation(pid);
+                    self.send(json!({"cmd": "developer_activate"}));
+                }
+            }
             "error" | "fatal" => {
                 self.error = text("message");
                 if event.event == "fatal" {
@@ -929,90 +1064,191 @@ impl LiteApp {
     }
 
     fn board_picker(&mut self, ctx: &egui::Context) {
+        #[cfg(test)]
+        self.board_rows.clear();
         let palette = Palette::from_context(ctx);
         let mut open = self.board_dialog;
-        let mut selection = None;
-        egui::Window::new("Choose your board")
+        let mut confirm = false;
+        let mut cancel = false;
+        let recent = if self.board_query.trim().is_empty() {
+            self.recent_boards.clone()
+        } else {
+            Vec::new()
+        };
+        let names: Vec<String> = recent
+            .iter()
+            .cloned()
+            .chain(
+                self.boards
+                    .iter()
+                    .filter(|board| !recent.contains(&board.name))
+                    .map(|board| board.name.clone()),
+            )
+            .collect();
+        let mut moved = false;
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp))
+            && !names.is_empty()
+        {
+            let index = names.iter().position(|name| name == &self.board_candidate);
+            let down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
+            let next = match (index, down) {
+                (Some(index), true) => (index + 1).min(names.len() - 1),
+                (Some(index), false) => index.saturating_sub(1),
+                (None, true) => 0,
+                (None, false) => names.len() - 1,
+            };
+            self.board_candidate = names[next].clone();
+            moved = true;
+        }
+        let height = (ctx.content_rect().height() - 238.0).clamp(100.0, 350.0);
+        let window = egui::Window::new("Choose your board")
             .open(&mut open)
             .collapsible(false)
-            .max_width((ctx.content_rect().width() - 40.0).max(300.0))
-            .max_height((ctx.content_rect().height() - 40.0).max(260.0))
+            .resizable(true)
+            .max_width((ctx.content_rect().width() - 64.0).max(300.0))
+            .max_height((ctx.content_rect().height() - 48.0).max(260.0))
             .default_width(560.0)
             .frame(card(ctx, PAPER))
             .show(ctx, |ui| {
-                if ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.board_query)
-                            .hint_text("Search name, board ID, MCU, vendor or framework")
-                            .margin(egui::vec2(6.0, 6.0))
-                            .desired_width(f32::INFINITY),
-                    )
-                    .changed()
-                {
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut self.board_query)
+                        .hint_text("Search name, board ID, MCU, vendor or framework")
+                        .margin(egui::vec2(6.0, 6.0))
+                        .desired_width(f32::INFINITY),
+                );
+                if self.board_focus_search {
+                    search.request_focus();
+                    self.board_focus_search = false;
+                }
+                if search.changed() {
                     self.board_query_at = Instant::now();
                     self.boards.clear();
                     self.board_loading = true;
+                    self.board_candidate.clear();
                 }
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 egui::ScrollArea::vertical()
                     .id_salt("board-results")
-                    .max_height(350.0)
+                    .max_height(height)
+                    .min_scrolled_height(height)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if self.board_query.trim().is_empty() && !self.recent_boards.is_empty() {
-                            ui.label(
-                                RichText::new("Recent boards")
-                                    .family(FontFamily::Name("bold".into())),
-                            );
-                            for name in &self.recent_boards {
-                                if ui.add(egui::Button::new(name).wrap()).clicked() {
-                                    selection = Some(name.clone());
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        if !recent.is_empty() {
+                            caption(ui, "Recent boards");
+                            for name in &recent {
+                                let detail = self
+                                    .boards
+                                    .iter()
+                                    .find(|b| &b.name == name)
+                                    .map(|b| format!("{} / {}", b.platform, b.mcu))
+                                    .unwrap_or_else(|| "Recently selected target".into());
+                                let response =
+                                    board_row(ui, name, &detail, self.board_candidate == *name);
+                                #[cfg(test)]
+                                self.board_rows.push((name.clone(), response.rect));
+                                if response.clicked() {
+                                    self.board_candidate = name.clone();
+                                }
+                                if response.double_clicked() {
+                                    confirm = true;
+                                }
+                                if moved && self.board_candidate == *name {
+                                    response.scroll_to_me(Some(Align::Center));
                                 }
                             }
-                            ui.separator();
+                            caption(ui, "All boards");
                         }
                         for board in &self.boards {
-                            let response = ui.selectable_label(
-                                self.board == board.name,
-                                RichText::new(&board.name).size(15.0),
-                            );
-                            if response.clicked() {
-                                selection = Some(board.name.clone());
+                            if recent.contains(&board.name) {
+                                continue;
                             }
-                            ui.label(
-                                RichText::new(format!("{} / {}", board.platform, board.mcu))
-                                    .small()
-                                    .color(palette.muted),
+                            let detail = format!("{} / {}", board.platform, board.mcu);
+                            let response = board_row(
+                                ui,
+                                &board.name,
+                                &detail,
+                                self.board_candidate == board.name,
                             );
-                            ui.add_space(7.0);
+                            #[cfg(test)]
+                            self.board_rows.push((board.name.clone(), response.rect));
+                            if response.clicked() {
+                                self.board_candidate = board.name.clone();
+                            }
+                            if response.double_clicked() {
+                                confirm = true;
+                            }
+                            if moved && self.board_candidate == board.name {
+                                response.scroll_to_me(Some(Align::Center));
+                            }
                         }
-                        if self.offline_preview {
-                            ui.label("Visual preview. Board search runs through the Python tools.");
-                        } else if self.board_loading {
+                        if self.board_loading {
                             ui.label("Searching boards...");
-                        } else if self.boards.is_empty() {
+                        } else if self.boards.is_empty() && recent.is_empty() {
                             ui.label("No matching boards. Try a board ID, MCU, or a shorter name.");
                         }
                     });
-                ui.add_space(8.0);
-                let summary = if self.offline_preview {
-                    "Recent history examples / no hardware is selected.".to_owned()
-                } else if self.board_fuzzy {
+                ui.add_space(6.0);
+                let summary = if self.board_fuzzy {
                     format!(
-                        "{} closest matches. Select the exact target you intend to use.",
+                        "{} closest matches. Confirm the exact target.",
                         self.board_total
                     )
                 } else {
                     format!(
-                        "{} matches / showing {}. Multiple words can match across fields.",
+                        "{} matches / showing {}",
                         self.board_total,
                         self.boards.len()
                     )
                 };
-                ui.label(RichText::new(summary).small().color(palette.muted));
+                ui.add(
+                    egui::Label::new(RichText::new(summary).small().color(palette.muted))
+                        .truncate(),
+                );
+                ui.add(
+                    egui::Label::new(if self.board_candidate.is_empty() {
+                        "Choose a target from the list"
+                    } else {
+                        &self.board_candidate
+                    })
+                    .truncate(),
+                )
+                .on_hover_text(&self.board_candidate);
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(!self.board_candidate.is_empty() && self.idle(), |ui| {
+                        if button(
+                            ui,
+                            "Select Board",
+                            "board",
+                            Tone::Primary,
+                            egui::vec2(162.0, 40.0),
+                        )
+                        .clicked()
+                        {
+                            confirm = true;
+                        }
+                    });
+                    if button(ui, "Cancel", "", Tone::Secondary, egui::vec2(100.0, 40.0)).clicked()
+                    {
+                        cancel = true;
+                    }
+                });
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    confirm = true;
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    cancel = true;
+                }
             });
-        self.board_dialog = open;
-        if let Some(name) = selection {
-            self.choose_board(name);
+        #[cfg(test)]
+        {
+            self.board_geometry = window.map(|window| window.response.rect);
+        }
+        #[cfg(not(test))]
+        let _ = window;
+        self.board_dialog = open && !cancel;
+        if confirm && !cancel && open && self.idle() && !self.board_candidate.is_empty() {
+            self.choose_board(self.board_candidate.clone());
         }
     }
 
@@ -1037,7 +1273,7 @@ impl LiteApp {
                         ui.label(RichText::new("Uses PlatformIO board packages. An internet connection is required.").small().color(palette.muted));
                         ui.add_space(16.0);
                         ui.horizontal_wrapped(|ui| {
-                            if button(ui, "Choose board", "board", Tone::Secondary, egui::vec2(162.0, 40.0)).clicked() { self.board_dialog = true; }
+                            if button(ui, "Choose board", "board", Tone::Secondary, egui::vec2(162.0, 40.0)).clicked() { self.open_board_picker(); }
                             ui.add_enabled_ui(!self.board.is_empty(), |ui| {
                                 if button(ui, "Prepare selected board", "resources", Tone::Primary, egui::vec2(222.0, 40.0)).clicked() { self.action("board_install"); }
                             });
@@ -1182,7 +1418,7 @@ impl LiteApp {
                     .on_hover_text("Search the board catalog")
                     .clicked()
                 {
-                    self.board_dialog = true;
+                    self.open_board_picker();
                 }
                 let mut recent = None;
                 ui.add_enabled_ui(!self.recent_boards.is_empty(), |ui| {
@@ -1631,17 +1867,7 @@ impl eframe::App for LiteApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            egui::Image::new(icon("lite"))
-                                .fit_to_exact_size(egui::vec2(38.0, 38.0))
-                                .sense(Sense::click()),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.logo_gesture.click(Instant::now());
-                    }
+                    logo_button(ui, &mut self.logo_gesture, Instant::now());
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("MCU Flasher / Lite")
@@ -1821,6 +2047,166 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
 #[cfg(test)]
 mod verification {
     use super::*;
+
+    fn fixture_boards(app: &mut LiteApp) {
+        app.boards = [
+            ("Arduino Uno [atmelavr:uno]", "atmelavr", "ATmega328P"),
+            ("ESP32 Development Board with a deliberately long vendor and product name [espressif32:esp32dev]", "espressif32", "ESP32"),
+            ("STM32 Nucleo [ststm32:nucleo_f401re]", "ststm32", "STM32F401RE"),
+        ].map(|(name, platform, mcu)| Board { name: name.into(), platform: platform.into(), mcu: mcu.into() }).to_vec();
+        app.board_total = app.boards.len();
+        app.recent_boards = vec![app.boards[0].name.clone()];
+    }
+
+    #[test]
+    fn board_picker_keeps_rows_aligned_and_bounded_at_windows_scales() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for size in [egui::vec2(700.0, 560.0), egui::vec2(1140.0, 800.0)] {
+                let ctx = egui::Context::default();
+                let mut app = LiteApp::with_context(&ctx, true);
+                ctx.set_pixels_per_point(scale);
+                fixture_boards(&mut app);
+                app.open_board_picker();
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                for _ in 0..5 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ctx| app.board_picker(ctx),
+                    );
+                }
+                let window = app.board_geometry.unwrap();
+                assert!(
+                    screen.expand(1.0).contains_rect(window),
+                    "Board picker exceeds {size:?} at {scale}: {window:?}"
+                );
+                assert_eq!(
+                    app.board_rows.len(),
+                    3,
+                    "Recent boards must not be duplicated in all boards"
+                );
+                let first = app.board_rows[0].1;
+                for (_, row) in &app.board_rows {
+                    assert!((row.height() - BOARD_ROW_HEIGHT).abs() < 0.1);
+                    assert!((row.left() - first.left()).abs() < 0.1);
+                    assert!(
+                        (row.width() - first.width()).abs() < 0.1,
+                        "Long names must not resize rows"
+                    );
+                    assert!(window.contains_rect(*row));
+                }
+                // Arrow navigation changes the candidate, never the configured target.
+                let input = |key| egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                };
+                let _ = ctx.run(input(egui::Key::ArrowDown), |ctx| app.board_picker(ctx));
+                assert_eq!(app.board_candidate, app.boards[0].name);
+                assert!(app.board.is_empty());
+                assert!(app.board_dialog);
+                let _ = ctx.run(input(egui::Key::Escape), |ctx| app.board_picker(ctx));
+                assert!(!app.board_dialog);
+                assert!(app.board.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn logo_widget_keeps_clicks_batched_by_a_slow_native_frame() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let start = Instant::now();
+        let mut gesture = LogoGesture::default();
+        let mut rect = egui::Rect::NOTHING;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                rect = logo_button(ui, &mut gesture, start).rect;
+            });
+        });
+        let pos = rect.center();
+        let mut events = vec![egui::Event::PointerMoved(pos)];
+        for _ in 0..5 {
+            for pressed in [true, false] {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        let _ = ctx.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    logo_button(ui, &mut gesture, start + Duration::from_millis(500));
+                });
+                if ctx.current_pass_index() == 0 {
+                    ctx.request_discard("fixture layout retry");
+                }
+            },
+        );
+        assert_eq!(
+            gesture.count, 5,
+            "Native pointer releases must not collapse into one rendered click"
+        );
+    }
+
+    #[test]
+    fn logo_widget_counts_real_pointer_releases_including_double_clicks() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        let start = Instant::now();
+        let mut gesture = LogoGesture::default();
+        let mut rect = egui::Rect::NOTHING;
+        for frame in 0..11 {
+            let pos = rect.center();
+            let events = if frame == 0 {
+                vec![]
+            } else {
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: frame % 2 == 1,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            let now = start + Duration::from_millis(frame * 50);
+            let _ = ctx.run(
+                egui::RawInput {
+                    time: Some(frame as f64 * 0.05),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 560.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        rect = logo_button(ui, &mut gesture, now).rect;
+                    });
+                },
+            );
+        }
+        assert_eq!(gesture.count, 5);
+        assert!(gesture.take_ready(start + Duration::from_millis(1301)));
+    }
 
     fn contrast(a: Color32, b: Color32) -> f32 {
         fn light(color: Color32) -> f32 {

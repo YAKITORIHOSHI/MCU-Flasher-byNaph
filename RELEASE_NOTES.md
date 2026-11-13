@@ -11,6 +11,16 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 13 — Lite Windows interaction repair
+
+- Align the board picker with the main app: stable left-aligned rows, deduplicated
+  recent targets, explicit confirmation, keyboard navigation and bounded long names.
+- Preserve five logo clicks batched in one frame and avoid counting layout retries.
+  Add Developer Access startup acknowledgement, an owned Windows focus handoff,
+  startup diagnostics and clean standalone helper shutdown.
+- Add native Windows CI and fractional-scale checks. Keep Lite's existing colorway,
+  authentication, automatic preparation and exact-board firmware reuse.
+
 ## November 13 — Isolated Lite workbench and complete Bootstrap sources
 
 - Added `LITE-MODE`: a separate Rust workbench with Python build/upload tools,

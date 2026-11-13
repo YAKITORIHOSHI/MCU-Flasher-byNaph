@@ -5,6 +5,7 @@
 /.venv/
 __pycache__/
 *.pyc
+!/Cargo.lock
 !/UBUNTU
 !/UBUNTU_ARM64
 !/WINDOWS.exe
