@@ -147,7 +147,7 @@ def main():
             try:
                 def launch_fixture(command, **options):
                     nonlocal child
-                    check(command[-1].endswith("python/developer.py"), "entry starts the dedicated helper")
+                    check(Path(command[-1]) == ROOT / "python/developer.py", "entry starts the dedicated helper")
                     if os.environ.get("LITE_VERIFY_NATIVE") == "1" and sys.platform == "win32":
                         options["env"]["QT_QPA_PLATFORM"] = "windows"
                     child = real_popen([sys.executable, "-B", str(Path(__file__).resolve()), "--child"], **options)
