@@ -14,7 +14,7 @@ and clean close. This exposed and fixed a buffered-stdin shutdown crash.
 Both supplied launchers are rebuilt. Strict Clippy, formatting and main runtime
 checks pass. Owned Xvfb captures cover the revised picker and existing themes.
 The Lite Windows workflow runs Rust natively and the real Qt helper at five scales
-on Python 3.11/3.12. Its results will be recorded separately; a cross-build and
+on Python 3.11/3.14. Its results will be recorded separately; a cross-build and
 headless geometry checks do not qualify Windows desktop interactions. Windows 11
 and physical USB remain separate gates. See evidence/windows-repair-2026-11-13.json.
 

@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.11', '3.12']
+        python: ['3.11', '3.14']
     timeout-minutes: 35
     env:
       PYTHONDONTWRITEBYTECODE: '1'
