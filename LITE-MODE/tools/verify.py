@@ -106,7 +106,8 @@ def main():
         child_setup()
         from PySide6.QtCore import QCoreApplication
         app = QCoreApplication.instance() or QCoreApplication([])
-        with patch("serial.tools.list_ports.comports", return_value=[]):
+        with patch("serial.tools.list_ports.comports", return_value=[]), \
+                patch("main.web_bridge.MCUWebBackendAPI._scan_ports", return_value=[]):
             output = Recorder()
             worker = Worker(state, output)
             worker.ports()
@@ -207,6 +208,7 @@ def main():
             program = (
                 "import sys; sys.path.insert(0, sys.argv[1]); "
                 "import serial.tools.list_ports; serial.tools.list_ports.comports=lambda: []; "
+                "import main.web_bridge; main.web_bridge.MCUWebBackendAPI._scan_ports=lambda self: []; "
                 "import worker; worker.main()"
             )
             child_env = dict(os.environ, MCU_LITE_STATE=str(child_state))

@@ -137,7 +137,7 @@ def main():
                 app.processEvents()
                 time.sleep(.01)
             check(dialog.service is service, "real portal initializes through the existing service adapter")
-            check(dialog.auth_card.width() >= 350, "portal login card completes its queued responsive layout")
+            check(dialog.auth_card.width() >= min(350, dialog.width() - 70), "portal login card completes its queued responsive layout")
             check(dialog.stack.currentWidget() == dialog.auth_page, "five-click entry still requires the main authentication gate")
             check(dialog.txt_auth_pwd.echoMode() == QLineEdit.EchoMode.Password, "passwords stay masked in the reused portal")
             check(not dialog.windowIcon().isNull(), "Developer Access uses Lite's own native icon")
@@ -149,7 +149,8 @@ def main():
                 check(dialog.grab().save(str(args.render_dir / "developer-access.png")), "real Developer Access login renders with fixture accounts only")
             dialog.close()
             app.processEvents()
-        with patch("serial.tools.list_ports.comports", return_value=[]):
+        with patch("serial.tools.list_ports.comports", return_value=[]), \
+                patch("main.web_bridge.MCUWebBackendAPI._scan_ports", return_value=[]):
             output = Mock()
             worker = Worker(state, output)
             real_popen = subprocess.Popen

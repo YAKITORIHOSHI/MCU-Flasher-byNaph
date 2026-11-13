@@ -63,7 +63,8 @@ def main():
         from main.core import config
         from main.core.board_catalog import BoardCatalog
         application = QCoreApplication.instance() or QCoreApplication([])
-        with patch("serial.tools.list_ports.comports", return_value=[]):
+        with patch("serial.tools.list_ports.comports", return_value=[]), \
+                patch("main.web_bridge.MCUWebBackendAPI._scan_ports", return_value=[]):
             output = Recorder()
             worker = Worker(state, output)
             try:

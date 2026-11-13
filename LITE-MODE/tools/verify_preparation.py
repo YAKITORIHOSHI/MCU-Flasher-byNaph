@@ -136,7 +136,8 @@ def main():
             def __init__(self): self.events = []
             def send(self, event, data=None): self.events.append((event, data))
         output = Record()
-        with patch("serial.tools.list_ports.comports", return_value=[]):
+        with patch("serial.tools.list_ports.comports", return_value=[]), \
+                patch("main.web_bridge.MCUWebBackendAPI._scan_ports", return_value=[]):
             worker = Worker(state, output)
             worker.select_project(str(source))
             worker.api.current_board = "Arduino Uno [atmelavr:uno]"
