@@ -20,6 +20,56 @@ from direct.ubuntu import user_install as install
 
 
 class UserInstallChecks(unittest.TestCase):
+    def test_checkout_inventory_discovers_future_tracked_folders_and_omits_untracked_sketches(self):
+        import subprocess
+        future = self.source / 'FutureAddon/module.py'
+        future.parent.mkdir()
+        future.write_text('public source')
+        private = self.source / 'UserSketch/Private.ino'
+        private.parent.mkdir()
+        private.write_text('private source')
+        subprocess.run(['git', 'init', '-q', str(self.source)], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(self.source), 'add', '--', *install.REQUIRED, 'FutureAddon/module.py'], check=True, capture_output=True)
+        names = {path.as_posix() for path in install._inventory(self.source)[0]}
+        self.assertIn('FutureAddon/module.py', names)
+        self.assertNotIn('UserSketch/Private.ino', names)
+
+    def test_release_inventory_copies_lite_and_future_public_folders_without_user_data(self):
+        from src.modules.application_sources import MANIFEST, manifest_bytes
+        additions = ('LITE-MODE/UBUNTU', 'LITE-MODE/WINDOWS.exe', 'FutureAddon/module.py')
+        for name in additions:
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('public fixture')
+        (self.source / 'LITE-MODE/UBUNTU').chmod(0o755)
+        names = list(install.REQUIRED) + list(additions)
+        (self.source / MANIFEST).write_bytes(manifest_bytes('a' * 40, '', names))
+        private = self.source / 'UnrelatedSketch/Private.ino'
+        private.parent.mkdir()
+        private.write_text('private sketch')
+        destination = self.stage()
+        for name in additions:
+            self.assertEqual((destination / name).read_text(), 'public fixture')
+        self.assertTrue((destination / 'LITE-MODE/UBUNTU').stat().st_mode & 0o111)
+        self.assertFalse((destination / 'UnrelatedSketch').exists())
+
+    def test_public_inventory_rejects_paths_outside_source_or_private_state(self):
+        from src.modules.application_sources import MANIFEST
+        for name in ('../escape', '/absolute', '.', 'LITE-MODE/.venv/private', 'src/_python/python.exe'):
+            (self.source / MANIFEST).write_text(json.dumps({'schema': 1, 'commit': 'a' * 40, 'files': [name]}))
+            with self.subTest(path=name), self.assertRaises(RuntimeError):
+                self.stage()
+
+    def test_legacy_zip_includes_lite_but_never_its_private_or_build_folders(self):
+        for name in ('LITE-MODE/UBUNTU', 'LITE-MODE/target/object.o', 'LITE-MODE/.tools/compiler',
+                     'LITE-MODE/.venv/private', 'LITE-MODE/evidence/audit.json'):
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture')
+        destination = self.stage()
+        self.assertTrue((destination / 'LITE-MODE/UBUNTU').is_file())
+        self.assertEqual([p.name for p in (destination / 'LITE-MODE').iterdir()], ['UBUNTU'])
+
     def setUp(self):
         base = ROOT / 'temp/audit/user-install'
         base.mkdir(parents=True, exist_ok=True)

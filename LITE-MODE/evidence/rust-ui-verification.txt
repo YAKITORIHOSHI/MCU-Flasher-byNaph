@@ -1,0 +1,11 @@
+   Compiling mcu-flasher-lite v0.1.0 (/home/natsuki/Downloads/PROJECT MCU Flasher by Naph - Stable Release/LITE-MODE)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+     Running unittests src/main.rs (LITE-MODE/target/debug/deps/mcu_flasher_lite-10d8b6af45310c09)
+
+running 3 tests
+test ui::verification::actions_follow_board_port_and_operation_readiness ... ok
+test ui::verification::late_search_results_cannot_replace_the_current_query ... ok
+test ui::verification::streaming_monitors_keep_fixed_viewports_and_row_heights ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+

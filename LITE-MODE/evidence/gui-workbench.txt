@@ -1,0 +1,6 @@
+PASS normal
+PASS compact
+PASS serial
+PASS recent-projects
+PASS recent-boards
+PASS compact-resources

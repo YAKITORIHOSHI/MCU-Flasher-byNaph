@@ -11,6 +11,18 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 13 — Isolated Lite workbench and complete Bootstrap sources
+
+- Added `LITE-MODE`: a separate Rust workbench with Python build/upload tools,
+  recent sketches/boards, search, stable monitors and automatic certified build reuse.
+- Added active Light/Dark labels, colored Connection controls, original-folder
+  filename links and five-click access to the existing authenticated developer portal.
+- Bootstrap now carries Lite and future public application files automatically
+  from tracked checkout files or the release's generated source manifest, while
+  excluding private state, runtimes and development scratch.
+- Lite supports Ubuntu and Windows. Windows Lite is cross-built; native Windows
+  interaction and physical USB qualification remain pending.
+
 ## November 13 — Assistant loading and Developer Access tickets
 
 - **Quieter Assistant startup.** Removed the elapsed-time counter from the

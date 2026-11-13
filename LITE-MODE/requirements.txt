@@ -1,0 +1,10 @@
+# Headless tool worker only; no Qt WebEngine, editor or assistant dependencies.
+PySide6-Essentials>=6.7,<6.12; python_version < "3.12"
+PySide6-Essentials>=6.7,<7; python_version >= "3.12"
+pyserial>=3.5,<4
+psutil>=5.9,<8
+platformio==6.2.0
+click>=8.1.8,<8.2
+esptool>=4.11,<6
+setuptools==80.9.0
+future==1.0.0

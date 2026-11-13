@@ -1,0 +1,2 @@
+    Checking mcu-flasher-lite v0.1.0 (/home/natsuki/Downloads/PROJECT MCU Flasher by Naph - Stable Release/LITE-MODE)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s

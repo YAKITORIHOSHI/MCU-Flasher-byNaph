@@ -1,0 +1,11 @@
+/target/
+/bin/
+/.tools/
+/.local/
+/.venv/
+__pycache__/
+*.pyc
+!/UBUNTU
+!/UBUNTU_ARM64
+!/WINDOWS.exe
+/temp/

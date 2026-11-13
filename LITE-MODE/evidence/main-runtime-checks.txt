@@ -1,0 +1,67 @@
+test_ambiguous_board_match_is_rejected (__main__.RuntimeChecks.test_ambiguous_board_match_is_rejected) ... ok
+test_application_guidance_does_not_escape_to_sketches (__main__.RuntimeChecks.test_application_guidance_does_not_escape_to_sketches) ... ok
+test_build_preparation_failure_releases_busy_state (__main__.RuntimeChecks.test_build_preparation_failure_releases_busy_state) ... ok
+test_catalog_refresh_preserves_imported_reference (__main__.RuntimeChecks.test_catalog_refresh_preserves_imported_reference) ... ok
+test_clear_never_types_into_a_running_cli (__main__.RuntimeChecks.test_clear_never_types_into_a_running_cli) ... ok
+test_cloud_reload_rejects_completion_after_renderer_replacement (__main__.RuntimeChecks.test_cloud_reload_rejects_completion_after_renderer_replacement) ... ok
+test_compiler_jobs_reserve_ui_and_limit_saved_values (__main__.RuntimeChecks.test_compiler_jobs_reserve_ui_and_limit_saved_values) ... ok
+test_cpu_guard_and_unknown_cpu_fail_closed (__main__.RuntimeChecks.test_cpu_guard_and_unknown_cpu_fail_closed) ... ok
+test_cpu_guard_precedes_runtime_and_gui_initialization (__main__.RuntimeChecks.test_cpu_guard_precedes_runtime_and_gui_initialization) ... ok
+test_disconnected_port_clears_claim_before_catalog_reaches_controls (__main__.RuntimeChecks.test_disconnected_port_clears_claim_before_catalog_reaches_controls) ... ok
+test_framework_changes_firmware_identity (__main__.RuntimeChecks.test_framework_changes_firmware_identity) ... ok
+test_host_detection (__main__.RuntimeChecks.test_host_detection) ... ok
+test_installed_manifest_refreshes_copied_cache (__main__.RuntimeChecks.test_installed_manifest_refreshes_copied_cache) ... ok
+test_linux_reset_lock_excludes_another_process (__main__.RuntimeChecks.test_linux_reset_lock_excludes_another_process) ... ok
+test_linux_symlinked_venv_identity (__main__.RuntimeChecks.test_linux_symlinked_venv_identity) ... ok
+test_low_end_profiles_and_background_throttling (__main__.RuntimeChecks.test_low_end_profiles_and_background_throttling) ... ok
+test_missing_compiler_releases_operation_before_idle_signal (__main__.RuntimeChecks.test_missing_compiler_releases_operation_before_idle_signal) ... ok
+test_native_pty_roundtrip (__main__.RuntimeChecks.test_native_pty_roundtrip) ... ok
+test_native_upload_failure_is_not_replayed (__main__.RuntimeChecks.test_native_upload_failure_is_not_replayed) ... ok
+test_old_serial_reader_cannot_disconnect_new_reader (__main__.RuntimeChecks.test_old_serial_reader_cannot_disconnect_new_reader) ... ok
+test_package_installation_cannot_be_interrupted (__main__.RuntimeChecks.test_package_installation_cannot_be_interrupted) ... ok
+test_programmer_does_not_require_com (__main__.RuntimeChecks.test_programmer_does_not_require_com) ... ok
+test_recovery_is_bounded_and_expires (__main__.RuntimeChecks.test_recovery_is_bounded_and_expires) ... ok
+test_registry_schema_and_no_command_mutation (__main__.RuntimeChecks.test_registry_schema_and_no_command_mutation) ... ok
+test_renderer_callbacks_preserve_newer_recovery_edits (__main__.RuntimeChecks.test_renderer_callbacks_preserve_newer_recovery_edits) ... ok
+test_renderer_recovery_rejects_stale_pages_and_requires_exact_buffers (__main__.RuntimeChecks.test_renderer_recovery_rejects_stale_pages_and_requires_exact_buffers) ... ok
+test_skip_compile_never_reuses_changed_sources (__main__.RuntimeChecks.test_skip_compile_never_reuses_changed_sources) ... ok
+test_source_syntax (__main__.RuntimeChecks.test_source_syntax) ... ok
+test_target_framework_and_injection (__main__.RuntimeChecks.test_target_framework_and_injection) ... ok
+test_terminal_close_during_spawn_cannot_orphan_pty (__main__.RuntimeChecks.test_terminal_close_during_spawn_cannot_orphan_pty) ... ok
+test_terminal_controls_preserve_order_and_coalesce_resizes (__main__.RuntimeChecks.test_terminal_controls_preserve_order_and_coalesce_resizes) ... ok
+test_terminal_honors_no_color_and_cleans_private_python (__main__.RuntimeChecks.test_terminal_honors_no_color_and_cleans_private_python) ... ok
+test_terminal_output_waits_for_renderer_consumption (__main__.RuntimeChecks.test_terminal_output_waits_for_renderer_consumption) ... ok
+test_terminal_preserves_protocol_and_bounds_history (__main__.RuntimeChecks.test_terminal_preserves_protocol_and_bounds_history) ... ok
+test_terminal_resize_and_input_target_their_session (__main__.RuntimeChecks.test_terminal_resize_and_input_target_their_session) ... ok
+test_unknown_board_is_rejected (__main__.RuntimeChecks.test_unknown_board_is_rejected) ... ok
+test_upload_rejection_releases_operation_without_hardware_calls (__main__.RuntimeChecks.test_upload_rejection_releases_operation_without_hardware_calls) ... ok
+test_vector_controls_have_readable_labels (__main__.RuntimeChecks.test_vector_controls_have_readable_labels) ... ok
+test_cancelled_worker_and_stale_replies_cannot_finish_newer_reload (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_cancelled_worker_and_stale_replies_cannot_finish_newer_reload) ... ok
+test_denied_nested_directory_rejects_partial_enumeration (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_denied_nested_directory_rejects_partial_enumeration) ... ok
+test_denied_root_does_not_certify_existing_sources_as_empty (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_denied_root_does_not_certify_existing_sources_as_empty) ... ok
+test_empty_directory_is_successful_but_missing_root_is_not (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_empty_directory_is_successful_but_missing_root_is_not) ... ok
+test_manifest_runs_off_owner_thread_and_completion_is_queued (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_manifest_runs_off_owner_thread_and_completion_is_queued) ... ok
+test_only_one_scan_runs_and_project_change_rejects_its_result (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_only_one_scan_runs_and_project_change_rejects_its_result) ... ok
+test_renderer_change_during_scan_rejects_before_any_model_reload (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_renderer_change_during_scan_rejects_before_any_model_reload) ... ok
+test_supported_sources_and_existing_pruning_remain_compatible (direct.verify_cloud_editor_manifest.CloudManifestChecks.test_supported_sources_and_existing_pruning_remain_compatible) ... ok
+
+----------------------------------------------------------------------
+Ran 46 tests in 0.712s
+
+OK
+QRhiGles2: Failed to create temporary context
+QRhiGles2: Failed to create context
+Failed to create RHI for backend: OpenGL
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support propagateSizeHints()
+This plugin does not support propagateSizeHints()
+This plugin does not support raise()
+This plugin does not support grabbing the keyboard
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+This plugin does not support raise()
+Qt tabs, keyboard navigation, compact/wide ownership, three detach/reattach and dirty renderer recovery cycles: OK
+Confirmed cloud Pull replaces all Monaco source buffers and clears dirty recovery: OK
+Accepted workspace close destroys its owned WebEngine page before process exit: OK

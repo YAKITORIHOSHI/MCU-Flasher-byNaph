@@ -1,0 +1,164 @@
+{
+  "host": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "target": "atmelavr:uno / arduino",
+  "ports": "mocked empty; never opened",
+  "results": [
+    {
+      "phase": "initial",
+      "seconds": 4.762,
+      "compiled_objects": [
+        "  Compiling FixtureBlink.ino.cpp.o...",
+        "  Compiling CDC.cpp.o...",
+        "  Compiling HardwareSerial.cpp.o...",
+        "  Compiling HardwareSerial0.cpp.o...",
+        "  Compiling HardwareSerial1.cpp.o...",
+        "  Compiling HardwareSerial2.cpp.o...",
+        "  Compiling HardwareSerial3.cpp.o...",
+        "  Compiling IPAddress.cpp.o...",
+        "  Compiling PluggableUSB.cpp.o...",
+        "  Compiling Print.cpp.o...",
+        "  Compiling Stream.cpp.o...",
+        "  Compiling Tone.cpp.o...",
+        "  Compiling USBCore.cpp.o...",
+        "  Compiling WInterrupts.c.o...",
+        "  Compiling WMath.cpp.o...",
+        "  Compiling WString.cpp.o...",
+        "  Compiling abi.cpp.o...",
+        "  Compiling hooks.c.o...",
+        "  Compiling main.cpp.o...",
+        "  Compiling new.cpp.o...",
+        "  Compiling wiring.c.o...",
+        "  Compiling wiring_analog.c.o...",
+        "  Compiling wiring_digital.c.o...",
+        "  Compiling wiring_pulse.S.o...",
+        "  Compiling wiring_pulse.c.o...",
+        "  Compiling wiring_shift.c.o..."
+      ],
+      "success": true
+    },
+    {
+      "phase": "unchanged",
+      "seconds": 1.383,
+      "compiled_objects": [],
+      "success": true
+    },
+    {
+      "phase": "source edit",
+      "seconds": 1.431,
+      "compiled_objects": [
+        "  Compiling FixtureBlink.ino.cpp.o..."
+      ],
+      "success": true
+    },
+    {
+      "phase": "separate Nano build",
+      "seconds": 1.441,
+      "success": true
+    }
+  ],
+  "automatic_preparation": true,
+  "upload_dependency": "tool-avrdude",
+  "offline_uploader_envdump": true,
+  "upload_dispatch": "exactly once per request; final device boundary mocked",
+  "packages": [
+    {
+      "name": "atmelavr",
+      "version": "5.3.0",
+      "changed": false,
+      "origin": "installed"
+    },
+    {
+      "name": "tool-scons",
+      "version": "4.41101.0",
+      "changed": false,
+      "origin": "installed"
+    },
+    {
+      "name": "toolchain-atmelavr",
+      "version": "1.70300.191015",
+      "changed": false,
+      "origin": "installed"
+    },
+    {
+      "name": "framework-arduino-avr",
+      "version": "5.4.0",
+      "changed": false,
+      "origin": "installed"
+    },
+    {
+      "name": "tool-avrdude",
+      "version": "1.60300.200527",
+      "changed": false,
+      "origin": "installed"
+    }
+  ],
+  "separate_board_workspaces": true,
+  "boards": [
+    "Arduino Uno [atmelavr:uno]",
+    "Arduino Nano ATmega328 [atmelavr:nanoatmega328]"
+  ],
+  "automatic_cached_uploads": [
+    {
+      "phase": "Nano saved build",
+      "board": "Arduino Nano ATmega328 [atmelavr:nanoatmega328]",
+      "skip_compile": true,
+      "dispatches": 1
+    },
+    {
+      "phase": "return to Uno saved build",
+      "board": "Arduino Uno [atmelavr:uno]",
+      "skip_compile": true,
+      "dispatches": 1
+    },
+    {
+      "phase": "changed source requires Uno compilation",
+      "board": "Arduino Uno [atmelavr:uno]",
+      "skip_compile": false,
+      "dispatches": 1
+    },
+    {
+      "phase": "changed source requires Nano compilation",
+      "board": "Arduino Nano ATmega328 [atmelavr:nanoatmega328]",
+      "skip_compile": false,
+      "dispatches": 1
+    },
+    {
+      "phase": "restored source verifies saved Uno bytes",
+      "board": "Arduino Uno [atmelavr:uno]",
+      "skip_compile": true,
+      "dispatches": 1
+    },
+    {
+      "phase": "corrupt Uno firmware cannot be reused",
+      "board": "Arduino Uno [atmelavr:uno]",
+      "skip_compile": false,
+      "dispatches": 1
+    },
+    {
+      "phase": "Uno corruption leaves Nano firmware reusable",
+      "board": "Arduino Nano ATmega328 [atmelavr:nanoatmega328]",
+      "skip_compile": true,
+      "dispatches": 1
+    },
+    {
+      "phase": "restored Uno firmware verifies again",
+      "board": "Arduino Uno [atmelavr:uno]",
+      "skip_compile": true,
+      "dispatches": 1
+    },
+    {
+      "phase": "Clean requires compilation on next upload",
+      "board": "Arduino Uno [atmelavr:uno]",
+      "skip_compile": false,
+      "dispatches": 1
+    }
+  ],
+  "certified_uno_sha256": "6d7cb6e06e05c928378fd006cdcc8d024836b83a20d90edfc8729020ab451922",
+  "reused_from_main": [
+    "Reusing main package: atmelavr @ 5.3.0",
+    "Reusing main package: tool-scons @ 4.41101.0",
+    "Reusing main package: toolchain-atmelavr @ 1.70300.191015",
+    "Reusing main package: framework-arduino-avr @ 5.4.0",
+    "Reusing main package: tool-avrdude @ 1.60300.200527"
+  ]
+}

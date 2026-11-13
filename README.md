@@ -82,6 +82,13 @@ Apps; launch it from there afterwards. Later repairs and updates appear in the
 same Bootstrap window as on Windows; only the very first setup uses a terminal. On macOS, the first open needs
 Control-click → **Open**, because the app is not notarized.
 
+**Lite:** `LITE-MODE/` contains the separate Rust workbench for Ubuntu and Windows.
+Open its `UBUNTU` or `WINDOWS.exe` launcher; it reuses the prepared Python tools.
+See [Lite's guide](LITE-MODE/README.md). Bootstrap includes Lite and future public
+application folders automatically: checkouts use tracked files, and release ZIPs
+carry a generated source manifest. Private settings, caches and build scratch
+remain excluded from installation sources.
+
 ## Everyday use
 
 | Task | How |

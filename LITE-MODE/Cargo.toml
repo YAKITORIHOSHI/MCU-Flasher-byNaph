@@ -1,0 +1,27 @@
+[package]
+name = "mcu-flasher-lite"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "An isolated Rust workbench for MCU Flasher's Python tools"
+
+[workspace]
+
+[dependencies]
+eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_extras = { version = "=0.33.3", default-features = false, features = ["svg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+resvg = { version = "0.45", default-features = false }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+unicode-width = "=0.2.3"
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true

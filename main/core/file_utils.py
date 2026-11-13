@@ -1284,6 +1284,7 @@ def application_agent_guidance(project_dir) -> str:
         return ""
     return (
         "## Application development scope\n\n"
+        "- Bootstrap copies public application sources from Git tracked paths or the release-generated `.mcu-flasher-sources.json` through `src/modules/application_sources.py`, including LITE-MODE and future public folders without new allowlist entries. Preserve private state and runtime/scratch exclusions; legacy ZIPs use the reviewed fallback. Verify user_install and release_sources in owned fixtures.\n\n"
         "This directory contains the MCU Flasher application. When the user requests app changes, "
         "the root-sketch restriction in Step 2 applies to firmware work only. App work may edit "
         "`main/`, `src/` source/assets, `direct/`, `desktop/`, `LAUNCHER/`, `cleaner/`, "

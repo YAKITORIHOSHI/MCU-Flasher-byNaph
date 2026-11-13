@@ -1,9 +1,19 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication and public release integrity."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, complete Bootstrap source inventories and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+Bootstrap source ownership is shared through `src/modules/application_sources.py`.
+Use tracked files for Git checkouts and `.mcu-flasher-sources.json` from public ZIPs.
+`direct/build_release.py` generates that manifest from the exact committed archive;
+new public application folders, including LITE-MODE, must not need a folder-list
+edit. Keep private state, runtimes, installers and development scratch excluded.
+Legacy ZIPs retain the reviewed copy list with Lite included. Verify user_install
+and release_sources in owned fixtures; never infer ownership by scanning arbitrary
+user folders. Commit Lite's supplied native launchers, keep their bytes/modes, and
+exclude its development evidence from public ZIPs through export-ignore.
 
 ## Atomic source access and persistent Ubuntu installation
 

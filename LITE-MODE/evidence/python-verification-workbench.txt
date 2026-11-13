@@ -1,0 +1,47 @@
+PASS Ubuntu 24.04 is admitted by explicit host policy
+PASS unsupported or malformed Linux release is refused: fedora/44
+PASS unsupported or malformed Linux release is refused: ubuntu/invalid
+PASS macOS is outside Lite's two-OS policy
+PASS Windows ARM64 is refused before any runtime mutation
+PASS source project is staged separately
+PASS only supported root source files are captured
+PASS original sketch bytes are preserved
+PASS staged bytes match the saved source
+PASS saved source changes are captured before a build
+PASS deleted sources do not linger in the staged sketch
+PASS linked root sources are refused
+PASS backend source is reused byte-for-byte
+PASS headless persistence modules are present in the snapshot
+PASS no board or port is automatically selected
+PASS port enumeration uses a hardware-free fixture
+PASS exact boards are searchable before packages are installed
+PASS bundled catalog supplies a broad board picker
+PASS compile delegates to the original backend action
+PASS compile automatically prepares tools before dispatch
+PASS upload delegates to the original backend action
+PASS upload automatically prepares tools before dispatch
+PASS clean delegates to the original backend action
+PASS baud changes do not request a reset
+PASS Connect delegates to the original passive monitor
+PASS serial sends retain the requested line ending
+PASS target changes are refused during an active operation
+PASS catalog refresh retains operation ownership until target definitions settle
+PASS protocol rejects arbitrary method dispatch
+PASS full catalogs never overflow the bounded UI protocol
+PASS user Unicode serial data is preserved
+PASS generated status messages do not contain decorative emoji
+PASS real Clean completes and releases operation ownership
+PASS real Clean removes only private build workspaces
+PASS Clean preserves private AI recovery history
+PASS Clean preserves original and staged source files
+PASS Lite does not create settings in the original source tree
+PASS settings are redirected to private Lite state
+PASS Python tool children inherit isolated settings
+PASS Python child isolation initializes without startup errors
+PASS audit guard refuses writes to original application files before mutation
+PASS real worker startup publishes a protocol handshake
+PASS command acknowledgements match exact requests and do not replay on malformed JSON
+PASS malformed requests report errors without preventing graceful shutdown
+PASS all real protocol frames fit the Rust reader budget
+
+45 hardware-free checks passed. No device was opened and no package was downloaded.

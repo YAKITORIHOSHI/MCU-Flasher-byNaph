@@ -1,0 +1,143 @@
+{
+  "created_at": "2026-11-13T11:34:18.306180+00:00",
+  "features": [
+    "active theme labels and icons",
+    "colored Connection panel and dropdowns",
+    "five-click Developer Access using main portal and authentication",
+    "private Lite credential/cache namespace",
+    "automatic Bootstrap inclusion from tracked paths/public release manifest"
+  ],
+  "checks": {
+    "rust": 9,
+    "python": 98,
+    "developer_access": 14,
+    "ubuntu_install": 15,
+    "release_sources": 15,
+    "main_runtime": 46,
+    "gui_captures": 11,
+    "portal_capture": "offscreen Qt with fake service; no real vault/network",
+    "physical_hardware": "not accessed"
+  },
+  "artifacts": {
+    "UBUNTU": {
+      "bytes": 10799840,
+      "sha256": "2e10d87f3353af787277a27d6954d2f8d94207f10f53d06046346a5345933c75"
+    },
+    "WINDOWS.exe": {
+      "bytes": 6213632,
+      "sha256": "6a4e8004b4fa1097b0265b5ffc482f9c5602a896c69edff0d89f62829146372c"
+    }
+  },
+  "logs": {
+    "LITE-MODE/evidence/access-rust-tests.txt": {
+      "bytes": 1175,
+      "sha256": "59310d308ad1ab9f2594182ac666dfd13401bd147de64ea8c6c2bdcda2782adb"
+    },
+    "LITE-MODE/evidence/access-clippy.txt": {
+      "bytes": 190,
+      "sha256": "20cefd8b239f01933e5b693198db4ce90e728ba6526dce40b976f0e3b2036c35"
+    },
+    "LITE-MODE/evidence/access-python-checks.txt": {
+      "bytes": 2780,
+      "sha256": "49d64c2783c086035befad1191c798c622a4ca9554b9605ff0fc2ebef91dfbe0"
+    },
+    "LITE-MODE/evidence/access-preparation-checks.txt": {
+      "bytes": 1846,
+      "sha256": "ac6f381a60eb3fb47c7fa9d71ec137f79d985528abaf310d184f7654e7717276"
+    },
+    "LITE-MODE/evidence/access-history-checks.txt": {
+      "bytes": 1507,
+      "sha256": "5f1ad04b1a5ed6deb4d36db0ff130c85e577e5cff9f495f2dcfbfaca5abbd67b"
+    },
+    "LITE-MODE/evidence/access-developer-checks.txt": {
+      "bytes": 920,
+      "sha256": "eecfd29b95ab85247ad7671aaffbc2037e991c4f49de6a265c84cf5d7763e77e"
+    },
+    "LITE-MODE/evidence/bootstrap-user-install-checks.txt": {
+      "bytes": 2833,
+      "sha256": "ad6931dce97642d803f65791884811bca95b029299ce7b175ffa7c027e9ee6ec"
+    },
+    "LITE-MODE/evidence/bootstrap-release-source-checks.txt": {
+      "bytes": 2500,
+      "sha256": "96daa66c5be4293d7e5623a72a3e2898721ab62dfb08b314be712f01e7aaa4a4"
+    },
+    "LITE-MODE/evidence/main-runtime-checks.txt": {
+      "bytes": 7231,
+      "sha256": "7dd64d547073974f2e43c8adc72efcae0abdfce60575d274d4af36e3395289b7"
+    },
+    "LITE-MODE/evidence/access-ubuntu-build.txt": {
+      "bytes": 8028,
+      "sha256": "deed4a9e0e066cb19c4390f5c7192ec9f06910bd35a0c6479b38b6ab91ccba18"
+    },
+    "LITE-MODE/evidence/access-windows-build.txt": {
+      "bytes": 4834,
+      "sha256": "9b21ebf9cec6bc0f8543e8558afce33ccef40c53da7726e5c1759cffdb873576"
+    },
+    "LITE-MODE/evidence/access-render.txt": {
+      "bytes": 181,
+      "sha256": "572425ef84b2a1b6c5bf70af1d5a6598b98e38e17944e3a1e1e7722e341c7ed7"
+    }
+  },
+  "main_changes": "User approved Bootstrap/release ownership integration and associated guidance; main GUI/auth/build behavior remains unchanged.",
+  "changed_original_paths": [
+    ".agents/skills/mcu-flash-project-hygiene/SKILL.md",
+    ".gitignore",
+    "README.md",
+    "RELEASE_NOTES.md",
+    "direct/build_release.py",
+    "direct/ubuntu/user_install.py",
+    "direct/verify_release_sources.py",
+    "direct/verify_user_install.py",
+    "main/core/file_utils.py"
+  ],
+  "source_sha256": {
+    "LITE-MODE/src/bridge.rs": "6b2fae4edafff9fa0d81f9982ae702894868778f0bae9340430de21ebb239210",
+    "LITE-MODE/src/desktop.rs": "edd3739e01b5f50a344867e5afe24a6599d886b58e5d6e9bf83edcbf797cefec",
+    "LITE-MODE/src/ui.rs": "aca4ebec43e0eee07a2d3dcfb93b74c03e533e75aabf78609071f7ae2e1126cc",
+    "LITE-MODE/src/main.rs": "5eaadad1647aa32944e90995fe8f095cca2297ca08359c00832454f46240f498",
+    "LITE-MODE/python/isolation.py": "60c0b863fa9ca0f6f382548b76717288a7b91ceca32690288ec17548d351d61a",
+    "LITE-MODE/python/worker.py": "bd16afd93b3d343cf1d73b56bc9ee72f99ee32b8e565a996639405a6bc1ab943",
+    "LITE-MODE/python/preparation.py": "08343f7d15f800a75aa7397afc5a264d203121661ce275889634d6509186b1b7",
+    "LITE-MODE/python/developer.py": "905c9b08e76aa117f301ede4c7d30ad0e8561fdbe786fc18edd49a3f4329001f",
+    "LITE-MODE/python/search.py": "05444dda1be731115df235b9d9dc95a444ce1df8d076a807b6ef03bd9a0a0f04",
+    "LITE-MODE/tools/verify_preparation.py": "9447a5e039575f59aaebd7927b2f832211a2e67638aa4dc5081d903ecf909b96",
+    "LITE-MODE/tools/verify.py": "c6974e157f2601a494ce98ad73c7f7298e2ef70e57a75eff022dc36b6c62304b",
+    "LITE-MODE/tools/setup.py": "d9b768ffb4b1d57ae32f720d57aa3d5f1824a350aa0e1e43ea814a6245cb8963",
+    "LITE-MODE/tools/qualify_compile.py": "39385dcc0b029b632fd01c3bc50a11b3ce43121541c504dd325d14fd4799397b",
+    "LITE-MODE/tools/verify_developer.py": "2c371afb82f9168cdd0de3ea9f60f1ed6546609d49a193d3eb4c844833bbee5c",
+    "LITE-MODE/tools/build.py": "aab9086bed3aa06df76f2445c8368c4fff037fc38157bfb4f49e0db8d82bb759",
+    "LITE-MODE/tools/verify_history_search.py": "bec2b657f35ddf5114455ff0b13664bf55e26b24fee45b1eeeadbf5f06fd5b33",
+    "LITE-MODE/assets/lite.svg": "ca98c5da9d9a6f6a2567f5b0639f6c77bf36d195e7e90a2e141f648c4c23c769",
+    "LITE-MODE/assets/clean.svg": "4147a6c40b60dd7d46513bf20b8dee08cd022ca1a31d11e2e406490013772e18",
+    "LITE-MODE/assets/preview.png": "6b9cc51bfc262a7b3ac2b02b0b4ef61b53a62cbe065344df3b734192541d6369",
+    "LITE-MODE/assets/folder.svg": "0e174cff929fa4ec7f561cacedbc4fc60c548603fba4e0925f0cf79e32435e21",
+    "LITE-MODE/assets/boards.json": "8ab40cf1557848f7a5cb0418ac212db61026c77ba1a333bfd3b31be7a2c45a09",
+    "LITE-MODE/assets/serial.svg": "1924ffcc8347da8df4b95ea0808f5afa749c0eb1f6fed4ab3628e88b93bd9fb0",
+    "LITE-MODE/assets/stop.svg": "3bdf57b7e521928e90e8e0b785a94997b95248947230d81fb0ffd7cab467bb0c",
+    "LITE-MODE/assets/lite.png": "66291253e844e492c4d701b0f95e35abf27ce948dc4fc3a3cad5b6f94394ecc6",
+    "LITE-MODE/assets/compile.svg": "01f030a5772355d6cdb35080d97a55cfae90b38e6f4f37dd1b5e054bc58575e8",
+    "LITE-MODE/assets/resources.svg": "407facc38978909998ff8bc7174776b6c9970b393f9069e4722ff0067dc5d281",
+    "LITE-MODE/assets/board.svg": "cd99d507eccb5edde768776402db8c705e265d27a81b291191b75d11afc9235a",
+    "LITE-MODE/assets/lite.ico": "f26139db81a50d4f75b5c495cb898300515767012411e628571f617b1a2c1f7f",
+    "LITE-MODE/assets/PROVENANCE.md": "f98ddecee04c40d8a5e73a6af92f1fb919a0d3e8c23e8146f4e7a0313d240846",
+    "LITE-MODE/assets/refresh.svg": "0553d19a90d46f1de191d0add5d70fd3f6ce01ceb28b65224ba19e8b05dc24a5",
+    "LITE-MODE/assets/preview-dark.png": "76b90111b52d05f065651a5dc83a2119676c47232b7c131e53ed8cc5ed4875b9",
+    "LITE-MODE/assets/moon.svg": "b672d0d798f5212d6e23fe0e508a15d6884a33b506a96d7ee6c1b06d430392b3",
+    "LITE-MODE/assets/upload.svg": "b1cc7c0e36a8de3b44dea689fa7240da67d678ceddb48cea7504479f99026418",
+    "LITE-MODE/assets/sun.svg": "f117466ee2c67963c2ca1b93509699761e5745eba422f0b20171ed685bf281d3",
+    "LITE-MODE/assets/fonts/Montserrat-Regular.ttf": "ef9cf99f0175bef530b88934bd904fcf56f773cec6fd4dfb8ccaf7ce2bbd395e",
+    "LITE-MODE/assets/fonts/Montserrat-Bold.ttf": "7fa93d7daa5c2f881a6727229c211782de6b76008fbd6346b3d7664e8fc83f43",
+    "LITE-MODE/assets/fonts/OFL.txt": "77669d97bc1fcef80d834ac2c1432943d48ed9ae4cdfc80f26e49d1da84830ac",
+    "LITE-MODE/.agents/skills/lite-workbench/SKILL.md": "4d5182dabe024625745ce81e372bf5476ebbaea2bca52a062007b3c604bf6f4c"
+  },
+  "pending": [
+    "native Windows desktop/USB qualification",
+    "Wayland/mixed-monitor interaction",
+    "native Ubuntu 24.04/ARM64 qualification"
+  ],
+  "release": {
+    "tag": "latest",
+    "asset": "MCU_Flasher-v11.zip",
+    "action": "replace existing ZIP after commit and full packaging verification"
+  }
+}

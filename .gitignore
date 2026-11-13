@@ -1,4 +1,5 @@
 # === PlatformIO / Arduino toolchain caches ===
+/.mcu-flasher-sources.json
 .pio/
 .mcu_flasher_build_cache/
 .pioenvs/

@@ -22,6 +22,9 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT))
+from src.modules.application_sources import MANIFEST as SOURCE_MANIFEST, manifest_bytes
 EXCLUDED = {'.git', '.venv-linux', '.venv-macos', '.venv', 'env', '_python', '.ubuntu-tools', '.macos-tools',
             '.mcu_flasher_build_cache', '.mcu_ai_edits', '.pio', '.vscode',
             '.clangd', '.opencode', 'temp', 'logs', 'test', 'tests', '__pycache__'}
@@ -235,7 +238,7 @@ def build(output, report_dir):
                     temporary, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
                 for member in archive:
                     path = PurePosixPath(member.name)
-                    if member.name == BUNDLED_REVISION:
+                    if member.name in {BUNDLED_REVISION, SOURCE_MANIFEST}:
                         continue
                     if not include_committed_source(member.name):
                         if member.isfile():
@@ -264,6 +267,10 @@ def build(output, report_dir):
                 bundle.writestr(info_for(BUNDLED_REVISION, 0o644), revision)
                 entries.append({'path': BUNDLED_REVISION, 'sha256': hashlib.sha256(revision).hexdigest(),
                                 'size': len(revision), 'mode': oct(0o644)})
+                inventory_data = manifest_bytes(commit, committed_at, [entry['path'] for entry in entries])
+                bundle.writestr(info_for(SOURCE_MANIFEST, 0o644), inventory_data)
+                entries.append({'path': SOURCE_MANIFEST, 'sha256': hashlib.sha256(inventory_data).hexdigest(),
+                                'size': len(inventory_data), 'mode': oct(0o644)})
                 print(f'Adding {len(runtime_files)} private Windows runtime files...', flush=True)
                 for path in runtime_files:
                     add_local(bundle, path, 0o644)

@@ -1,0 +1,6 @@
+/UBUNTU binary
+/UBUNTU_ARM64 binary
+/WINDOWS.exe binary
+evidence/** export-ignore
+evidence/** -whitespace
+/assets/fonts/OFL.txt -text -whitespace

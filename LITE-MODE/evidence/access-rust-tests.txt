@@ -1,0 +1,17 @@
+   Compiling mcu-flasher-lite v0.1.0 (/home/natsuki/Downloads/PROJECT MCU Flasher by Naph - Stable Release/LITE-MODE)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running unittests src/main.rs (LITE-MODE/target/debug/deps/mcu_flasher_lite-eb00cb30ee786200)
+
+running 9 tests
+test desktop::verification::source_directory_stays_one_literal_argument ... ok
+test desktop::verification::unavailable_directory_is_reported_before_launching ... ok
+test ui::verification::developer_gesture_requires_exactly_five_releases_then_a_pause ... ok
+test ui::verification::progress_updates_one_owned_row_and_keeps_diagnostics ... ok
+test ui::verification::actions_follow_board_port_and_operation_readiness ... ok
+test ui::verification::late_search_results_cannot_replace_the_current_query ... ok
+test ui::verification::connection_popup_retains_readable_accent_material_in_both_modes ... ok
+test ui::verification::theme_switch_preserves_logs_and_monospaced_table_alignment ... ok
+test ui::verification::streaming_monitors_keep_fixed_viewports_and_row_heights ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+

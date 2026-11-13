@@ -1,0 +1,27 @@
+PASS recent sketches retain the newest 10 original paths
+PASS reopening a sketch moves it first without duplicates
+PASS recent sketches never expose private staged paths
+PASS recent sketches persist in Lite's settings
+PASS recent boards retain the newest 5 selections
+PASS reselecting a board moves it first without duplicates
+PASS both histories survive a fresh Python process
+PASS history transactions lock only Lite's private settings
+PASS missing sketch folders are pruned like the main app
+PASS exact board IDs rank first
+PASS search tolerates case and punctuation
+PASS search ignores accent marks without splitting words
+PASS multiple query words match together across names and MCU metadata
+PASS board-name typos offer clearly marked closest matches
+PASS vendor, MCU and framework metadata are searchable together
+PASS unchanged catalogs reuse their normalized search index
+PASS catalog revisions replace stale search entries
+PASS board search results remain bounded
+PASS library search prioritizes exact names and removes duplicate packages
+PASS compile rejects an unconfigured board before tool preparation
+PASS upload rejects an unconfigured board before tool preparation
+PASS Compile requires a valid board but no port
+PASS Upload rejects a missing port before tool preparation
+PASS Upload rejects a disconnected port before tool preparation
+PASS a ready Upload enables automatic certified-build reuse before one handoff
+
+25 history/search/readiness checks passed. No downloads or device access.

@@ -199,6 +199,8 @@ class ReleaseArchiveChecks(unittest.TestCase):
         expected['src/launch.vbs'] = expected['src/launch.vbs'].replace(b'\n', b'\r\n')
         expected[build_release.BUNDLED_REVISION] = build_release.bundled_revision_entry(
             manifest['commit'], manifest['committed_at'])
+        expected[build_release.SOURCE_MANIFEST] = build_release.manifest_bytes(
+            manifest['commit'], manifest['committed_at'], expected)
         with zipfile.ZipFile(self.output) as bundle:
             self.assertEqual(set(bundle.namelist()), set(expected))
             self.assertIn('LAUNCHER/WINDOWS.exe', bundle.namelist())

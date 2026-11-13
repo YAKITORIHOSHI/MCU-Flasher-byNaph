@@ -19,10 +19,11 @@ import tempfile
 import time
 
 from src.modules.bootstrap_file_pool import Progress, run_all
+from src.modules.application_sources import source_inventory
 
 RECEIPT = ".mcu-flasher-install.json"
 ROOT_FILES = ("mcu_flash_gui.py", "README.md", "RELEASE_NOTES.md", "LICENSE")
-SOURCE_FOLDERS = ("main", "src", "direct", "LAUNCHER", "cleaner", "index_json", ".agents/skills")
+SOURCE_FOLDERS = ("main", "src", "direct", "LAUNCHER", "cleaner", "index_json", ".agents/skills", "LITE-MODE")
 EXCLUDED = frozenset(("__pycache__", "_python", "env", "node_modules", ".git",
     "temp", "logs", "test", "tests", ".venv-linux", ".mcu_flasher_build_cache",
     ".mcu_ai_edits", ".pio", ".vscode", ".clangd", ".opencode"))
@@ -74,6 +75,17 @@ def _source_file(root, relative):
 
 def _inventory(root):
     _plain(root, directory=True)
+    published = source_inventory(root)
+    if published is not None:
+        files = published
+        for relative in files:
+            _source_file(root, relative)
+        if set(REQUIRED) - {path.as_posix() for path in files}:
+            raise RuntimeError("The source is not a complete MCU Flasher application.")
+        total = sum((root / path).stat().st_size for path in files)
+        if total > 2 * 1024**3:
+            raise RuntimeError("The application sources exceed the supported installation size.")
+        return files, total
     files = []
     for name in ROOT_FILES:
         if (root / name).is_file():
@@ -84,7 +96,8 @@ def _inventory(root):
             continue
         _plain(base, directory=True)
         for current, directories, names in os.walk(base, followlinks=False):
-            directories[:] = sorted(name for name in directories if name not in EXCLUDED)
+            lite_scratch = {"target", "bin", ".tools", ".local", ".venv", "evidence"} if folder == "LITE-MODE" else set()
+            directories[:] = sorted(name for name in directories if name not in EXCLUDED and name not in lite_scratch)
             for name in directories:
                 _plain(Path(current) / name, directory=True)
             for name in sorted(names):
