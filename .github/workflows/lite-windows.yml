@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: lite-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -69,12 +73,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: History, search, preparation and worker isolation
+        if: always()
         shell: pwsh
         run: |
+          $failures = @()
           foreach ($verifier in @('verify', 'verify_history_search', 'verify_preparation')) {
             & LITE-MODE/.venv/Scripts/python.exe -B "LITE-MODE/tools/$verifier.py"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($LASTEXITCODE -ne 0) { $failures += $verifier }
           }
+          if ($failures.Count -gt 0) { throw "Failed Lite checks: $($failures -join ', ')" }
       - uses: actions/upload-artifact@v6
         if: always()
         with:
