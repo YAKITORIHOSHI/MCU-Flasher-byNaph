@@ -86,12 +86,52 @@ pub fn open_directory(directory: &Path) -> Result<(), String> {
 fn window_command(executable: &Path, project: &str) -> Command {
     let mut command = Command::new(executable);
     command
+        .arg("--from-bootstrap")
         .arg("--project")
         .arg(project)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
+}
+
+/// The first Lite launch uses the same setup/repair path as the main app.
+/// Bootstrap returns to Lite with a literal marker, preventing a launch loop.
+pub fn bootstrap(arguments: &[String]) -> Result<bool, String> {
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--preview" | "--from-bootstrap"))
+    {
+        return Ok(false);
+    }
+    let lite = crate::bridge::lite_root()?;
+    let root = lite
+        .parent()
+        .ok_or("Missing MCU Flasher application folder")?;
+    #[cfg(windows)]
+    let mut command = Command::new(root.join("LAUNCHER/WINDOWS.exe"));
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = Command::new("/bin/bash");
+        command
+            .arg(root.join("direct/ubuntu/run.sh"))
+            .arg("--desktop");
+        command
+    };
+    command.arg("--lite");
+    if let Some(project) = startup_project(arguments) {
+        command.arg("--project").arg(project);
+    }
+    command.current_dir(root).stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("Could not start Bootstrap: {error}"))?;
+    Ok(true)
 }
 
 /// Open another sketch in its own independent Lite window, like the main
@@ -162,6 +202,7 @@ mod verification {
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
             vec![
+                std::ffi::OsStr::new("--from-bootstrap"),
                 std::ffi::OsStr::new("--project"),
                 std::ffi::OsStr::new(project)
             ]

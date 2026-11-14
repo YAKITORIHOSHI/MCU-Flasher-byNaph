@@ -11,6 +11,33 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 14 — Lite prepared resources and laptop Developer Access
+
+- Use one physical native PlatformIO package store for main and Lite, including
+  newly installed libraries. Prepared builds can run together; only package
+  changes wait for active builds. Older Lite stores consolidate automatically:
+  move unique packages, retain differing versions, and delete duplicates only
+  after comparing their inventories and bytes. Settings, sketches and recovery
+  history stay in place.
+- Update each package's `Package files:` progress on one monitor line.
+- Keep automatic cleanup responsive to Stop and retain a sketch requested at
+  launch until catalog/preparation work finishes, then open it once.
+- Validate Lite's headless dependencies without requiring WebEngine, the main
+  editor or its LLVM parser. Reuse a verified installed runtime even when an
+  older installed launcher does not understand Lite's launch argument.
+- Keep Developer Access filters on one row at half-laptop width. Preserve readable
+  metrics and actions on shorter screens by scrolling the complete dashboard.
+- Lite discovers main-app native board manifests and configured library downloads.
+  Unresolved refresh entries cannot replace exact targets. Legacy invalid board
+  defaults no longer cause repeated “No verified PlatformIO definition” failures.
+- Resources lists installed/downloaded libraries and their sample sketch, header
+  and C++ files, including samples in ZIPs. Its native paper code viewer provides
+  syntax colors, selection/copy, Ctrl+F, case matching and F3/Shift+F3 navigation.
+  Boards lists downloaded definitions; Compile/Upload prepare tools automatically.
+- Opening Lite first runs the shared Bootstrap and returns to Lite after setup.
+  Windows prefers the prepared Python environment over the base interpreter.
+  Both workspaces use the prepared packages directly, without a second tool copy.
+
 ## November 14 — MCU Flasher Lite in All Apps
 
 - On Ubuntu, MCU Flasher Lite now appears in All Apps beside MCU Flasher, with

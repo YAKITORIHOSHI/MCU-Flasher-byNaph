@@ -6,6 +6,11 @@ mod ui;
 
 fn main() -> eframe::Result {
     let args: Vec<_> = std::env::args().collect();
+    let startup_error = match desktop::bootstrap(&args) {
+        Ok(true) => return Ok(()),
+        Ok(false) => None,
+        Err(error) => Some(error),
+    };
     let size = if args.iter().any(|arg| arg == "--preview") {
         args.windows(2)
             .find(|pair| pair[0] == "--preview-size")
@@ -31,6 +36,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "MCU Flasher Lite",
         options,
-        Box::new(|cc| Ok(Box::new(ui::LiteApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(ui::LiteApp::new(cc, startup_error)))),
     )
 }

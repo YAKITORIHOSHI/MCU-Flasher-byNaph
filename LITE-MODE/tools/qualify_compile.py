@@ -24,7 +24,7 @@ def main():
     parser.add_argument("--prepare", action="store_true", help="Download this host's Uno compiler into the private qualification fixture")
     parser.add_argument("--reuse-main", action="store_true", help="Read compatible prepared main-app packages into the private fixture")
     args = parser.parse_args()
-    main_core = main_core_directory(ORIGINAL, os.environ) if args.reuse_main else None
+    seed_core = main_core_directory(ORIGINAL, os.environ) if args.reuse_main else None
     base = ROOT / "temp/compile-proof"
     state = base / "state"
     state.mkdir(parents=True, exist_ok=True)
@@ -35,9 +35,30 @@ def main():
     sketch = source / "FixtureBlink.ino"
     sketch.write_text("void setup() {}\nvoid loop() { delay(1); }\n")
     engine = snapshot_engine(ORIGINAL, state)
+    # The real compiler proof owns its shared store. Its final Clean must never
+    # clear a real user's common object cache or change installed tool metadata.
+    main_core = state / "platformio" if args.reuse_main else None
+    if main_core is not None:
+        os.environ["MCU_LITE_MAIN_CORE"] = str(main_core)
+    os.environ["MCU_LITE_MAIN_EVENTS"] = str(state / "package-events")
     os.environ.update(environment(state))
     sys.path.insert(0, str(engine))
     child_setup()
+    if seed_core is not None:
+        from preparation import prepare
+        from isolation import protect_original
+        from platformio.package.manager.platform import PlatformPackageManager
+        from platformio.package.manager.tool import ToolPackageManager
+        protected_seed = protect_original(ORIGINAL)
+        protected_seed.append(seed_core)
+        config = state / "seed-uno.ini"
+        config.write_text("[env:lite]\nplatform=atmelavr\nboard=uno\nframework=arduino\n")
+        os.environ.update({"PLATFORMIO_CORE_DIR": str(main_core),
+                           "PLATFORMIO_PLATFORMS_DIR": str(main_core / "platforms"),
+                           "PLATFORMIO_PACKAGES_DIR": str(main_core / "packages")})
+        with patch.object(PlatformPackageManager, "install", side_effect=AssertionError("No fixture downloads")), \
+                patch.object(ToolPackageManager, "install", side_effect=AssertionError("No fixture downloads")):
+            prepare(config, main_core, seed_core, log=lambda _text: None)
     from PySide6.QtCore import QCoreApplication
     application = QCoreApplication.instance() or QCoreApplication([])
 
@@ -96,7 +117,7 @@ def main():
                 if label == "source edit":
                     assert all("FixtureBlink.ino.cpp.o" in text for text in compiled), f"Unrelated framework objects rebuilt: {compiled}"
                 results.append({"phase": label, "seconds": round(time.monotonic() - started, 3), "compiled_objects": compiled, "success": True})
-            report = json.loads((state / "prepare/result.json").read_text())
+            report = json.loads((worker.session / "prepare/result.json").read_text())
             assert "tool-avrdude" in report["uploader_packages"]
             from src.modules.platformio_build_env import build_environment, RUN_OPTIONS
             workspace = worker.api._board_workspace_dir(worker.api.current_board)

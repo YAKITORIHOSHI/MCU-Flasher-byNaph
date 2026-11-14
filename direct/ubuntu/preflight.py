@@ -172,10 +172,11 @@ def _check_linked_libraries(paths) -> None:
                            f"Install the {linux_label()} desktop prerequisites:\n" + system_install_command())
 
 
-def _check_qt_runtime_files(qt_root: Path, architecture: str) -> None:
+def _check_qt_runtime_files(qt_root: Path, architecture: str, *, lite=False) -> None:
     """Validate native CPU and all linked dependencies before importing Qt."""
-    paths = (qt_root / "lib/libQt6Core.so.6", qt_root / "plugins/platforms/libqxcb.so",
-             qt_root / "lib/libQt6WebEngineCore.so.6", qt_root / "libexec/QtWebEngineProcess")
+    paths = (qt_root / "lib/libQt6Core.so.6", qt_root / "plugins/platforms/libqxcb.so")
+    if not lite:
+        paths += (qt_root / "lib/libQt6WebEngineCore.so.6", qt_root / "libexec/QtWebEngineProcess")
     # Verify every target before letting ldd inspect any one of them. A copied
     # runtime must never reach native loading or a host loader for a foreign CPU.
     for native in paths:
@@ -196,6 +197,12 @@ def bootstrap_ready(core) -> bool:
     # Old online installations only have SCons and no preparation certificate.
     # Let the launcher repair those before showing an unusable board selector.
     return bool(find_arduino_cli() and find_opencode_cli() and ready(core) and startup_ready(core))
+
+
+def lite_bootstrap_ready(core) -> bool:
+    from src.modules.offline_bootstrap import ready
+    from src.modules.offline_mode import startup_ready
+    return bool(ready(core) and startup_ready(core))
 
 
 def check_qt_python_compatibility() -> None:
@@ -236,7 +243,7 @@ def check_platformio_click_compatibility() -> None:
                            "Run bash direct/ubuntu/run.sh --repair to install Click >=8.1.8,<8.2.")
 
 
-def runtime_preflight(root=ROOT) -> None:
+def runtime_preflight(root=ROOT, *, lite=False) -> None:
     """Validate private imports and native Qt plugins without creating windows."""
     require_supported_ubuntu()
     root = Path(root).resolve()
@@ -251,22 +258,31 @@ def runtime_preflight(root=ROOT) -> None:
     qt_spec = importlib.util.find_spec("PySide6")
     if qt_spec is not None and qt_spec.origin:
         qt_root = Path(qt_spec.origin).parent / "Qt"
-        _check_qt_runtime_files(qt_root, architecture)
+        if lite:
+            _check_qt_runtime_files(qt_root, architecture, lite=True)
+        else:
+            _check_qt_runtime_files(qt_root, architecture)
     check_platformio_click_compatibility()
     sys.path.insert(0, str(root))
     try:
         import PySide6
-        import PySide6.QtWebEngineWidgets
+        if lite:
+            import PySide6.QtCore, PySide6.QtWidgets, PySide6.QtSvg
+        else:
+            import PySide6.QtWebEngineWidgets
         import serial
         import esptool
         import psutil
         import platformio
-        import ptyprocess
+        if not lite:
+            import ptyprocess
         from src.modules.mbed_compat import prepare_dependencies
         prepare_dependencies()
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
         raise RuntimeError(f"{linux_label()} runtime dependency validation failed: {exc}\n"
                            f"Rerun {linux_label()} Bootstrap.") from exc
+    if lite:
+        return
     # Keep Qt5 and Qt6 native graphs in separate processes, as in production.
     parser = subprocess.run([sys.executable, "-I", "-B", "-c",
                              "from clang.cindex import Index; Index.create()"],
@@ -288,6 +304,8 @@ def runtime_preflight(root=ROOT) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", action="store_true", help="Check the prepared private environment")
+    parser.add_argument("--lite", action="store_true", help="Check Lite's headless worker and portal dependencies")
+    parser.add_argument("--runtime-root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     parser.add_argument("--host", action="store_true", help="Check native Linux prerequisites")
     parser.add_argument("--require-display", action="store_true")
     args = parser.parse_args(argv)
@@ -295,7 +313,7 @@ def main(argv=None) -> int:
         if args.host or not args.runtime:
             host_preflight(require_display=args.require_display)
         if args.runtime:
-            runtime_preflight()
+            runtime_preflight(args.runtime_root, lite=args.lite)
         return 0
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)

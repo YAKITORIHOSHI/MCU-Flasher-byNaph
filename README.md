@@ -35,8 +35,14 @@ terminals and an optional AI assistant in one window.
   devices. New tickets appear after **Create ticket** succeeds; cancelled drafts
   add nothing. The main workspace stays usable while the portal, its forms or
   notices are open. Deletions sync across devices, including an empty ticket list.
+  Laptop layouts keep filters together; short windows scroll complete controls.
 - **Resources:** Browse, download and prepare board packages and Arduino
   libraries. Soft and Hard Reset recovery reflash a board to a known state.
+- **Lite:** A separate lightweight workbench with shared Bootstrap preparation,
+  one shared board-tool and library store, installed library/sample browsing,
+  and a native read-only code viewer. Prepared packages are used directly by both
+  apps; older Lite duplicates are verified and consolidated automatically.
+  See [Lite](LITE-MODE/README.md).
 - **Interface:** Glass Dark, Frosted Light and Solarized Dark themes, an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
   including half-screen tiling.

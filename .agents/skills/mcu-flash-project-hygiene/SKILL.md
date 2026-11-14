@@ -1,9 +1,31 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
+description: "Maintain one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+## Shared resource discovery
+
+Lite captures the main native tool store and configured download directory
+before environment redirection, reads manifests/libraries without rewriting
+main settings or synthesizing package metadata, and uses opaque inventory IDs
+for bounded read-only sample access. ZIP viewing never extracts into live stores.
+Both products use one physical native package store. Prepared builds hold shared
+reader leases and may run concurrently; installs/removals take its writer gate.
+Keep the physical store's canonical coordination and the legacy event-root
+markers so products/copies with different log roots cannot race.
+Consolidate the old Lite store only with no other Lite worker and no package user.
+Delete duplicates only after full inventory and byte comparison; move unique
+packages and preserve differing contents side by side. Cross-drive migration
+retains the source until staged and published bytes independently verify. Keep
+unknown content, settings, projects and recovery history. Cleanup touches only
+recognized package/cache paths in Lite's retired store, never project caches.
+Bootstrap owns first-run runtime preparation and returns to Lite through explicit
+launch arguments. Lite's runtime preflight checks headless and portal dependencies;
+an owned older installation may supply its runtime without parsing --lite.
+Keep source ownership inventories complete for the shared Lite launch helper
+and new native/Python resource modules. All checks use owned fixtures.
 
 ## Lite process and portal lifetime ownership
 

@@ -1,10 +1,27 @@
 # Lite development
 
+First launches use the main Bootstrap's `--lite` route, returning with
+`--from-bootstrap`; additional owned sketch windows retain that marker. Prefer
+the main prepared Python environment, especially Windows env/ over src/_python.
+Discover the main native manifests and configured downloaded libraries read-only
+before redirecting the environment. Exact bundled/native definitions survive
+unresolved refresh rows; never restore an invalid default board selection.
+Resources Boards lists downloaded definitions, while Libraries inventories both
+products' installed/downloaded libraries and framework samples. Keep bounded
+sample reads, ZIP viewing without extraction, opaque file IDs, cancellable latest
+disk scans and batched protocol output. The native read-only viewer caches syntax
+and Unicode find data and virtualizes file/package rows; do not launch WebEngine
+or mix PyQt5 with PySide6. Main and Lite use one physical native package store;
+prepared builds are concurrent readers and only package changes take its writer
+gate. Verify tools/verify_shared_store.py, tools/verify_resources.py, main
+package_jobs and direct/verify_lite_launch.py as well as the existing checks.
+
 All implementation and documentation changes for Lite belong in this directory.
 Keep the main build backend, runtime, user sketches and protected caches unchanged.
 Explicitly requested shared Developer Access/Bootstrap GUI fixes belong in their
-main application sources. The user authorized shared Bootstrap/release ownership integration in
-application_sources.py, user_install.py and build_release.py plus their guidance.
+main application sources. The user authorized shared Bootstrap/release ownership,
+the single package store, cross-product coordination and duplicate cleanup in
+the relevant main modules plus their guidance.
 Public files must enter future installs automatically through Git/release manifests. This is a separate Rust application, not the desktop migration.
 
 The GUI uses egui/eframe, paper/charcoal palettes, heavy ink outlines, hard offset
@@ -16,17 +33,30 @@ Python is a headless tool worker over bounded JSON lines on stdio. Never expose
 arbitrary module names, methods, commands or shell strings over that protocol.
 Reuse the main backend from a private source snapshot. Changes to the original
 backend should be adopted on the next worker start; do not fork its build logic.
-Private settings, source snapshots, build state and packages live in Lite's own
-per-user state directory. Clean must operate only there. Original source folders
+Private settings, source snapshots and build state live in Lite's own
+per-user state directory. Clean must operate only there. Packages use the shared
+main native core. Original source folders
 are read-only; resnapshot their root sources before Compile and Upload.
 
 Compile/Upload automatically prepare the exact selected board's build and upload
 dependencies, including optional uploaders. Capture the main native tool store
-before redirecting Lite's environment. Reuse only host/version-compatible packages
-through verified independent copies; never claim legacy main packages by writing
-metadata, link writable tools to the main store, or download into it. Keep partial
-reuse stages outside package-manager search directories. Stop/failure during
+before redirecting Lite's environment. Use compatible installed packages directly
+from that physical core; install missing dependencies once under its writer gate.
+Dry readiness checks and builds use concurrent reader leases. Preserve canonical
+physical-core coordination and legacy event-root markers. Never synthesize
+missing legacy metadata during discovery. Lite's Windows aliases point to the
+shared core without repointing the main app's aliases. Stop/failure during
 preparation must prevent the pending action; successful handoff occurs once.
+
+Consolidate old Lite stores only under engine/worker/package guards. Compare full
+inventories and bytes before deleting duplicates; move unique packages, preserve
+differing contents side by side and independently verify cross-drive staged copies
+before removing their source. Preserve settings, projects, recovery history and
+unknown files. Each package's file progress updates one row. Lite preflight needs
+headless/portal dependencies, not WebEngine or LLVM; reuse an owned installed
+runtime safely even when its older launcher cannot parse --lite. Consolidation
+runs off the protocol thread with resource Stop; retain a startup sketch through
+busy catalog/cleanup work and dispatch it only once the worker is idle.
 
 Reuse the main history helpers against Lite's settings and private settings lock:
 10 original sketch paths and 5 exact board names, bumped first without duplicates.

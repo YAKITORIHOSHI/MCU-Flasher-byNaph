@@ -8,6 +8,8 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
+#[path = "resources.rs"]
+mod resource_browser;
 
 const INK: Color32 = Color32::from_rgb(23, 25, 24);
 const PAPER: Color32 = Color32::from_rgb(246, 243, 232);
@@ -711,6 +713,7 @@ pub struct LiteApp {
     send_text: String,
     line_ending: String,
     resources_open: bool,
+    installed: resource_browser::ResourceBrowser,
     resource_tab: bool,
     library_query: String,
     libraries: Vec<Library>,
@@ -753,10 +756,17 @@ pub struct LiteApp {
 }
 
 impl LiteApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, startup_error: Option<String>) -> Self {
         let args: Vec<String> = std::env::args().collect();
         let offline_preview = args.iter().any(|arg| arg == "--preview");
-        let mut app = Self::with_context(&cc.egui_ctx, offline_preview);
+        let mut app = Self::with_context(&cc.egui_ctx, offline_preview || startup_error.is_some());
+        if let Some(error) = startup_error {
+            app.ready = false;
+            app.offline_preview = false;
+            app.build_log = Log::default();
+            app.build_log.push(&error, "error", true);
+            app.error = error;
+        }
         app.startup_project = crate::desktop::startup_project(&args);
         app
     }
@@ -818,6 +828,7 @@ impl LiteApp {
             send_text: String::new(),
             line_ending: "both".into(),
             resources_open: false,
+            installed: resource_browser::ResourceBrowser::default(),
             resource_tab: false,
             library_query: String::new(),
             libraries: vec![],
@@ -880,6 +891,11 @@ impl LiteApp {
             app.compact_controls = std::env::args().any(|arg| arg == "--preview-controls");
             app.serial_tab = std::env::args().any(|arg| arg == "--preview-serial");
             app.resources_open = std::env::args().any(|arg| arg == "--preview-resources");
+            app.installed
+                .preview(std::env::args().any(|arg| arg == "--preview-samples"));
+            if std::env::args().any(|arg| arg == "--preview-samples") {
+                app.resources_open = true;
+            }
             if std::env::args().any(|arg| arg == "--preview-resource-boards") {
                 app.resources_open = true;
                 app.resource_tab = true;
@@ -1079,6 +1095,9 @@ impl LiteApp {
         ctx.memory_mut(|memory| memory.set_modal_layer(layer));
         // The board picker handles its own Escape and Enter keys.
         if top != BOARD_DIALOG && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if top == RESOURCES_DIALOG && self.installed.escape_find(ctx) {
+                return;
+            }
             match top {
                 PROJECT_DIALOG => self.project_dialog = false,
                 _ => self.resources_open = false,
@@ -1094,6 +1113,7 @@ impl LiteApp {
 
     fn event(&mut self, event: Event) {
         let data = event.data;
+        self.installed.event(&event.event, &data);
         let text = |key: &str| data[key].as_str().unwrap_or("").to_owned();
         match event.event.as_str() {
             "ack" => {
@@ -1108,10 +1128,6 @@ impl LiteApp {
                 self.state_path = text("state_path");
                 self.send(json!({"cmd": "boards", "query": ""}));
                 self.send(json!({"cmd": "history"}));
-                if let Some(path) = self.startup_project.take() {
-                    self.pending = true;
-                    self.send(json!({"cmd": "project", "path": path}));
-                }
             }
             "history" => {
                 self.recent_projects =
@@ -1224,6 +1240,7 @@ impl LiteApp {
             }
             "resource:installed" => {
                 self.phase = format!("Installed {}", text("spec"));
+                self.installed.open = false;
             }
             "developer:status" => self.developer_open = data.as_bool().unwrap_or(false),
             "developer:ready" => {
@@ -1510,11 +1527,16 @@ impl LiteApp {
     }
 
     fn resources(&mut self, ctx: &egui::Context) {
+        if !self.installed.open && self.ready && !self.offline_preview {
+            self.installed.open = true;
+            let request = self.installed.refresh();
+            self.send(request);
+        }
         let palette = Palette::from_context(ctx);
         let mut open = self.resources_open;
         let window = egui::Window::new(RESOURCES_DIALOG).open(&mut open).collapsible(false).resizable(true).order(egui::Order::Foreground)
             .constrain_to(ctx.content_rect().shrink(8.0))
-            .min_width(220.0).min_height(0.0)
+            .min_width(220.0).min_height(if self.installed.showing_source() { (ctx.content_rect().height() - 180.0).clamp(80.0, 620.0) } else { 0.0 })
             .max_width((ctx.content_rect().width() - 64.0).max(220.0))
             .max_height((ctx.content_rect().height() - 96.0).max(80.0)).vscroll(true)
             .default_width(640.0).default_height(420.0).frame(card(ctx, PAPER)).show(ctx, |ui| {
@@ -1524,23 +1546,10 @@ impl LiteApp {
                     }
                 });
                 ui.add_space(14.0);
+                let commands = self.installed.show(ui, self.resource_tab, self.idle());
+                for request in commands { self.send(request); }
                 ui.add_enabled_ui(self.idle(), |ui| {
-                    if self.resource_tab {
-                        ui.label(RichText::new(if self.board.is_empty() { "Select an exact board first" } else { &self.board }).family(FontFamily::Name("bold".into())).size(21.0));
-                        ui.add_space(8.0);
-                        ui.label("Download this board's platform, framework, compiler and upload tools into Lite's private store.");
-                        ui.label(RichText::new("Uses PlatformIO board packages. An internet connection is required.").small().color(palette.muted));
-                        ui.add_space(16.0);
-                        let stacked = ui.available_width() < 392.0;
-                        action_row(ui, stacked, 40.0, |ui| {
-                            if button(ui, "Choose board", "board", Tone::Secondary, egui::vec2(162.0, 40.0)).clicked() { self.open_board_picker(); }
-                            ui.add_enabled_ui(!self.board.is_empty(), |ui| {
-                                let width = ui.available_width().min(222.0);
-                                let label = if width < 222.0 { "Prepare board" } else { "Prepare selected board" };
-                                if button(ui, label, "resources", Tone::Primary, egui::vec2(width, 40.0)).on_hover_text("Prepare selected board").clicked() { self.action("board_install"); }
-                            });
-                        });
-                    } else {
+                    if !self.resource_tab { ui.collapsing("Find more libraries", |ui| {
                         let stacked = ui.available_width() < 264.0;
                         action_row(ui, stacked, 36.0, |ui| {
                             let width = ui.available_width() - if stacked { 0.0 } else { 112.0 };
@@ -1566,7 +1575,7 @@ impl LiteApp {
                             }
                         });
                         if let Some(spec) = install { self.pending = true; self.send(json!({"cmd": "library_install", "spec": spec})); }
-                    }
+                    }); }
                 });
                 if self.resource_busy {
                     ui.add_space(14.0);
@@ -1577,7 +1586,7 @@ impl LiteApp {
                         if button(ui, label, "stop", Tone::Danger, egui::vec2(width, 36.0)).on_disabled_hover_text(&self.stop_reason).clicked() { self.send(json!({"cmd": "stop"})); }
                     });
                 }
-                ui.add_space(10.0); ui.label(RichText::new("Downloads belong to Lite. Clean keeps installed libraries and board tools.").small().color(palette.muted));
+                ui.add_space(10.0); ui.label(RichText::new("Prepared resources from MCU Flasher and Lite are available here. Compile checks the selected board automatically.").small().color(palette.muted));
             });
         #[cfg(test)]
         {
@@ -1586,6 +1595,9 @@ impl LiteApp {
         #[cfg(not(test))]
         let _ = window;
         self.resources_open = open;
+        if !open {
+            self.installed.open = false;
+        }
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
@@ -2323,6 +2335,13 @@ impl LiteApp {
         for event in events {
             self.event(event);
         }
+        // Catalog refresh and first-upgrade cleanup may still own startup.
+        // Keep the requested sketch until the worker can accept it once.
+        if self.idle()
+            && let Some(path) = self.startup_project.take()
+        {
+            self.send(json!({"cmd": "project", "path": path}));
+        }
         while let Ok(path) = self.folder_rx.try_recv() {
             self.picker_busy = false;
             if let Some(path) = path {
@@ -2487,6 +2506,8 @@ impl LiteApp {
         }
         if self.resources_open {
             self.resources(ctx);
+        } else {
+            self.installed.open = false;
         }
         if self.board_dialog {
             self.board_picker(ctx);
@@ -2972,6 +2993,38 @@ mod verification {
                 }
             }
         }
+    }
+
+    #[test]
+    fn startup_project_waits_for_busy_startup_and_dispatches_only_once() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.ready = false;
+        app.busy = true;
+        app.startup_project = Some("fixture startup sketch".into());
+        app.event(Event {
+            event: "ready".into(),
+            data: json!({"state_path": "fixture"}),
+        });
+        assert!(
+            app.startup_project.is_some(),
+            "Ready cannot discard a busy launch's sketch"
+        );
+        let frame = |app: &mut LiteApp| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.update_ui(ctx));
+        };
+        frame(&mut app);
+        assert!(app.startup_project.is_some());
+        app.busy = false;
+        app.resource_busy = true;
+        frame(&mut app);
+        assert!(app.startup_project.is_some());
+        app.resource_busy = false;
+        frame(&mut app);
+        assert!(app.startup_project.is_none());
+        assert_eq!(app.next_id, 1);
+        frame(&mut app);
+        assert_eq!(app.next_id, 1, "The startup sketch must not be replayed");
     }
 
     #[test]

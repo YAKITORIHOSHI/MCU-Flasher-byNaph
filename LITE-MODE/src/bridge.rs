@@ -60,14 +60,14 @@ fn python(root: &Path) -> Result<PathBuf, String> {
     let original = root.parent().ok_or("Missing main application folder")?;
     #[cfg(windows)]
     let candidates = [
+        original.join("env/Scripts/python.exe"),
         root.join(".venv/Scripts/python.exe"),
         original.join("src/_python/python.exe"),
-        original.join("env/Scripts/python.exe"),
     ];
     #[cfg(not(windows))]
     let candidates = [
-        root.join(".venv/bin/python"),
         original.join(".venv-linux/bin/python"),
+        root.join(".venv/bin/python"),
     ];
     candidates.into_iter().find(|p| p.is_file()).ok_or_else(||
         "Python tools are missing. Run LITE-MODE/tools/setup.py with Python 3.11+ or prepare the main app's private runtime.".into())

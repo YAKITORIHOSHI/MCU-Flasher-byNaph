@@ -85,6 +85,10 @@ def main():
             ("smallest-board-resources", "360x240", ["--preview-resource-boards"]),
             ("portrait-boards", "480x800", ["--preview-boards"]),
             ("short-resources", "496x300", ["--preview-resources"]),
+            ("installed-resources", "900x760", ["--preview-resources"]),
+            ("samples", "900x900", ["--preview-samples"]),
+            ("samples-dark", "700x800", ["--preview-samples", "--preview-dark"]),
+            ("samples-short", "496x300", ["--preview-samples"]),
         ]
         captures = []
         for name, size, flags in cases:

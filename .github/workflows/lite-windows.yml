@@ -100,7 +100,7 @@ jobs:
         shell: pwsh
         run: |
           $failures = @()
-          foreach ($verifier in @('verify', 'verify_history_search', 'verify_preparation')) {
+          foreach ($verifier in @('verify', 'verify_history_search', 'verify_preparation', 'verify_resources', 'verify_shared_store')) {
             & LITE-MODE/.venv/Scripts/python.exe -B "LITE-MODE/tools/$verifier.py"
             if ($LASTEXITCODE -ne 0) { $failures += $verifier }
           }
@@ -168,7 +168,7 @@ jobs:
         run: LITE-MODE/.venv/bin/python -B LITE-MODE/tools/verify_layout.py --executable LITE-MODE/UBUNTU --render-dir LITE-MODE/temp/ubuntu-renderer
       - name: Worker, cancellation, history and real portal fixtures
         run: |
-          for verifier in verify verify_history_search verify_preparation verify_developer; do
+          for verifier in verify verify_history_search verify_preparation verify_resources verify_shared_store verify_developer; do
             env -u DISPLAY -u WAYLAND_DISPLAY LITE-MODE/.venv/bin/python -B "LITE-MODE/tools/$verifier.py"
           done
       - uses: actions/upload-artifact@v6

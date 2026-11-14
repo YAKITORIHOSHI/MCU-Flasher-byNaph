@@ -97,8 +97,14 @@ def child_setup():
     sys.modules["win_subprocess_hide"] = hide
     from src.modules import platform_runtime, bytecode_cache
     platform_runtime.app_cache_dir = lambda: state / "cache"
-    platform_runtime.native_platformio_dir = lambda: state / "platformio"
+    shared_value = os.environ.get("MCU_LITE_MAIN_CORE")
+    core = Path(shared_value).resolve() if shared_value else state / "platformio"
+    platform_runtime.native_platformio_dir = lambda: core
     bytecode_cache.cache_directory = lambda: state / "pycache"
+    # The main app and Lite coordinate the same physical package store. Events
+    # may have different consumers; legacy use markers still meet the main app.
+    from src.modules import package_jobs
+    package_jobs.package_core_directory = lambda: core
     # Make missing-package notices useful in this separate product.
     platform_runtime.repair_command = lambda: "retry Compile or Upload in Lite; board tools prepare automatically"
     from src.modules import offline_runtime
@@ -106,6 +112,32 @@ def child_setup():
         f"{detail}. Lite checks board tools automatically before Compile or Upload. "
         "Retry the action while online; use Resources for additional libraries."
     )
+    # Discover the main app's actual native manifests and downloaded board
+    # declarations. Reading a prepared store needs no package mutation lease.
+    # Builds use the same prepared native packages, with separate sketch output.
+    from main.core import board_catalog
+    if not hasattr(board_catalog, "_lite_native_catalog"):
+        board_catalog._lite_native_catalog = board_catalog._load_platformio_board_catalog
+        board_catalog._lite_board_roots = board_catalog._get_arduino_board_search_roots
+
+    def native_catalog(core_dir=None, *, force_read=False):
+        local = board_catalog._lite_native_catalog(core_dir, force_read=force_read)
+        shared = os.environ.get("MCU_LITE_MAIN_CORE")
+        if core_dir is not None or not shared or Path(shared).resolve() == core.resolve():
+            return local
+        identities = {(row["platform"], row["id"]) for row in local}
+        return local + [row for row in board_catalog._lite_native_catalog(shared, force_read=force_read)
+                        if (row["platform"], row["id"]) not in identities]
+
+    def board_roots():
+        roots = board_catalog._lite_board_roots()
+        shared = os.environ.get("MCU_LITE_MAIN_DOWNLOAD")
+        if shared and (Path(shared) / "Boards").is_dir():
+            roots = list(dict.fromkeys([*roots, Path(shared) / "Boards"]))
+        return roots
+
+    board_catalog._load_platformio_board_catalog = native_catalog
+    board_catalog._get_arduino_board_search_roots = board_roots
     if sys.platform == "win32":
         from main.platforms import windows
         # The main app's drive-root aliases and legacy cleanup are shared by
@@ -123,17 +155,28 @@ def child_setup():
         windows._mcuflasher_app_root = short_namespace
         windows._cleanup_legacy_app_aliases = lambda *args, **kwargs: None
         windows._neutralize_conflicting_global_platformio_config = lambda: None
+        if shared_value:
+            def shared_core(_script_dir):
+                core.mkdir(parents=True, exist_ok=True)
+                return windows._short_platformio_core_alias(core)
+            windows._get_safe_platformio_core_dir = shared_core
+            # These stable re-exports may have loaded during config/catalog
+            # imports before this Windows-specific hook was installed.
+            from main.core import toolchain
+            toolchain._get_safe_platformio_core_dir = shared_core
+            board_catalog._get_safe_platformio_core_dir = shared_core
 
 
-def protect_original(original):
+def protect_original(original, *, writable=()):
     """Audit Python mutations of the source installation and selected sketches.
 
-    Native tool subprocesses receive only private staged projects and private
+    Native tool subprocesses receive only private staged projects and shared
     package paths. This is a file-preservation guard, not an OS security sandbox.
     """
     original = Path(original).resolve()
     lite = original / "LITE-MODE"
     roots = [original]
+    allowed = tuple(Path(path).resolve() for path in writable)
 
     def check(path, dir_fd=None):
         if not isinstance(path, (str, bytes, os.PathLike)):
@@ -147,6 +190,8 @@ def protect_original(original):
             except OSError as exc:
                 raise PermissionError("Cannot verify the directory of a relative mutation") from exc
         target = target.resolve()
+        if any(target.is_relative_to(root) for root in allowed):
+            return
         if (target.is_relative_to(original) and not target.is_relative_to(lite)
                 or any(target.is_relative_to(root) for root in roots[1:])):
             raise PermissionError(f"Lite keeps original files read-only: {target}")

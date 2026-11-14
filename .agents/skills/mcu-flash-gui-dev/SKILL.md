@@ -1,9 +1,48 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 14: shared prepared resources and short portals
+
+Lite's first native entry dispatches the shared Bootstrap with `--lite`, which
+opens Lite with `--from-bootstrap` after successful setup. Prefer the main
+prepared environment (Windows env/ before src/_python); never bypass repair when
+it is missing. Preserve the destination through updates and persistent-install
+handoff. Read main native board manifests and its configured downloaded resource
+location before Lite environment redirection. Unresolved Arduino rows cannot
+erase exact bundled/native targets or restore an invalid legacy board default.
+Resources lists downloaded board definitions and both apps' installed libraries,
+framework libraries and sample source files, including ZIPs without extraction.
+Use one cancellable latest disk reader, opaque inventory IDs and bounded batches.
+Keep the native read-only sample viewer's syntax/search caches, selection/copy,
+Ctrl+F/F3/Shift+F3 and short-screen scrolling without a WebEngine/Qt5 dependency.
+Main and Lite use one physical native package store for platforms, frameworks,
+tools and installed libraries. Already prepared targets use shared reader leases;
+only missing-package/library installs reserve the writer gate. Coordination lives
+inside the physical core, with legacy event-root markers retained for old windows.
+Builds in both products can run together. Main dependency discovery honors the
+configured library location too. Lite checks its headless/portal runtime without
+WebEngine or LLVM, and may reuse an owned installed runtime without executing an
+older launcher that cannot parse --lite.
+
+Consolidate old Lite packages only under engine, worker and package activity
+guards. Verify complete inventories and file bytes before removing duplicates;
+move unique packages, keep differing contents side by side and verify staged
+cross-device copies before retiring their source. Preserve settings, projects,
+recovery history and unknown content. `Package files:` updates use one progress
+key per package, preserving ordinary compiler diagnostics. Verify shared_store,
+package_jobs and lite_launch in owned fixtures. Run consolidation off the command
+thread with ordinary resource Stop authority; retain the startup sketch until
+the worker is idle, then dispatch it once.
+
+Developer Access groups its three filters below Search at laptop widths and
+reflows its title/actions. Short portals scroll the whole dashboard while keeping
+metric and ticket-reading minima; controls must never collapse into empty strips.
+Verify half-laptop geometry, short scrolled cards, resources, Lite Bootstrap
+routing, real compiler reuse and renderer captures in owned fixtures.
 
 ## November 14: Lite windows, modal dialogs and shared ports
 

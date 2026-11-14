@@ -18,6 +18,7 @@ import time
 from isolation import child_setup, environment, protect_original, state_directory
 from preparation import main_core_directory
 from search import BoardSearch, rank_libraries
+from resources import Inventory, main_download_directory
 
 LITE = Path(__file__).resolve().parents[1]
 ORIGINAL = LITE.parent
@@ -214,7 +215,7 @@ class Output:
 
 
 class Worker:
-    def __init__(self, state, output, *, main_core=None, session=None):
+    def __init__(self, state, output, *, main_core=None, main_download=None, session=None):
         self.state, self.output = state, output
         # Per-window scratch: other Lite windows share the state directory.
         self.session = Path(session) if session is not None else state / "sessions" / str(os.getpid())
@@ -223,8 +224,14 @@ class Worker:
         # Serializes the portal lock between launches and helper watchers.
         self._developer_guard = threading.Lock()
         self.main_core = Path(main_core).resolve() if main_core is not None else None
+        self.package_events = Path(os.environ.get("MCU_LITE_MAIN_EVENTS") or state / "package-events")
         self._action_lock = threading.RLock()
         self.board_search = BoardSearch()
+        self.inventory = Inventory(state, self.main_core, main_download)
+        self._reader_guard = threading.Lock()
+        self._reader_pending = None
+        self._reader_thread = None
+        self._reader_cancel = threading.Event()
         self.source = None
         self.resource_busy = False
         self.process = None
@@ -235,9 +242,10 @@ class Worker:
         self.closing = False
         self.cancel = threading.Event()
         self.last_ports = []
-        self.protected = protect_original(ORIGINAL)
-        if self.main_core is not None:
-            self.protected.append(self.main_core)
+        self.protected = protect_original(ORIGINAL, writable=tuple(
+            path for path in (self.main_core, self.package_events) if path is not None))
+        if main_download is not None:
+            self.protected.append(Path(main_download).resolve())
         from main.web_bridge import MCUWebBackendAPI, SUPPORTED_BOARDS
         self.boards = SUPPORTED_BOARDS
         # Official PlatformIO catalog, bundled for offline board selection.
@@ -254,7 +262,10 @@ class Worker:
             record["hwids"] = record["arduino_defines"] = set()
             name = f"{record['name']} [{record['platform']}:{record['id']}]"
             catalog[name] = _native_board_entry(record)
-        self.boards.replace({**catalog, **dict(self.boards)})
+        self.catalog_boards = catalog
+        from main.core.target_profile import target_problem
+        self.boards.replace({**catalog, **{name: info for name, info in self.boards.items()
+                                          if not target_problem(info)}})
         owner = self
 
         class LiteBackend(MCUWebBackendAPI):
@@ -262,7 +273,10 @@ class Worker:
                 # No Qt windows, notifications database, hardware-state generation
                 # or journal persistence is driven by this view's event transport.
                 if name == "boards:updated" and isinstance(data, dict) and isinstance(data.get("boards"), dict):
-                    owner.boards.replace({**dict(owner.boards), **data["boards"]})
+                    # Unresolved Arduino aliases must never replace an exact
+                    # native definition or become a selectable build target.
+                    owner.boards.replace({**owner.catalog_boards,
+                        **{name: info for name, info in data["boards"].items() if not target_problem(info)}})
                 if name not in {"console:log", "serial:log", "console:clear", "serial:clear", "operation:phase", "serial:status", "console:progress", "notification"}:
                     return
                 if name == "notification" and isinstance(data, dict):
@@ -290,6 +304,10 @@ class Worker:
             def _get_qt_signals(self):
                 return None
 
+            def _library_search_directories(self, platformio_core):
+                return list(dict.fromkeys(path for path, origin in owner.inventory.library_roots()
+                                          if "framework" not in origin and path.is_dir()))
+
             def _restore_returned_port(self, port):
                 # Lite reselects its returning port but never opens it without Connect.
                 self._returning_port = ""
@@ -302,20 +320,125 @@ class Worker:
                 owner.status()
 
         self.api = LiteBackend()
+        if self.api.current_board not in self.boards or target_problem(self.api._resolve_board_info()):
+            # The main backend's legacy default is not a user selection.
+            self.api.current_board = ""
         self.api.reset_on_baud_change = False
         self.api.clear_console_on_action = False
         self.api.skip_compile = True
-        self.api._package_event_root = str(state / "package-events")
+        self.api._package_event_root = str(self.package_events)
         # AI review/editor services are outside Lite's monitor-only scope.
         self.api.ai_watcher = None
         self.api.ai_review_manager = None
+
+    def read_resource(self, request):
+        """One active disk reader plus one latest request; no UI-thread scans."""
+        with self._reader_guard:
+            self._reader_pending = request
+            self._reader_cancel.set()
+            if self._reader_thread is not None and self._reader_thread.is_alive():
+                return
+            self._reader_thread = threading.Thread(target=self._read_resources, name="LiteInventory", daemon=True)
+            self._reader_thread.start()
+
+    def _read_resources(self):
+        while True:
+            with self._reader_guard:
+                request, self._reader_pending = self._reader_pending, None
+                if request is None or self.closing:
+                    self._reader_thread = None
+                    return
+                self._reader_cancel = cancel = threading.Event()
+            kind = request["cmd"]
+            token = request.get("token", 0)
+            self.output.send("resources:loading", {"kind": kind, "token": token})
+            try:
+                if kind == "resources":
+                    libraries = self.inventory.scan(cancel)
+                    from main.core.board_catalog import _load_platformio_board_catalog, _native_board_entry
+                    installed = []
+                    for row in _load_platformio_board_catalog():
+                        if cancel.is_set():
+                            raise InterruptedError("Resource scan stopped")
+                        name = f"{row['name']} [{row['platform']}:{row['id']}]"
+                        entry = _native_board_entry(row)
+                        self.boards.set_definition(name, entry)
+                        installed.append({"name": name, "platform": row["platform"], "mcu": row.get("mcu", ""),
+                                          "frameworks": entry["frameworks"]})
+                    payloads = [("resources:libraries", libraries), ("resources:boards", installed)]
+                elif kind == "samples":
+                    payloads = [("resources:samples", self.inventory.examples(str(request.get("library", "")), cancel))]
+                else:
+                    source = self.inventory.source(str(request.get("sample", "")))
+                    value = source.pop("text")
+                    payloads = [("resources:source", [dict(source, text=value[index:index + 16384])
+                                  for index in range(0, max(1, len(value)), 16384)])]
+                with self._reader_guard:
+                    if cancel.is_set() or self.closing:
+                        continue
+                    for event, items in payloads:
+                        batch = 1 if event == "resources:source" else 64
+                        for start in range(0, max(1, len(items)), batch):
+                            self.output.send(event, {"token": token, "reset": start == 0,
+                                "items": items[start:start + batch], "done": start + batch >= len(items)})
+                    self.output.send("resources:loaded", {"token": token})
+            except InterruptedError:
+                pass
+            except Exception as exc:
+                if not cancel.is_set():
+                    self.output.send("resources:error", {"token": token, "message": str(exc)})
 
     def busy(self):
         return (self.resource_busy or self.api.is_busy or self.api._operation_worker_alive()
                 or self.api._catalog_refresh_running)
 
-    def log(self, text, tag="info"):
-        self.output.send("console:log", {"text": text, "tag": tag, "newline": True})
+    def consolidate_packages(self):
+        """Upgrade old stores off the command thread, with the ordinary Stop gate."""
+        from shared_store import legacy_cores
+        if self.main_core is None or not any((old / folder).is_dir() for old in legacy_cores(self.state)
+                                            for folder in ("platforms", "packages", "lib")):
+            return False
+        self.cancel.clear()
+        self.resource_busy = True
+        self.output.send("resource:busy", True)
+        self.status()
+
+        def work():
+            from shared_store import consolidate
+            group = 0
+            def cleanup_log(message):
+                nonlocal group
+                if message.startswith("Checking shared package:"):
+                    group += 1
+                self.log(message, progress_key=f"shared-cleanup:{os.getpid()}:{group}" if message.startswith("Package files:") else None)
+            try:
+                cleanup = consolidate(self.state, self.main_core, events=self.package_events, apply=True,
+                                      log=cleanup_log, cancel=self.cancel, own_pid=os.getpid())
+                scratch = self.state / "shared-store-cleanup.tmp"
+                scratch.write_text(json.dumps(cleanup, indent=2), encoding="utf-8")
+                scratch.replace(self.state / "shared-store-cleanup.json")
+                if self.cancel.is_set():
+                    raise InterruptedError("Old-store cleanup stopped; shared tools remain selected")
+                if cleanup["deferred"]:
+                    self.log(cleanup["reason"], "warning")
+                elif cleanup["removed_bytes"] or cleanup["moved_bytes"]:
+                    self.log(f"Shared board tools are ready; reclaimed {cleanup['removed_bytes'] / (1024 ** 3):.2f} GiB from Lite's duplicated store.", "success")
+            except Exception as exc:
+                self.log(f"Shared tools are selected; old-store cleanup was deferred: {exc}", "warning")
+            finally:
+                with self._action_lock:
+                    if not self.closing:
+                        self.api.refresh_board_catalog(invalidate_parsed=True)
+                    self.resource_busy = False
+                    self.output.send("resource:busy", False)
+                    self.status()
+        self.catalog_thread = threading.Thread(target=work, name="LiteSharedStore", daemon=True)
+        self.catalog_thread.start()
+        return True
+
+    def log(self, text, tag="info", *, progress_key=None):
+        self.output.send("console:log", {"text": text, "tag": tag, "newline": True,
+                                       **({"progress_key": progress_key} if progress_key else {})})
 
     def stop_state(self):
         """Describe the same cancellation boundaries the backend enforces."""
@@ -424,7 +547,7 @@ class Worker:
             raise ValueError(f"{self.api.current_port} is selected in {owner}. Release it there first.")
 
     def pio_environment(self):
-        core = self.state / "platformio" if sys.platform != "win32" else self.state / "engine/src/.platformio-mcu-gui"
+        core = self.inventory.core
         env = dict(os.environ)
         for name, directory in {
             "PLATFORMIO_CORE_DIR": core, "PLATFORMIO_PLATFORMS_DIR": core / "platforms",
@@ -497,6 +620,8 @@ class Worker:
                 publish(None)
         threading.Thread(target=drain, daemon=True).start()
         deadline = time.monotonic() + timeout
+        file_progress = None
+        file_group = 0
         try:
             while True:
                 if self.cancel.is_set() or time.monotonic() >= deadline:
@@ -507,7 +632,16 @@ class Worker:
                     continue
                 if line is None:
                     break
-                self.log(line.rstrip())
+                text = line.rstrip()
+                progress = re.fullmatch(r"Package files:\s*(\d+)/(\d+)", text)
+                if progress:
+                    if file_progress is None or int(progress[1]) == 0:
+                        file_group += 1
+                        file_progress = f"resource:{process.pid}:files:{file_group}"
+                    self.log(text, progress_key=file_progress)
+                else:
+                    file_progress = None
+                    self.log(text)
             while not _exited(process):
                 if self.cancel.is_set() or time.monotonic() >= deadline:
                     raise RuntimeError("Resource operation cancelled" if self.cancel.is_set() else f"Resource operation exceeded its {timeout:g}-second budget")
@@ -604,9 +738,10 @@ class Worker:
                     spec = str(request.get("spec", ""))
                     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_. +()-]+@[A-Za-z0-9_.+-]+", spec):
                         raise ValueError("Select a versioned library from the registry results")
-                    self.log(f"Installing {spec} into Lite's private library store")
+                    self.log(f"Installing {spec} into the shared library store")
                     with self.package_lock():
-                        self.run_pio(["pkg", "install", "--global", "--library", spec])
+                        self.run_tool([str(LITE / "python/preparation.py"), "--library", spec,
+                                       "--result", str(self.session / "library-result.json")])
                     completed = "resource:installed", {"spec": spec}
                 else:
                     with self.package_lock():
@@ -782,6 +917,9 @@ class Worker:
             query = str(request.get("query", ""))[:200]
             self.output.send("boards", self.board_search.find(self.boards, query))
             return True
+        if cmd in {"resources", "samples", "sample_source"}:
+            self.read_resource(request)
+            return True
         if self.busy():
             raise RuntimeError("Wait for the current operation to finish")
         if cmd == "project":
@@ -844,6 +982,7 @@ class Worker:
 
     def close(self):
         self.closing = True
+        self._reader_cancel.set()
         # The workspace asks users to close the portal first. A lost workspace
         # leaves its portal alive rather than losing an unsaved draft or write.
         self.api._stop_port_monitor.set()
@@ -951,6 +1090,10 @@ def start_session(state):
 def main():
     host_check()
     main_core = main_core_directory(ORIGINAL, os.environ)
+    main_download = main_download_directory(ORIGINAL)
+    os.environ["MCU_LITE_MAIN_CORE"] = str(main_core)
+    os.environ["MCU_LITE_MAIN_DOWNLOAD"] = str(main_download)
+    os.environ["MCU_LITE_MAIN_EVENTS"] = str(ORIGINAL / "logs/package-jobs")
     state = state_directory()
     state.mkdir(parents=True, exist_ok=True)
     for folder in ("tmp", "data", "cache", "config", "windows-local", "windows-roaming"):
@@ -968,8 +1111,9 @@ def main():
     # Ports are shared with the main app: read its live instances as well.
     config._peer_instance_registries = lambda: ((Path.home() / ".mcu_gui_config.json", ORIGINAL / "src" / "gui_config.json"),)
     config._OWN_PRODUCT_WINDOW, config._PEER_PRODUCT_WINDOW = "another Lite window", "the MCU Flasher app"
-    worker = Worker(state, output, main_core=main_core, session=session)
-    worker.api.refresh_board_catalog()
+    worker = Worker(state, output, main_core=main_core, main_download=main_download, session=session)
+    if not worker.consolidate_packages():
+        worker.api.refresh_board_catalog()
     output.send("ready", {"protocol": 1, "state_path": str(state), "host": platform.system()})
     worker.history()
     worker.ports()

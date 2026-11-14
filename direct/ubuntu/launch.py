@@ -328,21 +328,23 @@ class BackgroundCheck:
         return self._value
 
 
-def runtime_problem(env: dict[str, str]) -> str | None:
+def runtime_problem(env: dict[str, str], *, lite=False, runtime_root=None) -> str | None:
     from src.modules.ubuntu_architecture import elf_matches_host, host_architecture
     from src.modules.ubuntu_release import linux_label
 
     label = linux_label()
-    python = ROOT / ".venv-linux/bin/python"
+    runtime_root = Path(runtime_root) if runtime_root is not None else ROOT
+    python = runtime_root / ".venv-linux/bin/python"
     if not python.is_file() or not os.access(python, os.X_OK):
         return f"The {label} private runtime is missing or has a broken interpreter link."
     if not elf_matches_host(python):
         return (f"The {label} private runtime interpreter does not match this host's "
                 f"{host_architecture()} architecture. Run Bootstrap repair on this computer.")
     commands = (
-        [str(python), "-B", str(ROOT / "direct/ubuntu/preflight.py"), "--runtime"],
+        [str(python), "-B", str(ROOT / "direct/ubuntu/preflight.py"), "--runtime",
+         *(["--lite"] if lite else []), *(["--runtime-root", str(runtime_root)] if runtime_root != ROOT else [])],
         [str(python), "-B", "-c",
-         "from direct.ubuntu.preflight import bootstrap_ready; "
+         "from direct.ubuntu.preflight import " + ("lite_bootstrap_ready as bootstrap_ready; " if lite else "bootstrap_ready; ") +
          "from src.modules.platform_runtime import native_platformio_dir; "
          "raise SystemExit(0 if bootstrap_ready(native_platformio_dir()) else 1)"],
     )
@@ -355,6 +357,57 @@ def runtime_problem(env: dict[str, str]) -> str | None:
         if result.returncode:
             return result.stderr.strip() or f"The {label} native board packages need Bootstrap preparation."
     return None
+
+
+def lite_runtime_problem(env):
+    return runtime_problem(env, lite=True)
+
+
+def installed_launcher_supports_lite(installed):
+    import ast
+    try:
+        path = Path(installed) / "direct/ubuntu/launch.py"
+        if path.stat().st_size > 512 * 1024:
+            return False
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        return any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "add_argument" and node.args
+                   and isinstance(node.args[0], ast.Constant) and node.args[0].value == "--lite"
+                   for node in ast.walk(tree))
+    except (OSError, ValueError, SyntaxError):
+        return False
+
+
+def launch_lite_with_owned_runtime(installed, arguments, env, *, repair, window):
+    """An older installed launcher cannot parse --lite; reuse its runtime safely.
+
+Keep the current Lite sources/executable and prepare the runtime at its already
+owned final location, without copying venvs or launching the old main workspace.
+"""
+    from direct.ubuntu.user_install import is_owned_installation
+    if not is_owned_installation(installed):
+        raise RuntimeError("Lite can reuse only a verified owned application installation")
+    problem = runtime_problem(env, lite=True, runtime_root=installed)
+    if repair or problem:
+        if window is None and not sys.stdin.isatty():
+            window = BootstrapWindow.open(ROOT, env=env, subtitle="Preparing shared Lite tools")
+            if window is None:
+                if bootstrap_terminal(list(arguments), env):
+                    return 0
+                raise RuntimeError("Bootstrap needs a terminal to prepare the shared private runtime")
+        command = [sys.executable, "-B", str(installed / "direct/ubuntu/setup.py")]
+        if window is not None:
+            log = ROOT / "logs" / f"lite-runtime-setup-{time.strftime('%Y%m%d-%H%M%S')}.log"
+            result = run_logged(command, cwd=installed, env=env, window=window, log_path=log)
+        else:
+            result = subprocess.call(command, cwd=installed, env=env)
+        if result:
+            raise RuntimeError("Shared runtime preparation failed; Lite has not been launched")
+        problem = runtime_problem(env, lite=True, runtime_root=installed)
+        if problem:
+            raise RuntimeError(problem)
+    env = dict(env, MCU_LITE_PYTHON=str(installed / ".venv-linux/bin/python"))
+    return launch_workspace(arguments, env, desktop=not sys.stdin.isatty(), window=window)
 
 
 def bootstrap_terminal(arguments: list[str], env: dict[str, str]) -> bool:
@@ -385,11 +438,15 @@ def bootstrap_terminal(arguments: list[str], env: dict[str, str]) -> bool:
 def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool,
                      window: BootstrapWindow | None = None) -> int:
     command = [str(ROOT / ".venv-linux/bin/python"), "-B", str(ROOT / "mcu_flash_gui.py"), *arguments]
+    product = "MCU Flasher Lite" if "--lite" in arguments else "MCU Flasher"
+    if "--lite" in arguments:
+        from src.modules.lite_launch import lite_command
+        command = lite_command(ROOT, arguments)
     if window is not None:
-        window.status("Opening MCU Flasher…")
+        window.status(f"Opening {product}…")
     if not desktop:
         if window is not None:
-            window.finish(True, "Opening MCU Flasher…")
+            window.finish(True, f"Opening {product}…")
         os.chdir(ROOT)
         os.execvpe(command[0], command, env)
     # Desktop launches have no terminal. Retain immediate failures in a local log
@@ -408,10 +465,10 @@ def launch_workspace(arguments: list[str], env: dict[str, str], *, desktop: bool
         with path.open("rb") as stream:
             stream.seek(max(0, path.stat().st_size - 4000))
             detail = stream.read().decode("utf-8", errors="replace")
-        report_error(f"MCU Flasher could not start.\n{detail}\nLaunch log: {path}", desktop=True, window=window)
+        report_error(f"{product} could not start.\n{detail}\nLaunch log: {path}", desktop=True, window=window)
         return process.returncode or 1
     if window is not None:
-        window.finish(True, "MCU Flasher is open.")
+        window.finish(True, f"{product} is open.")
     return 0
 
 
@@ -439,7 +496,9 @@ def forward_to_installation(installed: Path, arguments: list[str], env: dict[str
     """Continue this desktop launch in the installed copy, keeping any open window."""
     forwarded = list(arguments)
     if project:
-        forwarded[1] = str(Path(project).absolute())
+        forwarded[forwarded.index("--project") + 1] = str(Path(project).absolute())
+    if "--lite" in forwarded and not installed_launcher_supports_lite(installed):
+        return launch_lite_with_owned_runtime(installed, forwarded, env, repair=repair, window=window)
     if repair:
         forwarded.insert(0, "--repair")
     command = [sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"), "--desktop", *forwarded]
@@ -467,16 +526,22 @@ def main(argv=None) -> int:
     parser.add_argument("--check", action="store_true", help="Diagnose dependencies without installing or launching")
     parser.add_argument("--install-shortcut", action="store_true", help="Create a shortcut and Applications menu entry")
     parser.add_argument("--project", help="Open this sketch folder")
+    parser.add_argument("--lite", action="store_true", help="Open Lite after preparing the shared runtime and board packages")
     parser.add_argument("sketch", nargs="?", help="Optional sketch file or folder (legacy launch syntax)")
     parser.add_argument("--new-window", action="store_true", help="Open an independent sketch window")
     parser.add_argument("--desktop", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--bootstrap-window", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--resume-application-update", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(arguments_in)
+    check_runtime = lite_runtime_problem if args.lite else runtime_problem
     desktop = not args.check and (args.bootstrap_window or (args.desktop and not sys.stdin.isatty()))
     env = clean_environment()
     window: BootstrapWindow | None = None
     try:
+        if args.lite:
+            from src.modules.ubuntu_release import linux_distribution
+            if linux_distribution().family != "ubuntu":
+                raise RuntimeError("Lite currently supports native Ubuntu 24.04+ and Windows 10/11 x64 only.")
         if not args.check and hasattr(os, "geteuid") and os.geteuid() == 0:
             raise RuntimeError(f"Run MCU Flasher as your normal {label} desktop account, without sudo.")
         if args.install_shortcut and not args.check:
@@ -505,7 +570,7 @@ def main(argv=None) -> int:
             # GitHub's answer (one or two network round trips) used to run one after
             # the other before any window could appear. Neither changes anything.
             if not args.repair and host_problem is None:
-                runtime_check = BackgroundCheck(runtime_problem, env)
+                runtime_check = BackgroundCheck(check_runtime, env)
             candidate = available_application_update(arguments_in)
             if candidate is not None:
                 if runtime_check is not None:
@@ -519,7 +584,7 @@ def main(argv=None) -> int:
                     runtime_check = None
                     host_problem = host_check()
         if args.check:
-            problem = runtime_problem(env)
+            problem = check_runtime(env)
             if problem:
                 print(problem, file=sys.stderr)
                 return 1
@@ -529,13 +594,15 @@ def main(argv=None) -> int:
         if not enforce_minimum_cpu_requirement():
             return 1
         arguments = []
+        if args.lite:
+            arguments.append("--lite")
         project = args.project or args.sketch
         if project:
             arguments += ["--project", project]
         if args.new_window:
             arguments += ["--new-window"]
         problem = host_problem or (f"Explicit {label} repair requested." if args.repair else
-                                   runtime_check.result() if runtime_check is not None else runtime_problem(env))
+                                   runtime_check.result() if runtime_check is not None else check_runtime(env))
         if problem:
             print(problem, file=sys.stderr)
             if desktop and not args.bootstrap_window:
@@ -564,12 +631,15 @@ def main(argv=None) -> int:
                 window.status(preparing)
             installed = persistent_setup_root(ROOT, report=window.message if window is not None else print)
             if installed != ROOT:
+                if args.lite:
+                    return forward_to_installation(installed, arguments, env, repair=args.repair,
+                                                   project=project, window=window)
                 if window is not None:
                     return forward_to_installation(installed, arguments, env, repair=args.repair,
                                                    project=project, window=window)
                 forwarded = list(arguments)
                 if project:
-                    forwarded[1] = str(Path(project).absolute())
+                    forwarded[forwarded.index("--project") + 1] = str(Path(project).absolute())
                 if args.repair:
                     forwarded.insert(0, "--repair")
                 # The installed launcher prepares its runtime at this final
@@ -597,7 +667,7 @@ def main(argv=None) -> int:
             # import results before checking freshly installed ARM Qt5.
             importlib.invalidate_caches()
             host_preflight(require_display=True)
-            problem = runtime_problem(env)
+            problem = check_runtime(env)
             if problem:
                 raise RuntimeError(problem)
             if window is not None:

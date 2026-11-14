@@ -9991,6 +9991,23 @@ def _spawn_main_gui() -> "tuple[subprocess.Popen | None, Path | None]":
     """
     import subprocess as sp
 
+    if "--lite" in sys.argv:
+        from src.modules.lite_launch import lite_command
+        command = lite_command(SCRIPT_DIR, sys.argv[1:])
+        folder = SCRIPT_DIR / "logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
+                                         prefix="lite_startup-", suffix=".log", delete=False) as log:
+            options = {}
+            if sys.platform == "win32":
+                startup = sp.STARTUPINFO()
+                startup.dwFlags |= sp.STARTF_USESHOWWINDOW
+                startup.wShowWindow = 4  # SW_SHOWNOACTIVATE, never inherited SW_HIDE
+                options = {"startupinfo": startup, "creationflags": sp.CREATE_NO_WINDOW}
+            process = sp.Popen(command, cwd=str(SCRIPT_DIR), stdin=sp.DEVNULL,
+                               stdout=log, stderr=log, **options)
+            return process, Path(log.name)
+
     # Skip running the wrapper EXE to prevent relaunch loop; always run Python GUI script
 
 

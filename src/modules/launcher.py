@@ -275,7 +275,7 @@ if __name__ == "__main__":
                     if c_path.exists():
                         cand_project = c_path
                         break
-        if cand_project:
+        if cand_project and "--lite" not in sys.argv:
             from main.core.config import find_project_window, focus_project_window
             owner = find_project_window(cand_project)
             if owner:

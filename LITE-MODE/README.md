@@ -20,9 +20,10 @@ The launchers find their tools relative to themselves, so the complete project
 can be moved. This checkout supplies Ubuntu x64 and Windows x64 executables.
 Ubuntu ARM64 requires a native build, which produces `UBUNTU_ARM64`.
 
-Lite first uses its own `.venv` if one exists, then borrows the main project's
-prepared private Python interpreter **without installing or modifying anything
-in that interpreter**. If neither is available, install Lite's tool dependencies:
+The first launch goes through the main application's Bootstrap for runtime and
+configured board preparation, then opens Lite. Lite prefers that prepared private
+Python environment; an existing Lite `.venv` remains a fallback. The worker does
+not install into the borrowed interpreter. For an optional separate tool runtime:
 
 ```sh
 # Ubuntu, Python 3.11+ with venv available
@@ -35,8 +36,9 @@ py -3 tools\setup.py
 ```
 
 The Rust GUI does not need Python GUI rendering or Qt WebEngine. The headless
-backend still uses Qt Core through PySide6 Essentials. Runtime setup installs
-only into `LITE-MODE/.venv`. Rust is needed to rebuild, not to use the supplied
+backend still uses Qt Core through PySide6 Essentials. The optional setup command
+installs only into `LITE-MODE/.venv`; normal Bootstrap prepares the main runtime.
+Rust is needed to rebuild, not to use the supplied
 native executables.
 
 ## Workbench
@@ -58,14 +60,20 @@ native executables.
    matches. **Recent boards** retains the last 5 selections. Select the exact
    board and one of its declared frameworks. No board or port is automatically
    chosen. Both histories persist in Lite's private settings.
-3. **Compile and Upload prepare their tools automatically.** Lite first keeps
-   matching tools already installed in its store, then reuses compatible packages
-   prepared by the main app. Only missing requirements are downloaded. The check
+3. **Compile and Upload prepare their tools automatically.** Main and Lite use
+   one native package store, so prepared tools are used directly. Only missing
+   requirements are downloaded once. The check
    includes optional uploaders such as `tool-avrdude`, as well as the selected
    platform, framework, compiler and SCons. No separate Prepare click is needed.
-   **Resources > Boards > Prepare selected board** remains an optional way to
-   prepare in advance. **Resources > Libraries** searches the PlatformIO registry
-   and installs the displayed version into Lite's own store.
+   **Resources > Boards** lists exact definitions in downloaded native platforms,
+   including the main app's prepared store. Select a row to use that board.
+   **Resources > Libraries** lists installed and downloaded libraries from both
+   apps, Arduino's library folder and prepared frameworks. Select a library for
+   all sample sketches, C/C++ files and headers. ZIP samples open without extraction.
+   The native read-only paper viewer supports syntax colors, source selection,
+   Copy code, Ctrl+F, case matching, Previous/Next and F3/Shift+F3. Escape leaves
+   the find field before closing Resources. **Find more libraries** searches the
+   PlatformIO registry and installs the displayed version into the shared store.
 4. **Compile**, **Upload** and **Clean** call the existing backend actions.
    Compile is enabled only with a sketch and configured board/framework. Upload
    additionally requires a selected, currently connected serial port. The worker
@@ -125,6 +133,8 @@ startup is retained until the helper can be started.
 The normal account/local-key authentication remains required. Lite keeps local
 portal data and saved credentials in its own namespace, while using the same
 built-in cloud provider and account rules. The main workspace is not launched.
+At laptop widths the ticket filters share a row. Very short portals scroll the
+dashboard while preserving readable metrics, actions and ticket contents.
 
 Both monitors have Follow, Copy and display-only Clear controls, selectable
 output, separate histories and a bounded 4,000-line view. Only visible log rows
@@ -161,8 +171,8 @@ Default writable state is separate from both the main app and original sketches:
 | Ubuntu | `${XDG_DATA_HOME:-~/.local/share}/mcu-flasher-lite` |
 | Windows | `%LOCALAPPDATA%\mcu-flasher-lite` |
 
-That directory owns the backend snapshot, settings, staged sketches, downloads,
-packages and caches. Original root sources are read only; protected original
+That directory owns the backend snapshot, settings, staged sketches and caches.
+Board packages and installed libraries use the shared store below. Original root sources are read only; protected original
 cache/journal trees are not copied. The optional `MCU_LITE_STATE` override must be
 absolute. `MCU_LITE_PYTHON` can name a compatible interpreter, and `MCU_LITE_ROOT`
 can explicitly locate this folder. No override is necessary for ordinary use.
@@ -179,12 +189,21 @@ port is released only by choosing another port, choosing No port or closing.
 For tool reuse, Lite finds the main app's native PlatformIO store before changing
 its own environment: the main copy's `src/.platformio-mcu-gui` on Windows and
 `${XDG_DATA_HOME:-~/.local/share}/mcu-flasher/platformio/<architecture>` on Ubuntu.
-It accepts only matching package identity, version and host metadata. Reused
-packages are independent private copies verified against the source bytes; the
-main store is read only. Existing incompatible versions are not silently adopted.
-Copy progress appears as `Package files:` in the Build monitor. Interrupted reuse
-stages stay outside installed package directories, so a partial copy cannot be
-mistaken for an installed uploader. Successful reuse requires no network access.
+Both products read compatible packages directly from that one physical store.
+Already prepared builds run concurrently. Installation and removal wait for
+active package users, with coordination owned by the physical store rather than
+one app's log folder. Missing packages are installed once; existing incompatible
+versions are not silently adopted. Reuse needs no network access or file copy.
+
+On upgrade, Lite consolidates its old private package store while no other Lite
+worker or shared-store build is active. Unique packages move to the shared store;
+different contents are retained side by side. A duplicate is deleted only after
+its complete inventory and file bytes match the retained copy. Across drives,
+migration verifies a staged copy before retiring the old one. Cleanup preserves
+settings, staged projects, recovery history and unknown folders. It defers safely
+when another window is using the packages. Each package's `Package files:` status
+updates one line in the Build monitor. Cleanup runs off the command thread and
+Stop cancels it. A sketch supplied at launch waits for startup work to finish.
 
 Windows keeps any short-path junctions under its dedicated
 `<drive>:\.mcu-flasher-lite\<state-hash>` namespace (or within Lite state when
@@ -205,8 +224,10 @@ cargo clippy --locked --all-targets --manifest-path LITE-MODE/Cargo.toml -- -D w
 cargo test --locked --manifest-path LITE-MODE/Cargo.toml
 .venv-linux/bin/python -B LITE-MODE/tools/verify.py
 .venv-linux/bin/python -B LITE-MODE/tools/verify_preparation.py
+.venv-linux/bin/python -B LITE-MODE/tools/verify_resources.py
 .venv-linux/bin/python -B LITE-MODE/tools/verify_history_search.py
 .venv-linux/bin/python -B LITE-MODE/tools/verify_developer.py
+.venv-linux/bin/python -B direct/verify_lite_launch.py
 ```
 
 On Windows, use `py -3 tools\build.py` from this folder and run `tools\verify.py`

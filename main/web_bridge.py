@@ -6865,6 +6865,14 @@ class MCUWebBackendAPI:
         details = f"{describe('setup', setup_owners)}; {describe('loop', loop_owners)}"
         return len(setup_owners) == 1 and len(loop_owners) == 1, details
 
+    def _library_search_directories(self, platformio_core: Path) -> list[Path]:
+        """Collections used by both the dependency scan and generated build input."""
+        from main.core.board_catalog import _get_download_dir
+        return list(dict.fromkeys(path for path in (
+            platformio_core / "lib", Path(_get_download_dir()) / "Libs",
+            Path.home() / "Documents/Arduino/libraries", _project_root / "Libs",
+        ) if path.is_dir()))
+
     def _generate_platformio_ini(self, cache_root: Path):
         """Generate platformio.ini dynamically for the active board in cache."""
         binfo = self._resolve_board_info(self.current_board)
@@ -6882,17 +6890,7 @@ class MCUWebBackendAPI:
         from main.core.platformio_board_compat import board_compatibility_options
         compatibility = board_compatibility_options(binfo, platformio_core)
         compatibility_options = "".join(f"{key} = {value}\n" for key, value in compatibility.items())
-        offline_libraries = platformio_core / "lib"
-        extra_dirs = [offline_libraries.as_posix()] if offline_libraries.is_dir() else []
-        app_lib_dir = Path(os.path.expanduser("~")) / "Documents" / "_MCUFlasherByNaph_src" / "Libs"
-        if app_lib_dir.is_dir():
-            extra_dirs.append(app_lib_dir.as_posix())
-        arduino_libs = Path(os.path.expanduser("~")) / "Documents" / "Arduino" / "libraries"
-        if arduino_libs.is_dir():
-            extra_dirs.append(arduino_libs.as_posix())
-        local_libs = _project_root / "Libs"
-        if local_libs.is_dir():
-            extra_dirs.append(local_libs.as_posix())
+        extra_dirs = [path.as_posix() for path in self._library_search_directories(platformio_core)]
         lib_extra = f"lib_extra_dirs = {', '.join(extra_dirs)}\n" if extra_dirs else ""
 
         # Check sketch includes for matching libraries in extra_dirs

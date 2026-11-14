@@ -68,9 +68,9 @@ class PackageJobChecks(unittest.TestCase):
                 if stream:
                     stream.close()
 
-    def child(self, mode, wait=False):
+    def child(self, mode, wait=False, events=None):
         command = [sys.executable, '-B', str(Path(__file__).resolve()),
-                   '--lease-child', '--events-root', str(self.events),
+                   '--lease-child', '--events-root', str(events or self.events),
                    '--core', str(self.core), '--mode', mode]
         if wait:
             command.append('--wait')
@@ -215,6 +215,31 @@ class PackageJobChecks(unittest.TestCase):
         self.expect(other, 'busy')
         self.assertEqual(other[0].wait(timeout=5), 0)
         self.release(writer)
+
+    def test_products_with_different_event_roots_coordinate_one_physical_store(self):
+        with jobs.package_store_lease(self.core, root=self.events):
+            lite = self.child('use', events=self.folder / 'lite-events')
+            self.expect(lite, 'acquired')
+            writer = self.child('prepare', events=self.folder / 'another-copy-events')
+            self.expect(writer, 'busy')
+            self.assertEqual(writer[0].wait(timeout=5), 0)
+            self.release(lite)
+        writer = self.child('prepare', events=self.folder / 'lite-events')
+        self.expect(writer, 'acquired')
+        with self.assertRaises(jobs.PackageStoreBusy):
+            with jobs.package_store_lease(self.core, root=self.events):
+                self.fail('A main build bypassed the shared package writer')
+        self.release(writer)
+
+    def test_old_event_namespace_lease_is_honored_during_transition(self):
+        directory = jobs._legacy_store_directory(self.core, self.events)
+        directory.mkdir(parents=True)
+        lease = directory / 'old-window.json'
+        lease.write_text(json.dumps({'pid': os.getpid(), 'mode': 'use'}))
+        with self.assertRaises(jobs.PackageStoreBusy):
+            with jobs.package_store_lease(self.core, 'prepare', root=self.events):
+                self.fail('An old running window was ignored')
+        lease.unlink()
 
     def test_queued_writer_reserves_store_before_existing_reader_finishes(self):
         with jobs.package_store_lease(self.core, root=self.events):

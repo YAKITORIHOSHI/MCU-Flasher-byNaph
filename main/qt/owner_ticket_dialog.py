@@ -1440,12 +1440,20 @@ class OwnerTicketDialog(_TaskPortal):
         page = QWidget(self.stack)
         page.setObjectName("developer-dashboard-page")
         self.dashboard_page = page
-        outer = QVBoxLayout(page)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        # A short native window scrolls the complete dashboard instead of
+        # crushing the metrics/filters to zero height above the ticket list.
+        self.dashboard_scroll, dashboard_body, outer = scroll_body(page)
+        self.dashboard_scroll.setObjectName("developer-dashboard-scroll")
+        page_layout.addWidget(self.dashboard_scroll)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(12)
 
         # 1. Stationary top toolbar with aligned cloud sync actions (A6)
-        title_row = QHBoxLayout()
+        brand = QWidget(dashboard_body)
+        title_row = QHBoxLayout(brand)
+        title_row.setContentsMargins(0, 0, 0, 0)
         self.dashboard_brand = DeveloperArtwork("developer-access-chip.svg", page)
         self.dashboard_brand.setFixedSize(48, 48)
         title_row.addWidget(self.dashboard_brand)
@@ -1457,13 +1465,13 @@ class OwnerTicketDialog(_TaskPortal):
         self.btn_lock = button("Log out", page, self._do_lock, role="quiet", vector="lock")
         self.btn_lock.setToolTip("Sign out and forget a kept session on this device.")
         self.title_actions = ResponsiveRow([(self.btn_refresh, 0), (self.btn_new, 0), (self.btn_lock, 0)], page, compact_width=0)
-        title_row.addWidget(self.title_actions)
-        outer.addLayout(title_row)
+        self.dashboard_title = ResponsiveRow([(brand, 1), (self.title_actions, 0)], dashboard_body, compact_width=600)
+        outer.addWidget(self.dashboard_title)
 
         # 2. Stats metrics ribbon (stationary outside scroll area - A5 / B7)
         ribbon = NeoCard(page)
         stats_layout = QVBoxLayout(ribbon)
-        stats_layout.setContentsMargins(18, 14, 18, 14)
+        stats_layout.setContentsMargins(12, 8, 12, 8)
         self.stat_total = self._make_stat_badge("Total tickets", "0", "active", ribbon)
         self.stat_critical = self._make_stat_badge("Critical", "0", "fail", ribbon)
         self.stat_open = self._make_stat_badge("Active", "0", "warn", ribbon)
@@ -1491,9 +1499,16 @@ class OwnerTicketDialog(_TaskPortal):
         self.sort_cb.setAccessibleName("Sort tickets")
         self.sort_cb.setMaximumWidth(180)
         self.sort_cb.currentTextChanged.connect(lambda _text: self._render_tickets_list())
+        # Search gets its own row on laptops; the three filters still share a
+        # row. Stacking all four controls spent most of a short screen on chrome.
+        # Keep the same widgets through every reflow, including keyboard focus.
+        self.filter_row = ResponsiveGrid(
+            [self.filter_cb, self.category_filter, self.sort_cb], page,
+            columns=3, cell_width=140)
+        for control in (self.filter_cb, self.category_filter, self.sort_cb):
+            control.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.search_row = ResponsiveRow(
-            [(self.search_input, 1), (self.filter_cb, 0), (self.category_filter, 0), (self.sort_cb, 0)],
-            page, compact_width=720)
+            [(self.search_input, 1), (self.filter_row, 0)], page, compact_width=920)
         outer.addWidget(self.search_row)
 
         # 4. Account metadata (stationary outside scroll area)
@@ -1520,6 +1535,7 @@ class OwnerTicketDialog(_TaskPortal):
         self.scroll_area = self.scroll
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setMinimumHeight(220)
 
         # 6. Ticket cards container with balanced symmetric margins (12, 6, 12, 12) (B6)
         self.cards_container = QWidget(body)
@@ -1542,6 +1558,8 @@ class OwnerTicketDialog(_TaskPortal):
         box = QVBoxLayout(widget)
         box.setContentsMargins(12, 10, 12, 10)
         box.setSpacing(4)
+        widget.setMinimumHeight(68)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         val = label(value, widget, "value")
         val.setObjectName("val-label")
         retone(val, tone)

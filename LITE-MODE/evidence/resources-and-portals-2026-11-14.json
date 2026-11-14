@@ -1,0 +1,419 @@
+{
+  "date": "2026-11-14",
+  "base_commit": "e244ccbe2d67531217b1235def098b7d79582a51",
+  "scope": "Lite prepared resource discovery, shared first-run Bootstrap, native sample viewer and responsive Developer Access",
+  "source_and_binary_files": {
+    "LITE-MODE/python/isolation.py": {
+      "sha256": "1af2651bd173b2e1c5b768c03981872cb7b67f1f46be3709bc6f4d491f82eb40",
+      "bytes": 9192
+    },
+    "LITE-MODE/python/worker.py": {
+      "sha256": "e7b24202dcfbfdbe5cde53657b31e0afec2e4729089f5c7e38dbca4dea30f08e",
+      "bytes": 53635
+    },
+    "LITE-MODE/python/resources.py": {
+      "sha256": "97424f07c8e0599299904dffec1440c3ac1afe60d7b1a009f25c743405902b16",
+      "bytes": 8495
+    },
+    "LITE-MODE/src/main.rs": {
+      "sha256": "bf2b2cd440610591592d1c49cd0616fb6b439b25075457b3b98bf20e79b341c9",
+      "bytes": 1476
+    },
+    "LITE-MODE/src/ui.rs": {
+      "sha256": "9325630c4f326423d0f2d7a2a35a0c9bb13f5bdf04a194d4ae2490b75a87610b",
+      "bytes": 141314
+    },
+    "LITE-MODE/src/resources.rs": {
+      "sha256": "c91d82511b8aed24abc9752ca5686ddb5925974974d59262e2fe80e0c5e85102",
+      "bytes": 26865
+    },
+    "LITE-MODE/src/desktop.rs": {
+      "sha256": "c3fc621aaac1845bcd6bfefa0c4290512579157ac1794bb2f2758adc7deb462a",
+      "bytes": 7401
+    },
+    "LITE-MODE/src/bridge.rs": {
+      "sha256": "6fa89b9c945aa0b62cef1b08837332c564eb24521c05e19daccf0b6d5c227a7a",
+      "bytes": 8446
+    },
+    "LITE-MODE/Cargo.lock": {
+      "sha256": "638f0949bc40bc671ecceb7297e83293cf3e81c4d45baf00fb40e118b3a47b88",
+      "bytes": 96063
+    },
+    "main/qt/owner_ticket_dialog.py": {
+      "sha256": "e525aaa5cd145a48f5bdaeee0504fea4232617250c5928aaf5a7ae453d7f91e5",
+      "bytes": 96129
+    },
+    "main/web_bridge.py": {
+      "sha256": "b61c7da272ee72278948d3e10586007e3eb1f499561da8a513366ec378495e99",
+      "bytes": 522255
+    },
+    "main/core/file_utils.py": {
+      "sha256": "b1a84214e1afad5f3336ca6c2e5d7ffbd9404cdea407e3319722cd59adc658c3",
+      "bytes": 115377
+    },
+    "src/modules/lite_launch.py": {
+      "sha256": "969ad2bb0e1317a6fab6c9c4bb1d01656255a5ef7d91cb73d3f006b1b690b5bb",
+      "bytes": 1252
+    },
+    "src/modules/bootstrap.py": {
+      "sha256": "006c7ddc7f0cee63e1cbb1baf38692450258192b0b067807fbcf1a8b2283826c",
+      "bytes": 492323
+    },
+    "src/modules/launcher.py": {
+      "sha256": "e78328b113e39396217af32a3d86d730d2259d2b8514a17802bb38e07a75fe17",
+      "bytes": 17958
+    },
+    "direct/ubuntu/launch.py": {
+      "sha256": "ebb653fe256484fd345044437321994946df5c1ad6c9349a3573fa05cb868f7f",
+      "bytes": 28641
+    },
+    "direct/verify_lite_launch.py": {
+      "sha256": "ab9ea842c9c96d190889d78daf52377850e4d4d4c3c303c0861f0ba02daab20b",
+      "bytes": 6610
+    },
+    "direct/verify_owner_tickets.py": {
+      "sha256": "99a5c79a35dee384228861bedddbc522574cf6601a862240b028de31da23df05",
+      "bytes": 82420
+    },
+    "LITE-MODE/tools/verify_resources.py": {
+      "sha256": "e8658b540eeec8269a4fe51387c0a068d376ce07d898f9fcbabdf4395c4bd21b",
+      "bytes": 9058
+    },
+    "LITE-MODE/tools/verify_layout.py": {
+      "sha256": "9bcd8f812898353ede3e876ee18c479bc8c469de1eccfa93acbd97fe5c61b603",
+      "bytes": 6751
+    },
+    "LITE-MODE/tools/qualify_compile.py": {
+      "sha256": "a8418a7e34e7e73c22a06780575b78dfdb04cf2d48767248c4558fd463c8acc7",
+      "bytes": 11652
+    },
+    "LITE-MODE/UBUNTU": {
+      "sha256": "057de9abaaaebb2cdd70c942a17444f884c57ca204ef2141d767a35f7a5dfb48",
+      "bytes": 10962016
+    },
+    "LITE-MODE/WINDOWS.exe": {
+      "sha256": "e77a94b1b0016c63306b2f5d30193c5a0d2d68c323524bd67c1e7f70ac918803",
+      "bytes": 6349312
+    }
+  },
+  "checks": {
+    "rust_tests": 26,
+    "strict_clippy": "passed",
+    "worker_isolation": 99,
+    "preparation_and_cancellation": 53,
+    "history_and_readiness": 25,
+    "installed_resources": 15,
+    "developer_helper": 26,
+    "bootstrap_handoff": 5,
+    "main_ticket_ui": 42,
+    "main_verifiers": [
+      "runtime",
+      "controls",
+      "owner_tickets",
+      "owner_ticket_service",
+      "shutdown",
+      "package_browser",
+      "target_resolution",
+      "incremental_builds",
+      "file_access",
+      "user_install",
+      "release_sources",
+      "bootstrap_updates",
+      "bootstrap_promotion",
+      "ubuntu_bootstrap_window",
+      "ubuntu_launcher",
+      "library_samples",
+      "lite_launch"
+    ]
+  },
+  "real_compiler": {
+    "host": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "target": "atmelavr:uno / arduino",
+    "ports": "mocked empty; never opened",
+    "results": [
+      {
+        "phase": "initial",
+        "seconds": 1.741,
+        "compiled_objects": [],
+        "success": true
+      },
+      {
+        "phase": "unchanged",
+        "seconds": 1.746,
+        "compiled_objects": [],
+        "success": true
+      },
+      {
+        "phase": "source edit",
+        "seconds": 1.736,
+        "compiled_objects": [],
+        "success": true
+      },
+      {
+        "phase": "separate Nano build",
+        "seconds": 1.987,
+        "success": true
+      }
+    ],
+    "automatic_preparation": true,
+    "upload_dependency": "tool-avrdude",
+    "offline_uploader_envdump": true,
+    "upload_dispatch": "exactly once per request; final device boundary mocked",
+    "packages": [
+      {
+        "name": "atmelavr",
+        "version": "5.3.0",
+        "changed": false,
+        "origin": "installed"
+      },
+      {
+        "name": "tool-scons",
+        "version": "4.41101.0",
+        "changed": false,
+        "origin": "installed"
+      },
+      {
+        "name": "toolchain-atmelavr",
+        "version": "1.70300.191015",
+        "changed": false,
+        "origin": "installed"
+      },
+      {
+        "name": "framework-arduino-avr",
+        "version": "5.4.0",
+        "changed": false,
+        "origin": "installed"
+      },
+      {
+        "name": "tool-avrdude",
+        "version": "1.60300.200527",
+        "changed": false,
+        "origin": "installed"
+      }
+    ],
+    "separate_board_workspaces": true,
+    "boards": [
+      "Arduino Uno [atmelavr:uno]",
+      "Arduino Nano ATmega328 [atmelavr:nanoatmega328]"
+    ],
+    "automatic_cached_uploads": [
+      {
+        "phase": "Nano saved build",
+        "board": "Arduino Nano ATmega328 [atmelavr:nanoatmega328]",
+        "skip_compile": true,
+        "dispatches": 1
+      },
+      {
+        "phase": "return to Uno saved build",
+        "board": "Arduino Uno [atmelavr:uno]",
+        "skip_compile": true,
+        "dispatches": 1
+      },
+      {
+        "phase": "changed source requires Uno compilation",
+        "board": "Arduino Uno [atmelavr:uno]",
+        "skip_compile": false,
+        "dispatches": 1
+      },
+      {
+        "phase": "changed source requires Nano compilation",
+        "board": "Arduino Nano ATmega328 [atmelavr:nanoatmega328]",
+        "skip_compile": false,
+        "dispatches": 1
+      },
+      {
+        "phase": "restored source verifies saved Uno bytes",
+        "board": "Arduino Uno [atmelavr:uno]",
+        "skip_compile": true,
+        "dispatches": 1
+      },
+      {
+        "phase": "corrupt Uno firmware cannot be reused",
+        "board": "Arduino Uno [atmelavr:uno]",
+        "skip_compile": false,
+        "dispatches": 1
+      },
+      {
+        "phase": "Uno corruption leaves Nano firmware reusable",
+        "board": "Arduino Nano ATmega328 [atmelavr:nanoatmega328]",
+        "skip_compile": true,
+        "dispatches": 1
+      },
+      {
+        "phase": "restored Uno firmware verifies again",
+        "board": "Arduino Uno [atmelavr:uno]",
+        "skip_compile": true,
+        "dispatches": 1
+      },
+      {
+        "phase": "Clean requires compilation on next upload",
+        "board": "Arduino Uno [atmelavr:uno]",
+        "skip_compile": false,
+        "dispatches": 1
+      }
+    ],
+    "certified_uno_sha256": "6d7cb6e06e05c928378fd006cdcc8d024836b83a20d90edfc8729020ab451922",
+    "reused_from_main": []
+  },
+  "renderer": {
+    "host": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "native_windows": false,
+    "owned_xvfb": true,
+    "hardware_and_accounts": "not accessed",
+    "captures": [
+      {
+        "name": "wide",
+        "requested_logical_size": "1140x800",
+        "pixels": [
+          1140,
+          800
+        ],
+        "sha256": "13da725f7a7b8f50597dcf8d0cba933a381b3ed704df5863d51c4d89a702f5a4"
+      },
+      {
+        "name": "wide-dark",
+        "requested_logical_size": "1140x800",
+        "pixels": [
+          1140,
+          800
+        ],
+        "sha256": "f8e7eb12a47bd484662c8686b0b4f9a4b0c6028c6b9ba6564edf2a8668447daf"
+      },
+      {
+        "name": "compact",
+        "requested_logical_size": "700x560",
+        "pixels": [
+          700,
+          560
+        ],
+        "sha256": "0432c777fed67a052dfb8a60eb4b24fc9e05977704ed731fb9497b07ec7a9af6"
+      },
+      {
+        "name": "compact-dark",
+        "requested_logical_size": "700x560",
+        "pixels": [
+          700,
+          560
+        ],
+        "sha256": "7b97208f9afbdcc253ad6400c0cc120837254ae944b2f4bdb649b8615e43400d"
+      },
+      {
+        "name": "short",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "2092636ba8f201cc57bc49f7f99200c42c04449280c35126005f481c059016cd"
+      },
+      {
+        "name": "controls",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "9716a4150d02f5a72a6cd9ef29f7972fc849324fb8e849b0bdd3789c47d7b5c8"
+      },
+      {
+        "name": "smallest",
+        "requested_logical_size": "360x240",
+        "pixels": [
+          360,
+          240
+        ],
+        "sha256": "ed35c2f8c0fc50a731191c4c6503776fcb18f1583197e1fc91b5768ca37e11cf"
+      },
+      {
+        "name": "smallest-project",
+        "requested_logical_size": "360x240",
+        "pixels": [
+          360,
+          240
+        ],
+        "sha256": "f5c85e36e7e4ebe9eabbb84a3257fa6c30929e5f54feaa53ae3052d1fe276a40"
+      },
+      {
+        "name": "smallest-board-resources",
+        "requested_logical_size": "360x240",
+        "pixels": [
+          360,
+          240
+        ],
+        "sha256": "a4c5b412c2787015be67b23ba4b6150b9a89228f5bf9996a559ddb5607b153cc"
+      },
+      {
+        "name": "portrait-boards",
+        "requested_logical_size": "480x800",
+        "pixels": [
+          480,
+          800
+        ],
+        "sha256": "a1ee76d7b43815f28631d603342f11d12a98d91fd39cada59e680b52af79cad4"
+      },
+      {
+        "name": "short-resources",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "9276d8c0c46e5bd0b9a021e0a0a5a32600a73f726e40dec97c699a14109e15e4"
+      },
+      {
+        "name": "installed-resources",
+        "requested_logical_size": "900x760",
+        "pixels": [
+          900,
+          760
+        ],
+        "sha256": "4fc02464566a042229a5e32d8f4764d749aacaac8161ea448af2f2add797485a"
+      },
+      {
+        "name": "samples",
+        "requested_logical_size": "900x900",
+        "pixels": [
+          900,
+          900
+        ],
+        "sha256": "782c291015049cd579e89c6f743af9c8da70d65a090447de4c56a4807f6d905e"
+      },
+      {
+        "name": "samples-dark",
+        "requested_logical_size": "700x800",
+        "pixels": [
+          700,
+          800
+        ],
+        "sha256": "39cfb969d011cecc78637e65c48a9d3aa01e7970eb4cc3ec14d80408cfb00ae9"
+      },
+      {
+        "name": "samples-short",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "130de6b1c323c4701ec8a4675f13ed988d470471ed3c5f0aa80760d0410985a1"
+      }
+    ]
+  },
+  "portal_captures": [
+    "temp/audit/critical-lite/tickets/tickets-half-laptop.png",
+    "temp/audit/critical-lite/tickets/tickets-short-scrolled.png"
+  ],
+  "qualification": {
+    "host": "Ubuntu 26.04 x64",
+    "ubuntu_glibc_floor": "2.39",
+    "windows_binary": "x64 GNU cross-build; GUI subsystem; system DLLs only",
+    "native_windows": "pending for this repair",
+    "windows_11": "pending",
+    "physical_usb": "not exercised",
+    "hardware": "serial enumeration mocked; final upload dispatch mocked",
+    "protected_project_state": "not modified",
+    "main_resources": "read-only; verified independent copies for build tools",
+    "sandbox": "owned Xvfb and Chromium shutdown checks required approved execution outside workspace sandbox"
+  },
+  "checkpoint": "Earlier resource/portal checkpoint, before shared-store consolidation and startup follow-up; hashes are historical.",
+  "superseded_by": "shared-store-2026-11-14.json"
+}

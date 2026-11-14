@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-windows-maintainer
-description: "Windows MCU Flasher maintainer for visible modeless Developer Access, responsive multi-window Lite with modal dialogs and ports shared safely with the main app, cancellable Stop, passive monitoring, deliberate resets, rounded glass menus, Settings, source navigation, updates, UNC CMD and steady OpenCode columns."
+description: "Maintain one shared main/Lite tool store, verified cleanup, compact progress, Bootstrap, installed resources and readable short portals. Windows MCU Flasher maintainer for visible modeless Developer Access, responsive multi-window Lite with modal dialogs and ports shared safely with the main app, cancellable Stop, passive monitoring, deliberate resets, rounded glass menus, Settings, source navigation, updates, UNC CMD and steady OpenCode columns."
 tools: [read, edit, search, execute]
 ---
 
@@ -29,6 +29,8 @@ Ground every conclusion in the current source and preserve user projects and har
 - Bootstrap source refreshes use the canonical GitHub `main` branch before a standalone fast launch. Stage and verify an exact-commit clone under per-user state, preserve user/runtime/installer data and defer while any workspace is active. Windows invalidates warm-launch health before restart; native Ubuntu re-execs its launcher with a one-shot resume marker. Skip Git working copies; use GitHub's immutable archive only if Git is unavailable. Verify with `direct/verify_app_update.py` and `direct/verify_ubuntu_launcher.py` fixtures.
 
 ## Project Model
+
+- Lite first uses shared Bootstrap (`--lite` / `--from-bootstrap`) and prefers env/Scripts/python.exe over the base interpreter. Discover prepared main board manifests and configured downloaded libraries read-only; exact targets survive unresolved refresh rows. Resources has installed libraries, sample files, downloaded boards and a native read-only paper viewer. Main and Lite use one physical native package store with concurrent build readers and exclusive package changes; keep canonical and legacy coordination. Consolidate old Lite duplicates only after inventory/byte verification, retaining unique/conflicting packages and all settings/projects/recovery. Use Lite's own short aliases to the shared core, never repoint main aliases. Keep cached syntax/find layouts, bounded opaque-ID reads and one Package files progress row per package. Developer Access groups laptop filters and scrolls short dashboards without compressing metric/control text. Verify shared_store, package_jobs, resources, lite_launch, owner_tickets and actual native previews in isolated fixtures.
 
 - `MCUUploadGUI` owns compile, upload, serial monitor, Hard Reset, Soft Reset, Clean, board selection, and project lifecycle behavior.
 - `src/modules/bootstrap.py` manages private Python runtime auto-heal (`_heal_private_python_runtime()`), virtual environments (`env`), PlatformIO toolchains, Arduino CLI, Node.js LTS, and OpenCode AI Assistant.

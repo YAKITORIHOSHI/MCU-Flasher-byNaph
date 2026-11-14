@@ -231,6 +231,7 @@ class PortalChecks(unittest.TestCase):
         cursor = card.description_label.textCursor()
         cursor.select(QTextCursor.SelectionType.Document)
         card.description_label.setTextCursor(cursor)
+
         selected = cursor.selection().toPlainText()
         self.assertEqual(selected, literal)
         card.description_label.setFocus()
@@ -264,6 +265,27 @@ class PortalChecks(unittest.TestCase):
         self.dialog.scroll.verticalScrollBar().setValue(self.dialog.cards_container.y())
         pump()
         capture(self.dialog, "tickets-long-code-compact")
+
+    def test_half_laptop_dashboard_keeps_filters_together_and_short_dashboard_scrolls(self):
+        self.sign_in()
+        self.dialog.resize(683, 730)
+        pump()
+        filters = [self.dialog.filter_cb, self.dialog.category_filter, self.dialog.sort_cb]
+        tops = [control.mapTo(self.dialog, QPoint(0, 0)).y() for control in filters]
+        self.assertLessEqual(max(tops) - min(tops), 1)
+        for control in filters:
+            self.assertGreaterEqual(control.height(), control.minimumSizeHint().height())
+        self.assertGreaterEqual(self.dialog.scroll.viewport().height(), 300)
+        capture(self.dialog, "tickets-half-laptop")
+        self.dialog.resize(380, 420)
+        pump()
+        self.assertGreater(self.dialog.dashboard_scroll.verticalScrollBar().maximum(), 0)
+        for badge in (self.dialog.stat_total, self.dialog.stat_critical, self.dialog.stat_open, self.dialog.stat_resolved):
+            self.assertGreaterEqual(badge.height(), 68)
+        self.dialog.dashboard_scroll.ensureWidgetVisible(self.dialog.scroll)
+        pump()
+        self.assertGreaterEqual(self.dialog.scroll.viewport().height(), 200)
+        capture(self.dialog, "tickets-short-scrolled")
 
     def test_long_edit_and_create_content_wraps_without_replacing_draft_widgets(self):
         self.sign_in()

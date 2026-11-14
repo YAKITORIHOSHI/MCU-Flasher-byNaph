@@ -12,7 +12,7 @@ import os
 import re
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 from uuid import uuid4
 
@@ -233,6 +233,11 @@ class _GateBusy(Exception):
 
 
 def _store_directory(core, root=None):
+    """The physical store, not a product's event folder, owns coordination."""
+    return Path(core).resolve() / ".mcu-package-users"
+
+
+def _legacy_store_directory(core, root=None):
     identity = os.path.normcase(str(Path(core).resolve()))
     key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     return event_directory(root) / "leases" / key
@@ -291,8 +296,11 @@ def package_store_lease(core, mode="use", *, wait=False, cancel=None, on_wait=No
     """
     if mode not in ("use", "prepare"):
         raise ValueError("Invalid package store lease mode")
-    directory = _store_directory(core, root)
-    token = directory / (uuid4().hex + ".json")
+    # Also publish to the previous event-root namespace while older running
+    # windows may still use it. New products/copies share the canonical gate.
+    directories = sorted({_store_directory(core, root), _legacy_store_directory(core, root)}, key=str)
+    token_name = uuid4().hex + ".json"
+    tokens = [directory / token_name for directory in directories]
     reserved = False
     announced = False
     try:
@@ -301,19 +309,27 @@ def package_store_lease(core, mode="use", *, wait=False, cancel=None, on_wait=No
                 raise InterruptedError("Package preparation cancelled while queued")
             acquired = False
             try:
-                with _gate(directory):
-                    others = [(p, v) for p, v in _live_leases(directory) if p != token]
+                with ExitStack() as gates:
+                    for directory in directories:
+                        gates.enter_context(_gate(directory))
+                    others = [(p, v) for directory in directories for p, v in _live_leases(directory)
+                              if p.name != token_name]
                     writers = any(v.get("mode") != "use" for _, v in others)
                     if mode == "use" and not writers:
-                        _atomic(token, {"pid": os.getpid(), "mode": mode})
+                        reserved = True
+                        for token in tokens:
+                            _atomic(token, {"pid": os.getpid(), "mode": mode})
                         reserved = acquired = True
                     elif mode == "prepare" and not writers:
                         if not others:
-                            _atomic(token, {"pid": os.getpid(), "mode": mode})
+                            reserved = True
+                            for token in tokens:
+                                _atomic(token, {"pid": os.getpid(), "mode": mode})
                             reserved = acquired = True
                         elif wait and not reserved:
-                            _atomic(token, {"pid": os.getpid(), "mode": "waiting"})
                             reserved = True
+                            for token in tokens:
+                                _atomic(token, {"pid": os.getpid(), "mode": "waiting"})
             except _GateBusy:
                 pass
             if acquired:
@@ -330,7 +346,8 @@ def package_store_lease(core, mode="use", *, wait=False, cancel=None, on_wait=No
         yield
     finally:
         if reserved:
-            token.unlink(missing_ok=True)
+            for token in tokens:
+                token.unlink(missing_ok=True)
 
 
 def guarded_package_operation(method):

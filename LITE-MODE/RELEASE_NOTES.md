@@ -1,5 +1,35 @@
 # Lite 0.1.0 — updated 2026-11-14
 
+One shared tool store and compact progress:
+
+- Main and Lite use the same physical native platform, framework, compiler and
+  installed-library store. Prepared builds run together; package changes wait
+  for active users. Tools are no longer copied into a second Lite store.
+- Automatically consolidate old Lite packages under both products' activity
+  guards. Compare duplicates byte for byte before deleting them, move unique
+  packages and preserve differing versions, settings, projects and recovery data.
+- Keep each package's file progress on one updating Build monitor line.
+- Run consolidation off the command thread with Stop available. Preserve a
+  requested startup sketch until the worker is idle, then open it once.
+- Check the headless worker and native portal dependencies at launch without
+  requiring the main editor's WebEngine or LLVM parser. An older installed
+  launcher can supply its verified private runtime without consuming `--lite`.
+
+Prepared resources and small-screen Developer Access:
+
+- Discover the main app's installed board manifests and configured downloaded
+  libraries. Keep exact catalog targets through unresolved refresh results and
+  clear invalid legacy default selections before Compile.
+- List installed libraries, all their sample source files and downloaded board
+  definitions. Open samples (including ZIP contents) in Lite's native read-only
+  paper viewer with C++ colors, copy, Ctrl+F, case matching and F3/Shift+F3.
+  Registry search remains under Find more libraries.
+- Start shared Bootstrap when Lite is opened first and return to Lite afterwards.
+  Prefer the prepared main Python environment, including on Windows, and use its
+  prepared native tools directly.
+- Keep ticket filters together on laptop screens; short portals scroll complete
+  metrics, controls and ticket content instead of compressing them out of view.
+
 MCU Flasher Lite in All Apps:
 
 - The installed Ubuntu MCU Flasher registers MCU Flasher Lite in All Apps with

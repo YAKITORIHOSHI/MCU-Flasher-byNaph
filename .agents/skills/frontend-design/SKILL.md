@@ -1,10 +1,26 @@
 ---
 name: frontend-design
-description: "Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+## Installed resources and short ticket dashboards
+
+Lite Resources opens on installed libraries and downloaded board definitions.
+Keep indexed virtual rows with left-aligned name/version/origin, filtered sample
+file lists and its native read-only paper code viewer. Cache syntax layouts and
+Unicode find indexes; Ctrl+F, F3/Shift+F3, case matching and copy remain usable at
+small sizes. Allocate real reading height when code opens, and scroll short
+screens. Registry search belongs under Find more libraries. Shared package
+origins use plain labels, and each package's `Package files:` progress replaces
+one monitor row without suppressing compiler diagnostics or reader scrollback.
+Developer Access puts Search above a shared three-filter row at laptop widths;
+reflow title/actions before squeezing their labels. A short portal scrolls its
+whole dashboard with complete metric/control minima and a usable ticket viewport.
+Inspect actual half-laptop and short captures; geometry containment alone cannot
+prove that compressed text remains visible.
 
 ## Lite modal dialogs
 

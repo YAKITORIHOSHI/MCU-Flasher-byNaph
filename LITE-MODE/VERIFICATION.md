@@ -1,5 +1,66 @@
 # Lite verification — updated 2026-11-14
 
+## November 14 — one physical package store and cleanup
+
+The shared-store follow-up supersedes the earlier independent-copy design.
+
+- Fifteen shared-store checks pass on Ubuntu: duplicate verification, unique and
+  conflicting packages, active-window/build exclusion, cross-drive migration,
+  internal link relocation, settings/recovery preservation, concurrent readers,
+  one progress row per package and responsive/cancellable startup cleanup.
+- Twenty-two main package coordination checks pass, including different product
+  event roots and the previous event-root namespace.
+- Twenty-seven Rust tests and strict Clippy pass. A regression test first
+  reproduced the lost startup sketch, then verifies waiting through catalog/
+  cleanup work and dispatching only once. Supplied native binaries are rebuilt.
+- Eight Bootstrap/Lite launch checks pass. Lite's headless runtime check and the
+  main runtime check both pass on the local host; no setup or installer was run
+  during fixture checks. The local main runtime's missing pinned LLVM binding
+  was separately repaired before its read-only check.
+- A real ESP32 Arduino compile uses the existing physical main tool store while
+  another reader lease is active. Both initial and unchanged actions succeed
+  without changing any packages; the unchanged action compiles zero objects.
+  Uno/Nano compiler and nine certified Upload-reuse checks also pass in owned
+  storage, with the physical device boundary mocked.
+- An authorized local cleanup removed 18 byte-verified duplicate packages and
+  retired Lite caches, reclaiming 5,244,058,033 bytes. A second cleanup removes
+  nothing. Lite's remaining state is approximately 83 MiB. No user settings,
+  sketches, protected project caches or recovery journals were removed.
+
+The current source/binary hashes and sanitized receipts are recorded in
+`evidence/shared-store-2026-11-14.json`. Windows CI runs the same shared-store
+checks (the POSIX symlink case is excluded there); native Windows 11 and physical
+USB qualification remain separate.
+
+## November 14 — prepared resources and short Developer Access
+
+Local Ubuntu 26.04 x64 verification for this repair:
+
+- 26 Rust tests and strict Clippy pass, including native find-key input, Unicode
+  match offsets, stale sample-chunk rejection and the existing scaled layout matrix.
+- Lite checks pass: 99 worker/isolation checks, 53 preparation/cancellation checks,
+  25 history/readiness checks, 15 resource checks and 26 Developer Access checks.
+  Resource fixtures use fake main stores and downloaded libraries, prove exact
+  target preservation and leave main-store bytes unchanged. No downloads occur.
+- Shared Bootstrap routing passes five recorded checks, including cold Ubuntu
+  repair returning to Lite, the Windows visible-launch parameters and refusal of
+  other Linux hosts before setup. No real installer or workspace is launched.
+- Main runtime, controls, owner tickets/service, package browser, target resolution,
+  file access, installation/source inventories, Bootstrap updates/window/promotion,
+  Ubuntu launcher, library samples, incremental builds and shutdown checks pass.
+  Shutdown needed a run outside the workspace sandbox for Chromium's own sandbox.
+- Real hardware-free Uno and Nano compilation and nine certified Upload-reuse
+  decisions pass. The final device dispatch is mocked; no serial port is opened.
+- Fifteen real Rust renderer captures pass on an owned Xvfb display, including
+  installed resources and light/dark/short sample viewers. The supplied Ubuntu
+  executable retains the glibc 2.39 floor. The Windows x64 executable is cross-built
+  with the GUI subsystem; native Windows/Windows 11 and physical USB checks remain
+  separate qualification. Updated CI retains those native host gates.
+
+See `evidence/resources-and-portals-2026-11-14.json`; captures and compiler logs are
+under `temp/critical-lite/` and `temp/compile-proof/`. No live project caches,
+accounts or AI journals were changed.
+
 ## November 14 — first-come serial port ownership
 
 A reported takeover was traced through the kernel log: the CH340 board dropped

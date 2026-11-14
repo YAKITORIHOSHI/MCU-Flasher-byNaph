@@ -1,4 +1,4 @@
-"""Selected-target build/upload dependencies, with read-only main-store reuse.
+"""Selected-target build/upload dependencies in the shared native package store.
 
 This module prepares packages only. It never runs a compiler or uploader and
 never opens a serial port. PlatformIO's selected platform owns the dependency
@@ -101,13 +101,13 @@ def inventory(root):
     return files, links, directories
 
 
-def copy_package(package, manager, log=print):
+def copy_package(package, manager, log=print, *, destination_name=None, cancel=None, deadline=None):
     """Publish an independent native copy only after byte/inventory verification."""
     from src.modules.bootstrap_file_pool import FilePool, file_workers
     source = Path(package.path).resolve(strict=True)
     parent = Path(manager.package_dir)
     parent.mkdir(parents=True, exist_ok=True)
-    destination = parent / source.name
+    destination = parent / (destination_name or source.name)
     if os.path.lexists(destination):
         # Let PlatformIO handle its own side-by-side versions, never overwrite
         # a different installed package or a user's unknown directory here.
@@ -132,6 +132,8 @@ def copy_package(package, manager, log=print):
 
         def copy(relative):
             nonlocal done, last_progress
+            if (cancel is not None and cancel.is_set()) or (deadline is not None and time.monotonic() > deadline):
+                raise InterruptedError("Package migration stopped before publication")
             src, dst = source / relative, stage / relative
             dst.parent.mkdir(parents=True, exist_ok=True)
             before = file_hash(src)
@@ -152,6 +154,8 @@ def copy_package(package, manager, log=print):
         for relative, target in links.items():
             os.symlink(target, stage / relative, target_is_directory=(source / relative).is_dir())
         log(f"Package files: {len(files)}/{len(files)}")
+        if (cancel is not None and cancel.is_set()) or (deadline is not None and time.monotonic() > deadline):
+            raise InterruptedError("Package migration stopped before publication")
         if os.path.lexists(destination):
             return False
         stage.rename(destination)
@@ -162,11 +166,17 @@ def copy_package(package, manager, log=print):
             shutil.rmtree(stage)
 
 
-def ensure_package(manager, spec, shared=None, log=print):
+class MissingPackage(RuntimeError):
+    pass
+
+
+def ensure_package(manager, spec, shared=None, log=print, *, install=True):
     from platformio.package.exception import PackageException
     existing = manager.get_package(spec)
     if existing is not None:
         return existing, False, "installed"
+    if not install:
+        raise MissingPackage(f"Missing shared package: {spec}")
     if shared is not None:
         try:
             candidate = shared.get_package(spec)
@@ -183,7 +193,7 @@ def ensure_package(manager, spec, shared=None, log=print):
     return package, True, "download"
 
 
-def prepare(config_path, core, main_core=None, log=print):
+def prepare(config_path, core, main_core=None, log=print, *, install=True):
     """Prepare upload and build requirements without any device I/O."""
     from platformio import app
     from platformio.dependencies import get_core_dependencies
@@ -207,7 +217,10 @@ def prepare(config_path, core, main_core=None, log=print):
         def install(self, spec):
             return super().install(spec, skip_dependencies=True)
     platforms = PlatformOnly(platforms.package_dir)
-    pkg, changed, origin = ensure_package(platforms, platform_spec, shared_platforms, log)
+    if not install:
+        platforms = source_manager(PlatformPackageManager, core / "platforms")
+        tools = source_manager(ToolPackageManager, core / "packages")
+    pkg, changed, origin = ensure_package(platforms, platform_spec, shared_platforms, log, install=install)
     actions.append({"name": pkg.metadata.name, "version": str(pkg.metadata.version), "changed": changed, "origin": origin})
     platform = PlatformFactory.new(pkg)
     platform.project_env = "lite"
@@ -218,7 +231,7 @@ def prepare(config_path, core, main_core=None, log=print):
         requirements=get_core_dependencies()["tool-scons"]))]
     requirements += [(name, platform.get_package_spec(name)) for name, options in platform.packages.items() if not options.get("optional")]
     for name, spec in requirements:
-        pkg, changed, origin = ensure_package(tools, spec, shared_tools, log)
+        pkg, changed, origin = ensure_package(tools, spec, shared_tools, log, install=install)
         actions.append({"name": name, "version": str(pkg.metadata.version), "changed": changed, "origin": origin})
     missing = [name for name, spec in requirements if tools.get_package(spec) is None]
     if missing:
@@ -231,29 +244,50 @@ def prepare(config_path, core, main_core=None, log=print):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--library")
     parser.add_argument("--result", required=True, type=Path)
     args = parser.parse_args()
     state = Path(os.environ["MCU_LITE_STATE"]).resolve(strict=True)
-    config = args.config.resolve(strict=True)
+    config = args.config.resolve(strict=True) if args.config else None
     result = args.result.resolve()
-    if not config.is_relative_to(state) or not result.is_relative_to(state):
+    if (config is not None and not config.is_relative_to(state)) or not result.is_relative_to(state):
         raise RuntimeError("Tool preparation accepts only private Lite paths")
     core = Path(os.environ["PLATFORMIO_CORE_DIR"]).resolve()
-    if not core.is_relative_to(state):
-        raise RuntimeError("Tool preparation cannot write outside private Lite state")
     shared_value = os.environ.get("MCU_LITE_MAIN_CORE")
     shared = Path(shared_value).resolve() if shared_value else None
-    if shared is not None and (shared == core or shared.is_relative_to(state)):
-        shared = None
+    if core != shared and not core.is_relative_to(state):
+        raise RuntimeError("Tool preparation accepts only the selected native shared store")
     from isolation import protect_original
     original = Path(__file__).resolve().parents[2]
-    protected = protect_original(original)
-    if shared is not None:
-        protected.append(shared)
+    events = Path(os.environ.get("MCU_LITE_MAIN_EVENTS") or state / "package-events")
+    protect_original(original, writable=(core, events))
     from src.modules.package_jobs import package_store_lease
-    with package_store_lease(core, "prepare", wait=True, root=state / "package-events"):
-        report = prepare(config, core, shared)
+    report = None
+    if args.library:
+        import re
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_. +()-]+@[A-Za-z0-9_.+-]+", args.library):
+            raise ValueError("Select a versioned library from the registry results")
+        from platformio.package.manager.library import LibraryPackageManager
+        from platformio.package.meta import PackageSpec
+        with package_store_lease(core, "prepare", wait=True, root=events):
+            package = LibraryPackageManager(str(core / "lib")).install(PackageSpec(args.library))
+            if package is None:
+                raise RuntimeError("Library preparation did not return an installed package")
+            report = {"library": args.library, "path": package.path}
+    elif config is not None:
+        # An already prepared target is a reader, just like a build. Only a
+        # missing dependency reserves the writer gate and waits for readers.
+        with package_store_lease(core, wait=True, root=events):
+            try:
+                report = prepare(config, core, log=print, install=False)
+            except MissingPackage:
+                pass
+        if report is None:
+            with package_store_lease(core, "prepare", wait=True, root=events):
+                report = prepare(config, core)
+    else:
+        raise ValueError("Choose a board configuration or a library")
     scratch = result.with_suffix(".tmp")
     scratch.write_text(json.dumps(report, indent=2), encoding="utf-8")
     scratch.replace(result)

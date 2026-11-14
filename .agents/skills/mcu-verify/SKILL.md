@@ -1,9 +1,33 @@
 ---
 name: mcu-verify
-description: "Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Verify shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
+
+## Prepared resources and short Developer Access
+
+- Lite tools/verify_shared_store.py covers one physical core, concurrent readers,
+  active-window/build cleanup exclusion, exact duplicate retirement, unique and
+  conflicting packages, cross-drive copies, internal link relocation, preserved
+  settings/projects/recovery and one progress key per package. Main package_jobs
+  also checks different product event roots and legacy markers. Never clean a
+  live project cache as part of these fixtures. Block cleanup in a fixture while
+  exercising status/Stop and require no success after cancellation. Rust startup
+  tests retain the requested sketch through busy work and dispatch it once idle.
+- Lite tools/verify_resources.py covers read-only main manifests/configured
+  libraries, all sample source extensions, ZIP samples, opaque IDs, cancellation,
+  exact target preservation and bounded publications. Keep main bytes unchanged.
+- direct/verify_lite_launch.py records both host Bootstrap handoffs and a cold
+  Ubuntu repair without launching setup or either real workspace. Normal Lite
+  selects the prepared environment before the Windows base interpreter. Cover
+  the headless preflight and reuse of an owned runtime with an older launcher.
+- owner_tickets asserts three filters on one row at 683x730 and complete metric/
+  ticket minima after scrolling at 380x420. Check actual captures as well as bounds.
+- Lite previews include installed resources and light/dark/short sample code.
+  Native viewer find offsets preserve Unicode and stale chunks cannot replace a
+  current file. Real compiler qualification records session-local preparation
+  results through worker.session, never the retired shared prepare folder.
 
 ## Lite windows and shared ports
 
