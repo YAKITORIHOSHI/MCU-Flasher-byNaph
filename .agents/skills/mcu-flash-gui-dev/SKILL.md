@@ -1336,7 +1336,11 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   a Git working copy. Defer refresh while a workspace is active. Windows
   invalidates warm-launch health, retains its update worker until it stops and
   restarts through a child process, because Windows' exec family does not quote
-  arguments and a folder with a space would break it. GitHub archives list their
+  arguments and a folder with a space would break it. The updating process still
+  holds `launcher.lock`, so the child (`--resume-application-update`) adopts it
+  only when its actual parent owns it (`_adopt_bootstrap_slot_handoff`); an
+  ordinary claim saw a live owner, said "already starting up" and exited, leaving
+  nothing running. An early-exiting child returns the lock to the parent. GitHub archives list their
   wrapper folder first, so fixtures must too. Ubuntu re-execs `direct/ubuntu/run.sh` with a one-shot resume marker. Use
   finite check/clone/archive time budgets. This source refresh is not a
   packaged-release qualification. Verify isolated preservation, rollback,

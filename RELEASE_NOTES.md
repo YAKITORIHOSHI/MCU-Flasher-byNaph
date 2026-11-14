@@ -13,6 +13,9 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ## November 14 — Lite screen fit, visible Developer Access and reliable Stop
 
+- Fix Windows staying closed after an automatic update said it was restarting:
+  the restarted Bootstrap now takes over the startup lock instead of reporting
+  that MCU Flasher is already starting.
 - Fix Windows Developer Access reporting Ready with no visible window: preserve
   native GUI startup and verify the window before acknowledging readiness.
 - Keep the main workspace usable during Developer Access authentication, ticket

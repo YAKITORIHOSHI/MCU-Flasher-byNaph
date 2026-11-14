@@ -536,16 +536,73 @@ class BootstrapRestartChecks(unittest.TestCase):
         self.received = self.fixture / "received.json"
         self.log = []
 
+    HANDOFF_NAMES = ("_write_bootstrap_slot_owner", "_adopt_bootstrap_slot_handoff")
+
+    @staticmethod
+    def _segments(names):
+        source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
+        found = {}
+        for node in ast.parse(source).body:
+            name = getattr(node, "name", None)
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+                name = node.targets[0].id
+            if name in names:
+                found[name] = ast.get_source_segment(source, node)
+        return "\n\n".join(found[name] for name in names)
+
     def _restart(self, child_source, argv):
         (self.root / "src" / "modules" / "bootstrap.py").write_text(child_source, encoding="utf-8")
-        source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
-        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
-                        and node.name == "_restart_after_application_update")
+        self.lock = self.fixture / "launcher.lock"
+        self.lock.write_text(str(os.getpid()), encoding="utf-8")
         namespace = {"STARTUP_HEALTH_FILE": self.health, "SCRIPT_DIR": self.root, "sys": SimpleNamespace(
             argv=argv, executable=sys.executable, exit=sys.exit), "subprocess": subprocess, "os": os,
+            "_BOOTSTRAP_LOCK_FILE": self.lock,
             "_record_bootstrap_log": lambda level, message: self.log.append(message)}
-        exec(compile(ast.get_source_segment(source, function), "bootstrap.py", "exec"), namespace)
+        code = self._segments(self.HANDOFF_NAMES[:1] + ("_restart_after_application_update",))
+        exec(compile(code, "bootstrap.py", "exec"), namespace)
         return namespace["_restart_after_application_update"]
+
+    def _adopting_child(self, then=""):
+        """A child running the real handoff code, as the restarted Bootstrap's entry does."""
+        return ("import json, os, sys\nfrom pathlib import Path\n"
+                f"_BOOTSTRAP_LOCK_FILE = Path({str(self.fixture / 'launcher.lock')!r})\n"
+                + self._segments(self.HANDOFF_NAMES) + "\n"
+                "adopted = _adopt_bootstrap_slot_handoff()\n"
+                f"json.dump({{'adopted': adopted, 'pid': os.getpid()}}, open({str(self.received)!r}, 'w'))\n"
+                + then)
+
+    def test_restarted_bootstrap_adopts_the_launcher_lock_instead_of_reporting_already_starting(self):
+        # The updating process still holds the lock: the restarted one used to
+        # see a live owner, say "already starting up" and exit, so nothing opened.
+        # The parent passes only the resume flag, as older installed copies do.
+        restart = self._restart(self._adopting_child(), ["launcher.py"])
+        with self.assertRaises(SystemExit) as finished:
+            restart()
+        self.assertEqual(finished.exception.code, 0)
+        received = json.loads(self.received.read_text(encoding="utf-8"))
+        self.assertTrue(received["adopted"])
+        self.assertEqual(self.lock.read_text(encoding="utf-8"), str(received["pid"]))
+
+    def test_child_that_exits_early_returns_the_lock_to_the_continuing_bootstrap(self):
+        self._restart(self._adopting_child("raise SystemExit(3)\n"), ["launcher.py"])()
+        self.assertTrue(json.loads(self.received.read_text(encoding="utf-8"))["adopted"])
+        self.assertEqual(self.lock.read_text(encoding="utf-8"), str(os.getpid()))
+
+    def test_handoff_needs_the_resume_flag(self):
+        source = self._segments(self.HANDOFF_NAMES)
+        lock = self.fixture / "launcher.lock"
+        lock.write_text(str(os.getppid()), encoding="utf-8")
+        namespace = {"os": os, "sys": SimpleNamespace(argv=["bootstrap.py"]), "_BOOTSTRAP_LOCK_FILE": lock}
+        exec(compile(source, "bootstrap.py", "exec"), namespace)
+        self.assertFalse(namespace["_adopt_bootstrap_slot_handoff"]())
+        self.assertEqual(lock.read_text(encoding="utf-8"), str(os.getppid()))
+
+    def test_handoff_never_takes_a_lock_held_by_another_process(self):
+        restart = self._restart(self._adopting_child("raise SystemExit(3)\n"), ["launcher.py"])
+        self.lock.write_text("424242", encoding="utf-8")
+        restart()
+        self.assertFalse(json.loads(self.received.read_text(encoding="utf-8"))["adopted"])
+        self.assertEqual(self.lock.read_text(encoding="utf-8"), "424242")
 
     def test_restart_keeps_spaced_paths_whole_and_leaves_once_the_child_runs(self):
         child = ("import json, sys\n"

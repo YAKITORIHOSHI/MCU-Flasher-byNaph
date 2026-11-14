@@ -9964,6 +9964,7 @@ def _restart_after_application_update() -> None:
     command = [str(sys.executable), "-B", str(SCRIPT_DIR / "src" / "modules" / "bootstrap.py"),
                "--resume-application-update", *retained]
     _record_bootstrap_log("UPDATE", "Restarting Bootstrap after a verified application update.")
+    # This process still holds the launcher lock; the child adopts it from us.
     try:
         restarted = subprocess.Popen(command)
     except OSError as exc:
@@ -9978,6 +9979,8 @@ def _restart_after_application_update() -> None:
         sys.exit(0)
     if exit_code == 0:
         sys.exit(0)
+    # Continuing here: take the lock back if the child adopted it.
+    _write_bootstrap_slot_owner(restarted.pid, os.getpid())
     _record_bootstrap_log("UPDATE", f"Restarted Bootstrap exited early ({exit_code}); continuing from this process.")
 
 
@@ -11424,6 +11427,31 @@ def _release_bootstrap_slot():
         pass
 
 
+def _write_bootstrap_slot_owner(expected_pid: int, new_pid: int) -> bool:
+    """Move the launcher lock from one known owner to another, never from a stranger."""
+    try:
+        if int(_BOOTSTRAP_LOCK_FILE.read_text(encoding="utf-8").strip()) != expected_pid:
+            return False
+        _BOOTSTRAP_LOCK_FILE.write_text(str(new_pid), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def _adopt_bootstrap_slot_handoff() -> bool:
+    """Take the launcher lock from the Bootstrap that restarted us after an update.
+
+    The updating process still holds the lock while it starts this one, so an
+    ordinary claim reported "already starting up" and left nothing running.
+    Adopt only a resumed update whose actual parent owns the lock. This needs
+    nothing from the parent, so copies whose old Bootstrap performs the update
+    hand over too.
+    """
+    if "--resume-application-update" not in sys.argv:
+        return False
+    return _write_bootstrap_slot_owner(os.getppid(), os.getpid())
+
+
 def _notify_bootstrap_already_running():
     try:
         import ctypes
@@ -11681,7 +11709,7 @@ if __name__ == "__main__":
     # or manual testing). Shares launcher.py's own lock file, so whichever
     # of the two entry points got there first blocks the other one.
     if "--new-window" not in sys.argv:
-        if not _claim_bootstrap_slot():
+        if not _adopt_bootstrap_slot_handoff() and not _claim_bootstrap_slot():
             _notify_bootstrap_already_running()
             sys.exit(0)
         import atexit
