@@ -1,0 +1,70 @@
+{
+  "date": "2026-11-15",
+  "parent_commit": "6739cb05f78d9975d0dea50b51be4e258aef4de0",
+  "scope": "Finalize reviewed handoff: owned backdrop refresh lifetime, Bootstrap console fallback and stage parser, repaired serial/platform fixtures, full native matrix coverage with finite longer budget",
+  "source_files": {
+    "direct/ubuntu/bootstrap_view.py": {
+      "sha256": "55f579a95057b4f4955ebee2fd23b4ae914e08cb4bbb5746d7501c79e371422c",
+      "bytes": 10519
+    },
+    "direct/ubuntu/setup.py": {
+      "sha256": "26493c78981afd30ca9c119c2c507d4446c86ab1c8f8ed2f727eff9296377f36",
+      "bytes": 12590
+    },
+    "direct/verify_glass.py": {
+      "sha256": "5250b6f990dbf7e244a2d70aee53289dec89e497314a387fbff1ac0af3614099",
+      "bytes": 33589
+    },
+    "direct/verify_monitor_matrix.py": {
+      "sha256": "c51aac40b15c381f82db86689641cb7d845b5172217c6af0ea1d82073c7f1be9",
+      "bytes": 30220
+    },
+    "direct/verify_platforms.py": {
+      "sha256": "42e0029299772a7a96064af59cf9128ce6062a81eab6d865bae4d426e2e8d546",
+      "bytes": 37932
+    },
+    "direct/verify_serial_reader.py": {
+      "sha256": "618365f368a759ae7ca70c1229ca804bc279da7033bdaa55d408027353a53513",
+      "bytes": 40520
+    },
+    "direct/verify_theme_readability.py": {
+      "sha256": "68a030c955e099fdd3b57724b49c37785e16f1ad224d88491eb3cbdb976a525e",
+      "bytes": 12779
+    },
+    "direct/verify_ubuntu_bootstrap_window.py": {
+      "sha256": "967d3e7deb7889d281e2b3fb0819c52f4f64e9a34bb6c4b1a751c4cb7b142b9c",
+      "bytes": 7184
+    },
+    "main/core/file_utils.py": {
+      "sha256": "c76168c192c9e4e59acc7e9bef9808809f52a001f1e0e34259c2e7dd227a7068",
+      "bytes": 116124
+    },
+    "main/qt/glass.py": {
+      "sha256": "0679c4d389b61417bab3c95bff42af947cbd1901da000efb53e9703f0fde0c6f",
+      "bytes": 32754
+    }
+  },
+  "local_checks": {
+    "glass": 32,
+    "platforms": 26,
+    "serial_reader": 40,
+    "ubuntu_bootstrap_window": 7,
+    "theme_readability": "passed",
+    "ubuntu_bootstrap": "passed",
+    "ubuntu_runtime": "passed",
+    "owner_tickets": 42,
+    "shutdown": "passed"
+  },
+  "native_parent_checks": {
+    "lite_windows_and_ubuntu": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43606262544",
+    "developer_windows_3_11": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43606262543/job/132481442392",
+    "developer_windows_3_14": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43606262543/job/132481442278",
+    "bootstrap_contracts": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43606262448",
+    "conclusion": "success; Lite source and both supplied native launchers are unchanged in this follow-up"
+  },
+  "limits": [
+    "Follow-up Qt lifetime/console changes are checked locally on Ubuntu; parent native Windows results do not independently qualify changed follow-up Python files.",
+    "Full native matrix retains all original display-scale cases.",
+    "No native Windows 11 or physical USB qualification was added."
+  ]
+}

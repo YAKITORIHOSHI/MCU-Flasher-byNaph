@@ -46,6 +46,7 @@ def reader_fixture():
         "load_gui_config": Mock(return_value={}),
         "save_gui_config": Mock(),
         "port_occupied_owner": Mock(return_value=None),
+        "port_owner_window": Mock(return_value=None),
     }
     exec(compile(module, str(source), "exec"), namespace)
     return namespace["ReaderBackend"], namespace["serial"]
@@ -888,8 +889,16 @@ class ReaderChecks(unittest.TestCase):
             finally:
                 api._stop_serial_monitor()
 
-
-
+    def test_held_port_never_opens_serial_monitor(self):
+        port = FakePort()
+        api, events = backend_fixture(port)
+        with patch.dict(READER_BACKEND._start_serial_monitor.__globals__,
+                        {"port_owner_window": Mock(return_value="MCU Flasher Lite (PID 42)")}):
+            api._start_serial_monitor()
+            self.assertFalse(api.serial_running)
+            self.assertIsNone(api._serial_conn)
+            self.assertIn("--- SIMULATED is selected in MCU Flasher Lite (PID 42); not connecting ---",
+                          [p.get("text", "") for n, p in events if n == "serial:log"])
 
 
 if __name__ == "__main__":

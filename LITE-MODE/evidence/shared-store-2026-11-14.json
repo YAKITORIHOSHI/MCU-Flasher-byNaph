@@ -601,5 +601,7 @@
     "Windows x64 GUI executable is cross-built locally; hosted native checks run in lite-windows.yml for each code revision.",
     "Hosted Windows Server does not qualify native Windows 11 or physical USB. No physical serial port or real account was accessed."
   ],
-  "user_state": "Settings, original sketches, protected project caches and recovery journals were preserved. Cleanup retired only validated duplicates and reproducible retired Lite caches."
+  "user_state": "Settings, original sketches, protected project caches and recovery journals were preserved. Cleanup retired only validated duplicates and reproducible retired Lite caches.",
+  "checkpoint_commit": "6739cb05f78d9975d0dea50b51be4e258aef4de0",
+  "followup_receipt": "handoff-2026-11-15.json"
 }

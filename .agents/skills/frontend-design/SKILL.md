@@ -1,10 +1,15 @@
 ---
 name: frontend-design
-description: "Maintain installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+PageBackdrop coalesces geometry events through an owned single-shot QTimer.
+Validate native widget lifetimes, stop queued updates and remove ancestor filters
+when the source view is destroyed. Retained Python wrappers cannot call a deleted
+native view. Keep all native display scales in the renderer matrix.
 
 ## Installed resources and short ticket dashboards
 

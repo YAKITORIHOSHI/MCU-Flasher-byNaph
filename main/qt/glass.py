@@ -19,6 +19,11 @@ import random
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QDialog, QStackedWidget, QTabBar, QTabWidget, QWidget
+try:
+    from shiboken6 import isValid
+except ImportError:
+    def isValid(obj):
+        return obj is not None
 
 from main.core.theme import Theme
 
@@ -392,7 +397,11 @@ def page_backdrop_for(view: QWidget) -> dict[str, float]:
     every size; 150%: most). A sheet filling that viewport loses its right and bottom
     rim past the widget's edge, so the page sizes its sheet to these numbers instead.
     """
+    if not isValid(view):
+        return {}
     window = view.window()
+    if not isValid(window):
+        return {}
     origin = view.mapTo(window, QPoint())
     width, height, left, top = scene_fit(window.width(), window.height())
     return {"width": round(width, 2), "height": round(height, 2),
@@ -413,32 +422,60 @@ class PageBackdrop(QObject):
         self._last = None
         self._watched: list[QWidget] = []
         self._pending = False
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.refresh)
+        if hasattr(view, "destroyed"):
+            view.destroyed.connect(self._on_view_destroyed)
         self._watch()
         self.refresh()
 
+    def _on_view_destroyed(self, *args) -> None:
+        self._timer.stop()
+        self._pending = False
+        for widget in self._watched:
+            if isValid(widget):
+                widget.removeEventFilter(self)
+        self._watched = []
+
     def _watch(self) -> None:
+        if not isValid(self) or not isValid(self._view):
+            for widget in self._watched:
+                if isValid(widget):
+                    widget.removeEventFilter(self)
+            self._watched = []
+            return
         chain = []
         widget = self._view
-        while widget is not None:
+        while widget is not None and isValid(widget):
             chain.append(widget)
             widget = None if widget.isWindow() else widget.parentWidget()
         if chain == self._watched:
             return
         for widget in self._watched:
-            widget.removeEventFilter(self)
+            if isValid(widget):
+                widget.removeEventFilter(self)
         for widget in chain:
-            widget.installEventFilter(self)
+            if isValid(widget):
+                widget.installEventFilter(self)
         self._watched = chain
 
     def eventFilter(self, watched, event) -> bool:
-        if event.type() in self._WATCHED and not self._pending:
-            self._pending = True
-            QTimer.singleShot(0, self.refresh)
+        if not isValid(self) or not isValid(self._view) or not isValid(watched):
+            return False
+        if event.type() in self._WATCHED:
+            if not self._pending:
+                self._pending = True
+                self._timer.start(0)
         return False
 
     def refresh(self) -> None:
         self._pending = False
+        if not isValid(self) or not isValid(self._view):
+            return
         self._watch()
+        if not isValid(self._view):
+            return
         values = page_backdrop_for(self._view)
         if values != self._last:
             self._last = values

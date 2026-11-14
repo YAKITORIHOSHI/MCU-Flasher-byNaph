@@ -18,7 +18,11 @@ STAGE_TITLES = ("System prerequisites", "Private Python environment", "Python pa
 
 
 def announce(title: str) -> None:
-    print(f"── [{STAGE_TITLES.index(title) + 1}/{len(STAGE_TITLES)}] {title} ──", flush=True)
+    text = f"── [{STAGE_TITLES.index(title) + 1}/{len(STAGE_TITLES)}] {title} ──"
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        print(f"-- [{STAGE_TITLES.index(title) + 1}/{len(STAGE_TITLES)}] {title} --", flush=True)
 
 
 def clean_native_bootstrap_environment() -> dict[str, str]:
@@ -180,7 +184,7 @@ def main(argv=None) -> int:
         stage = "native board toolchains"
         announce("Board toolchains")
         with package_store_lease(core, mode="prepare", wait=True,
-                                 on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains…")):
+                                 on_wait=lambda: print("Waiting for active builds or board preparation before repairing toolchains...")):
             subprocess.run(command, check=True, env=env, cwd=ROOT)
             finish_bootstrap(core)
         announce("Finishing setup")

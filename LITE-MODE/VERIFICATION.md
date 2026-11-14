@@ -1,5 +1,11 @@
 # Lite verification — updated 2026-11-14
 
+The November 15 handoff follow-up is recorded in
+`evidence/handoff-2026-11-15.json`: local glass lifecycle, Bootstrap console/parser
+and repaired serial/platform fixtures pass. Lite source/launcher bytes are
+unchanged from the four passing native Windows/Ubuntu jobs at `6739cb0`; changed
+follow-up Python files retain their separate native qualification limits.
+
 ## November 14 — one physical package store and cleanup
 
 The shared-store follow-up supersedes the earlier independent-copy design.

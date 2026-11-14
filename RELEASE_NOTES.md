@@ -1,6 +1,6 @@
 # MCU Flasher by Naph — Release Notes
 
-**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 14, 2026
+**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 15, 2026
 
 **Platforms:** Windows 10/11 (AMD64) · Ubuntu 24.04+ (amd64, ARM64) ·
 Linux Mint 22.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
@@ -10,6 +10,16 @@ Installed copies update themselves from GitHub on their next launch; see
 [commit log](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commits/main).
 
 ---
+
+## November 15 — Bootstrap output and view cleanup
+
+- Fall back to readable ASCII stage headings on legacy consoles while retaining
+  Bootstrap's stage and progress updates. Output failures remain visible.
+- Retire queued backdrop updates when their view closes and guard deleted native
+  widgets during reparenting and teardown.
+- Repair serial-ownership and platform fixtures, drain pending Qt cleanup, and
+  wait for both detached toolbar actions. Retain every display-scale check with
+  a finite longer budget for the full native matrix.
 
 ## November 14 — Lite prepared resources and laptop Developer Access
 

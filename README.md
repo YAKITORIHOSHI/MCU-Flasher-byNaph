@@ -45,7 +45,7 @@ terminals and an optional AI assistant in one window.
   See [Lite](LITE-MODE/README.md).
 - **Interface:** Glass Dark, Frosted Light and Solarized Dark themes, an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
-  including half-screen tiling.
+  including half-screen tiling. Closing a view retires its pending backdrop updates.
 
 ## Supported systems
 

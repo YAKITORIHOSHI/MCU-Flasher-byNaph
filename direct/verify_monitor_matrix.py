@@ -413,8 +413,12 @@ def check_monitor(render_dir: Path | None) -> int:
 
         window.detach_editor()
         # Toolbar layout settles on a queued pass, which a very large window paints slowly.
-        settled = time.monotonic() + 3
-        while time.monotonic() < settled and not window._primary_toolbar.btn_compile.isVisibleTo(window._detached_window):
+        settled = time.monotonic() + 6
+        while time.monotonic() < settled and not (
+            window._primary_toolbar.btn_compile.isVisibleTo(window._detached_window)
+            and getattr(window._primary_toolbar, "btn_download", None) is not None
+            and window._primary_toolbar.btn_download.isVisibleTo(window._detached_window)
+        ):
             pump(.05)
         pump(.3)
         require_on_screen("detached", window._detached_window)

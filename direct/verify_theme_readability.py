@@ -56,6 +56,7 @@ class ThemeReadabilityChecks(unittest.TestCase):
         def dispose():
             widget.deleteLater()
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            QCoreApplication.processEvents()
         self.addCleanup(dispose)
         return widget
 

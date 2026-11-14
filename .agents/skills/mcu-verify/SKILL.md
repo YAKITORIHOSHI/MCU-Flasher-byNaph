@@ -1,9 +1,16 @@
 ---
 name: mcu-verify
-description: "Verify shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Verify deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
+
+Glass checks include deleting a page with a queued backdrop refresh and retaining
+its Python wrapper without another page call. Platform checks exercise cp1252
+heading fallback without swallowing I/O failures; Ubuntu Bootstrap checks route
+both heading forms into real stage/status/progress widgets. Serial-reader AST
+fixtures must provide port_owner_window, and a held port must never open a monitor.
+Preserve all display-scale cases when allowing slower native renderer matrices.
 
 ## Prepared resources and short Developer Access
 

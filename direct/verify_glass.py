@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QMainWindow, QMenuBar, QPlainTextEdit, QPushButton,
@@ -410,6 +410,22 @@ class Scene(unittest.TestCase):
         self.assertEqual(len(sent), told)
         backdrop.forget()  # A new page has been told nothing.
         self.assertEqual(len(sent), told + 1)
+
+    def test_deleted_page_cancels_queued_backdrop_updates(self):
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        view = QWidget(window)
+        sent = []
+        backdrop = glass.PageBackdrop(view, sent.append)
+        backdrop.eventFilter(view, QEvent(QEvent.Type.Resize))
+        before = len(sent)
+        view.deleteLater()
+        QCoreApplication.sendPostedEvents(view, QEvent.Type.DeferredDelete)
+        APP.processEvents()
+        self.assertEqual(len(sent), before, "A deleted page must never receive a queued refresh")
+        self.assertEqual(glass.page_backdrop_for(view), {})
+        backdrop.refresh()  # A retained Python wrapper cannot reach dead native widgets.
+        self.assertEqual(len(sent), before)
 
     def test_the_editor_page_is_the_same_glass(self):
         html = (ROOT / "src/editor/index.html").read_text(encoding="utf-8")

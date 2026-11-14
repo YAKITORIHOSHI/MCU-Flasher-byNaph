@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -86,6 +87,26 @@ class WindowChecks(unittest.TestCase):
         self.assertTrue(self.window.skip_cb.isHidden())
         self.assertTrue(self.window.cancellable)
         self.render("update-in-progress")
+
+    def test_setup_headings_keep_stage_events_with_unicode_or_ascii_output(self):
+        from direct.ubuntu.bootstrap_view import BootstrapWindow, _show_line
+
+        for rule in ("──", "--"):
+            with self.subTest(rule=rule):
+                stream = io.StringIO()
+                bridge = BootstrapWindow(stream, pid=0)
+                with patch.object(bridge, "alive", return_value=True):
+                    _show_line(bridge, f"{rule} [3/8] Python packages {rule}\n".encode("utf-8"))
+                records = [json.loads(line) for line in stream.getvalue().splitlines()]
+                self.assertEqual(records, [
+                    {"event": "log", "args": ["Python packages", "section"]},
+                    {"event": "status", "args": ["Python packages…"]},
+                    {"event": "progress", "args": [25.0]},
+                ])
+                self.feed(*((record["event"], *record["args"]) for record in records), end=False)
+                self.assertIn("Python packages", self.window.summary_edit.toPlainText())
+                self.assertEqual(self.window.prog_bar.value(), 25)
+                self.assertEqual(self.window.status_lbl.toolTip(), "Python packages…")
 
     def test_setup_cannot_be_closed_until_it_finishes(self):
         self.feed(("log", "Python packages", "section"), end=False)

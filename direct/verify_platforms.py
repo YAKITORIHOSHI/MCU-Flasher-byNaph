@@ -223,18 +223,33 @@ class PlatformChecks(unittest.TestCase):
         with patch.object(setup, "sys", SimpleNamespace(platform="win32", version_info=(3, 11), stderr=sys.stderr)), \
                 patch.object(setup.venv, "EnvBuilder", side_effect=AssertionError("No install")):
             self.assertEqual(setup.main([]), 1)
-        with patch.object(setup, "sys", SimpleNamespace(platform="linux", version_info=(3, 11), stderr=sys.stderr)), \
+        with patch.object(setup, "sys", SimpleNamespace(platform="linux", version_info=(3, 11), stderr=sys.stderr, stdout=sys.stdout)), \
                 patch.object(setup.os, "geteuid", return_value=0, create=True), \
                 patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \
                 patch.object(setup.venv, "EnvBuilder", side_effect=AssertionError("No root install")):
             self.assertEqual(setup.main([]), 1)
+
+    def test_setup_stage_heading_falls_back_for_legacy_console_encoding(self):
+        from direct.ubuntu import setup
+        class LegacyConsole(io.StringIO):
+            def write(self, text):
+                text.encode("cp1252")
+                return super().write(text)
+        output = LegacyConsole()
+        with patch.object(sys, "stdout", output):
+            setup.announce("System prerequisites")
+        self.assertIn("-- [1/", output.getvalue())
+        self.assertIn("System prerequisites --", output.getvalue())
+        with patch("builtins.print", side_effect=OSError("fixture closed output")):
+            with self.assertRaises(OSError):
+                setup.announce("System prerequisites")
 
     def test_ubuntu_setup_repairs_only_native_venv_and_preserves_launch_arguments(self):
         spec = importlib.util.spec_from_file_location("fixture_ubuntu_setup", ROOT / "direct/ubuntu/setup.py")
         setup = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(setup)
         setup.ROOT, setup.ENV_DIR = self.root, self.root / ".venv-linux"
-        with patch.object(setup, "sys", SimpleNamespace(platform="linux", version_info=(3, 11), stderr=sys.stderr)), \
+        with patch.object(setup, "sys", SimpleNamespace(platform="linux", version_info=(3, 11), stderr=sys.stderr, stdout=sys.stdout)), \
                 patch.object(setup.os, "geteuid", return_value=1000, create=True), \
                 patch("src.modules.runtime_resources.enforce_minimum_cpu_requirement", return_value=True), \
                 patch("direct.ubuntu.preflight.host_preflight"), \

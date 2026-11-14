@@ -26,8 +26,8 @@ ENVIRONMENT_KEY = "MCU_FLASHER_BOOTSTRAP_WINDOW"
 # not a person closing it, so an update carries on.
 STARTUP_FAILURE_SECONDS = 3.0
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
-# setup.py announces each stage as "── [3/8] Python dependencies ──".
-_STAGE = re.compile(r"^── \[(\d+)/(\d+)\] (.+?) ──$")
+# setup.py uses ASCII rules when its output encoding cannot print box drawing.
+_STAGE = re.compile(r"^(?:──|--) \[(\d+)/(\d+)\] (.+?) (?:──|--)$")
 
 
 def _has_display() -> bool:
