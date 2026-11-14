@@ -128,6 +128,13 @@ fn caption(ui: &mut egui::Ui, text: &str) {
     );
 }
 
+fn scroll_style() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle {
+        foreground_color: true,
+        ..egui::style::ScrollStyle::solid()
+    }
+}
+
 #[derive(Default)]
 struct LogoGesture {
     count: usize,
@@ -603,6 +610,10 @@ pub struct LiteApp {
     next_id: u64,
     awaiting: HashSet<u64>,
     resource_busy: bool,
+    stop_enabled: bool,
+    stop_reason: String,
+    compact_controls: bool,
+    last_monitor: Option<(Vec2, f32)>,
     phase: String,
     error: String,
     source: String,
@@ -664,6 +675,18 @@ pub struct LiteApp {
     board_geometry: Option<egui::Rect>,
     #[cfg(test)]
     board_rows: Vec<(String, egui::Rect)>,
+    #[cfg(test)]
+    stop_geometry: Option<(egui::Rect, bool)>,
+    #[cfg(test)]
+    controls_viewport: Option<egui::Rect>,
+    #[cfg(test)]
+    control_cards: Vec<egui::Rect>,
+    #[cfg(test)]
+    project_geometry: Option<egui::Rect>,
+    #[cfg(test)]
+    resource_geometry: Option<egui::Rect>,
+    #[cfg(test)]
+    monitor_frame: Option<egui::Rect>,
 }
 
 impl LiteApp {
@@ -689,6 +712,10 @@ impl LiteApp {
             next_id: 0,
             awaiting: HashSet::new(),
             resource_busy: false,
+            stop_enabled: false,
+            stop_reason: "No cancellable operation is running".into(),
+            compact_controls: false,
+            last_monitor: None,
             phase: "Starting Python tools".into(),
             error: String::new(),
             source: String::new(),
@@ -754,6 +781,18 @@ impl LiteApp {
             board_geometry: None,
             #[cfg(test)]
             board_rows: Vec::new(),
+            #[cfg(test)]
+            stop_geometry: None,
+            #[cfg(test)]
+            controls_viewport: None,
+            #[cfg(test)]
+            control_cards: Vec::new(),
+            #[cfg(test)]
+            project_geometry: None,
+            #[cfg(test)]
+            resource_geometry: None,
+            #[cfg(test)]
+            monitor_frame: None,
         };
         app.build_log.push("MCU Flasher / Lite\nOpen a sketch folder, select its exact board, then Compile or Upload.", "info", true);
         if offline_preview {
@@ -770,8 +809,13 @@ impl LiteApp {
                 apply_theme(ctx, true);
             }
             app.ready = true;
+            app.compact_controls = std::env::args().any(|arg| arg == "--preview-controls");
             app.serial_tab = std::env::args().any(|arg| arg == "--preview-serial");
             app.resources_open = std::env::args().any(|arg| arg == "--preview-resources");
+            if std::env::args().any(|arg| arg == "--preview-resource-boards") {
+                app.resources_open = true;
+                app.resource_tab = true;
+            }
             app.project_dialog = std::env::args().any(|arg| arg == "--preview-projects");
             app.board_dialog = std::env::args().any(|arg| arg == "--preview-boards");
             if app.board_dialog {
@@ -794,6 +838,9 @@ impl LiteApp {
                 ];
             }
             app.phase = "Preview / no devices or tools".into();
+            if std::env::args().any(|arg| arg == "--preview-error") {
+                app.error = "Preview diagnostic: a long file path or tool failure remains in the Build monitor and is available in this notice's tooltip.".into();
+            }
             app.build_log.push("This visual preview never starts Python, enumerates ports, writes settings or accesses hardware.", "warning", true);
         }
         app
@@ -923,6 +970,11 @@ impl LiteApp {
             }
             "state" => {
                 self.busy = data["busy"].as_bool().unwrap_or(false);
+                self.stop_enabled = data["stop"]["enabled"].as_bool().unwrap_or(false);
+                self.stop_reason = data["stop"]["reason"]
+                    .as_str()
+                    .unwrap_or("Wait for operation status")
+                    .to_owned();
                 self.board = text("board");
                 self.port = text("port");
                 self.connected = data["monitor"].as_bool().unwrap_or(false);
@@ -978,6 +1030,23 @@ impl LiteApp {
             "operation:phase" => {
                 self.busy = data["is_busy"].as_bool().unwrap_or(false);
                 self.phase = text("phase");
+                if !self.busy
+                    || matches!(
+                        self.phase.as_str(),
+                        "flashing" | "writing" | "erasing" | "resetting" | "cleaning"
+                    )
+                {
+                    // A log burst can split phase and policy across UI batches.
+                    // Close the old cancellation affordance immediately; only
+                    // the worker's authority may enable it again.
+                    self.stop_enabled = false;
+                    self.stop_reason = if self.busy {
+                        "Wait for the protected operation to finish"
+                    } else {
+                        "No cancellable operation is running"
+                    }
+                    .into();
+                }
             }
             "console:progress" => {
                 let action = text("action");
@@ -987,6 +1056,10 @@ impl LiteApp {
             }
             "resource:busy" => {
                 self.resource_busy = data.as_bool().unwrap_or(false);
+            }
+            "stop:state" => {
+                self.stop_enabled = data["enabled"].as_bool().unwrap_or(false);
+                self.stop_reason = text("reason");
             }
             "libraries" => {
                 if text("query") == self.library_query {
@@ -999,8 +1072,9 @@ impl LiteApp {
             }
             "developer:status" => self.developer_open = data.as_bool().unwrap_or(false),
             "developer:ready" => {
-                if let Some(pid) = data["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()) {
-                    crate::desktop::allow_portal_activation(pid);
+                if let Some(pid) = data["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok())
+                    && crate::desktop::allow_portal_activation(pid)
+                {
                     self.send(json!({"cmd": "developer_activate"}));
                 }
             }
@@ -1013,6 +1087,8 @@ impl LiteApp {
                     self.developer_open = false;
                     self.busy = false;
                     self.resource_busy = false;
+                    self.stop_enabled = false;
+                    self.stop_reason = "Python tools are unavailable".into();
                     self.phase = "Tools unavailable".into();
                 }
                 self.build_log.push(&self.error, "error", true);
@@ -1027,13 +1103,18 @@ impl LiteApp {
     fn project_picker(&mut self, ctx: &egui::Context) {
         let palette = Palette::from_context(ctx);
         let mut open = self.project_dialog;
-        egui::Window::new("Open sketch").open(&mut open).collapsible(false).resizable(true)
+        let window = egui::Window::new("Open sketch").open(&mut open).collapsible(false).resizable(true)
+            .constrain_to(ctx.content_rect().shrink(8.0))
+            .min_width(220.0).min_height(0.0)
+            .max_width((ctx.content_rect().width() - 64.0).max(220.0))
+            .max_height((ctx.content_rect().height() - 96.0).max(80.0)).vscroll(true)
             .default_width(520.0).frame(card(ctx, PAPER)).show(ctx, |ui| {
                 ui.label("Select a folder with .ino, .cpp or .c files at its root.");
                 ui.add_space(12.0);
                 ui.add(egui::TextEdit::singleline(&mut self.project_input).hint_text("Full sketch folder path").margin(egui::vec2(6.0, 6.0)).desired_width(f32::INFINITY));
                 ui.add_space(12.0);
-                ui.horizontal(|ui| {
+                let actions_layout = if ui.available_width() < 287.0 { egui::Layout::top_down(Align::Min) } else { egui::Layout::left_to_right(Align::Center) };
+                ui.with_layout(actions_layout, |ui| {
                     ui.add_enabled_ui(!self.picker_busy, |ui| {
                         if button(ui, "Browse", "folder", Tone::Secondary, egui::vec2(124.0, 40.0)).clicked() {
                             self.picker_busy = true;
@@ -1064,6 +1145,12 @@ impl LiteApp {
                 if let Some(path) = selected { self.open_recent_project(path); }
                 ui.add_space(8.0); ui.label(RichText::new("Edit files in your usual editor. Lite reads saved files before every build.").small().color(palette.muted));
             });
+        #[cfg(test)]
+        {
+            self.project_geometry = window.map(|window| window.response.rect);
+        }
+        #[cfg(not(test))]
+        let _ = window;
         self.project_dialog = open;
     }
 
@@ -1104,13 +1191,17 @@ impl LiteApp {
             self.board_candidate = names[next].clone();
             moved = true;
         }
-        let height = (ctx.content_rect().height() - 238.0).clamp(100.0, 350.0);
+        let height = (ctx.content_rect().height() - 238.0).clamp(BOARD_ROW_HEIGHT, 350.0);
         let window = egui::Window::new("Choose your board")
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .max_width((ctx.content_rect().width() - 64.0).max(300.0))
-            .max_height((ctx.content_rect().height() - 48.0).max(260.0))
+            .constrain_to(ctx.content_rect().shrink(8.0))
+            .min_width(220.0)
+            .min_height(0.0)
+            .max_width((ctx.content_rect().width() - 64.0).max(220.0))
+            .max_height((ctx.content_rect().height() - 96.0).max(80.0))
+            .vscroll(true)
             .default_width(560.0)
             .frame(card(ctx, PAPER))
             .show(ctx, |ui| {
@@ -1218,7 +1309,12 @@ impl LiteApp {
                     .truncate(),
                 )
                 .on_hover_text(&self.board_candidate);
-                ui.horizontal(|ui| {
+                let actions_layout = if ui.available_width() < 270.0 {
+                    egui::Layout::top_down(Align::Min)
+                } else {
+                    egui::Layout::left_to_right(Align::Center)
+                };
+                ui.with_layout(actions_layout, |ui| {
                     ui.add_enabled_ui(!self.board_candidate.is_empty() && self.idle(), |ui| {
                         if button(
                             ui,
@@ -1259,9 +1355,11 @@ impl LiteApp {
     fn resources(&mut self, ctx: &egui::Context) {
         let palette = Palette::from_context(ctx);
         let mut open = self.resources_open;
-        egui::Window::new("Resources").open(&mut open).collapsible(false).resizable(true)
-            .max_width((ctx.content_rect().width() - 40.0).max(300.0))
-            .max_height((ctx.content_rect().height() - 40.0).max(260.0))
+        let window = egui::Window::new("Resources").open(&mut open).collapsible(false).resizable(true)
+            .constrain_to(ctx.content_rect().shrink(8.0))
+            .min_width(220.0).min_height(0.0)
+            .max_width((ctx.content_rect().width() - 64.0).max(220.0))
+            .max_height((ctx.content_rect().height() - 96.0).max(80.0)).vscroll(true)
             .default_width(640.0).default_height(420.0).frame(card(ctx, PAPER)).show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     for (boards, label) in [(false, "Libraries"), (true, "Boards")] {
@@ -1276,15 +1374,21 @@ impl LiteApp {
                         ui.label("Download this board's platform, framework, compiler and upload tools into Lite's private store.");
                         ui.label(RichText::new("Uses PlatformIO board packages. An internet connection is required.").small().color(palette.muted));
                         ui.add_space(16.0);
-                        ui.horizontal_wrapped(|ui| {
+                        let actions_layout = if ui.available_width() < 392.0 { egui::Layout::top_down(Align::Min) } else { egui::Layout::left_to_right(Align::Center) };
+                        ui.with_layout(actions_layout, |ui| {
                             if button(ui, "Choose board", "board", Tone::Secondary, egui::vec2(162.0, 40.0)).clicked() { self.open_board_picker(); }
                             ui.add_enabled_ui(!self.board.is_empty(), |ui| {
-                                if button(ui, "Prepare selected board", "resources", Tone::Primary, egui::vec2(222.0, 40.0)).clicked() { self.action("board_install"); }
+                                let width = ui.available_width().min(222.0);
+                                let label = if width < 222.0 { "Prepare board" } else { "Prepare selected board" };
+                                if button(ui, label, "resources", Tone::Primary, egui::vec2(width, 40.0)).on_hover_text("Prepare selected board").clicked() { self.action("board_install"); }
                             });
                         });
                     } else {
-                        ui.horizontal(|ui| {
-                            let enter = ui.add(egui::TextEdit::singleline(&mut self.library_query).hint_text("Search PlatformIO libraries").margin(egui::vec2(6.0, 6.0)).desired_width((ui.available_width() - 112.0).max(100.0)));
+                        let stacked = ui.available_width() < 264.0;
+                        let search_layout = if stacked { egui::Layout::top_down(Align::Min) } else { egui::Layout::left_to_right(Align::Center) };
+                        ui.with_layout(search_layout, |ui| {
+                            let width = ui.available_width() - if stacked { 0.0 } else { 112.0 };
+                            let enter = ui.add(egui::TextEdit::singleline(&mut self.library_query).hint_text("Search PlatformIO libraries").margin(egui::vec2(6.0, 6.0)).desired_width(width.max(1.0)));
                             if button(ui, "Search", "", Tone::Primary, egui::vec2(104.0, 36.0)).clicked() || (enter.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                                 self.pending = true; self.send(json!({"cmd": "library_search", "query": self.library_query}));
                             }
@@ -1308,16 +1412,32 @@ impl LiteApp {
                         if let Some(spec) = install { self.pending = true; self.send(json!({"cmd": "library_install", "spec": spec})); }
                     }
                 });
-                if self.resource_busy { ui.add_space(14.0); ui.label("Working. Download and install output appears in the Build monitor."); if button(ui, "Cancel resource operation", "stop", Tone::Danger, egui::vec2(250.0, 36.0)).clicked() { self.send(json!({"cmd": "stop"})); } }
+                if self.resource_busy {
+                    ui.add_space(14.0);
+                    ui.label("Working. Download and install output appears in the Build monitor.");
+                    ui.add_enabled_ui(self.stop_enabled, |ui| {
+                        let width = ui.available_width().min(250.0);
+                        let label = if width < 250.0 { "Stop operation" } else { "Cancel resource operation" };
+                        if button(ui, label, "stop", Tone::Danger, egui::vec2(width, 36.0)).on_disabled_hover_text(&self.stop_reason).clicked() { self.send(json!({"cmd": "stop"})); }
+                    });
+                }
                 ui.add_space(10.0); ui.label(RichText::new("Downloads belong to Lite. Clean keeps installed libraries and board tools.").small().color(palette.muted));
             });
+        #[cfg(test)]
+        {
+            self.resource_geometry = window.map(|window| window.response.rect);
+        }
+        #[cfg(not(test))]
+        let _ = window;
         self.resources_open = open;
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
         let palette = Palette::from_context(ui.ctx());
+        #[cfg(test)]
+        self.control_cards.clear();
         ui.add_enabled_ui(self.idle(), |ui| {
-            card(ui.ctx(), WHITE).show(ui, |ui| {
+            let sketch_card = card(ui.ctx(), WHITE).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 heading(ui, "Sketch");
                 ui.add_space(4.0);
@@ -1325,7 +1445,7 @@ impl LiteApp {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "No sketch open".into());
-                ui.label(RichText::new(name).font(bold(17.0)))
+                ui.add(egui::Label::new(RichText::new(name).font(bold(17.0))).truncate())
                     .on_hover_text(&self.source);
                 ui.label(
                     RichText::new(format!("{} source files", self.files.len()))
@@ -1380,13 +1500,18 @@ impl LiteApp {
                         .show(ui, |ui| {
                             for file in &self.files {
                                 if ui
-                                    .link(
-                                        RichText::new(file)
-                                            .monospace()
-                                            .size(12.0)
-                                            .underline()
-                                            .color(palette.ink),
+                                    .add(
+                                        egui::Label::new(
+                                            RichText::new(file)
+                                                .monospace()
+                                                .size(12.0)
+                                                .underline()
+                                                .color(palette.ink),
+                                        )
+                                        .truncate()
+                                        .sense(Sense::click()),
                                     )
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
                                     .on_hover_text(format!(
                                         "Open original sketch folder:\n{}",
                                         self.source
@@ -1402,8 +1527,12 @@ impl LiteApp {
                     }
                 }
             });
+            #[cfg(test)]
+            self.control_cards.push(sketch_card.response.rect);
+            #[cfg(not(test))]
+            let _ = sketch_card;
             ui.add_space(10.0);
-            card(ui.ctx(), WHITE).show(ui, |ui| {
+            let connection_card = card(ui.ctx(), WHITE).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 heading(ui, "Connection");
                 ui.add_space(6.0);
@@ -1548,7 +1677,212 @@ impl LiteApp {
                 });
                 self.serial_input(ui);
             });
+            #[cfg(test)]
+            self.control_cards.push(connection_card.response.rect);
+            #[cfg(not(test))]
+            let _ = connection_card;
         });
+    }
+
+    fn controls_panel(&mut self, ui: &mut egui::Ui) {
+        // A solid, reserved gutter keeps the scrollbar outside both cards and
+        // prevents widths from changing when source rows or fields appear.
+        ui.spacing_mut().scroll = scroll_style();
+        let output = egui::ScrollArea::vertical()
+            .id_salt("controls")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width((ui.available_width() - 8.0).max(1.0));
+                self.controls(ui);
+                ui.add_space(6.0);
+            });
+        #[cfg(test)]
+        {
+            self.controls_viewport = Some(output.inner_rect);
+        }
+        #[cfg(not(test))]
+        let _ = output;
+    }
+
+    fn stop_button(&mut self, ui: &mut egui::Ui, width: f32) {
+        ui.add_enabled_ui(self.ready && self.stop_enabled, |ui| {
+            let response = button(ui, "Stop", "stop", Tone::Danger, egui::vec2(width, 40.0))
+                .on_hover_text(&self.stop_reason)
+                .on_disabled_hover_text(&self.stop_reason);
+            #[cfg(test)]
+            {
+                self.stop_geometry = Some((response.rect, ui.is_enabled()));
+            }
+            if response.clicked() {
+                self.send(json!({"cmd": "stop"}));
+                self.stop_enabled = false;
+                self.stop_reason = "Requesting cancellation".into();
+            }
+        });
+    }
+
+    fn primary_actions(&mut self, ui: &mut egui::Ui) {
+        let widths = if ui.available_width() < 650.0 {
+            [112.0, 108.0, 90.0, 132.0, 96.0]
+        } else {
+            [136.0, 136.0, 104.0, 146.0, 104.0]
+        };
+        let available = ui.available_width();
+        let mut start = 0;
+        // Pack whole enabled scopes before drawing them. egui's wrapped
+        // horizontal layout cannot retroactively move custom-painted children
+        // when a scope turns out wider than the remaining row.
+        while start < widths.len() {
+            let mut end = start + 1;
+            let mut used = widths[start];
+            while end < widths.len()
+                && used + ui.spacing().item_spacing.x + widths[end] <= available
+            {
+                used += ui.spacing().item_spacing.x + widths[end];
+                end += 1;
+            }
+            ui.horizontal(|ui| {
+                for (index, width) in widths.iter().enumerate().take(end).skip(start) {
+                    if index == 4 {
+                        self.stop_button(ui, *width);
+                        continue;
+                    }
+                    let (label, icon, tone, problem) = match index {
+                        0 => (
+                            "Compile",
+                            "compile",
+                            Tone::Primary,
+                            self.action_problem(false),
+                        ),
+                        1 => ("Upload", "upload", Tone::Primary, self.action_problem(true)),
+                        2 => (
+                            "Clean",
+                            "clean",
+                            Tone::Secondary,
+                            if !self.idle() {
+                                Some("Wait for the current operation")
+                            } else if self.source.is_empty() {
+                                Some("Open a sketch folder first")
+                            } else {
+                                None
+                            },
+                        ),
+                        _ => (
+                            "Resources",
+                            "resources",
+                            Tone::Secondary,
+                            if self.idle() {
+                                None
+                            } else {
+                                Some("Wait for the current operation")
+                            },
+                        ),
+                    };
+                    ui.add_enabled_ui(problem.is_none(), |ui| {
+                        if button(ui, label, icon, tone, egui::vec2(*width, 40.0))
+                            .on_disabled_hover_text(problem.unwrap_or(""))
+                            .clicked()
+                        {
+                            match index {
+                                0 => self.action("compile"),
+                                1 => self.action("upload"),
+                                2 => self.action("clean"),
+                                _ => self.resources_open = true,
+                            }
+                        }
+                    });
+                }
+            });
+            start = end;
+        }
+    }
+
+    fn monitor_panel(&mut self, ui: &mut egui::Ui) {
+        let height = ui.available_height();
+        if height >= 170.0 {
+            self.monitor(ui);
+        } else {
+            // Keep complete reading/control heights on very short desktops;
+            // the layout itself scrolls instead of pushing controls offscreen.
+            ui.spacing_mut().scroll = scroll_style();
+            egui::ScrollArea::vertical()
+                .id_salt("short-monitor-layout")
+                .stick_to_bottom(true)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), 170.0),
+                        egui::Layout::top_down(Align::Min),
+                        |ui| self.monitor(ui),
+                    );
+                });
+        }
+    }
+
+    fn workspace(&mut self, ui: &mut egui::Ui) {
+        if ui.available_width() < 650.0 {
+            ui.horizontal(|ui| {
+                if tab(ui, !self.compact_controls, "Monitor").clicked() {
+                    self.compact_controls = false;
+                }
+                if tab(ui, self.compact_controls, "Sketch & Connection").clicked() {
+                    self.compact_controls = true;
+                }
+            });
+            ui.add_space(4.0);
+            if self.compact_controls {
+                self.controls_panel(ui);
+            } else {
+                self.monitor_panel(ui);
+            }
+        } else {
+            let available = ui.available_size();
+            let left_width = if available.x < 850.0 { 248.0 } else { 276.0 };
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(left_width, available.y),
+                    egui::Layout::top_down(Align::Min),
+                    |ui| self.controls_panel(ui),
+                );
+                ui.add_space(4.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), available.y),
+                    egui::Layout::top_down(Align::Min),
+                    |ui| self.monitor_panel(ui),
+                );
+            });
+        }
+    }
+
+    fn fit_viewport(&mut self, ctx: &egui::Context) {
+        if self.offline_preview {
+            return;
+        }
+        let screen = ctx.input(|input| {
+            input.viewport().monitor_size.map(|size| {
+                (
+                    size,
+                    input.viewport().native_pixels_per_point.unwrap_or(1.0),
+                )
+            })
+        });
+        if screen != self.last_monitor {
+            self.last_monitor = screen;
+            if let Some((monitor, _)) = screen {
+                // egui already supplies logical points. Leave native borders,
+                // title and desktop panels room without applying DPI twice.
+                let maximum = (monitor - egui::vec2(32.0, 96.0)).max(egui::vec2(320.0, 200.0));
+                let current = ctx.content_rect().size();
+                let fitted = current.min(maximum);
+                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                    egui::vec2(360.0, 240.0).min(maximum),
+                ));
+                if fitted != current {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(fitted));
+                }
+            }
+        }
     }
 
     fn serial_input(&mut self, ui: &mut egui::Ui) {
@@ -1633,13 +1967,23 @@ impl LiteApp {
             self.monitor_text_origins.clear();
         }
         let narrow = ui.available_width() < 570.0;
+        let short = ui.available_height() < 240.0;
         ui.horizontal(|ui| {
-            for (serial, label) in [(false, "Build monitor"), (true, "Serial monitor")] {
+            let labels = if short {
+                [(false, "Build"), (true, "Serial")]
+            } else {
+                [(false, "Build monitor"), (true, "Serial monitor")]
+            };
+            for (serial, label) in labels {
                 if tab(ui, self.serial_tab == serial, label).clicked() {
                     self.serial_tab = serial;
                 }
             }
-            if !narrow {
+            if short {
+                menu_button(ui, "Options", egui::vec2(88.0, 32.0), |ui| {
+                    ui.horizontal(|ui| self.monitor_tools(ui));
+                });
+            } else if !narrow {
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                     self.monitor_tools(ui)
                 });
@@ -1658,7 +2002,7 @@ impl LiteApp {
             status_box(ui, "STATUS", &self.phase, status_width);
             status_box(ui, "USB PORT", &port, status_width);
         });
-        if narrow {
+        if narrow && !short {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                     self.monitor_tools(ui)
@@ -1666,8 +2010,11 @@ impl LiteApp {
             });
         }
         ui.add_space(4.0);
-        let height = (ui.available_height() - 24.0).max(60.0);
-        egui::Frame::new()
+        // min_scrolled_height describes the reading area, excluding the
+        // reserved horizontal scrollbar as well as the frame's padding/rim.
+        let height =
+            (ui.available_height() - 24.0 - ui.spacing().scroll.allocated_width()).max(32.0);
+        let monitor_frame = egui::Frame::new()
             .fill(palette.terminal)
             .stroke(Stroke::new(2.0_f32, palette.border))
             .inner_margin(10)
@@ -1760,17 +2107,27 @@ impl LiteApp {
                     });
                 #[cfg(test)]
                 {
-                    self.monitor_geometry = Some((output.inner_rect, output.content_size));
+                    self.monitor_geometry = Some((
+                        output.inner_rect.intersect(ui.clip_rect()),
+                        output.content_size,
+                    ));
                     self.monitor_offset = output.state.offset;
                 }
                 #[cfg(not(test))]
                 let _ = output;
             });
+        #[cfg(test)]
+        {
+            self.monitor_frame = Some(monitor_frame.response.rect);
+        }
+        #[cfg(not(test))]
+        let _ = monitor_frame;
     }
 }
 
-impl eframe::App for LiteApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+impl LiteApp {
+    fn update_ui(&mut self, ctx: &egui::Context) {
+        self.fit_viewport(ctx);
         self.frames += 1;
         if self.offline_preview && self.frames == 8 && self.capture.is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
@@ -1870,13 +2227,18 @@ impl eframe::App for LiteApp {
                     .inner_margin(egui::Margin::symmetric(12, 8)),
             )
             .show(ctx, |ui| {
+                let compact = ui.available_width() < 520.0;
                 ui.horizontal(|ui| {
                     logo_button(ui, &mut self.logo_gesture, Instant::now());
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new("MCU Flasher / Lite")
-                                .size(22.0)
-                                .family(FontFamily::Name("bold".into())),
+                            RichText::new(if compact {
+                                "MCU / Lite"
+                            } else {
+                                "MCU Flasher / Lite"
+                            })
+                            .size(if compact { 20.0 } else { 22.0 })
+                            .family(FontFamily::Name("bold".into())),
                         );
                         ui.label(
                             RichText::new(if self.offline_preview {
@@ -1891,14 +2253,18 @@ impl eframe::App for LiteApp {
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         if button(
                             ui,
-                            if palette.dark {
+                            if compact && palette.dark {
+                                "Dark"
+                            } else if compact {
+                                "Light"
+                            } else if palette.dark {
                                 "Dark mode"
                             } else {
                                 "Light mode"
                             },
                             if palette.dark { "moon" } else { "sun" },
                             Tone::Secondary,
-                            egui::vec2(144.0, 38.0),
+                            egui::vec2(if compact { 108.0 } else { 144.0 }, 38.0),
                         )
                         .on_hover_text(if palette.dark {
                             "Switch to Light mode"
@@ -1913,36 +2279,47 @@ impl eframe::App for LiteApp {
                     });
                 });
             });
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(palette.paper).inner_margin(egui::Margin::symmetric(12, 6))).show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let idle = self.idle();
-                let compile_problem = self.action_problem(false);
-                let upload_problem = self.action_problem(true);
-                ui.add_enabled_ui(compile_problem.is_none(), |ui| {
-                    if button(ui, "Compile", "compile", Tone::Primary, egui::vec2(136.0, 40.0)).on_disabled_hover_text(compile_problem.unwrap_or("")).clicked() { self.action("compile"); }
-                });
-                ui.add_enabled_ui(upload_problem.is_none(), |ui| {
-                    if button(ui, "Upload", "upload", Tone::Primary, egui::vec2(136.0, 40.0)).on_disabled_hover_text(upload_problem.unwrap_or("")).clicked() { self.action("upload"); }
-                });
-                ui.add_enabled_ui(idle && !self.source.is_empty(), |ui| { if button(ui, "Clean", "clean", Tone::Secondary, egui::vec2(104.0, 40.0)).clicked() { self.action("clean"); } });
-                ui.add_enabled_ui(idle, |ui| { if button(ui, "Resources", "resources", Tone::Secondary, egui::vec2(146.0, 40.0)).clicked() { self.resources_open = true; } });
-                if (self.busy || self.resource_busy) && button(ui, "Stop", "stop", Tone::Danger, egui::vec2(104.0, 40.0)).on_hover_text("Stops compilation or downloads; active firmware writes are protected").clicked() { self.send(json!({"cmd": "stop"})); }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(palette.paper)
+                    .inner_margin(egui::Margin::symmetric(12, 6)),
+            )
+            .show(ctx, |ui| {
+                self.primary_actions(ui);
+                ui.add_space(8.0);
+                if !self.error.is_empty() {
+                    egui::Frame::new()
+                        .fill(CORAL)
+                        .stroke(Stroke::new(2.0_f32, INK))
+                        .shadow(hard_shadow(palette, 3))
+                        .inner_margin(6)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let width = (ui.available_width() - 100.0).max(1.0);
+                                ui.add_sized(
+                                    egui::vec2(width, 32.0),
+                                    egui::Label::new(RichText::new(&self.error).color(INK))
+                                        .truncate(),
+                                )
+                                .on_hover_text(&self.error);
+                                if button(
+                                    ui,
+                                    "Dismiss",
+                                    "",
+                                    Tone::Secondary,
+                                    egui::vec2(92.0, 32.0),
+                                )
+                                .clicked()
+                                {
+                                    self.error.clear();
+                                }
+                            });
+                        });
+                    ui.add_space(6.0);
+                }
+                self.workspace(ui);
             });
-            ui.add_space(8.0);
-            if !self.error.is_empty() {
-                egui::Frame::new().fill(CORAL).stroke(Stroke::new(2.0_f32, INK)).shadow(hard_shadow(palette, 3)).inner_margin(10).show(ui, |ui| { ui.set_width(ui.available_width()); ui.horizontal_wrapped(|ui| { ui.label(RichText::new(&self.error).color(INK)); if button(ui, "Dismiss", "", Tone::Secondary, egui::vec2(92.0, 32.0)).clicked() { self.error.clear(); } }); });
-                ui.add_space(12.0);
-            }
-            let available = ui.available_rect_before_wrap();
-            let left_width = if available.width() < 850.0 { 248.0 } else { 276.0 };
-            ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(egui::vec2(left_width, available.height()), egui::Layout::top_down(Align::Min), |ui| {
-                    egui::ScrollArea::vertical().id_salt("controls").auto_shrink([false, false]).show(ui, |ui| { self.controls(ui); });
-                });
-                ui.add_space(4.0);
-                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), available.height()), egui::Layout::top_down(Align::Min), |ui| { self.monitor(ui); });
-            });
-        });
         if self.project_dialog {
             self.project_picker(ctx);
         }
@@ -1952,6 +2329,12 @@ impl eframe::App for LiteApp {
         if self.board_dialog {
             self.board_picker(ctx);
         }
+    }
+}
+
+impl eframe::App for LiteApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_ui(ctx);
     }
 }
 
@@ -2038,6 +2421,7 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     style
         .text_styles
         .insert(egui::TextStyle::Monospace, FontId::monospace(13.0));
+    style.spacing.scroll = scroll_style();
     style
         .text_styles
         .insert(egui::TextStyle::Heading, bold(17.0));
@@ -2051,6 +2435,240 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
 #[cfg(test)]
 mod verification {
     use super::*;
+
+    #[test]
+    fn monitor_changes_fit_logical_size_once_without_pinning_normal_resizes() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.offline_preview = false; // No bridge was constructed for this fixture.
+        for (monitor, scale, expected) in [
+            (egui::vec2(1280.0, 720.0), 1.5, egui::vec2(1140.0, 624.0)),
+            (egui::vec2(640.0, 360.0), 2.0, egui::vec2(608.0, 264.0)),
+        ] {
+            let input = || {
+                let mut raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1140.0, 800.0),
+                    )),
+                    ..Default::default()
+                };
+                let viewport = raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+                viewport.monitor_size = Some(monitor);
+                viewport.native_pixels_per_point = Some(scale);
+                raw
+            };
+            let output = ctx.run(input(), |ctx| app.fit_viewport(ctx));
+            let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+            assert!(
+                commands.contains(&egui::ViewportCommand::InnerSize(expected)),
+                "Fit applies logical monitor dimensions only once: {commands:?}"
+            );
+            let output = ctx.run(input(), |ctx| app.fit_viewport(ctx));
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .iter()
+                    .any(|command| matches!(command, egui::ViewportCommand::InnerSize(_))),
+                "Ordinary frames must not pin user resizing"
+            );
+        }
+    }
+
+    #[test]
+    fn protected_phase_disables_stale_stop_before_the_next_policy_batch() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.event(Event {
+            event: "stop:state".into(),
+            data: json!({"enabled": true, "reason": "Compilation"}),
+        });
+        assert!(app.stop_enabled);
+        app.event(Event {
+            event: "operation:phase".into(),
+            data: json!({"is_busy": true, "phase": "flashing"}),
+        });
+        assert!(!app.stop_enabled);
+        app.event(Event {
+            event: "operation:phase".into(),
+            data: json!({"is_busy": true, "phase": "compiling"}),
+        });
+        assert!(
+            !app.stop_enabled,
+            "A display phase alone cannot grant cancellation"
+        );
+        app.event(Event {
+            event: "stop:state".into(),
+            data: json!({"enabled": true, "reason": "Compilation"}),
+        });
+        assert!(app.stop_enabled);
+        app.event(Event {
+            event: "fatal".into(),
+            data: json!({"message": "Fixture worker ended"}),
+        });
+        assert!(!app.stop_enabled);
+    }
+
+    #[test]
+    fn monitor_frame_includes_both_scrollbar_gutters_inside_the_pane() {
+        for size in [egui::vec2(340.0, 240.0), egui::vec2(778.0, 500.0)] {
+            let ctx = egui::Context::default();
+            let mut app = LiteApp::with_context(&ctx, true);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            for _ in 0..4 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| app.monitor(ui));
+                    },
+                );
+            }
+            assert!(
+                screen.shrink(7.5).contains_rect(app.monitor_frame.unwrap()),
+                "Monitor's rim or scrollbar leaves its pane at {size:?}: {:?}",
+                app.monitor_frame
+            );
+        }
+    }
+
+    #[test]
+    fn control_scrollbars_and_shadows_never_cover_cards_or_long_sources() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for size in [
+                egui::vec2(248.0, 240.0),
+                egui::vec2(276.0, 800.0),
+                egui::vec2(520.0, 300.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = LiteApp::with_context(&ctx, true);
+                ctx.set_pixels_per_point(scale);
+                app.source = format!("/fixture/{}", "LongSketchName".repeat(15));
+                app.files = (0..12)
+                    .map(|n| format!("{n}_{}.hpp", "long_source_name".repeat(12)))
+                    .collect();
+                app.frameworks = vec!["arduino".into()];
+                app.framework = "arduino".into();
+                for _ in 0..5 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| app.controls_panel(ui));
+                        },
+                    );
+                }
+                let viewport = app.controls_viewport.unwrap();
+                assert_eq!(app.control_cards.len(), 2);
+                for card in &app.control_cards {
+                    assert!(
+                        card.left() >= viewport.left()
+                            && card.right() + 4.0 <= viewport.right() + 0.5,
+                        "Card/shadow overlaps scrollbar at {size:?}/{scale}: {card:?} in {viewport:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pickers_and_resources_fit_short_portrait_and_scaled_desktops() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for size in [
+                egui::vec2(320.0, 240.0),
+                egui::vec2(360.0, 240.0),
+                egui::vec2(496.0, 252.0),
+                egui::vec2(700.0, 560.0),
+            ] {
+                for kind in 0..4 {
+                    let ctx = egui::Context::default();
+                    let mut app = LiteApp::with_context(&ctx, true);
+                    ctx.set_pixels_per_point(scale);
+                    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    fixture_boards(&mut app);
+                    app.board_dialog = true;
+                    app.project_dialog = true;
+                    app.resources_open = true;
+                    app.resource_tab = kind == 3;
+                    app.board = "A very long board name to verify wrapping and the preparation footer at high display scales".into();
+                    for _ in 0..5 {
+                        let _ = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ctx| match kind {
+                                0 => app.board_picker(ctx),
+                                1 => app.project_picker(ctx),
+                                _ => app.resources(ctx),
+                            },
+                        );
+                    }
+                    let window = match kind {
+                        0 => app.board_geometry,
+                        1 => app.project_geometry,
+                        _ => app.resource_geometry,
+                    }
+                    .unwrap();
+                    assert!(
+                        screen.expand(1.0).contains_rect(window),
+                        "Dialog {kind} exceeds {size:?}/{scale}: {window:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_keeps_stop_visible_and_monitor_reachable_on_scaled_screens() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for physical in [
+                egui::vec2(1024.0, 600.0),
+                egui::vec2(1366.0, 768.0),
+                egui::vec2(1920.0, 1080.0),
+                egui::vec2(1080.0, 1920.0),
+                egui::vec2(3840.0, 2160.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = LiteApp::with_context(&ctx, true);
+                let size = (physical - egui::vec2(32.0, 96.0)) / scale;
+                ctx.set_pixels_per_point(scale);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                for busy in [false, true, false] {
+                    app.busy = busy;
+                    app.stop_enabled = busy;
+                    for _ in 0..3 {
+                        let _ = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ctx| app.update_ui(ctx),
+                        );
+                    }
+                    let (stop, enabled) = app.stop_geometry.expect("Stop stays present while idle");
+                    assert!(
+                        screen.contains_rect(stop),
+                        "Stop leaves {size:?} at {scale}: {stop:?}"
+                    );
+                    assert_eq!(enabled, busy);
+                    let (monitor, _) = app.monitor_geometry.expect("Monitor remains available");
+                    assert!(
+                        screen.expand(1.0).contains_rect(monitor),
+                        "Monitor leaves {size:?} at {scale}: {monitor:?}"
+                    );
+                    assert!(
+                        monitor.width() >= 200.0 && monitor.height() >= 30.0,
+                        "No useful reading area at {size:?}: {monitor:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn startup_does_not_discard_the_developer_gesture() {

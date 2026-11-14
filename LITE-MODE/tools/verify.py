@@ -152,6 +152,44 @@ def main():
             worker.api._catalog_refresh_running = True
             check(worker.busy(), "catalog refresh retains operation ownership until target definitions settle")
             worker.api._catalog_refresh_running = False
+            check(not worker.stop_state()["enabled"], "idle and Developer Access do not advertise a cancellable operation")
+            with patch.object(worker.api, "stop_operation") as stop:
+                worker.api.is_busy = True
+                worker.api.active_operation = "upload"
+                for phase in ("resolving", "compiling", "connecting"):
+                    worker.api._current_op_phase = phase
+                    worker.api._stop_requested = False
+                    check(worker.stop_state()["enabled"], "Stop is enabled during " + phase)
+                    worker.dispatch({"cmd": "stop"})
+                    check(stop.call_count > 0, "Stop reaches the cancellable backend during " + phase)
+                for operation, phase in (("upload", "flashing"), ("upload", "writing"), ("upload", "erasing"), ("upload", "resetting"), ("clean", "cleaning")):
+                    worker.api.active_operation = operation
+                    worker.api._current_op_phase = phase
+                    stop.reset_mock()
+                    check(not worker.stop_state()["enabled"] and bool(worker.stop_state()["reason"]), "protected " + phase + " explains why Stop is disabled")
+                    worker.resource_busy = True
+                    check(not worker.stop_state()["enabled"], "protected " + phase + " takes precedence during preparation handoff")
+                    worker.resource_busy = False
+                    worker.dispatch({"cmd": "stop"})
+                    check(not stop.called, "Stop never interrupts " + phase)
+                worker.api.active_operation = "compile"
+                worker.api._current_op_phase = "compiling"
+                worker.api._stop_requested = True
+                check(not worker.stop_state()["enabled"], "a repeated Stop is disabled while cancellation completes")
+                worker.api._stop_requested = False
+                worker.api._framework_download_active = True
+                check(not worker.stop_state()["enabled"], "native package publication retains the backend Stop guard")
+                worker.api._framework_download_active = False
+                worker.api.is_busy = False
+                worker.api.active_operation = worker.api._current_op_phase = None
+                worker.resource_busy = True
+                check(worker.stop_state()["enabled"], "resource preparation remains cancellable")
+                worker.dispatch({"cmd": "stop"})
+                check(worker.cancel.is_set() and not worker.stop_state()["enabled"], "resource Stop reports cancellation in progress without repeated handoffs")
+                worker.resource_busy = False
+                worker.cancel.clear()
+                worker.api.emit("operation:phase", {"is_busy": False, "phase": "idle"})
+                check(output.events[-1] == ("stop:state", worker.stop_state()), "operation transitions publish Stop authority without waiting for polling")
             try:
                 worker.dispatch({"cmd": "arbitrary_python_method"})
             except ValueError:

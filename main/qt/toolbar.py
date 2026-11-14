@@ -687,18 +687,27 @@ class PrimaryToolbar(QToolBar):
         try:
             from main.qt.owner_ticket_dialog import OwnerTicketDialog
             parent_window = self.window() if self.window() else self
-            if self._owner_dialog is None or not self._owner_dialog.isVisible():
+            if self._owner_dialog is None:
                 self._owner_dialog = OwnerTicketDialog(backend=self._backend, parent=parent_window)
+                self._owner_dialog.destroyed.connect(self._owner_dialog_destroyed)
                 self._owner_dialog.show()
                 self._owner_dialog.raise_()
                 self._owner_dialog.activateWindow()
             else:
+                if self._owner_dialog.isMinimized():
+                    self._owner_dialog.showNormal()
+                elif not self._owner_dialog.isVisible():
+                    self._owner_dialog.show()
                 self._owner_dialog.raise_()
                 self._owner_dialog.activateWindow()
                 if hasattr(self._owner_dialog, "auto_refresh"):
                     self._owner_dialog.auto_refresh()
         except Exception as exc:
             self._show_owner_ticket_error(exc)
+
+    @Slot()
+    def _owner_dialog_destroyed(self) -> None:
+        self._owner_dialog = None
 
     def _show_owner_ticket_error(self, error: Exception) -> None:
         from main.core.runtime_recovery import bootstrap_can_repair

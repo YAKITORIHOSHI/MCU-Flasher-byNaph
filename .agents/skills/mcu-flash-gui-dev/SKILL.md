@@ -1,9 +1,45 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain Lite board rows, exact logo gestures and owned Windows Developer Access alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 14: Lite screen fit, visible portal and cancellation
+
+Lite applies native egui scaling once and fits on monitor/scale changes. Keep
+Stop visible in idle and busy states; worker stop_state supplies enablement and
+reason-specific tooltips, with immediate operation-phase updates and backend
+revalidation. Never enable it for a portal, catalog refresh, cleanup or protected
+firmware write/restart. Pack entire action scopes before custom painting; wrapped
+scopes cannot move already-painted children. Reserve solid scrollbar gutters and
+card-shadow clearance, keep the monitor rim inside both scrollbar budgets, and
+use narrow Monitor/Sketch & Connection views. Short monitor layouts and bounded
+project/board/Resources windows scroll while preserving logs and fonts.
+
+The borrowed Windows backend installs a subprocess hiding hook. Lite's owned
+Developer Access helper must explicitly use STARTF_USESHOWWINDOW/SW_SHOWNOACTIVATE
+beside CREATE_NO_WINDOW; Qt's isVisible alone cannot prove its HWND was shown.
+Wait for actual native visibility before Ready, validate the venv descendant,
+and dispatch activation only after the owned foreground grant succeeds. Reopening
+preserves maximized state. Main Developer Access is an independent modeless
+window with workspace lifetime ownership; create/edit/settings and notices use
+nonblocking window-modal open() only to that portal, so the main workspace stays
+usable. Do not introduce nested exec() callbacks or application-modal notices.
+
+Lite library search uses python/registry.py's fixed endpoint in the cancellable
+tool runner with a 30-second absolute budget and bounded metadata. Stop shares
+the result/success and action-handoff lock. Assign suspended Windows tools to the
+shared owned Job before resume; retain POSIX leader identity until owned group
+retirement, including exited redirectors. Never taskkill an unverified PID.
+Bootstrap's disclosure names the other view: Technical details / Activity summary.
+
+Run Lite Rust checks/strict Clippy, worker/preparation/history/developer checks,
+actual renderer previews, plus main runtime, controls and owner_tickets. Native
+renderer previews use owned Xvfb or isolated Windows Actions only. Distinguish
+native host DPI from the 100–200% simulated widget matrix and native Qt scales;
+Windows Server, Windows 11, mixed monitors and physical USB remain separate gates.
+
 
 ## Lite Windows interactions
 

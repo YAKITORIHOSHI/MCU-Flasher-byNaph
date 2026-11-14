@@ -1,10 +1,29 @@
 ---
 name: frontend-design
-description: "Maintain Lite board rows, exact logo gestures and owned Windows Developer Access alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+## Lite screen fit and independent Developer Access
+
+Keep Lite's Stop present with worker-authoritative enablement and explanations.
+Pack complete custom button scopes before painting; reserve solid, visible
+scrollbar gutters outside Sketch/Connection cards and their shadows. Account for
+both monitor scrollbars in its frame height. Apply native scaling once, fit on
+monitor changes, and use Monitor/Sketch & Connection views at narrow widths.
+Short layouts and bounded project/board/Resources dialogs scroll without changing
+fonts, selections or logs; narrow dialog action rows stack before clipping.
+
+The Windows portal's console stays suppressed while SW_SHOWNOACTIVATE explicitly
+shows its native window. Ready checks native visibility, foreground activation
+requires a successful owned grant, and repeat gestures preserve maximization.
+The main portal is modeless and independent of the workspace's modal ancestry;
+its forms/notices open nonblockingly and block only the portal. Bootstrap's
+button alternates Technical details / Activity summary. Verify real renderer
+captures on owned displays and keep simulated scale evidence distinct.
+
 
 ## Lite Windows interactions
 

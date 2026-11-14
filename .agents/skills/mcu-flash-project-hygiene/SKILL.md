@@ -1,9 +1,21 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, complete Bootstrap source inventories and public release integrity."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+## Lite process and portal lifetime ownership
+
+Lite's fixed registry helper writes only private Lite state. Run it with a
+30-second absolute budget, refuse late result/success publication after Stop,
+and retire only an assigned Windows Job or reserved POSIX process group. Never
+use an exited leader's reused PID to discover/kill unrelated children. Failed
+Windows Job assignment must retire the still-suspended child before any resume.
+Developer Access has independent native/modal ancestry while its lifetime remains
+tied to the accepting workspace; keep one portal on reopen and preserve taskbar
+relaunch identity. Fixtures use injected services and owned temporary state.
+
 
 Bootstrap source ownership is shared through `src/modules/application_sources.py`.
 Use tracked files for Git checkouts and `.mcu-flasher-sources.json` from public ZIPs.

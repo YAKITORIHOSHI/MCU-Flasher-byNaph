@@ -516,6 +516,10 @@ class BootstrapDialog(GlassDialog):
         self.details_btn.blockSignals(True)
         self.details_btn.setChecked(self.details_expanded)
         self.details_btn.blockSignals(False)
+        self.details_btn.setText("Activity summary" if self.details_expanded else "Technical details")
+        self.details_btn.setToolTip(
+            "Show the concise setup activity summary." if self.details_expanded else
+            "Show retained installer output. The detailed run log contains the full output.")
         with self._follow.update(), self._summary_follow.update():
             self.log_stack.setCurrentWidget(self.log_edit if self.details_expanded else self.summary_edit)
             self.log_stack.layout().activate()

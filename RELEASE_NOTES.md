@@ -1,6 +1,6 @@
 # MCU Flasher by Naph — Release Notes
 
-**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 13, 2026
+**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 14, 2026
 
 **Platforms:** Windows 10/11 (AMD64) · Ubuntu 24.04+ (amd64, ARM64) ·
 Linux Mint 22.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
@@ -10,6 +10,25 @@ Installed copies update themselves from GitHub on their next launch; see
 [commit log](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commits/main).
 
 ---
+
+## November 14 — Lite screen fit, visible Developer Access and reliable Stop
+
+- Fix Windows Developer Access reporting Ready with no visible window: preserve
+  native GUI startup and verify the window before acknowledging readiness.
+- Keep the main workspace usable during Developer Access authentication, ticket
+  forms and notices. Reopening retains its maximized state; closing the workspace
+  retires its portal safely.
+- Keep Lite's Stop button visible. Enable it only for cancellable work and explain
+  protected writes, cleanup, idle and stopping states.
+- Fit Lite to scaled, short and portrait desktops. Keep complete action rows,
+  provide Monitor/Sketch & Connection views in narrow windows, reserve scrollbar
+  space outside cards, and keep dialogs and monitor rims within their panes.
+- Cancel library searches through an owned worker with a 30-second elapsed budget;
+  stopped work cannot publish late results or success. Retire only that operation's
+  child processes on Windows and Ubuntu.
+- Bootstrap's disclosure alternates **Technical details** and **Activity summary**.
+  Expand isolated Windows/Ubuntu CI to exercise the actual Rust renderer as well
+  as layout, portal, cancellation and backend regressions.
 
 ## November 13 — Lite Windows interaction repair
 

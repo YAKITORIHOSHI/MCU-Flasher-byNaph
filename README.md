@@ -33,7 +33,8 @@ terminals and an optional AI assistant in one window.
   counter. Its file edits are highlighted for you to accept or reject.
 - **Developer Access:** Private issue tickets shared across your signed-in
   devices. New tickets appear after **Create ticket** succeeds; cancelled drafts
-  add nothing. Deletions sync across devices, including an empty ticket list.
+  add nothing. The main workspace stays usable while the portal, its forms or
+  notices are open. Deletions sync across devices, including an empty ticket list.
 - **Resources:** Browse, download and prepare board packages and Arduino
   libraries. Soft and Hard Reset recovery reflash a board to a known state.
 - **Interface:** Glass Dark, Frosted Light and Solarized Dark themes, an
@@ -69,7 +70,9 @@ has not yet been verified on physical hardware; see the
    [latest release](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/latest)
    and extract it. Keep the folder together.
 2. Open `LAUNCHER` and run the entry for your system (table above).
-3. The first launch runs **Bootstrap**. It prepares a private Python runtime,
+3. The first launch runs **Bootstrap**. **Technical details** shows installer
+   output; the same button changes to **Activity summary** to switch back.
+   Bootstrap prepares a private Python runtime,
    the required packages, the default board support and, on Windows, the
    CP210x and CH34x USB drivers. Linux may ask for your password to install
    system packages.
@@ -86,6 +89,8 @@ Control-click → **Open**, because the app is not notarized.
 Open its `UBUNTU` or `WINDOWS.exe` launcher; it reuses the prepared Python tools.
 Lite's board picker follows the main app's rows and confirmation controls; its
 five-click Developer Access opens the existing authenticated portal.
+Stop stays visible with reason-specific enablement, and narrow windows switch
+between the monitor and scrollable Sketch & Connection controls.
 See [Lite's guide](LITE-MODE/README.md). Bootstrap includes Lite and future public
 application folders automatically: checkouts use tracked files, and release ZIPs
 carry a generated source manifest. Private settings, caches and build scratch

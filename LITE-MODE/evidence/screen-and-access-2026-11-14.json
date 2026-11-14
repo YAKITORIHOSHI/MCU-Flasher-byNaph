@@ -1,0 +1,221 @@
+{
+  "date": "2026-11-14",
+  "baseline_commit": "67296919cf32ad512fa4be6f679b0de2b2d7e467",
+  "host": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "os_release": {
+    "NAME": "Ubuntu",
+    "ID": "ubuntu",
+    "PRETTY_NAME": "Ubuntu 26.04.1 LTS",
+    "VERSION_ID": "26.04",
+    "VERSION": "26.04.1 LTS (Resolute Raccoon)",
+    "VERSION_CODENAME": "resolute",
+    "ID_LIKE": "debian",
+    "HOME_URL": "https://www.ubuntu.com/",
+    "SUPPORT_URL": "https://help.ubuntu.com/",
+    "BUG_REPORT_URL": "https://bugs.launchpad.net/ubuntu/",
+    "PRIVACY_POLICY_URL": "https://www.ubuntu.com/legal/terms-and-policies/privacy-policy",
+    "UBUNTU_CODENAME": "resolute",
+    "LOGO": "ubuntu-logo"
+  },
+  "python": "3.14.4 (main, Aug 20 2026, 10:41:58) [GCC 15.2.0]",
+  "qt": "6.12.0",
+  "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "local_checks": {
+    "rust": 20,
+    "worker": 75,
+    "preparation": 53,
+    "history_search": 25,
+    "developer_helper": 26,
+    "main_portal": 41,
+    "main_controls": 48,
+    "clippy": "strict -D warnings passed",
+    "format": "passed",
+    "git_fsck": "passed",
+    "main_verifiers": [
+      "runtime",
+      "controls",
+      "owner_ticket_service",
+      "user_install",
+      "release_sources",
+      "bootstrap_promotion",
+      "ubuntu_bootstrap_window",
+      "taskbar_identity",
+      "shutdown",
+      "hygiene"
+    ],
+    "sandbox_note": "Chromium IPC refusal reproduced at baseline; isolated runtime/shutdown rerun passed outside sandbox"
+  },
+  "artifacts": {
+    "UBUNTU": {
+      "bytes": 10800992,
+      "sha256": "a19625fd2e03390f526b74645b9648a4012cd3842679ed0a3a6874bdae835687",
+      "glibc_floor": "2.39"
+    },
+    "WINDOWS.exe": {
+      "bytes": 6214144,
+      "sha256": "5061141c6fa32e48a41e3f5c8cae1ae6d8678295416930d80e84dbe4418d336b",
+      "subsystem": "Windows GUI",
+      "dlls": [
+        "advapi32.dll",
+        "dwmapi.dll",
+        "gdi32.dll",
+        "imm32.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "opengl32.dll",
+        "user32.dll",
+        "uxtheme.dll",
+        "KERNEL32.dll",
+        "msvcrt.dll",
+        "ntdll.dll",
+        "kernel32.dll",
+        "kernel32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "bcryptprimitives.dll",
+        "shlwapi.dll",
+        "combase.dll",
+        "gdi32.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "ole32.dll",
+        "shell32.dll",
+        "user32.dll"
+      ]
+    }
+  },
+  "renderer": {
+    "host": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+    "native_windows": false,
+    "owned_xvfb": true,
+    "hardware_and_accounts": "not accessed",
+    "captures": [
+      {
+        "name": "wide",
+        "requested_logical_size": "1140x800",
+        "pixels": [
+          1140,
+          800
+        ],
+        "sha256": "13da725f7a7b8f50597dcf8d0cba933a381b3ed704df5863d51c4d89a702f5a4"
+      },
+      {
+        "name": "wide-dark",
+        "requested_logical_size": "1140x800",
+        "pixels": [
+          1140,
+          800
+        ],
+        "sha256": "f8e7eb12a47bd484662c8686b0b4f9a4b0c6028c6b9ba6564edf2a8668447daf"
+      },
+      {
+        "name": "compact",
+        "requested_logical_size": "700x560",
+        "pixels": [
+          700,
+          560
+        ],
+        "sha256": "0432c777fed67a052dfb8a60eb4b24fc9e05977704ed731fb9497b07ec7a9af6"
+      },
+      {
+        "name": "compact-dark",
+        "requested_logical_size": "700x560",
+        "pixels": [
+          700,
+          560
+        ],
+        "sha256": "7b97208f9afbdcc253ad6400c0cc120837254ae944b2f4bdb649b8615e43400d"
+      },
+      {
+        "name": "short",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "2092636ba8f201cc57bc49f7f99200c42c04449280c35126005f481c059016cd"
+      },
+      {
+        "name": "controls",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "9716a4150d02f5a72a6cd9ef29f7972fc849324fb8e849b0bdd3789c47d7b5c8"
+      },
+      {
+        "name": "smallest",
+        "requested_logical_size": "360x240",
+        "pixels": [
+          360,
+          240
+        ],
+        "sha256": "ed35c2f8c0fc50a731191c4c6503776fcb18f1583197e1fc91b5768ca37e11cf"
+      },
+      {
+        "name": "smallest-project",
+        "requested_logical_size": "360x240",
+        "pixels": [
+          360,
+          240
+        ],
+        "sha256": "04530500b31920ada28e46d97a0f890e521489f0667dd55632c6f2f99db69471"
+      },
+      {
+        "name": "smallest-board-resources",
+        "requested_logical_size": "360x240",
+        "pixels": [
+          360,
+          240
+        ],
+        "sha256": "53e685fbc5edd646fe203025a39085bb6b003bee3313bcfacbc1f466e66df2b5"
+      },
+      {
+        "name": "portrait-boards",
+        "requested_logical_size": "480x800",
+        "pixels": [
+          480,
+          800
+        ],
+        "sha256": "5e9314d6b56daf140a63e96c06db15a7cf1bcfb52d6798517722b572545b4cd0"
+      },
+      {
+        "name": "short-resources",
+        "requested_logical_size": "496x300",
+        "pixels": [
+          496,
+          300
+        ],
+        "sha256": "812e4f8b54849be7ce41f36308d04086569f703d07bbec07e99afd9d6b0355dd"
+      }
+    ]
+  },
+  "source_sha256": {
+    "LITE-MODE/src/main.rs": "0ff6d2e74a1c3faa291010e525026beeb20e1d0a550681495dd70d8ca2601616",
+    "LITE-MODE/src/ui.rs": "b479486d6885fa3c95cd3745ee0470a91a96cfa346aca566019dcd9df82a2d67",
+    "LITE-MODE/src/desktop.rs": "cd98619e42217595877aba8a626aa21f654b8a27256a039ec543e37a45b5155b",
+    "LITE-MODE/src/bridge.rs": "6b2fae4edafff9fa0d81f9982ae702894868778f0bae9340430de21ebb239210",
+    "LITE-MODE/Cargo.toml": "7e155b7b87f07410db8493ccdad51e8049a643431d49dd6521d21afcbe1bce21",
+    "LITE-MODE/Cargo.lock": "638f0949bc40bc671ecceb7297e83293cf3e81c4d45baf00fb40e118b3a47b88",
+    "LITE-MODE/build.rs": "c415fd3ed954b3a931f989043c2def89769b65fe91882af9242f136527f6095b",
+    "LITE-MODE/python/worker.py": "a7f35c0ac2c33fc0d38acd3e445b284c4eca5d73733612f11c6605477cc3eacf",
+    "LITE-MODE/python/developer.py": "d1551e5041a85ac3d3f5d01b15e7080e9b7352abd13876f49f9b8531431eb873",
+    "LITE-MODE/python/registry.py": "170dc5f3544e8ce7b85d05402024639f678ddc4937749b24fe873131824647d9",
+    "LITE-MODE/tools/verify.py": "aa4378611e92baa20247b75284955eea7832f04a0c38e80214241ca66ca39efc",
+    "LITE-MODE/tools/verify_preparation.py": "d3f0ff198398abb71929ededb5b8956e2270c89f7df486dbce4df3a5fae41488",
+    "LITE-MODE/tools/verify_developer.py": "eacf29a1130a65b637f6f229ed9cf9113ca85eb971ab4100a924b7d624d65344",
+    "LITE-MODE/tools/verify_layout.py": "5c425cfdcde68a54cdd24e8103c5d6c78b744ce41e1cea0937099adb7d22a54c",
+    "main/qt/owner_ticket_dialog.py": "98a9523e4c327ea738a09d8a2a15ec7741694d1fcad3c3d00baa4ce8a69860b7",
+    "main/qt/toolbar.py": "edc8de9a50a167186c18d5c345b0fe297610656cd729da232e31c2d68e14b329",
+    "src/modules/bootstrap_qt.py": "1382d5fc57ae7c0f0382099de11f2dc40962b84927ebb017f394c1d74a8b3ef7",
+    "direct/verify_controls.py": "1d891c9facdd1c74e239fc53917764fc6453b158068973777621128898e48df9",
+    "direct/verify_owner_tickets.py": "805a82272ff67f0c1909916e9c678bd3d3c76ac3bf3ae719d729e7c14146eadb"
+  },
+  "native_ci": "pending repository push",
+  "unqualified": [
+    "Windows 11 desktop",
+    "Wayland/mixed-monitor DPI interaction",
+    "physical USB/serial"
+  ],
+  "hardware_accounts_and_vault": "not accessed; injected fixture services only"
+}

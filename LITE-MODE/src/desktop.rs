@@ -3,9 +3,12 @@ use std::process::{Command, Stdio};
 
 /// Permit our owned portal to activate only while Lite owns the foreground.
 /// Windows policy: https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow
-pub fn allow_portal_activation(pid: u32) {
+pub fn allow_portal_activation(pid: u32) -> bool {
+    if pid == 0 || pid == u32::MAX {
+        return false;
+    }
     #[cfg(windows)]
-    if pid != 0 && pid != u32::MAX {
+    {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             AllowSetForegroundWindow, GetForegroundWindow, GetWindowThreadProcessId,
         };
@@ -16,16 +19,20 @@ pub fn allow_portal_activation(pid: u32) {
             let mut owner = 0;
             if !window.is_null() {
                 GetWindowThreadProcessId(window, &mut owner);
-                if owner == std::process::id() {
-                    // The PID comes from our worker's live child, never user
-                    // input. Never grant ASFW_ANY or take focus from another app.
-                    AllowSetForegroundWindow(pid);
-                }
+                return portal_focus_allowed(pid, owner, |pid| AllowSetForegroundWindow(pid) != 0);
             }
+            false
         }
     }
     #[cfg(not(windows))]
-    let _ = pid;
+    {
+        true
+    }
+}
+
+#[cfg(any(windows, test))]
+fn portal_focus_allowed(pid: u32, foreground_owner: u32, grant: impl FnOnce(u32) -> bool) -> bool {
+    pid != 0 && pid != u32::MAX && foreground_owner == std::process::id() && grant(pid)
 }
 
 fn directory_command(directory: &Path) -> Command {
@@ -79,6 +86,26 @@ pub fn open_directory(directory: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod verification {
     use super::*;
+
+    #[test]
+    fn portal_focus_permission_never_grants_another_foreground_app() {
+        let own = std::process::id();
+        for (pid, owner) in [
+            (0, own),
+            (u32::MAX, own),
+            (1234, own.wrapping_add(1)),
+            (1234, 0),
+        ] {
+            assert!(!portal_focus_allowed(pid, owner, |_| panic!(
+                "Must not grant focus"
+            )));
+        }
+        assert!(!portal_focus_allowed(1234, own, |_| false));
+        assert!(portal_focus_allowed(1234, own, |pid| {
+            assert_eq!(pid, 1234);
+            true
+        }));
+    }
 
     #[test]
     fn source_directory_stays_one_literal_argument() {

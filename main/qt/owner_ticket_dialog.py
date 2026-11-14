@@ -27,6 +27,7 @@ from main.qt.owner_ticket_style import (
 )
 from main.qt.icons import icon
 from main.qt.responsive import clamp_window, fit_dialog
+from main.qt import taskbar
 
 _assets_dir = Path(__file__).resolve().parents[2] / "src/assets"
 _mcu_icon_path = _assets_dir / "mcu_icon.ico"
@@ -44,6 +45,22 @@ STATUS_TONES = {"Open": "active", "In Progress": "warn", "Resolved": "ok", "Clos
 # independently of its widgets; Qt disconnects the destroyed receiver safely.
 _SERVICE_TASKS = set()
 _SERVICE_LOCKS = WeakKeyDictionary()
+
+
+def _portal_message(parent, title, text, *, icon=QMessageBox.Icon.Warning,
+                    buttons=QMessageBox.StandardButton.Ok, default=None, on_finished=None):
+    """Scope portal notices and confirmations to their own window hierarchy."""
+    box = QMessageBox(icon, title, text, buttons, parent)
+    box.setWindowModality(Qt.WindowModality.WindowModal)
+    if parent.window().testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
+        box.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    if default is not None:
+        box.setDefaultButton(default)
+    if on_finished is not None:
+        box.finished.connect(on_finished)
+    box.finished.connect(box.deleteLater)
+    box.open()
+    return box
 
 
 class _ServiceTask(QObject):
@@ -549,15 +566,18 @@ class TicketCard(NeoCard):
 
     def _on_delete(self) -> None:
         try:
-            res = QMessageBox.question(
+            def confirmed(result):
+                if result == QMessageBox.StandardButton.Yes:
+                    self.deleted.emit(self._ticket_id)
+            _portal_message(
                 self,
                 "Delete Ticket",
                 f"Are you sure you want to delete ticket:\n\n\"{self.ticket.get('title')}\"?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                icon=QMessageBox.Icon.Question,
+                buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                default=QMessageBox.StandardButton.No,
+                on_finished=confirmed,
             )
-            if res == QMessageBox.StandardButton.Yes:
-                self.deleted.emit(self._ticket_id)
         except Exception:
             pass
 
@@ -648,7 +668,7 @@ class CreateTicketDialog(_TaskPortal):
             return
         title = self.txt_title.text().strip()
         if not title:
-            QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
+            _portal_message(self, "Validation", "Ticket title cannot be blank.")
             self.txt_title.setFocus()
             return
 
@@ -697,7 +717,8 @@ class CreateTicketDialog(_TaskPortal):
                     pass
             self.accept()
         else:
-            QMessageBox.critical(self, "Save error", error or "The ticket could not be created. Please try again.")
+            _portal_message(self, "Save error", error or "The ticket could not be created. Please try again.",
+                            icon=QMessageBox.Icon.Critical)
 
 
 class EditTicketDialog(_TaskPortal):
@@ -724,6 +745,7 @@ class EditTicketDialog(_TaskPortal):
         ticket = ticket or {}
         super().__init__(parent, preferred=(680, 640))
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.ticket = ticket
         self.service = service
         self.categories = list(categories or CATEGORIES)
@@ -778,7 +800,7 @@ class EditTicketDialog(_TaskPortal):
     def _do_save(self) -> None:
         title = self.txt_title.text().strip()
         if not title:
-            QMessageBox.warning(self, "Validation", "Ticket title cannot be blank.")
+            _portal_message(self, "Validation", "Ticket title cannot be blank.")
             self.txt_title.setFocus()
             return
 
@@ -828,12 +850,14 @@ class EditTicketDialog(_TaskPortal):
         if ok:
             self.accept()
         else:
-            QMessageBox.critical(self, "Save error", error or "The ticket could not be saved. Your changes are still here.")
+            _portal_message(self, "Save error", error or "The ticket could not be saved. Your changes are still here.",
+                            icon=QMessageBox.Icon.Critical)
 
 
 class CloudSettingsDialog(_TaskPortal):
     def __init__(self, service, parent=None, *, config=None):
         super().__init__(parent, preferred=(640, 530))
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.service = service
         cfg = dict(config if config is not None else getattr(parent, "_config", {}))
         self.setWindowTitle("Connection and local access — MCU Flasher")
@@ -951,7 +975,15 @@ class OwnerTicketDialog(_TaskPortal):
     LIVE_REFRESH_DELAY_MS = 400
 
     def __init__(self, backend=None, parent=None):
-        super().__init__(parent, preferred=(590, 580))
+        # The portal is an independent workspace. A native transient-parent
+        # chain would let its window-modal forms block the sketch window too.
+        # Keep lifetime ownership without making that window a modal ancestor.
+        super().__init__(None, preferred=(590, 580))
+        if parent is not None:
+            parent.destroyed.connect(self._owner_destroyed)
+        self.setWindowFlags((self.windowFlags() & ~Qt.WindowType.WindowType_Mask)
+                            | Qt.WindowType.Window | Qt.WindowType.WindowMinMaxButtonsHint)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self._backend = backend
         self.service = None
         self._config = {}
@@ -1002,6 +1034,12 @@ class OwnerTicketDialog(_TaskPortal):
         self.apply_theme(self._theme_name)
         QTimer.singleShot(0, self, self._initialize_service)
 
+    def _owner_destroyed(self):
+        # This runs only after the workspace accepted its close, retaining close
+        # vetoes while stopping the portal's independent live subscription.
+        self.close()
+        self.deleteLater()
+
     def apply_theme(self, mode):
         super().apply_theme(mode)
         if hasattr(self, "live_wallpaper"):
@@ -1044,6 +1082,8 @@ class OwnerTicketDialog(_TaskPortal):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if self._backend is not None:
+            taskbar.window_shown(self)
         if hasattr(self, "live_wallpaper") and self.stack.currentWidget() == getattr(self, "auth_page", None):
             self.live_wallpaper.start()
             if hasattr(self, "auth_page"):
@@ -1559,7 +1599,7 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _tickets_loaded(self, tickets, error):
         if error:
-            QMessageBox.warning(self, "Load tickets", error)
+            _portal_message(self, "Load tickets", error)
             return
         self._tickets = tickets
         self._tickets_generation += 1
@@ -1652,15 +1692,28 @@ class OwnerTicketDialog(_TaskPortal):
         self.cards_layout.addStretch(1)
         refresh_portal_children(self.cards_container, self._theme_name)
 
-    def _open_edit_ticket_modal(self, ticket: Dict[str, Any]) -> None:
+    def _open_edit_ticket_modal(self, ticket: Dict[str, Any]):
+        existing = getattr(self, "_active_edit_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            return existing
         try:
             dlg = EditTicketDialog(ticket=ticket, service=self.service, parent=self,
                                    categories=self._category_options())
             dlg.categories_updated.connect(self._categories_updated)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                self._refresh_tickets_list()
+            self._active_edit_dialog = dlg
+            def finished(result):
+                self._active_edit_dialog = None
+                if result == QDialog.DialogCode.Accepted:
+                    self._refresh_tickets_list()
+                dlg.deleteLater()
+            dlg.finished.connect(finished)
+            if self.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
+                dlg.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            dlg.open()
+            return dlg
         except Exception:
-            pass
+            return None
 
     def _on_modal_ticket_created(self, ticket=None):
         self._refresh_tickets_list()
@@ -1714,7 +1767,7 @@ class OwnerTicketDialog(_TaskPortal):
                             break
                     self._update_stats(self._tickets)
                     self._render_tickets_list(force=True)
-                QMessageBox.warning(self, "Update ticket", error or "The ticket could not be changed. Try again.")
+                _portal_message(self, "Update ticket", error or "The ticket could not be changed. Try again.")
             else:
                 if result and len(result) > 1 and isinstance(result[1], list):
                     for updated_t in result[1]:
@@ -1738,7 +1791,7 @@ class OwnerTicketDialog(_TaskPortal):
             self._tickets_generation += 1
             self._render_tickets_list()
         if error or not result or not result[0]:
-            QMessageBox.warning(self, "Delete ticket", error or "The ticket could not be deleted. Check your connection and try again.")
+            _portal_message(self, "Delete ticket", error or "The ticket could not be deleted. Check your connection and try again.")
 
     def _on_ticket_deleted(self, ticket_id: str) -> None:
         try:
@@ -1788,11 +1841,11 @@ class OwnerTicketDialog(_TaskPortal):
 
     def _locked(self, result, error):
         if error:
-            QMessageBox.warning(self, "Log out", error)
+            _portal_message(self, "Log out", error)
             return
         ok, message = result if isinstance(result, tuple) else (True, "")
         if not ok:
-            QMessageBox.warning(self, "Log out", message)
+            _portal_message(self, "Log out", message)
         self.chk_keep_signed_in.setChecked(False)
         self._tickets = []
         self._tickets_generation += 1
@@ -1846,10 +1899,21 @@ class OwnerTicketDialog(_TaskPortal):
     def _open_cloud_settings_modal(self):
         if self._task_name or self.service is None:
             return
+        existing = getattr(self, "_active_settings_dialog", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            return existing
         dialog = CloudSettingsDialog(self.service, self, config=self._config)
-        dialog.exec()
-        self._run_task("config", self.service.get_config, self._settings_loaded)
-        dialog.deleteLater()
+        self._active_settings_dialog = dialog
+        def finished(_result):
+            self._active_settings_dialog = None
+            self._run_task("config", self.service.get_config, self._settings_loaded)
+            dialog.deleteLater()
+        dialog.finished.connect(finished)
+        if self.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        dialog.open()
+        return dialog
 
     def _settings_loaded(self, config, error):
         if not error:
@@ -1967,6 +2031,8 @@ class OwnerTicketDialog(_TaskPortal):
         self._render_tickets_list()
 
     def hideEvent(self, event):
+        if self._backend is not None:
+            taskbar.window_hidden(self, event)
         if hasattr(self, "live_wallpaper"):
             self.live_wallpaper.stop()
         # A closed portal stops listening; minimizing it (a spontaneous hide) does not.

@@ -2,7 +2,8 @@
 
 A separate Rust desktop workbench with the main MCU Flasher's Python build and
 device tools. All Lite source, launchers, assets and documentation belong to this
-folder. The main GUI/build logic and your original sketch files stay unchanged. Shared
+folder. Lite reuses the main build logic and reads your original sketches without
+modifying them. Shared Developer Access and Bootstrap fixes live in the main sources. Shared
 Bootstrap/release inventory code includes Lite and future public source files automatically.
 
 ![Lite workspace](assets/preview.png)
@@ -96,10 +97,19 @@ Open sketch, Connect) and the selected tab, coral marks Stop, Disconnect and
 errors, and everything else uses the same paper surface and ink outline. Fields
 and menus share one style and highlight on hover in both themes.
 
+Native display scaling is applied once. Lite fits its initial window to the
+current monitor, permits small windows down to 360×240 logical points, and
+rechecks its fit when the monitor or scale changes. Narrow windows switch between
+**Monitor** and **Sketch & Connection**; wider windows keep them side by side.
+The controls have a reserved, visible scrollbar outside their cards. Short
+monitor layouts and dialogs scroll to keep every control reachable, and long
+names/diagnostics retain their complete text in tooltips and the Build monitor.
+
 **Developer Access:** click the logo exactly five times, with less than 800 ms
 between clicks, then pause. This opens the main application's existing ticket
 portal in an owned helper window; another gesture brings that window forward.
-The helper acknowledges window startup before activation; on Windows, Lite
+The helper acknowledges a visible native window before activation; on Windows,
+its GUI startup explicitly overrides the backend's hidden-console hook. Lite
 permits only its owned helper to take focus while Lite owns the foreground.
 Windows virtual-environment redirectors are resolved to their verified owned
 GUI child, so readiness and focus use the actual portal PID.
@@ -114,8 +124,10 @@ built-in cloud provider and account rules. The main workspace is not launched.
 Both monitors have Follow, Copy and display-only Clear controls, selectable
 output, separate histories and a bounded 4,000-line view. Only visible log rows
 are drawn. Fixed row heights, a fixed viewport and reserved scrollbars keep output
-steady as long or partial lines arrive and when switching monitors. Stop follows
-the original backend's write protection; closing Lite
+steady as long or partial lines arrive and when switching monitors. **Stop stays
+visible** while idle or busy. It enables only for cancellable preparation,
+search, compilation or upload connection, and its tooltip explains idle,
+stopping, cleanup and protected firmware-write/restart states. Closing Lite
 is held while a command, compilation, download or firmware operation is active.
 There is deliberately no editor, assistant, cloud session or Reset action.
 Uploader and download progress updates replace their own activity row. Completed
@@ -126,6 +138,9 @@ Preparation runs in a worker while the interface remains responsive. Stop during
 preparation prevents the pending action from starting. A preparation failure
 does not attempt or replay an upload. Once tools are ready, the original backend
 receives the requested action exactly once and retains its flash-write guards.
+Library searches have a 30-second elapsed budget and run in an owned cancellable
+helper. Stop prevents late results and success messages. Windows jobs and Ubuntu
+process groups retire only that operation's children, including redirector descendants.
 
 ## Isolation
 
@@ -219,6 +234,11 @@ reading settings, enumerating ports or touching hardware. The capture options
 `--preview-projects` and `--preview-boards` dialogs.
 `--preview-dark` captures the alternate palette without changing the launch default.
 `--preview-sketch` displays synthetic filenames for checking the folder-link UI.
+`--preview-controls` selects the compact controls view and `--preview-error`
+shows a synthetic long diagnostic. `--preview-resource-boards` opens board tools.
+`tools/verify_layout.py` captures the actual
+Rust renderer on an owned Xvfb display; its `--native` mode requires isolated
+Windows Actions. It never starts Python tools, opens an account or touches devices.
 
 ## Platform evidence
 

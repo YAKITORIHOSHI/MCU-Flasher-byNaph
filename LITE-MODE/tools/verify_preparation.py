@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """Preparation/reuse regressions with fake native packages, no network/devices."""
 from pathlib import Path
+from contextlib import contextmanager
 import hashlib
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 from unittest.mock import patch
+from unittest.mock import Mock
+import psutil
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 from isolation import environment, child_setup
 from preparation import main_core_directory, source_manager, prepare, ensure_package, copy_package
 from worker import Worker, snapshot_engine, ORIGINAL
+import registry
 
 
 def write_package(root, kind, name, version, *, owner="platformio", system=None, manifest=None):
@@ -33,6 +39,19 @@ def write_package(root, kind, name, version, *, owner="platformio", system=None,
 def tree_hash(root):
     return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in root.rglob("*") if path.is_file() and not path.is_symlink()}
+
+
+@contextmanager
+def unrelated_tool():
+    """An owned sibling outside the resource job/session must survive Stop."""
+    options = {"creationflags": 0x08000000} if sys.platform == "win32" else {"start_new_session": True}
+    child = subprocess.Popen([sys.executable, "-B", "-c", "import time; time.sleep(30)"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **options)
+    try:
+        yield child
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
 
 
 def main():
@@ -147,10 +166,138 @@ def main():
                 worker.catalog_thread.join(timeout=5)
                 assert not worker.catalog_thread.is_alive()
                 app.processEvents()
+            response = {"items": [
+                {"name": "Fixture Library", "owner": {"username": "fixture"},
+                 "version": {"name": "1.0.0"}, "description": "Search fixture"},
+                {"name": "Optional metadata", "owner": None, "version": None},
+                {"name": "x" * 100000, "owner": {}, "version": {}},
+            ]}
+            with patch.object(registry.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(response).encode())) as fetch:
+                results = registry.search("LED & query=https://unexpected.invalid")
+                check(results[0]["spec"] == "fixture/Fixture Library@1.0.0" and len(results) == 2,
+                      "bounded registry results tolerate absent metadata without huge protocol fields")
+                check(fetch.call_args.args[0].startswith("https://api.registry.platformio.org/v3/search?")
+                      and "query%3Dhttps" in fetch.call_args.args[0], "library query stays encoded within the fixed registry endpoint")
+            with patch.object(registry.urllib.request, "urlopen", return_value=io.BytesIO(b"x" * (registry.MAX_RESPONSE + 1))):
+                try:
+                    registry.search("fixture")
+                except ValueError:
+                    check(True, "registry rejects oversized responses before JSON parsing")
+                else:
+                    check(False, "registry rejects oversized responses before JSON parsing")
+
+            real_tool = worker.run_tool
+            marker = state / "registry-started.json"
+            drip_program = '''
+import json, os, runpy, subprocess, sys, time, urllib.request
+from pathlib import Path
+marker = Path(sys.argv.pop(1))
+mode = sys.argv.pop(1)
+script = sys.argv.pop(1)
+sys.argv[0] = script
+def refuse(*args, **kwargs):
+    raise AssertionError("Live fixture network refused")
+urllib.request.OpenerDirector.open = refuse
+class Drip:
+    def __enter__(self): return self
+    def __exit__(self, *args): pass
+    def read(self, limit):
+        child = None
+        if mode == "descendant":
+            child = subprocess.Popen([sys.executable, "-B", "-c", "import time; time.sleep(60)"])
+        staged = marker.with_suffix(".tmp")
+        staged.write_text(json.dumps({"parent": os.getpid(), "child": child.pid if child else None}))
+        staged.replace(marker)
+        if mode == "success":
+            return b'{"items":[{"name":"fixture","owner":{"username":"fixture"},"version":{"name":"1.0.0"}}]}'
+        if child is not None:
+            os._exit(0)
+        while True:
+            print("Receiving fixture registry bytes", flush=True)
+            time.sleep(.03)
+urllib.request.urlopen = lambda *args, **kwargs: Drip()
+runpy.run_path(script, run_name="__main__")
+'''
+            for mode in ("stop", "deadline", "descendant"):
+                marker.unlink(missing_ok=True)
+                before = len(output.events)
+                worker.cancel.clear()
+                def mock_registry(arguments, *, timeout=1200):
+                    check(Path(arguments[0]) == ROOT / "python/registry.py" and timeout == 30,
+                          "search uses the fixed cancellable helper and finite elapsed budget: " + mode)
+                    real_tool(["-c", drip_program, str(marker), mode, *arguments],
+                              timeout=.8 if mode == "deadline" else 10)
+                started = time.monotonic()
+                with patch.object(worker, "run_tool", side_effect=mock_registry), unrelated_tool() as sibling:
+                    worker.dispatch({"cmd": "library_search", "query": "fixture"})
+                    deadline = time.monotonic() + 4
+                    while not marker.exists() and worker.catalog_thread.is_alive() and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    check(marker.exists(), "owned registry fixture starts without network: " + mode)
+                    identity = json.loads(marker.read_text())
+                    if mode != "deadline":
+                        worker.dispatch({"cmd": "stop"})
+                    join()
+                    check(sibling.poll() is None, "resource Stop/deadline leaves an unrelated fixture process running: " + mode)
+                events = output.events[before:]
+                check(("console:progress", {"action": "Searching libraries"}) in events,
+                      "resource search reports work instead of stale Ready status: " + mode)
+                check(time.monotonic() - started < 5 and not worker.busy() and worker.process is None,
+                      "registry ownership releases after Stop/deadline: " + mode)
+                check(not any(name in {"libraries", "resource:installed"} or
+                              name == "console:log" and data.get("tag") == "success"
+                              for name, data in events), "cancelled search cannot publish results or success: " + mode)
+                for pid in identity.values():
+                    if pid is None:
+                        continue
+                    try:
+                        stopped = psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+                    except psutil.NoSuchProcess:
+                        stopped = True
+                    check(stopped, "owned registry parent/descendants have stopped: " + mode)
+
+            worker.cancel.clear()
+            before = len(output.events)
+            def registry_success(arguments, *, timeout=1200):
+                real_tool(["-c", drip_program, str(marker), "success", *arguments], timeout=5)
+            with patch.object(worker, "run_tool", side_effect=registry_success):
+                worker.dispatch({"cmd": "library_search", "query": "--fixture &"})
+                join()
+            events = output.events[before:]
+            check(any(name == "libraries" and data["query"] == "--fixture &"
+                      and data["items"][0]["spec"] == "fixture/fixture@1.0.0" for name, data in events)
+                  and not worker.busy(), "search after cancellation publishes only its new helper result, including literal option-like queries")
+
+            worker.cancel.clear()
+            owned_job = Mock()
+            owned_job.assign_and_resume.side_effect = OSError("fixture job assignment failed")
+            suspended = Mock()
+            with patch("sys.platform", "win32"), \
+                    patch("src.modules.bootstrap_pip_monitor._WindowsJob", return_value=owned_job), \
+                    patch("worker.subprocess.Popen", return_value=suspended) as launch:
+                try:
+                    worker.run_tool(["-c", "raise AssertionError('must not run')"])
+                except OSError:
+                    pass
+                else:
+                    raise AssertionError("Failed job assignment must refuse tool execution")
+                check(launch.call_args.kwargs["creationflags"] & 4 and suspended.terminate.call_count == 1
+                      and suspended.wait.call_count == 1 and owned_job.close.call_count == 1,
+                      "failed Windows job assignment retires the suspended original handle before release")
+
             with patch.object(worker.api, "upload_sketch") as upload, patch.object(worker, "prepare_board", side_effect=RuntimeError("offline fixture")):
                 worker.dispatch({"cmd": "upload"})
                 join()
                 check(upload.call_count == 0 and not worker.busy(), "failed preparation releases ownership without attempting an upload")
+            def cancelled_after_prepare(_):
+                worker.cancel.set()
+                return {}
+            before = len(output.events)
+            with patch.object(worker.api, "upload_sketch") as upload, patch.object(worker, "prepare_board", side_effect=cancelled_after_prepare):
+                worker.dispatch({"cmd": "upload"})
+                join()
+                check(upload.call_count == 0 and not any(name == "resource:installed" for name, _ in output.events[before:]),
+                      "cancellation at preparation completion publishes no installed result and cannot hand off Upload")
             entered = threading.Event()
             def blocked(_):
                 entered.set()

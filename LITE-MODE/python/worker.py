@@ -13,8 +13,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.parse
-import urllib.request
 
 from isolation import child_setup, environment, protect_original, state_directory
 from preparation import main_core_directory
@@ -24,6 +22,22 @@ LITE = Path(__file__).resolve().parents[1]
 ORIGINAL = LITE.parent
 SOURCE_EXTENSIONS = {".ino", ".h", ".hpp", ".cpp", ".c"}
 MAX_FRAME = 256 * 1024
+
+
+def developer_launch_options():
+    """Suppress the helper's console without hiding its first native Qt window."""
+    if sys.platform != "win32":
+        return {"start_new_session": True}
+    # The borrowed backend's subprocess hook hides unknown programs with
+    # SW_HIDE. That startup state overrides Qt's first ShowWindow call even
+    # though Qt considers the dialog shown. A visible, nonactivating show state
+    # preserves the user's foreground app until Lite grants activation after
+    # readiness. CREATE_NO_WINDOW hides only Python's console and leaves the
+    # piped readiness/command protocol available.
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 4  # SW_SHOWNOACTIVATE
+    return {"creationflags": subprocess.CREATE_NO_WINDOW, "startupinfo": startup}
 
 
 def owned_portal_pid(process, pid):
@@ -259,6 +273,8 @@ class Worker:
                     if name == "console:log" and data.get("replace_pattern") and not data.get("progress_key"):
                         data["progress_key"] = f"{getattr(self, '_op_session_id', 0)}:pattern:{data['replace_pattern']}"
                 output.send(name, data)
+                if name == "operation:phase" and hasattr(owner, "api"):
+                    output.send("stop:state", owner.stop_state())
 
             def _sync_project_hardware_state(self, *args, **kwargs):
                 pass  # Lite has no AI-generated project instructions or live cache journal.
@@ -282,11 +298,35 @@ class Worker:
     def log(self, text, tag="info"):
         self.output.send("console:log", {"text": text, "tag": tag, "newline": True})
 
+    def stop_state(self):
+        """Describe the same cancellation boundaries the backend enforces."""
+        operation = getattr(self.api, "active_operation", None)
+        phase = getattr(self.api, "_current_op_phase", None)
+        if operation in {"flash", "reset", "hard_reset", "soft_reset"} or phase in {"flashing", "writing", "erasing", "resetting"}:
+            return {"enabled": False, "reason": "Firmware writes and device restarts must finish before stopping"}
+        if operation == "clean" or phase == "cleaning":
+            return {"enabled": False, "reason": "Wait for cache cleanup to finish"}
+        if getattr(self.api, "_framework_download_active", False):
+            return {"enabled": False, "reason": "Wait for the native package installation to finish"}
+        if self.resource_busy:
+            return {"enabled": not self.cancel.is_set(), "reason":
+                "Stopping the resource operation" if self.cancel.is_set() else
+                "Stop preparation, search or downloads before the build/upload starts"}
+        if self.api.is_busy:
+            stopping = getattr(self.api, "_stop_requested", False)
+            return {"enabled": not stopping, "reason":
+                "Stopping the current operation" if stopping else
+                "Stop compilation or the upload connection before firmware writing begins"}
+        return {"enabled": False, "reason":
+            "Wait for the current worker to finish" if self.busy() else
+            "No cancellable operation is running"}
+
     def status(self):
         self.output.send("state", {
             "busy": self.busy(), "board": self.api.current_board,
             "port": self.api.current_port, "baud": self.api.current_baud,
             "monitor": self.api.serial_running, "phase": self.api.active_operation or "idle",
+            "stop": self.stop_state(),
             "developer_access": self.developer_process is not None and self.developer_process.poll() is None,
             "state_path": str(self.state), "source": str(self.source or ""),
         })
@@ -365,13 +405,38 @@ class Worker:
         return self.run_tool(["-m", "platformio", *arguments], timeout=timeout)
 
     def run_tool(self, arguments, *, timeout=1200):
+        from src.modules.bootstrap_pip_monitor import _exited
+        if self.cancel.is_set():
+            raise InterruptedError("Resource operation cancelled before launch")
         env = self.pio_environment()
         for key in ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX"):
             env.pop(key, None)
-        options = {"creationflags": 0x08000000} if sys.platform == "win32" else {"start_new_session": True}
-        process = subprocess.Popen([sys.executable, "-B", "-u", *arguments],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            text=True, encoding="utf-8", errors="replace", env=env, cwd=self.state, **options)
+        job = None
+        if sys.platform == "win32":
+            from src.modules.bootstrap_pip_monitor import _WindowsJob
+            job = _WindowsJob()
+            options = {"creationflags": 0x08000004}  # No console; assign while suspended.
+        else:
+            options = {"start_new_session": True}
+        try:
+            process = subprocess.Popen([sys.executable, "-B", "-u", *arguments],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                text=True, encoding="utf-8", errors="replace", env=env, cwd=self.state, **options)
+            process._lite_owned_job = job
+            if job is not None:
+                try:
+                    job.assign_and_resume(process)
+                except Exception:
+                    # Assignment failed before resume: the original process
+                    # handle names the suspended child, which has no children.
+                    process.terminate()
+                    process.wait(timeout=10)
+                    process.stdout.close()
+                    raise
+        except Exception:
+            if job is not None:
+                job.close()
+            raise
         self.process = process
         # A draining reader lets the owner enforce elapsed budgets even when a
         # downloader is silent. Cancellation is of this process tree only.
@@ -395,7 +460,6 @@ class Worker:
         try:
             while True:
                 if self.cancel.is_set() or time.monotonic() >= deadline:
-                    self.stop_owned_process(process)
                     raise RuntimeError("Resource operation cancelled" if self.cancel.is_set() else f"Resource operation exceeded its {timeout:g}-second budget")
                 try:
                     line = lines.get(timeout=.1)
@@ -404,31 +468,34 @@ class Worker:
                 if line is None:
                     break
                 self.log(line.rstrip())
-            code = process.wait(timeout=10)
-            if code:
-                raise RuntimeError(f"PlatformIO exited with code {code}; see Build monitor")
+            while not _exited(process):
+                if self.cancel.is_set() or time.monotonic() >= deadline:
+                    raise RuntimeError("Resource operation cancelled" if self.cancel.is_set() else f"Resource operation exceeded its {timeout:g}-second budget")
+                time.sleep(.05)
         finally:
             abandoned.set()
-            if process.poll() is None:
+            # Retain the POSIX parent PID until this group's retirement; Windows
+            # uses the assigned Job and the original process handle throughout.
+            # Venv redirectors can exit while descendants retain the output pipe.
+            try:
                 self.stop_owned_process(process)
-            process.stdout.close()
-            self.process = None
+            finally:
+                if job is not None:
+                    job.close()
+                process.stdout.close()
+                self.process = None
+        if self.cancel.is_set():
+            raise InterruptedError("Resource operation cancelled")
+        if process.returncode:
+            raise RuntimeError(f"Resource tool exited with code {process.returncode}; see Build monitor")
 
     @staticmethod
     def stop_owned_process(process):
-        if process.poll() is not None:
-            return
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000, timeout=15)
-        else:
-            import signal
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=10)
+        from src.modules.bootstrap_pip_monitor import _stop
+        job = getattr(process, "_lite_owned_job", None)
+        if sys.platform == "win32" and job is None:
+            raise RuntimeError("Cannot stop a resource process without its owned Windows job")
+        _stop(process, job)
 
     def prepare_board(self, info):
         from main.core.target_profile import target_problem
@@ -475,38 +542,41 @@ class Worker:
         self.resource_busy = True
         self.cancel.clear()
         self.output.send("resource:busy", True)
+        self.output.send("console:progress", {"action": {
+            "library_search": "Searching libraries", "library_install": "Installing library",
+            "board_install": "Preparing board tools"}[action]})
         def work():
             handed_off = False
             try:
                 if action == "library_search":
                     query = str(request.get("query", ""))[:200]
-                    parameters = urllib.parse.urlencode({"query": "type:library " + query, "limit": 100, "page": 1, "sort": "relevance"})
-                    url = "https://api.registry.platformio.org/v3/search?" + parameters
-                    with urllib.request.urlopen(url, timeout=20) as response:
-                        raw = response.read(2 * 1024 * 1024 + 1)
-                    if len(raw) > 2 * 1024 * 1024:
-                        raise ValueError("Registry response exceeds the 2 MiB budget")
-                    results = []
-                    for item in json.loads(raw).get("items", [])[:100]:
-                        owner = item.get("owner", {}).get("username", "")
-                        name = str(item.get("name", ""))
-                        version = str(item.get("version", {}).get("name", ""))
-                        results.append({"name": name, "owner": owner, "version": version,
-                            "description": str(item.get("description", ""))[:500],
-                            "spec": f"{owner}/{name}@{version}"})
-                    self.output.send("libraries", {"query": query, "items": rank_libraries(results, query)})
+                    result = self.state / "library-search.json"
+                    self.run_tool([str(LITE / "python/registry.py"), "--query=" + query,
+                                   "--result", str(result)], timeout=30)
+                    results = json.loads(result.read_text(encoding="utf-8"))
+                    completed = "libraries", {"query": query, "items": rank_libraries(results, query)}
                 elif action == "library_install":
                     spec = str(request.get("spec", ""))
                     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_. +()-]+@[A-Za-z0-9_.+-]+", spec):
                         raise ValueError("Select a versioned library from the registry results")
                     self.log(f"Installing {spec} into Lite's private library store")
                     self.run_pio(["pkg", "install", "--global", "--library", spec])
-                    self.output.send("resource:installed", {"spec": spec})
+                    completed = "resource:installed", {"spec": spec}
                 else:
                     self.prepare_board(info)
-                    self.output.send("resource:installed", {"spec": board})
+                    completed = "resource:installed", {"spec": board}
                 if after is None:
-                    self.log("Resource operation completed", "success")
+                    # Stop and publication share ownership: a stopped request
+                    # cannot publish late results/success or block a new search.
+                    with self._action_lock:
+                        if self.cancel.is_set():
+                            raise InterruptedError("Resource operation cancelled")
+                        self.output.send(*completed)
+                        self.log("Resource operation completed", "success")
+                        self.resource_busy = False
+                        self.output.send("resource:busy", False)
+                        self.status()
+                        handed_off = True
                 else:
                     # Stop and the handoff share a lock: a late Stop either
                     # cancels preparation or reaches the original operation.
@@ -517,6 +587,7 @@ class Worker:
                             raise RuntimeError("The selected board changed; try the action again")
                         self.require_action_ready(after)
                         snapshot_sources(self.source, self.state)
+                        self.output.send(*completed)
                         if after == "upload":
                             self.api.skip_compile = True
                         {"compile": self.api.compile_sketch, "upload": self.api.upload_sketch}[after]()
@@ -550,7 +621,7 @@ class Worker:
         log = log_path.open("wb")
         try:
             command = [sys.executable, "-B", str(LITE / "python/developer.py")]
-            options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {"start_new_session": True}
+            options = developer_launch_options()
             process = subprocess.Popen(command, env=environment(self.state), cwd=self.state / "engine",
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, **options)
         except Exception:
@@ -617,10 +688,13 @@ class Worker:
                 raise RuntimeError("Wait for the current operation before closing Lite")
             return False
         if cmd == "stop":
-            if self.resource_busy:
-                self.cancel.set()
-            else:
-                self.api.stop_operation()
+            policy = self.stop_state()
+            if policy["enabled"]:
+                if self.resource_busy:
+                    self.cancel.set()
+                else:
+                    self.api.stop_operation()
+            self.status()
             return True
         if cmd == "status":
             self.status()

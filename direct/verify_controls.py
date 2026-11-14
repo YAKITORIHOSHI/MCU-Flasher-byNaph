@@ -918,6 +918,26 @@ class ControlChecks(unittest.TestCase):
             self.assertEqual(dialog.spin_lbl._color, dialog._theme_pal["T_GREEN"])
             self.assertEqual(dialog.spin_lbl.accessibleName(), "Check")
 
+    def test_bootstrap_details_button_names_the_other_view_and_preserves_output(self):
+        dialog, _, _ = bootstrap_fixture()
+        self.own(dialog)
+        dialog._on_log("Runtime verification", "section")
+        dialog._on_log("A retained installer diagnostic", "normal")
+        raw = dialog.log_edit.toPlainText()
+        summary = dialog.summary_edit.toPlainText()
+        for _ in range(3):
+            self.assertEqual(dialog.details_btn.text(), "Technical details")
+            dialog.details_btn.click()
+            self.assertTrue(dialog.details_expanded)
+            self.assertIs(dialog.log_stack.currentWidget(), dialog.log_edit)
+            self.assertEqual(dialog.details_btn.text(), "Activity summary")
+            self.assertIn("concise", dialog.details_btn.toolTip())
+            dialog.details_btn.click()
+            self.assertFalse(dialog.details_expanded)
+            self.assertIs(dialog.log_stack.currentWidget(), dialog.summary_edit)
+            self.assertEqual(dialog.log_edit.toPlainText(), raw)
+            self.assertEqual(dialog.summary_edit.toPlainText(), summary)
+
     def test_bootstrap_display_character_budget(self):
         dialog, _, _ = bootstrap_fixture()
         self.own(dialog)

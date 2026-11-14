@@ -1,4 +1,37 @@
-# Lite verification — 2026-11-13
+# Lite verification — updated 2026-11-14
+
+## November 14 — screen fit, visible portal and cancellation
+
+Local Ubuntu evidence covers the rebuilt Ubuntu x64 release, with the glibc 2.39
+floor verified, and a Windows x64 cross-build with GUI subsystem/system DLLs.
+Eleven actual Glow/software-OpenGL previews run on an owned Xvfb display: wide
+Light/Dark, compact Light/Dark, short diagnostics, compact controls, 360×240
+controls/project/board resources, portrait board picker and short Resources.
+The guide's preview images come from that rebuilt release executable.
+
+Twenty Rust regressions cover native-scale logical fitting, screen changes,
+100–200% simulated widget layouts, persistent Stop/phase transitions, card and
+scrollbar clearance, monitor rims, dialog bounds, foreground permission policy,
+history and stable streaming. Locked check, strict Clippy and formatting pass.
+Hardware-free Python checks cover worker Stop authority, real silent/dripping
+child cancellation/deadlines, exited-parent descendant cleanup, unrelated process
+preservation, publication races, isolated histories and the real portal helper.
+Main portal checks exercise actual workspace input during create/edit/settings
+forms and notices, maximized reuse, and owner closure during queued work.
+
+Shared main runtime, controls, owner-ticket service, installation, source inventory,
+Bootstrap promotion/Ubuntu window, hygiene, taskbar and shutdown checks pass in
+owned fixtures. Chromium runtime/shutdown need unsandboxed local IPC; the same
+sandbox refusal was reproduced against the unchanged baseline before a passing
+isolated rerun. No device, real account, vault or package download was exercised.
+
+The expanded Lite workflow runs both supplied release executables' actual native
+Rust renderer on Windows and Ubuntu, alongside the logical widget matrix, Python worker/preparation/history
+checks and real Qt helper. Native Rust host DPI, forced native Qt scale and
+simulated egui scale evidence are distinct. Updated native Windows CI evidence
+will be recorded after the repository push; Windows 11, Wayland/mixed-monitor
+interaction and physical USB remain separate gates. See
+`evidence/screen-and-access-2026-11-14.json` for local receipts and artifact hashes.
 
 
 ## Windows interaction repair

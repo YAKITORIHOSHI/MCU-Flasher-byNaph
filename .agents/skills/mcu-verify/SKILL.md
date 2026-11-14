@@ -1,9 +1,30 @@
 ---
 name: mcu-verify
-description: "Run MCU Flasher hardware-free and isolated native CI checks, including keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Run MCU Flasher hardware-free and isolated native CI checks, including Lite renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
+
+## Lite screen, cancellation and native visibility gates
+
+- Run locked cargo check/test and strict Clippy in LITE-MODE. The real egui
+  widget matrix covers 100/125/150/175/200% logical layouts, stable streaming,
+  persistent Stop, long source/card bounds, and small/short/portrait dialogs.
+- Run Lite tools/verify.py, verify_preparation.py, verify_history_search.py and
+  verify_developer.py with the private runtime. Cover silent/dripping child Stop,
+  absolute deadlines, exited-parent descendants, unrelated sibling preservation,
+  failed Job assignment, late-result suppression and exactly-once upload handoff.
+- The helper fixture must install the borrowed Windows hide hook and check actual
+  native visibility before Ready. Keep owned foreground grants and preserved
+  maximization. Main owner_tickets checks actual workspace input while portal
+  forms/notices are open and safe owner closure with queued services.
+- tools/verify_layout.py saves actual Rust renderer previews on its own Xvfb
+  display or isolated Windows Actions (--native) only. The real renderer runs at
+  host DPI; simulated widget scaling and forced native Qt scales are separate
+  evidence. Do not claim Windows 11, Wayland/mixed DPI or USB from those checks.
+- Run main runtime, controls, owner_tickets, owner_ticket_service, shutdown,
+  bootstrap_promotion and ubuntu_bootstrap_window after shared GUI changes.
+
 
 Ticket deletion checks use two service instances with independent caches and a
 mocked shared cloud: cover partial and final deletion, no resurrection, failed

@@ -1,4 +1,27 @@
-# Lite 0.1.0 — 2026-11-13
+# Lite 0.1.0 — updated 2026-11-14
+
+Screen fit, Developer Access and cancellation repair:
+
+- Show the owned Windows portal even with the borrowed backend's subprocess
+  hiding hook installed; report readiness only after native window visibility.
+- Keep the main application usable while Developer Access and its window-scoped
+  forms/notices are open. Reopening preserves maximization and closes safely with
+  the owning workspace.
+- Keep Stop visible in every state, with backend-authoritative enablement and
+  reason-specific tooltips. Protected firmware writes/restarts and cleanup finish normally.
+- Fit scaled/portrait/short desktops, pack complete action rows, reserve visible
+  scrollbar gutters outside Sketch/Connection cards, and keep monitor rims inside
+  the pane. Narrow windows offer Monitor and Sketch & Connection views.
+- Bound project, board and Resources windows and make short contents scrollable.
+  Preserve log history, selections, fonts and theme state while changing layout.
+- Run library searches in an owned helper with a 30-second elapsed budget;
+  cancellation cannot publish late results or success. Retire owned Windows Job
+  descendants or Ubuntu process groups without affecting other programs.
+- Bootstrap switches between Technical details and Activity summary with the
+  button naming the view it will open.
+- Add actual Rust renderer previews to Windows and Ubuntu CI alongside the
+  100–200% simulated widget matrix and real Qt portal checks. Windows 11,
+  mixed-monitor interaction and physical USB still need their own evidence.
 
 
 Windows interaction repair:

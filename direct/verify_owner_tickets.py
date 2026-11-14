@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "windows" if sys.platform == "win32" else "offscreen")
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QThread
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QRect, Qt, QThread
 from PySide6.QtGui import QPalette, QTextCursor, QTextOption
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMenu, QMessageBox, QStyle, QStyleOptionComboBox
@@ -438,7 +438,8 @@ class PortalChecks(unittest.TestCase):
         disabled = []
         original = self.dialog.cards_container.setEnabled
         self.dialog.cards_container.setEnabled = lambda value: (disabled.append(value), original(value))
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+        with patch.object(portal, "_portal_message", side_effect=lambda *args, **kwargs:
+                          kwargs["on_finished"](int(QMessageBox.StandardButton.Yes))):
             cards["fixture-2"].delete_button.click()
             settle(self.dialog)
         self.service.delete_ticket.assert_called_once_with("fixture-2")
@@ -481,7 +482,7 @@ class PortalChecks(unittest.TestCase):
         self.service.create_ticket.return_value = {}
         create.txt_title.setText("Failed draft")
         create.txt_desc.setPlainText("Keep these notes")
-        with patch.object(QMessageBox, "critical") as warning:
+        with patch.object(portal, "_portal_message") as warning:
             create.btn_save.click()
             settle(create)
         warning.assert_called_once()
@@ -518,12 +519,29 @@ class PortalChecks(unittest.TestCase):
         self.sign_in()
         self.service.delete_ticket.side_effect = None
         self.service.delete_ticket.return_value = False
-        with patch.object(QMessageBox, "warning") as warning:
+        with patch.object(portal, "_portal_message") as warning:
             self.dialog._on_ticket_deleted("fixture-2")
             settle(self.dialog)
         warning.assert_called_once()
         self.assertIn("fixture-2", [ticket["id"] for ticket in self.dialog._tickets])
         self.assertEqual(self.dialog.stat_total.findChild(QLabel, "val-label").text(), "3")
+
+    def test_delete_confirmation_is_nonblocking_and_only_yes_deletes(self):
+        self.sign_in()
+        card = self.dialog.cards_layout.itemAt(0).widget()
+        card._on_delete()
+        box = APP.activeModalWidget()
+        self.assertIsInstance(box, QMessageBox)
+        self.assertEqual(box.windowModality(), Qt.WindowModality.WindowModal)
+        self.service.delete_ticket.assert_not_called()
+        box.button(QMessageBox.StandardButton.No).click()
+        pump()
+        self.service.delete_ticket.assert_not_called()
+        card._on_delete()
+        box = APP.activeModalWidget()
+        box.button(QMessageBox.StandardButton.Yes).click()
+        settle(self.dialog)
+        self.service.delete_ticket.assert_called_once_with(card._ticket_id)
 
     def test_search_filter_create_edit_and_delete_routes(self):
         self.sign_in()
@@ -538,7 +556,8 @@ class PortalChecks(unittest.TestCase):
         self.service.update_ticket.assert_called_with("fixture-2", {"status": "Resolved"})
         self.assertEqual(card.ticket["status"], "Resolved")
         card = self.dialog.cards_layout.itemAt(0).widget()
-        with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+        with patch.object(portal, "_portal_message", side_effect=lambda *args, **kwargs:
+                          kwargs["on_finished"](int(QMessageBox.StandardButton.Yes))):
             card.delete_button.click()
         settle(self.dialog)
         self.service.delete_ticket.assert_called_once_with("fixture-2")
@@ -698,6 +717,131 @@ class PortalChecks(unittest.TestCase):
         QTest.mousePress(logo, Qt.MouseButton.LeftButton)
         QTest.mouseRelease(logo, Qt.MouseButton.LeftButton, pos=QPoint(-20, -20))
         self.assertEqual(activated.call_count, 2)
+
+    def test_portal_and_all_its_forms_leave_the_sketch_window_accessible(self):
+        workspace = QDialog()
+        self.addCleanup(workspace.deleteLater)
+        self.addCleanup(workspace.close)
+        source = QLineEdit(workspace)
+        source.setGeometry(20, 20, 240, 40)
+        show(workspace, (360, 180))
+        backend = SimpleNamespace(is_busy=False, active_operation=None, _current_op_phase=None,
+                                  current_board="", current_port="")
+        dialog = portal.OwnerTicketDialog(backend=backend, parent=workspace)
+        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(dialog.close)
+        show(dialog)
+        settle(dialog)
+        self.assertIsNone(dialog.parentWidget())
+        self.assertIsNone(dialog.windowHandle().transientParent())
+        self.assertEqual(dialog.windowType(), Qt.WindowType.Window)
+        self.assertEqual(dialog.windowModality(), Qt.WindowModality.NonModal)
+        self.assertIsNone(APP.activeModalWidget())
+
+        def workspace_input(text):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                APP.setActiveWindow(workspace)
+            source.setFocus()
+            QTest.mouseClick(source, Qt.MouseButton.LeftButton)
+            QTest.keyClicks(source, text)
+            self.assertTrue(workspace.isEnabled())
+            self.assertEqual(source.text(), text)
+            source.clear()
+
+        workspace_input("portal open")
+        forms = [
+            lambda: dialog._open_create_ticket_modal(),
+            lambda: dialog._open_edit_ticket_modal(dict(TICKETS[0])),
+            lambda: dialog._open_cloud_settings_modal(),
+        ]
+        for open_form in forms:
+            form = open_form()
+            self.assertIsNotNone(form)
+            show(form)
+            self.assertEqual(form.windowModality(), Qt.WindowModality.WindowModal)
+            self.assertIs(form.windowHandle().transientParent(), dialog.windowHandle())
+            self.assertIs(APP.activeModalWidget(), form)
+            workspace_input("form open")
+            form.reject()
+            pump()
+            settle(dialog)
+
+        def inspect_notice(box):
+            self.assertEqual(box.windowModality(), Qt.WindowModality.WindowModal)
+            self.assertIs(box.parentWidget(), dialog)
+            self.assertTrue(box.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen))
+            workspace_input("notice open")
+            box.close()
+        with patch.object(QMessageBox, "open", new=inspect_notice):
+            portal._portal_message(dialog, "Fixture error", "Retain access to the sketch")
+
+    def test_toolbar_reuses_a_closed_portal_and_recreates_only_a_destroyed_one(self):
+        toolbar = PrimaryToolbar(None)
+        self.addCleanup(toolbar.deleteLater)
+        dialog = Mock()
+        dialog.isMinimized.return_value = False
+        dialog.isVisible.return_value = False
+        toolbar._owner_dialog = dialog
+        with patch.object(portal, "OwnerTicketDialog") as create:
+            toolbar._open_owner_ticket_dialog()
+        create.assert_not_called()
+        dialog.show.assert_called_once()
+        dialog.showNormal.assert_not_called()
+        dialog.auto_refresh.assert_called_once()
+        dialog.isVisible.return_value = True
+        toolbar._open_owner_ticket_dialog()
+        dialog.showNormal.assert_not_called()  # A visible maximized portal stays maximized.
+        dialog.isMinimized.return_value = True
+        toolbar._open_owner_ticket_dialog()
+        dialog.showNormal.assert_called_once()
+        toolbar._owner_dialog_destroyed()
+        self.assertIsNone(toolbar._owner_dialog)
+
+    def test_workspace_destruction_closes_its_independent_portal(self):
+        workspace = QDialog()
+        dialog = portal.OwnerTicketDialog(parent=workspace)
+        show(dialog)
+        settle(dialog)
+        destroyed = Mock()
+        dialog.destroyed.connect(destroyed)
+        with patch.object(dialog, "close", wraps=dialog.close) as close:
+            workspace.deleteLater()
+            QCoreApplication.sendPostedEvents(workspace, QEvent.Type.DeferredDelete)
+            close.assert_called_once()
+            self.assertFalse(dialog.isVisible())
+        QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+        destroyed.assert_called_once()
+
+    def test_owner_can_close_during_a_portal_request_and_its_notice(self):
+        workspace = QDialog()
+        dialog = portal.OwnerTicketDialog(parent=workspace)
+        show(dialog)
+        settle(dialog)
+        entered, release = Event(), Event()
+        self.addCleanup(release.set)
+        def authenticate(*args, **kwargs):
+            entered.set()
+            if not release.wait(4):
+                raise AssertionError("Fixture did not finish the request")
+            return True, "Fixture sign-in completed"
+        with patch.object(self.service, "authenticate", side_effect=authenticate):
+            dialog.txt_auth_pwd.setText("fixture-only")
+            dialog._do_authenticate()
+            self.assertTrue(entered.wait(2))
+            notice = portal._portal_message(dialog, "Fixture", "An owned background request is running")
+            self.assertTrue(notice.isVisible())
+            ended = Mock()
+            dialog.destroyed.connect(ended)
+            workspace.deleteLater()
+            QCoreApplication.sendPostedEvents(workspace, QEvent.Type.DeferredDelete)
+            QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+            ended.assert_called_once()
+            release.set()
+            deadline = time.monotonic() + 3
+            while portal._SERVICE_TASKS and time.monotonic() < deadline:
+                QTest.qWait(10)
+            self.assertFalse(portal._SERVICE_TASKS)
 
     def test_repair_is_offered_for_missing_runtime_and_never_for_source_import_errors(self):
         runtime = ModuleNotFoundError("No module named 'PySide6.QtSvg'", name="PySide6.QtSvg")
