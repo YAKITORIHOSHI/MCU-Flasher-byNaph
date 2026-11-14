@@ -106,18 +106,33 @@ def register_lite(root: Path, data_home: Path) -> bool:
     lite = root / "LITE-MODE"
     if not (lite / "run.sh").is_file() or not (lite / "assets/lite.png").is_file():
         return False
-    write_if_changed(data_home / f"icons/hicolor/256x256/apps/{LITE_ICON}.png",
-                     (lite / "assets/lite.png").read_bytes(), 0o644)
+    install_icon(data_home, LITE_ICON, (lite / "assets/lite.png").read_bytes())
     write_if_changed(data_home / "applications" / LITE_ENTRY,
                      lite_desktop_entry(root).encode("utf-8"), 0o755)
     return True
 
 
-def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
-    """Keep icon/theme directory timestamps stable on repeated registration."""
+def install_icon(data_home: Path, name: str, contents: bytes) -> bool:
+    """Install a 256-pixel hicolor app icon so the running desktop shows it.
+
+    GTK (and GNOME Shell's app grid and dock) notices new icons only when the
+    theme directory's own timestamp changes, not a size subfolder's. Like
+    xdg-icon-resource, bump it after a real change so the icon appears without
+    logging out; unchanged registrations leave timestamps alone."""
+    theme = data_home / "icons/hicolor"
+    changed = write_if_changed(theme / f"256x256/apps/{name}.png", contents, 0o644)
+    if changed:
+        os.utime(theme)
+    return changed
+
+
+def write_if_changed(path: Path, contents: bytes, mode: int) -> bool:
+    """Keep icon/theme directory timestamps stable on repeated registration.
+    Returns whether the file's contents were replaced."""
     if path.is_symlink():
         raise OSError("A registered application file must not be a symbolic link")
-    if not path.is_file() or path.read_bytes() != contents:
+    changed = not path.is_file() or path.read_bytes() != contents
+    if changed:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
@@ -131,6 +146,7 @@ def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
                 temporary.unlink()
     if path.stat().st_mode & 0o777 != mode:
         path.chmod(mode)
+    return changed
 
 
 def main(argv=None) -> int:
@@ -157,7 +173,7 @@ def main(argv=None) -> int:
     if args.install:
         entries.append((data_home / "applications/mcu-flasher.desktop", desktop_entry(ROOT)))
     try:
-        write_if_changed(data_home / "icons/hicolor/256x256/apps/mcu-flasher.png", icon, 0o644)
+        install_icon(data_home, "mcu-flasher", icon)
         for path, text in entries:
             write_if_changed(path, text.encode("utf-8"), 0o755)
             print(f"Shortcut created: {path}")

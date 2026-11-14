@@ -236,14 +236,14 @@ def ensure_user_installation(source, *, data_home=None, report=print):
 
 
 def register_completed_installation(root, *, data_home=None, report=print):
-    from direct.ubuntu.install_desktop import desktop_entry, register_lite, write_if_changed
+    from direct.ubuntu.install_desktop import desktop_entry, install_icon, register_lite, write_if_changed
     root = Path(root).absolute()
     if root != installation_directory(data_home) or not is_owned_installation(root):
         return False
     # Call only after Bootstrap's complete runtime/package validation succeeds.
     data_home = data_directory(data_home)
     artwork = (root / "src/assets/mcu_icon.png").read_bytes()
-    write_if_changed(data_home / "icons/hicolor/256x256/apps/mcu-flasher.png", artwork, 0o644)
+    install_icon(data_home, "mcu-flasher", artwork)
     write_if_changed(data_home / "applications/mcu-flasher.desktop",
                      desktop_entry(root).encode("utf-8"), 0o755)
     lite = register_lite(root, data_home)

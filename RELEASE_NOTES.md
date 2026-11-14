@@ -15,6 +15,8 @@ Installed copies update themselves from GitHub on their next launch; see
 
 - On Ubuntu, MCU Flasher Lite now appears in All Apps beside MCU Flasher, with
   its own icon. Existing installations add it on their next launch.
+- New app icons now show in All Apps and the dock right away, without logging
+  out. A Lite window opened before its entry existed shows its icon once reopened.
 
 ## November 14 — Fair serial port ownership between the main app and Lite
 

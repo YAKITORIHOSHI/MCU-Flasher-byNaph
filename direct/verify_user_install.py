@@ -171,6 +171,9 @@ class UserInstallChecks(unittest.TestCase):
         (lite / 'run.sh').write_text('#!/usr/bin/env bash\n')
         (lite / 'assets/lite.png').write_bytes(b'lite icon')
         entry = self.data / 'applications' / LITE_ENTRY
+        theme = self.data / 'icons/hicolor'
+        theme.mkdir(parents=True)
+        os.utime(theme, (1, 1))
         # Never before the main entry exists: that marks a completed setup.
         self.assertFalse(install.refresh_registered_lite(destination, data_home=self.data))
         self.assertFalse(entry.exists())
@@ -180,12 +183,15 @@ class UserInstallChecks(unittest.TestCase):
         self.assertIn(exec_argument(str(lite / 'run.sh')), text)
         self.assertIn('StartupWMClass=dev.naph.mcuflasher.lite', text)
         self.assertEqual((self.data / 'icons/hicolor/256x256/apps/mcu-flasher-lite.png').read_bytes(), b'lite icon')
+        self.assertNotEqual(theme.stat().st_mtime, 1, 'A new icon bumps the theme so GNOME shows it without logging out')
+        os.utime(theme, (1, 1))
         # An installation registered before Lite had an entry gains it on launch, once.
         entry.unlink()
         self.assertTrue(install.refresh_registered_lite(destination, data_home=self.data))
         before = entry.stat().st_mtime_ns
         self.assertTrue(install.refresh_registered_lite(destination, data_home=self.data))
         self.assertEqual(entry.stat().st_mtime_ns, before)
+        self.assertEqual(theme.stat().st_mtime, 1, 'Unchanged icons leave the theme timestamp alone')
         self.assertFalse(install.refresh_registered_lite(self.source, data_home=self.data),
                          'A portable folder never registers itself')
         self.assertEqual(sorted(path.name for path in (self.data / 'applications').glob('*.desktop')),

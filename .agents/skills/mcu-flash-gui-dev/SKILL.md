@@ -47,7 +47,11 @@ file `dev.naph.mcuflasher.lite.desktop` matching Lite's Wayland app ID, icon
 `mcu-flasher-lite`). `register_completed_installation` writes it after setup;
 `launch.py` calls `refresh_registered_lite` on normal launches so earlier
 installations gain it. Both touch only the owned installation whose main entry
-exists.
+exists. Install icons through `install_icon`: GTK/GNOME Shell rescan a user
+icon theme only when `icons/hicolor` itself changes, so a real icon change bumps
+its timestamp (as xdg-icon-resource does). GNOME never re-matches an already
+open window, so a Lite window opened before its entry keeps a generic icon until
+reopened.
 
 Project, board and Resources dialogs are modal: `modal_dialogs()` paints the
 backdrop and makes the top open window egui's modal layer (board picker above
