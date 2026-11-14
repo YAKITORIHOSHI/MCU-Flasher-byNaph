@@ -536,7 +536,8 @@ class BootstrapRestartChecks(unittest.TestCase):
         self.received = self.fixture / "received.json"
         self.log = []
 
-    HANDOFF_NAMES = ("_write_bootstrap_slot_owner", "_adopt_bootstrap_slot_handoff")
+    HANDOFF_NAMES = ("_write_bootstrap_slot_owner", "_bootstrap_python_parent_pid",
+                     "_adopt_bootstrap_slot_handoff")
 
     @staticmethod
     def _segments(names):
@@ -558,17 +559,20 @@ class BootstrapRestartChecks(unittest.TestCase):
             argv=argv, executable=sys.executable, exit=sys.exit), "subprocess": subprocess, "os": os,
             "_BOOTSTRAP_LOCK_FILE": self.lock,
             "_record_bootstrap_log": lambda level, message: self.log.append(message)}
-        code = self._segments(self.HANDOFF_NAMES[:1] + ("_restart_after_application_update",))
+        code = self._segments(("_write_bootstrap_slot_owner", "_bootstrap_try_create_lock_exclusive",
+                               "_restart_after_application_update"))
         exec(compile(code, "bootstrap.py", "exec"), namespace)
         return namespace["_restart_after_application_update"]
 
-    def _adopting_child(self, then=""):
+    def _adopting_child(self, then="", *, cleanup=False):
         """A child running the real handoff code, as the restarted Bootstrap's entry does."""
         return ("import json, os, sys\nfrom pathlib import Path\n"
                 f"_BOOTSTRAP_LOCK_FILE = Path({str(self.fixture / 'launcher.lock')!r})\n"
                 + self._segments(self.HANDOFF_NAMES) + "\n"
                 "adopted = _adopt_bootstrap_slot_handoff()\n"
-                f"json.dump({{'adopted': adopted, 'pid': os.getpid()}}, open({str(self.received)!r}, 'w'))\n"
+                + (self._segments(("_release_bootstrap_slot",)) + "\n"
+                   "import atexit\natexit.register(_release_bootstrap_slot)\n" if cleanup else "")
+                + f"json.dump({{'adopted': adopted, 'pid': os.getpid()}}, open({str(self.received)!r}, 'w'))\n"
                 + then)
 
     def test_restarted_bootstrap_adopts_the_launcher_lock_instead_of_reporting_already_starting(self):
@@ -584,7 +588,7 @@ class BootstrapRestartChecks(unittest.TestCase):
         self.assertEqual(self.lock.read_text(encoding="utf-8"), str(received["pid"]))
 
     def test_child_that_exits_early_returns_the_lock_to_the_continuing_bootstrap(self):
-        self._restart(self._adopting_child("raise SystemExit(3)\n"), ["launcher.py"])()
+        self._restart(self._adopting_child("raise SystemExit(3)\n", cleanup=True), ["launcher.py"])()
         self.assertTrue(json.loads(self.received.read_text(encoding="utf-8"))["adopted"])
         self.assertEqual(self.lock.read_text(encoding="utf-8"), str(os.getpid()))
 
@@ -598,11 +602,30 @@ class BootstrapRestartChecks(unittest.TestCase):
         self.assertEqual(lock.read_text(encoding="utf-8"), str(os.getppid()))
 
     def test_handoff_never_takes_a_lock_held_by_another_process(self):
-        restart = self._restart(self._adopting_child("raise SystemExit(3)\n"), ["launcher.py"])
+        restart = self._restart(self._adopting_child("raise SystemExit(3)\n", cleanup=True), ["launcher.py"])
         self.lock.write_text("424242", encoding="utf-8")
         restart()
         self.assertFalse(json.loads(self.received.read_text(encoding="utf-8"))["adopted"])
         self.assertEqual(self.lock.read_text(encoding="utf-8"), "424242")
+
+    def test_handoff_follows_only_one_verified_windows_python_relay(self):
+        lock = self.fixture / "launcher.lock"
+        namespace = {"os": SimpleNamespace(getppid=lambda: 100, getpid=lambda: 200),
+                     "sys": SimpleNamespace(argv=["bootstrap.py", "--resume-application-update"],
+                                            platform="win32"), "_BOOTSTRAP_LOCK_FILE": lock}
+        exec(compile(self._segments(self.HANDOFF_NAMES), "bootstrap.py", "exec"), namespace)
+        relay = namespace["_bootstrap_python_parent_pid"] = Mock(return_value=50)
+        lock.write_text("50", encoding="utf-8")
+        self.assertTrue(namespace["_adopt_bootstrap_slot_handoff"]())
+        self.assertEqual(lock.read_text(encoding="utf-8"), "200")
+        relay.assert_called_once_with(100)
+
+        for owner, relay_parent in (("424242", 50), ("50", None)):
+            with self.subTest(owner=owner, relay_parent=relay_parent):
+                lock.write_text(owner, encoding="utf-8")
+                relay.return_value = relay_parent
+                self.assertFalse(namespace["_adopt_bootstrap_slot_handoff"]())
+                self.assertEqual(lock.read_text(encoding="utf-8"), owner)
 
     def test_restart_keeps_spaced_paths_whole_and_leaves_once_the_child_runs(self):
         child = ("import json, sys\n"

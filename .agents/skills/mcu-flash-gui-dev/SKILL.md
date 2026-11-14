@@ -12,6 +12,13 @@ Unicode and ASCII stage rules without changing stage/progress capture groups.
 Verify glass lifecycle and bootstrap_window in isolated fixtures; preserve the
 complete native layout matrix and finite elapsed budgets.
 
+Windows environment launchers insert a Python relay during Bootstrap restart.
+Resume adoption accepts the direct parent or one native-snapshot-verified
+python.exe/pythonw.exe relay whose parent owns the slot. Keep this dependency-free
+before setup. Early child exit runs real slot cleanup; recovery creates an absent
+slot exclusively and never overwrites an unrelated owner. Verify the real child
+path in bootstrap-handoff.yml on Windows 3.11/3.14, with app_update fixtures locally.
+
 ## November 14: shared prepared resources and short portals
 
 Lite's first native entry dispatches the shared Bootstrap with `--lite`, which

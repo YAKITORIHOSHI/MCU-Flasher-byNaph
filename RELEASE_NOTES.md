@@ -13,6 +13,10 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ## November 15 — Bootstrap output and view cleanup
 
+- Preserve Windows startup-lock handoff through Python's environment launcher.
+  After an early restart failure, reclaim only an exclusively available slot;
+  a separate live owner keeps its lock. A short native Windows workflow checks
+  real environment launchers on Python 3.11 and 3.14.
 - Fall back to readable ASCII stage headings on legacy consoles while retaining
   Bootstrap's stage and progress updates. Output failures remain visible.
 - Retire queued backdrop updates when their view closes and guard deleted native

@@ -134,6 +134,8 @@ window during a download skips that update and opens the installed version.
 - An update never installs an older version. A failed update leaves the current
   version in place.
 - Two launches at once share one download instead of each fetching the update.
+- Windows update restarts retain startup ownership through the prepared Python
+  environment, so the requested workspace can open normally after the update.
 - Updates are on by default. **Skip Updates** in the Windows Bootstrap window,
   or the environment variable `MCU_FLASH_GUI_SKIP_UPDATES=1`, turns them off.
 - A Git checkout is never updated automatically; use `git pull`.

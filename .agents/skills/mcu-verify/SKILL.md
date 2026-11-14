@@ -12,6 +12,11 @@ both heading forms into real stage/status/progress widgets. Serial-reader AST
 fixtures must provide port_owner_window, and a held port must never open a monitor.
 Preserve all display-scale cases when allowing slower native renderer matrices.
 
+BootstrapRestartChecks uses real child processes, real atexit slot cleanup and
+literal spaced paths. Check native Windows venv relay adoption through the short
+bootstrap-handoff workflow; mocked relay cases alone cannot prove Toolhelp layout
+or actual parent PIDs. Keep missing-resume and unrelated-owner refusal cases.
+
 ## Prepared resources and short Developer Access
 
 - Lite tools/verify_shared_store.py covers one physical core, concurrent readers,

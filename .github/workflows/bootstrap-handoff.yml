@@ -1,0 +1,40 @@
+name: Windows Bootstrap restart
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/modules/bootstrap.py'
+      - 'direct/verify_app_update.py'
+      - '.github/workflows/bootstrap-handoff.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-restart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  restart:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    timeout-minutes: 5
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Real Windows venv redirector and Bootstrap lock handoff
+        shell: pwsh
+        run: |
+          python -m venv temp/bootstrap-restart-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & temp/bootstrap-restart-runtime/Scripts/python.exe -B direct/verify_app_update.py BootstrapRestartChecks
+          exit $LASTEXITCODE

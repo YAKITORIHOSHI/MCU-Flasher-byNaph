@@ -1,7 +1,7 @@
 {
   "date": "2026-11-15",
-  "parent_commit": "6739cb05f78d9975d0dea50b51be4e258aef4de0",
-  "scope": "Finalize reviewed handoff: owned backdrop refresh lifetime, Bootstrap console fallback and stage parser, repaired serial/platform fixtures, full native matrix coverage with finite longer budget",
+  "parent_commit": "038a3cff1cac611bba40a4ffdb1f09de419e55f8",
+  "scope": "Finalize reviewed handoff: owned backdrop refresh lifetime, Bootstrap console fallback and stage parser, repaired serial/platform fixtures, full native matrix coverage with finite longer budget; Windows Bootstrap restart across one verified environment relay with exclusive failed-child recovery",
   "source_files": {
     "direct/ubuntu/bootstrap_view.py": {
       "sha256": "55f579a95057b4f4955ebee2fd23b4ae914e08cb4bbb5746d7501c79e371422c",
@@ -36,12 +36,20 @@
       "bytes": 7184
     },
     "main/core/file_utils.py": {
-      "sha256": "c76168c192c9e4e59acc7e9bef9808809f52a001f1e0e34259c2e7dd227a7068",
-      "bytes": 116124
+      "sha256": "0df6a6eab885b3469853ca5caf0f45e1be28574a3499947727819035a0d7569d",
+      "bytes": 116368
     },
     "main/qt/glass.py": {
       "sha256": "0679c4d389b61417bab3c95bff42af947cbd1901da000efb53e9703f0fde0c6f",
       "bytes": 32754
+    },
+    "src/modules/bootstrap.py": {
+      "sha256": "57ad667bdd9692d3b14c7464e2d6aafecde44b279cc34b41801d9399c1272c88",
+      "bytes": 495191
+    },
+    "direct/verify_app_update.py": {
+      "sha256": "18221b40d034f2ceb742c040f9d774d3e4356ddb7ec3875f568332bf08db33f2",
+      "bytes": 63565
     }
   },
   "local_checks": {
@@ -53,7 +61,8 @@
     "ubuntu_bootstrap": "passed",
     "ubuntu_runtime": "passed",
     "owner_tickets": 42,
-    "shutdown": "passed"
+    "shutdown": "passed",
+    "app_update": 60
   },
   "native_parent_checks": {
     "lite_windows_and_ubuntu": "https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/actions/runs/43606262544",
@@ -66,5 +75,6 @@
     "Follow-up Qt lifetime/console changes are checked locally on Ubuntu; parent native Windows results do not independently qualify changed follow-up Python files.",
     "Full native matrix retains all original display-scale cases.",
     "No native Windows 11 or physical USB qualification was added."
-  ]
+  ],
+  "restart_native_gate": ".github/workflows/bootstrap-handoff.yml; actual Windows venv launcher on Python 3.11 and 3.14"
 }

@@ -9980,7 +9980,11 @@ def _restart_after_application_update() -> None:
     if exit_code == 0:
         sys.exit(0)
     # Continuing here: take the lock back if the child adopted it.
-    _write_bootstrap_slot_owner(restarted.pid, os.getpid())
+    if not _write_bootstrap_slot_owner(restarted.pid, os.getpid()):
+        # The child's normal atexit cleanup removes its own lock. Windows venvs
+        # also insert a redirector, so Popen.pid need not be the Python owner.
+        # Exclusive creation restores a released slot without taking another's.
+        _bootstrap_try_create_lock_exclusive()
     _record_bootstrap_log("UPDATE", f"Restarted Bootstrap exited early ({exit_code}); continuing from this process.")
 
 
@@ -11455,18 +11459,69 @@ def _write_bootstrap_slot_owner(expected_pid: int, new_pid: int) -> bool:
         return False
 
 
+def _bootstrap_python_parent_pid(pid: int) -> int | None:
+    """Find a Windows Python relay's real parent without runtime dependencies."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                        ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        kernel.Process32FirstW.restype = wintypes.BOOL
+        kernel.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        kernel.Process32NextW.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+        snapshot = kernel.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+        if snapshot in (None, ctypes.c_void_p(-1).value):
+            return None
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            found = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+            while found:
+                if entry.th32ProcessID == pid:
+                    if entry.szExeFile.casefold() in ("python.exe", "pythonw.exe"):
+                        return int(entry.th32ParentProcessID) or None
+                    return None
+                found = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel.CloseHandle(snapshot)
+    except Exception:
+        pass
+    return None
+
+
 def _adopt_bootstrap_slot_handoff() -> bool:
     """Take the launcher lock from the Bootstrap that restarted us after an update.
 
     The updating process still holds the lock while it starts this one, so an
     ordinary claim reported "already starting up" and left nothing running.
-    Adopt only a resumed update whose actual parent owns the lock. This needs
-    nothing from the parent, so copies whose old Bootstrap performs the update
-    hand over too.
+    Adopt only a resumed update whose actual parent owns the lock, allowing one
+    verified Windows Python redirector between them. This needs nothing from
+    the parent, so copies whose old Bootstrap performs the update hand over too.
     """
     if "--resume-application-update" not in sys.argv:
         return False
-    return _write_bootstrap_slot_owner(os.getppid(), os.getpid())
+    parent_pid = os.getppid()
+    if _write_bootstrap_slot_owner(parent_pid, os.getpid()):
+        return True
+    if sys.platform == "win32":
+        # A Windows venv's python.exe/pythonw.exe starts the base interpreter
+        # as a child and waits. Its parent, rather than that relay, owns the lock.
+        owner_pid = _bootstrap_python_parent_pid(parent_pid)
+        if owner_pid:
+            return _write_bootstrap_slot_owner(owner_pid, os.getpid())
+    return False
 
 
 def _notify_bootstrap_already_running():
