@@ -73,6 +73,23 @@ jobs:
             & LITE-MODE/.venv/Scripts/python.exe -B LITE-MODE/tools/verify_developer.py --render-dir "LITE-MODE/temp/windows-native/$scale"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Software OpenGL for the hosted runner
+        shell: pwsh
+        run: |
+          # Hosted Windows runners expose only Microsoft's OpenGL 1.1, and
+          # egui_glow needs 2.0+. Mesa's llvmpipe renders the real executable on
+          # the CPU. CI-only: these DLLs are never committed or shipped.
+          $archive = Join-Path $env:RUNNER_TEMP "mesa.7z"
+          Invoke-WebRequest -Uri "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z" -OutFile $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne "351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695") { throw "Unexpected Mesa archive: $hash" }
+          $mesa = Join-Path $env:RUNNER_TEMP "mesa"
+          7z x $archive "-o$mesa" "x64\*" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path "$mesa\x64\opengl32.dll")) { throw "Mesa opengl32.dll is missing" }
+          Get-ChildItem "$mesa\x64" -Filter *.dll | Where-Object { $_.Name -match '^(opengl32|libgallium_wgl|libglapi)\.dll$' } |
+            Copy-Item -Destination LITE-MODE
+          "GALLIUM_DRIVER=llvmpipe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Actual Windows Rust renderer on synthetic small desktops
         shell: pwsh
         run: |
