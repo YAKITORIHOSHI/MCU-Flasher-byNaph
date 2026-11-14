@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import queue
+import threading
 from pathlib import Path
 import subprocess
 import sys
@@ -15,7 +17,7 @@ import psutil  # Load the native backend before host-policy fixtures change sys.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 from isolation import child_setup, environment
-from worker import ORIGINAL, Worker, snapshot_engine, snapshot_sources, host_check
+from worker import ORIGINAL, Worker, snapshot_engine, snapshot_sources, host_check, hold_lock, live_workers, try_lock
 
 
 class Recorder:
@@ -112,7 +114,8 @@ def main():
             worker = Worker(state, output)
             worker.ports()
             check(not worker.api.current_board and not worker.api.current_port, "no board or port is automatically selected")
-            check(output.events[-1] == ("ports", []), "port enumeration uses a hardware-free fixture")
+            check([data for event, data in output.events if event == "ports"][-1] == [], "port enumeration uses a hardware-free fixture")
+            check(output.events[-1] == ("sketches", {"open_elsewhere": []}), "the port poll reports sketches open in other Lite windows")
             worker.dispatch({"cmd": "boards", "query": "Arduino Uno [atmelavr:uno]"})
             found = [data for event, data in output.events if event == "boards"][-1]["items"]
             check(any(item["name"] == "Arduino Uno [atmelavr:uno]" for item in found), "exact boards are searchable before packages are installed")
@@ -241,6 +244,88 @@ def main():
                 check(True, "audit guard refuses writes to original application files before mutation")
             else:
                 check(False, "audit guard refuses writes to original application files before mutation")
+            # Ports are shared with the main app; sketches between Lite windows.
+            from main.core import config as lite_config
+
+            def refusal(request):
+                try:
+                    worker.dispatch(request)
+                except (ValueError, RuntimeError) as exc:
+                    return str(exc)
+                return ""
+            holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+            try:
+                created = psutil.Process(holder.pid).create_time()
+                peer = base / "main-home" / ".mcu_gui_config.json"
+                peer.parent.mkdir()
+                peer.write_text(json.dumps({"instances": {str(holder.pid): {
+                    "create_time": created, "selected_port": "/dev/ttyFIXTURE0"}}}), encoding="utf-8")
+                with patch.object(lite_config, "_peer_instance_registries", lambda: ((peer,),)):
+                    check(lite_config.port_occupied_owner("/dev/ttyFIXTURE0") == str(holder.pid),
+                          "a port selected in a live main window is occupied for Lite")
+                    check(not lite_config.claim_serial_port("/dev/ttyFIXTURE0"), "Lite cannot claim the main window's port")
+                    fixture_ports = [{"device": "/dev/ttyFIXTURE0"}, {"device": "/dev/ttyFIXTURE1"}]
+                    with patch.object(worker.api, "_scan_ports", return_value=fixture_ports), \
+                            patch.object(worker.api, "_stop_serial_monitor"):
+                        worker.ports()
+                        listed = {item["device"]: item["occupied"] for item in [data for event, data in output.events if event == "ports"][-1]}
+                        check(listed == {"/dev/ttyFIXTURE0": True, "/dev/ttyFIXTURE1": False},
+                              "the port list marks ports selected in other windows")
+                        check("another MCU Flasher or Lite window" in refusal({"cmd": "port", "value": "/dev/ttyFIXTURE0"})
+                              and worker.api.current_port != "/dev/ttyFIXTURE0", "selecting another window's port is refused")
+                        worker.dispatch({"cmd": "port", "value": "/dev/ttyFIXTURE1"})
+                        check(worker.api.current_port == "/dev/ttyFIXTURE1", "a free port can be selected")
+                        worker.api.current_port = "/dev/ttyFIXTURE0"
+                        check(refusal({"cmd": "monitor", "connect": True}) and not worker.api.serial_running,
+                              "Connect rechecks that no other window selected the port")
+                        worker.api.current_port = ""
+                    peer_lock = try_lock(peer.with_name(peer.name + ".lock"))
+                    started = time.monotonic()
+                    claimed = lite_config.claim_serial_port("/dev/ttyFIXTURE1")
+                    check(not claimed and time.monotonic() - started < 6,
+                          "a busy main settings lock ends a claim within its budget instead of deadlocking")
+                    peer_lock.close()
+                    check(lite_config.claim_serial_port(""), "Lite releases its port claim")
+                main_view = base / "main-view"
+                (main_view / "mcu-flasher-lite").mkdir(parents=True)
+                (main_view / "mcu-flasher-lite" / "settings.json").write_text(json.dumps({"instances": {str(holder.pid): {
+                    "create_time": created, "selected_port": "COM7"}}}), encoding="utf-8")
+                with patch.dict(os.environ, {"XDG_DATA_HOME": str(main_view), "LOCALAPPDATA": str(main_view)}):
+                    check(lite_config.port_occupied_owner("COM7") == str(holder.pid),
+                          "the main app reads ports selected in live Lite windows")
+                data = lite_config._load_raw_config(fresh=True)
+                data.setdefault("instances", {})[str(holder.pid)] = {"create_time": created, "active_sketch_dir": str(source)}
+                lite_config._save_raw_config(data)
+                check("already open in another Lite window" in refusal({"cmd": "project", "path": str(source)}),
+                      "a sketch open in another Lite window is refused")
+                with patch.object(worker.api, "_scan_ports", return_value=[]):
+                    worker.ports()
+                check(output.events[-1] == ("sketches", {"open_elsewhere": [str(source)]}),
+                      "the UI learns which sketches other Lite windows hold")
+            finally:
+                holder.kill()
+                holder.wait()
+            lite_config._pid_create_times_cache = None  # The backend caches process inventory for 2 s.
+            with patch.object(lite_config, "_peer_instance_registries", lambda: ((peer,),)):
+                check(lite_config.port_occupied_owner("/dev/ttyFIXTURE0") is None, "a closed window releases its port")
+            check(not refusal({"cmd": "project", "path": str(source)}) and worker.source == source,
+                  "a closed window releases its sketch")
+            worker.protected.remove(source)  # Opened for real; the fixture may delete it afterwards.
+            waiting = threading.Event()
+            held = try_lock(state / "packages.lock")
+            waiting.set()
+            try:
+                hold_lock(state / "packages.lock", budget=5, cancel=waiting)
+            except InterruptedError:
+                check(True, "Stop ends a wait for another window's package work")
+            else:
+                check(False, "Stop ends a wait for another window's package work")
+            held.close()
+            portal = try_lock(state / "developer-access.lock")
+            with patch("subprocess.Popen") as launched:
+                check("already open in another Lite window" in refusal({"cmd": "developer_access"}) and not launched.called,
+                      "Developer Access opens in only one Lite window")
+            portal.close()
             worker.close()
             child_state = base / "protocol-state"
             program = (
@@ -263,6 +348,37 @@ def main():
             check(acknowledgements == [101, 102], "command acknowledgements match exact requests and do not replay on malformed JSON")
             check(any(frame["event"] == "error" for frame in frames) and frames[-1]["event"] == "closed", "malformed requests report errors without preventing graceful shutdown")
             check(max(len(json.dumps(frame)) for frame in frames) < 1024 * 1024, "all real protocol frames fit the Rust reader budget")
+            shared_state = base / "shared-state"
+            multi_env = dict(child_env, MCU_LITE_STATE=str(shared_state), HOME=str(base / "multi-home"))
+            (base / "multi-home").mkdir()
+            first = subprocess.Popen([sys.executable, "-B", "-u", "-c", program, str(ROOT / "python")], env=multi_env,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            try:
+                lines = queue.Queue()
+                threading.Thread(target=lambda: [lines.put(line) for line in first.stdout], daemon=True).start()
+                deadline = time.monotonic() + 60
+                ready = False
+                while not ready and time.monotonic() < deadline:
+                    try:
+                        ready = json.loads(lines.get(timeout=1)).get("event") == "ready"
+                    except queue.Empty:
+                        pass
+                check(ready and len(live_workers(shared_state)) == 1, "a Lite window registers its worker in shared state")
+                second = subprocess.run([sys.executable, "-B", "-u", "-c", program, str(ROOT / "python")], env=multi_env,
+                    input='{"cmd":"status","id":201}\n{"cmd":"shutdown","id":202}\n', capture_output=True, text=True,
+                    timeout=60, check=False)
+                frames = [json.loads(line) for line in second.stdout.splitlines()]
+                check(second.returncode == 0 and any(frame["event"] == "ready" for frame in frames),
+                      "a second Lite window starts beside a running one")
+                check("shares its backend snapshot" in second.stderr, "a second window never rewrites the running window's backend")
+                first.stdin.write('{"cmd":"shutdown"}\n')
+                first.stdin.flush()
+                first.wait(timeout=30)
+            finally:
+                if first.poll() is None:
+                    first.kill()
+                    first.wait()
+            check(not live_workers(shared_state), "closed windows release their registration")
     print(f"\n{len(checks)} hardware-free checks passed. No device was opened and no package was downloaded.")
 
 

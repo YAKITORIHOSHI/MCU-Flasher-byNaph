@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-windows-maintainer
-description: "Windows MCU Flasher maintainer for visible modeless Developer Access, responsive Lite views and cancellable Stop, passive monitoring, deliberate resets, rounded glass menus, Settings, source navigation, updates, UNC CMD and steady OpenCode columns."
+description: "Windows MCU Flasher maintainer for visible modeless Developer Access, responsive multi-window Lite with modal dialogs and ports shared safely with the main app, cancellable Stop, passive monitoring, deliberate resets, rounded glass menus, Settings, source navigation, updates, UNC CMD and steady OpenCode columns."
 tools: [read, edit, search, execute]
 ---
 

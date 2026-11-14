@@ -90,7 +90,9 @@ Open its `UBUNTU` or `WINDOWS.exe` launcher; it reuses the prepared Python tools
 Lite's board picker follows the main app's rows and confirmation controls; its
 five-click Developer Access opens the existing authenticated portal.
 Stop stays visible with reason-specific enablement, and narrow windows switch
-between the monitor and scrollable Sketch & Connection controls.
+between the monitor and scrollable Sketch & Connection controls. Like the main
+app, Lite opens each sketch in its own window. A serial port selected in either
+app is marked in use in the other and cannot be selected there.
 See [Lite's guide](LITE-MODE/README.md). Bootstrap includes Lite and future public
 application folders automatically: checkouts use tracked files, and release ZIPs
 carry a generated source manifest. Private settings, caches and build scratch

@@ -11,6 +11,16 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 14 — Lite multiple sketches and shared serial ports
+
+- Lite opens several sketches at once, each in its own window, like the main app.
+- The main app and Lite never select the same serial port: a port chosen in one
+  is shown as in use in the other and refused, including at Connect and Upload.
+- Lite's Open sketch, Resources and board picker stay in front until closed, and
+  the large empty space in Open sketch is fixed.
+- Reopening Lite right after closing it no longer reports that another workspace
+  is using its state.
+
 ## November 14 — Lite screen fit, visible Developer Access and reliable Stop
 
 - Fix Windows staying closed after an automatic update said it was restarting:

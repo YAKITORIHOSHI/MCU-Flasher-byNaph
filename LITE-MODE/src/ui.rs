@@ -300,6 +300,62 @@ pub fn app_icon() -> egui::IconData {
     egui::IconData::default()
 }
 
+const PROJECT_DIALOG: &str = "Open sketch";
+const RESOURCES_DIALOG: &str = "Resources";
+const BOARD_DIALOG: &str = "Choose your board";
+
+/// Same sketch folder, ignoring trailing separators (and case on Windows).
+fn same_folder(a: &str, b: &str) -> bool {
+    let trim = |path: &str| path.trim().trim_end_matches(['/', '\\']).to_owned();
+    let (a, b) = (trim(a), trim(b));
+    if cfg!(windows) {
+        a.eq_ignore_ascii_case(&b)
+    } else {
+        a == b
+    }
+}
+
+/// A recent sketch row; a sketch open in another Lite window stays listed
+/// but cannot be chosen until that window closes it.
+fn recent_sketch(ui: &mut egui::Ui, path: &str, open_elsewhere: &[String]) -> bool {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    let elsewhere = open_elsewhere.iter().any(|open| same_folder(open, path));
+    let label = if elsewhere {
+        format!("{name}  (open in another window)\n{path}")
+    } else {
+        format!("{name}\n{path}")
+    };
+    ui.add_enabled(!elsewhere, egui::Button::new(label).wrap())
+        .on_disabled_hover_text("Already open in another Lite window")
+        .clicked()
+}
+
+/// A dialog action row: horizontal rows get exactly their controls' height,
+/// stacked rows grow downward. A centered layout given the rest of a
+/// scrolling window would center its buttons in that whole height.
+fn action_row<R>(
+    ui: &mut egui::Ui,
+    stacked: bool,
+    height: f32,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let (size, layout) = if stacked {
+        (
+            egui::vec2(ui.available_width(), 0.0),
+            egui::Layout::top_down(Align::Min),
+        )
+    } else {
+        (
+            egui::vec2(ui.available_width(), height),
+            egui::Layout::left_to_right(Align::Center),
+        )
+    };
+    ui.allocate_ui_with_layout(size, layout, add)
+}
+
 fn button(ui: &mut egui::Ui, label: &str, image: &str, tone: Tone, size: Vec2) -> egui::Response {
     let palette = Palette::from_context(ui.ctx());
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
@@ -486,6 +542,9 @@ struct Port {
     device: String,
     #[serde(default)]
     description: String,
+    /// Selected in another MCU Flasher or Lite window.
+    #[serde(default)]
+    occupied: bool,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -622,6 +681,10 @@ pub struct LiteApp {
     files: Vec<String>,
     project_input: String,
     project_dialog: bool,
+    /// `--project <path>`: the sketch this window was opened for.
+    startup_project: Option<String>,
+    /// Sketch folders open in other Lite windows.
+    open_elsewhere: Vec<String>,
     board: String,
     platform: String,
     board_dialog: bool,
@@ -691,8 +754,11 @@ pub struct LiteApp {
 
 impl LiteApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let offline_preview = std::env::args().any(|arg| arg == "--preview");
-        Self::with_context(&cc.egui_ctx, offline_preview)
+        let args: Vec<String> = std::env::args().collect();
+        let offline_preview = args.iter().any(|arg| arg == "--preview");
+        let mut app = Self::with_context(&cc.egui_ctx, offline_preview);
+        app.startup_project = crate::desktop::startup_project(&args);
+        app
     }
 
     fn with_context(ctx: &egui::Context, offline_preview: bool) -> Self {
@@ -724,6 +790,8 @@ impl LiteApp {
             files: vec![],
             project_input: String::new(),
             project_dialog: false,
+            startup_project: None,
+            open_elsewhere: Vec::new(),
             board: String::new(),
             platform: String::new(),
             board_dialog: false,
@@ -908,9 +976,49 @@ impl LiteApp {
         }
     }
 
-    fn open_recent_project(&mut self, path: String) {
+    /// Like the main app's Project: the first sketch opens here; another
+    /// sketch opens in its own window and this window keeps its sketch.
+    fn open_project(&mut self, path: String) {
         self.error.clear();
-        self.send(json!({"cmd": "project", "path": path}));
+        let path = path.trim().to_owned();
+        if path.is_empty() {
+            return;
+        }
+        if let Some(open) = self
+            .open_elsewhere
+            .iter()
+            .find(|open| same_folder(open, &path))
+        {
+            let name = std::path::Path::new(open)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| open.clone());
+            self.error = format!("{name} is already open in another Lite window.");
+            return;
+        }
+        if self.source.is_empty() || same_folder(&path, &self.source) {
+            self.pending = true;
+            self.send(json!({"cmd": "project", "path": path}));
+            return;
+        }
+        if self.offline_preview {
+            return;
+        }
+        match crate::desktop::open_window(&path) {
+            Ok(()) => {
+                self.project_dialog = false;
+                let name = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone());
+                self.build_log.push(
+                    &format!("Opening {name} in a new Lite window."),
+                    "info",
+                    true,
+                );
+            }
+            Err(error) => self.error = error,
+        }
     }
 
     fn open_sketch_directory(&mut self, ctx: &egui::Context) {
@@ -939,6 +1047,45 @@ impl LiteApp {
         self.board_dialog = false;
     }
 
+    /// Dialogs are modal, like the main app's project selector: while one is
+    /// open the workspace behind it takes no clicks, keyboard focus or popups.
+    /// The board picker opens from Resources and stays above it.
+    fn modal_dialogs(&mut self, ctx: &egui::Context) {
+        let open = [
+            (self.project_dialog, PROJECT_DIALOG),
+            (self.resources_open, RESOURCES_DIALOG),
+            (self.board_dialog, BOARD_DIALOG),
+        ];
+        let Some(top) = open
+            .iter()
+            .rev()
+            .find(|(open, _)| *open)
+            .map(|(_, title)| *title)
+        else {
+            return;
+        };
+        let palette = Palette::from_context(ctx);
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Middle,
+            egui::Id::new("lite-modal-backdrop"),
+        ))
+        .rect_filled(
+            ctx.content_rect(),
+            0.0,
+            Color32::from_black_alpha(if palette.dark { 120 } else { 45 }),
+        );
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(top));
+        ctx.move_to_top(layer);
+        ctx.memory_mut(|memory| memory.set_modal_layer(layer));
+        // The board picker handles its own Escape and Enter keys.
+        if top != BOARD_DIALOG && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            match top {
+                PROJECT_DIALOG => self.project_dialog = false,
+                _ => self.resources_open = false,
+            }
+        }
+    }
+
     fn open_board_picker(&mut self) {
         self.board_candidate = self.board.clone();
         self.board_focus_search = true;
@@ -961,6 +1108,10 @@ impl LiteApp {
                 self.state_path = text("state_path");
                 self.send(json!({"cmd": "boards", "query": ""}));
                 self.send(json!({"cmd": "history"}));
+                if let Some(path) = self.startup_project.take() {
+                    self.pending = true;
+                    self.send(json!({"cmd": "project", "path": path}));
+                }
             }
             "history" => {
                 self.recent_projects =
@@ -985,6 +1136,10 @@ impl LiteApp {
                 }
             }
             "ports" => self.ports = serde_json::from_value(data).unwrap_or_default(),
+            "sketches" => {
+                self.open_elsewhere =
+                    serde_json::from_value(data["open_elsewhere"].clone()).unwrap_or_default()
+            }
             "boards" => {
                 if text("query") == self.board_query {
                     self.boards = serde_json::from_value(data["items"].clone()).unwrap_or_default();
@@ -1103,18 +1258,24 @@ impl LiteApp {
     fn project_picker(&mut self, ctx: &egui::Context) {
         let palette = Palette::from_context(ctx);
         let mut open = self.project_dialog;
-        let window = egui::Window::new("Open sketch").open(&mut open).collapsible(false).resizable(true)
+        let max_height = (ctx.content_rect().height() - 96.0).max(80.0);
+        let window = egui::Window::new(PROJECT_DIALOG).open(&mut open).collapsible(false).resizable(true).order(egui::Order::Foreground)
             .constrain_to(ctx.content_rect().shrink(8.0))
             .min_width(220.0).min_height(0.0)
             .max_width((ctx.content_rect().width() - 64.0).max(220.0))
-            .max_height((ctx.content_rect().height() - 96.0).max(80.0)).vscroll(true)
-            .default_width(520.0).frame(card(ctx, PAPER)).show(ctx, |ui| {
+            .max_height(max_height).default_width(520.0).default_height(0.0)
+            .frame(card(ctx, PAPER)).show(ctx, |ui| {
+                // The window's own scroll area never shrinks, which held this short
+                // dialog at egui's default 420-point height. This one fits the
+                // content and scrolls only when the screen is shorter than it.
+                egui::ScrollArea::vertical().id_salt("open-sketch-body").auto_shrink([false, true])
+                    .min_scrolled_height(max_height).max_height(max_height).show(ui, |ui| {
                 ui.label("Select a folder with .ino, .cpp or .c files at its root.");
                 ui.add_space(12.0);
                 ui.add(egui::TextEdit::singleline(&mut self.project_input).hint_text("Full sketch folder path").margin(egui::vec2(6.0, 6.0)).desired_width(f32::INFINITY));
                 ui.add_space(12.0);
-                let actions_layout = if ui.available_width() < 287.0 { egui::Layout::top_down(Align::Min) } else { egui::Layout::left_to_right(Align::Center) };
-                ui.with_layout(actions_layout, |ui| {
+                let stacked = ui.available_width() < 287.0;
+                action_row(ui, stacked, 40.0, |ui| {
                     ui.add_enabled_ui(!self.picker_busy, |ui| {
                         if button(ui, "Browse", "folder", Tone::Secondary, egui::vec2(124.0, 40.0)).clicked() {
                             self.picker_busy = true;
@@ -1127,8 +1288,7 @@ impl LiteApp {
                     });
                     ui.add_enabled_ui(!self.project_input.trim().is_empty() && self.idle(), |ui| {
                         if button(ui, "Open sketch", "folder", Tone::Primary, egui::vec2(155.0, 40.0)).clicked() {
-                            self.pending = true;
-                            self.send(json!({"cmd": "project", "path": self.project_input.trim()}));
+                            self.open_project(self.project_input.clone());
                         }
                     });
                 });
@@ -1138,12 +1298,12 @@ impl LiteApp {
                 egui::ScrollArea::vertical().id_salt("recent-projects-picker").max_height(190.0).show(ui, |ui| {
                     if self.recent_projects.is_empty() { ui.label("Opened sketches will appear here."); }
                     for path in &self.recent_projects {
-                        let name = std::path::Path::new(path).file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
-                        if ui.add(egui::Button::new(format!("{name}\n{path}")).wrap()).clicked() { selected = Some(path.clone()); }
+                        if recent_sketch(ui, path, &self.open_elsewhere) { selected = Some(path.clone()); }
                     }
                 });
-                if let Some(path) = selected { self.open_recent_project(path); }
+                if let Some(path) = selected { self.open_project(path); }
                 ui.add_space(8.0); ui.label(RichText::new("Edit files in your usual editor. Lite reads saved files before every build.").small().color(palette.muted));
+                });
             });
         #[cfg(test)]
         {
@@ -1192,8 +1352,9 @@ impl LiteApp {
             moved = true;
         }
         let height = (ctx.content_rect().height() - 238.0).clamp(BOARD_ROW_HEIGHT, 350.0);
-        let window = egui::Window::new("Choose your board")
+        let window = egui::Window::new(BOARD_DIALOG)
             .open(&mut open)
+            .order(egui::Order::Foreground)
             .collapsible(false)
             .resizable(true)
             .constrain_to(ctx.content_rect().shrink(8.0))
@@ -1309,12 +1470,8 @@ impl LiteApp {
                     .truncate(),
                 )
                 .on_hover_text(&self.board_candidate);
-                let actions_layout = if ui.available_width() < 270.0 {
-                    egui::Layout::top_down(Align::Min)
-                } else {
-                    egui::Layout::left_to_right(Align::Center)
-                };
-                ui.with_layout(actions_layout, |ui| {
+                let stacked = ui.available_width() < 270.0;
+                action_row(ui, stacked, 40.0, |ui| {
                     ui.add_enabled_ui(!self.board_candidate.is_empty() && self.idle(), |ui| {
                         if button(
                             ui,
@@ -1355,7 +1512,7 @@ impl LiteApp {
     fn resources(&mut self, ctx: &egui::Context) {
         let palette = Palette::from_context(ctx);
         let mut open = self.resources_open;
-        let window = egui::Window::new("Resources").open(&mut open).collapsible(false).resizable(true)
+        let window = egui::Window::new(RESOURCES_DIALOG).open(&mut open).collapsible(false).resizable(true).order(egui::Order::Foreground)
             .constrain_to(ctx.content_rect().shrink(8.0))
             .min_width(220.0).min_height(0.0)
             .max_width((ctx.content_rect().width() - 64.0).max(220.0))
@@ -1374,8 +1531,8 @@ impl LiteApp {
                         ui.label("Download this board's platform, framework, compiler and upload tools into Lite's private store.");
                         ui.label(RichText::new("Uses PlatformIO board packages. An internet connection is required.").small().color(palette.muted));
                         ui.add_space(16.0);
-                        let actions_layout = if ui.available_width() < 392.0 { egui::Layout::top_down(Align::Min) } else { egui::Layout::left_to_right(Align::Center) };
-                        ui.with_layout(actions_layout, |ui| {
+                        let stacked = ui.available_width() < 392.0;
+                        action_row(ui, stacked, 40.0, |ui| {
                             if button(ui, "Choose board", "board", Tone::Secondary, egui::vec2(162.0, 40.0)).clicked() { self.open_board_picker(); }
                             ui.add_enabled_ui(!self.board.is_empty(), |ui| {
                                 let width = ui.available_width().min(222.0);
@@ -1385,8 +1542,7 @@ impl LiteApp {
                         });
                     } else {
                         let stacked = ui.available_width() < 264.0;
-                        let search_layout = if stacked { egui::Layout::top_down(Align::Min) } else { egui::Layout::left_to_right(Align::Center) };
-                        ui.with_layout(search_layout, |ui| {
+                        action_row(ui, stacked, 36.0, |ui| {
                             let width = ui.available_width() - if stacked { 0.0 } else { 112.0 };
                             let enter = ui.add(egui::TextEdit::singleline(&mut self.library_query).hint_text("Search PlatformIO libraries").margin(egui::vec2(6.0, 6.0)).desired_width(width.max(1.0)));
                             if button(ui, "Search", "", Tone::Primary, egui::vec2(104.0, 36.0)).clicked() || (enter.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
@@ -1473,14 +1629,7 @@ impl LiteApp {
                         |ui| {
                             ui.set_max_width(360.0);
                             for path in &self.recent_projects {
-                                let name = std::path::Path::new(path)
-                                    .file_name()
-                                    .map(|name| name.to_string_lossy())
-                                    .unwrap_or_default();
-                                if ui
-                                    .add(egui::Button::new(format!("{name}\n{path}")).wrap())
-                                    .clicked()
-                                {
+                                if recent_sketch(ui, path, &self.open_elsewhere) {
                                     recent = Some(path.clone());
                                     ui.close();
                                 }
@@ -1489,7 +1638,7 @@ impl LiteApp {
                     );
                 });
                 if let Some(path) = recent {
-                    self.open_recent_project(path);
+                    self.open_project(path);
                 }
                 if !self.files.is_empty() {
                     ui.add_space(6.0);
@@ -1601,8 +1750,21 @@ impl LiteApp {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.port, String::new(), "No port");
                         for port in &self.ports {
-                            ui.selectable_value(&mut self.port, port.device.clone(), &port.device)
-                                .on_hover_text(&port.description);
+                            // A port selected in another MCU Flasher or Lite window stays listed
+                            // but cannot be chosen here until that window releases it.
+                            let free = !port.occupied || self.port == port.device;
+                            let label = if free {
+                                port.device.clone()
+                            } else {
+                                format!("{}  (in use)", port.device)
+                            };
+                            ui.add_enabled_ui(free, |ui| {
+                                ui.selectable_value(&mut self.port, port.device.clone(), label)
+                                    .on_hover_text(&port.description)
+                                    .on_disabled_hover_text(
+                                        "Selected in another MCU Flasher or Lite window",
+                                    );
+                            });
                         }
                     });
                 if previous != self.port {
@@ -2213,8 +2375,7 @@ impl LiteApp {
                 .and_then(|file| file.path.clone())
         }) && self.idle()
         {
-            self.pending = true;
-            self.send(json!({"cmd": "project", "path": path}));
+            self.open_project(path.to_string_lossy().into_owned());
         }
         if self.take_developer_request(Instant::now()) {
             self.send(json!({"cmd": "developer_access"}));
@@ -2320,6 +2481,7 @@ impl LiteApp {
                 }
                 self.workspace(ui);
             });
+        self.modal_dialogs(ctx);
         if self.project_dialog {
             self.project_picker(ctx);
         }
@@ -2573,6 +2735,148 @@ mod verification {
                 }
             }
         }
+    }
+
+    #[test]
+    fn scrolling_dialogs_keep_action_rows_at_their_content_height() {
+        // A centered row given the rest of a scrolling window centered its buttons
+        // in that whole height, opening hundreds of pixels of empty space.
+        for scale in [1.0, 1.5, 2.0] {
+            for kind in 0..3 {
+                let ctx = egui::Context::default();
+                let mut app = LiteApp::with_context(&ctx, true);
+                ctx.set_pixels_per_point(scale);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1140.0, 800.0));
+                app.project_dialog = true;
+                app.resources_open = true;
+                app.resource_tab = kind == 2;
+                let mut heights = Vec::new();
+                for _ in 0..8 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ctx| match kind {
+                            0 => app.project_picker(ctx),
+                            _ => app.resources(ctx),
+                        },
+                    );
+                    let window = if kind == 0 {
+                        app.project_geometry
+                    } else {
+                        app.resource_geometry
+                    };
+                    heights.push(window.unwrap().height());
+                }
+                let last = *heights.last().unwrap();
+                // Open sketch fits its content; Resources keeps its 420-point default.
+                let limit = if kind == 0 { 360.0 } else { 520.0 };
+                assert!(
+                    last < limit,
+                    "Dialog {kind} at {scale} opens empty space: {heights:?}"
+                );
+                // ...and still shows its whole content: path, actions and recents.
+                assert!(
+                    last > 200.0,
+                    "Dialog {kind} at {scale} hides its content: {heights:?}"
+                );
+                assert!(
+                    (heights[3] - last).abs() < 1.0,
+                    "Dialog {kind} at {scale} keeps growing: {heights:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dialogs_are_modal_and_the_board_picker_stays_above_resources() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1140.0, 800.0));
+        let frame = |app: &mut LiteApp, events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.update_ui(ctx),
+            );
+        };
+        let layer = |title: &str| egui::LayerId::new(egui::Order::Foreground, egui::Id::new(title));
+        frame(&mut app, Vec::new());
+        assert!(ctx.memory(|m| m.top_modal_layer()).is_none());
+        app.project_dialog = true;
+        for _ in 0..3 {
+            frame(&mut app, Vec::new());
+        }
+        assert_eq!(
+            ctx.memory(|m| m.top_modal_layer()),
+            Some(layer(PROJECT_DIALOG))
+        );
+        assert!(
+            !ctx.memory(|m| m.allows_interaction(egui::LayerId::background())),
+            "The workspace behind Open sketch must not take input"
+        );
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        frame(&mut app, vec![escape]);
+        assert!(!app.project_dialog, "Escape closes the top dialog");
+        app.resources_open = true;
+        app.board_dialog = true;
+        for _ in 0..3 {
+            frame(&mut app, Vec::new());
+        }
+        assert_eq!(
+            ctx.memory(|m| m.top_modal_layer()),
+            Some(layer(BOARD_DIALOG))
+        );
+        assert!(!ctx.memory(|m| m.allows_interaction(layer(RESOURCES_DIALOG))));
+        app.board_dialog = false;
+        app.resources_open = false;
+        for _ in 0..3 {
+            frame(&mut app, Vec::new());
+        }
+        assert!(ctx.memory(|m| m.allows_interaction(egui::LayerId::background())));
+    }
+
+    #[test]
+    fn another_sketch_opens_in_its_own_window() {
+        assert!(same_folder("/home/me/Blink/", "/home/me/Blink"));
+        assert!(!same_folder("/home/me/Blink", "/home/me/Fade"));
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.offline_preview = false; // No bridge: requests are numbered, then refused.
+        app.open_project("/home/me/Blink".into());
+        assert_eq!(app.next_id, 1, "The first sketch opens in this window");
+        app.source = "/home/me/Blink".into();
+        app.open_project("/home/me/Blink/".into());
+        assert_eq!(
+            app.next_id, 2,
+            "Reopening this window's sketch refreshes it here"
+        );
+        // In the test harness current_exe is this test binary: never launch it.
+        app.offline_preview = true;
+        app.open_project("/home/me/Fade".into());
+        assert_eq!(
+            app.next_id, 2,
+            "Another sketch never replaces this window's sketch"
+        );
+        assert_eq!(app.source, "/home/me/Blink");
+        app.offline_preview = false;
+        app.open_elsewhere = vec!["/home/me/Fade".into()];
+        app.open_project("/home/me/Fade/".into());
+        assert_eq!(
+            app.next_id, 2,
+            "A sketch open in another window is not requested"
+        );
+        assert!(app.error.contains("already open in another Lite window"));
     }
 
     #[test]
@@ -3058,7 +3362,7 @@ mod verification {
         assert!(app.action_problem(true).is_some());
         app.ports.push(Port {
             device: app.port.clone(),
-            description: String::new(),
+            ..Default::default()
         });
         assert_eq!(app.action_problem(true), None);
         for flag in 0..3 {

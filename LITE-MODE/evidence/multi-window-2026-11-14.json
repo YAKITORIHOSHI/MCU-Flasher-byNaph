@@ -1,0 +1,151 @@
+{
+  "date": "2026-11-14",
+  "scope": "Multiple Lite windows, modal dialogs, compact dialog rows and serial ports shared with the main app",
+  "host": "Ubuntu (local), glibc 2.43; Ubuntu binary linked against a glibc 2.39 floor",
+  "rust": {
+    "tests": 24,
+    "clippy": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-gnu"
+    ],
+    "fmt": "pass"
+  },
+  "python": {
+    "verify.py": 95,
+    "verify_history_search.py": 25,
+    "verify_preparation.py": 53,
+    "verify_developer.py": 25
+  },
+  "main_verifiers": [
+    "verify_projects",
+    "verify_monitor_connection",
+    "verify_ubuntu_ports",
+    "verify_connection_loss",
+    "verify_actions",
+    "verify_upload_workers",
+    "verify_platforms",
+    "verify_board_families",
+    "verify_arduino_fallback",
+    "verify_board_build_cache"
+  ],
+  "previews": {
+    "display": "owned Xvfb",
+    "renderer": "Glow",
+    "captures": {
+      "host": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+      "native_windows": false,
+      "owned_xvfb": true,
+      "hardware_and_accounts": "not accessed",
+      "captures": [
+        {
+          "name": "wide",
+          "requested_logical_size": "1140x800",
+          "pixels": [
+            1140,
+            800
+          ],
+          "sha256": "13da725f7a7b8f50597dcf8d0cba933a381b3ed704df5863d51c4d89a702f5a4"
+        },
+        {
+          "name": "wide-dark",
+          "requested_logical_size": "1140x800",
+          "pixels": [
+            1140,
+            800
+          ],
+          "sha256": "f8e7eb12a47bd484662c8686b0b4f9a4b0c6028c6b9ba6564edf2a8668447daf"
+        },
+        {
+          "name": "compact",
+          "requested_logical_size": "700x560",
+          "pixels": [
+            700,
+            560
+          ],
+          "sha256": "0432c777fed67a052dfb8a60eb4b24fc9e05977704ed731fb9497b07ec7a9af6"
+        },
+        {
+          "name": "compact-dark",
+          "requested_logical_size": "700x560",
+          "pixels": [
+            700,
+            560
+          ],
+          "sha256": "7b97208f9afbdcc253ad6400c0cc120837254ae944b2f4bdb649b8615e43400d"
+        },
+        {
+          "name": "short",
+          "requested_logical_size": "496x300",
+          "pixels": [
+            496,
+            300
+          ],
+          "sha256": "2092636ba8f201cc57bc49f7f99200c42c04449280c35126005f481c059016cd"
+        },
+        {
+          "name": "controls",
+          "requested_logical_size": "496x300",
+          "pixels": [
+            496,
+            300
+          ],
+          "sha256": "9716a4150d02f5a72a6cd9ef29f7972fc849324fb8e849b0bdd3789c47d7b5c8"
+        },
+        {
+          "name": "smallest",
+          "requested_logical_size": "360x240",
+          "pixels": [
+            360,
+            240
+          ],
+          "sha256": "ed35c2f8c0fc50a731191c4c6503776fcb18f1583197e1fc91b5768ca37e11cf"
+        },
+        {
+          "name": "smallest-project",
+          "requested_logical_size": "360x240",
+          "pixels": [
+            360,
+            240
+          ],
+          "sha256": "f5c85e36e7e4ebe9eabbb84a3257fa6c30929e5f54feaa53ae3052d1fe276a40"
+        },
+        {
+          "name": "smallest-board-resources",
+          "requested_logical_size": "360x240",
+          "pixels": [
+            360,
+            240
+          ],
+          "sha256": "38fe37ec4240a44cbd5418981c013d75716743564252faf7766d4d8d3ebdac21"
+        },
+        {
+          "name": "portrait-boards",
+          "requested_logical_size": "480x800",
+          "pixels": [
+            480,
+            800
+          ],
+          "sha256": "a1ee76d7b43815f28631d603342f11d12a98d91fd39cada59e680b52af79cad4"
+        },
+        {
+          "name": "short-resources",
+          "requested_logical_size": "496x300",
+          "pixels": [
+            496,
+            300
+          ],
+          "sha256": "8b7f1e93a504341ccdb34f9b18fd581e56bb91452019f068f527c2cf05eb61e4"
+        }
+      ]
+    }
+  },
+  "artifacts": {
+    "UBUNTU": "a4c54e92fb4c70933ffe9c5b52c42b5260f26cdbbdaf7f071688ae801476769a",
+    "WINDOWS.exe": "0c19779ffe344d53786ab6631b4a9d9bd2f31a07cefb98004817f4a80b16f6dd"
+  },
+  "not_covered": [
+    "native Windows desktop",
+    "Windows 11",
+    "physical USB devices shared between apps"
+  ]
+}

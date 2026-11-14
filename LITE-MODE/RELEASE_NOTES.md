@@ -1,5 +1,18 @@
 # Lite 0.1.0 — updated 2026-11-14
 
+Multiple sketches, modal dialogs and shared serial ports:
+
+- Open several sketches at once: another sketch opens in its own Lite window,
+  and a sketch already open in one window cannot be opened in another.
+- Keep Open sketch, Resources and the board picker in front of their window
+  until closed; the workspace behind them is inactive and Escape closes them.
+- Fix the large empty space in Open sketch and the dialog action rows.
+- Never share a serial port with the main app: ports selected in another
+  MCU Flasher or Lite window are marked in use and refused, including at
+  Connect and Upload.
+- Reopening Lite right after closing it no longer reports that another
+  workspace is using its state.
+
 Screen fit, Developer Access and cancellation repair:
 
 - Show the owned Windows portal even with the borrowed backend's subprocess

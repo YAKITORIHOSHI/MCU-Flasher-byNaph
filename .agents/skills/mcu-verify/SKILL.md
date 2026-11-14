@@ -1,9 +1,22 @@
 ---
 name: mcu-verify
-description: "Run MCU Flasher hardware-free and isolated native CI checks, including Lite renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
+
+## Lite windows and shared ports
+
+- `tools/verify.py` starts two real workers on one state directory, checks the
+  main app's port claims in Lite and Lite's in the main app (temporary registries
+  with a live fixture process), busy peer locks, sketch ownership, package-lock
+  Stop and the single portal. Clear `_pid_create_times_cache` before asserting a
+  release: the backend caches process inventory for 2 seconds.
+- Rust tests cover modal layers, Escape, Open sketch height bounds and window
+  launch arguments. Never let a test reach `desktop::open_window`: in the test
+  harness `current_exe` is the test binary.
+- Run main port verifiers (projects, monitor_connection, ubuntu_ports,
+  connection_loss, actions, upload_workers) after changing `main/core/config.py`.
 
 ## Lite screen, cancellation and native visibility gates
 

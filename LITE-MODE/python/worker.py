@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import shutil
 import re
 import subprocess
 import sys
@@ -22,6 +23,7 @@ LITE = Path(__file__).resolve().parents[1]
 ORIGINAL = LITE.parent
 SOURCE_EXTENSIONS = {".ino", ".h", ".hpp", ".cpp", ".c"}
 MAX_FRAME = 256 * 1024
+PORT_IN_USE = "is selected in another MCU Flasher or Lite window. Choose another port or release it there."
 
 
 def developer_launch_options():
@@ -122,7 +124,6 @@ def snapshot_engine(original, state):
         if (target.is_file() and not target.is_symlink() and target.resolve().is_relative_to(engine.resolve())
                 and hashlib.sha256(target.read_bytes()).hexdigest() == digest):
             target.unlink()
-    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     site = (
         f"import sys\nsys.path.insert(0, {str(LITE / 'python')!r})\n"
         "from isolation import child_setup\nchild_setup()\n"
@@ -132,6 +133,8 @@ def snapshot_engine(original, state):
     settings = engine / "src/dbs/arduino_browser_settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(json.dumps({"download_dir": str(state / "downloads")}), encoding="utf-8")
+    # Written last: other Lite windows reuse only a complete snapshot.
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     return engine
 
 
@@ -212,8 +215,12 @@ class Output:
 
 
 class Worker:
-    def __init__(self, state, output, *, main_core=None):
+    def __init__(self, state, output, *, main_core=None, session=None):
         self.state, self.output = state, output
+        # Per-window scratch: other Lite windows share the state directory.
+        self.session = Path(session) if session is not None else state / "sessions" / str(os.getpid())
+        self.session.mkdir(parents=True, exist_ok=True)
+        self.developer_lock = None
         self.main_core = Path(main_core).resolve() if main_core is not None else None
         self._action_lock = threading.RLock()
         self.board_search = BoardSearch()
@@ -337,15 +344,29 @@ class Worker:
         if self.api.current_port and self.api.current_port not in devices and not self.api.is_busy:
             self.api._stop_serial_monitor()
             self.api.current_port = ""
+            from main.core.config import claim_serial_port
+            claim_serial_port("")
             self.log("Selected port disconnected", "warning")
         self.last_ports = ports
-        self.output.send("ports", ports)
+        from main.core.config import port_occupied_owner
+        self.output.send("ports", [dict(port, occupied=bool(port_occupied_owner(port["device"])))
+                                   for port in ports])
+        from main.core.config import get_occupied_folders
+        self.output.send("sketches", {"open_elsewhere": sorted(get_occupied_folders())})
 
     def select_project(self, path):
         source = Path(path).expanduser().resolve(strict=True)
         if source.is_relative_to(self.state):
             raise ValueError("Choose an original sketch folder, outside Lite's private state")
-        source, staged, files = snapshot_sources(source, self.state)
+        from main.core.config import set_active_sketch_dir
+        folder = source.parent if source.is_file() else source
+        if not set_active_sketch_dir(str(folder)):
+            raise ValueError(f"{folder.name} is already open in another Lite window")
+        try:
+            source, staged, files = snapshot_sources(source, self.state)
+        except Exception:
+            set_active_sketch_dir(str(self.source) if self.source else None)
+            raise
         if source not in self.protected:
             self.protected.append(source)
         self.source = source
@@ -382,6 +403,12 @@ class Worker:
                 raise ValueError("Select a connected serial port before Upload")
             if self.api.current_port not in {item["device"] for item in self.api._scan_ports()}:
                 raise ValueError("The selected port disconnected. Select a connected port before Upload")
+            self.require_port_owned()
+
+    def require_port_owned(self):
+        from main.core.config import port_occupied_owner
+        if port_occupied_owner(self.api.current_port):
+            raise ValueError(f"{self.api.current_port} {PORT_IN_USE}")
 
     def pio_environment(self):
         core = self.state / "platformio" if sys.platform != "win32" else self.state / "engine/src/.platformio-mcu-gui"
@@ -497,12 +524,17 @@ class Worker:
             raise RuntimeError("Cannot stop a resource process without its owned Windows job")
         _stop(process, job)
 
+    def package_lock(self):
+        """One Lite window at a time changes the shared package store."""
+        return hold_lock(self.state / "packages.lock", budget=1200, cancel=self.cancel, notify=self.log,
+                         waiting="Waiting for another Lite window to finish installing tools or libraries...")
+
     def prepare_board(self, info):
         from main.core.target_profile import target_problem
         problem = target_problem(info, arduino_sketch=False)
         if problem:
             raise ValueError(problem)
-        target = self.state / "prepare"
+        target = self.session / "prepare"
         target.mkdir(parents=True, exist_ok=True)
         values = [str(info[key]) for key in ("platform", "board", "framework")]
         if any("\n" in value or "\r" in value for value in values):
@@ -550,7 +582,7 @@ class Worker:
             try:
                 if action == "library_search":
                     query = str(request.get("query", ""))[:200]
-                    result = self.state / "library-search.json"
+                    result = self.session / "library-search.json"
                     self.run_tool([str(LITE / "python/registry.py"), "--query=" + query,
                                    "--result", str(result)], timeout=30)
                     results = json.loads(result.read_text(encoding="utf-8"))
@@ -560,10 +592,12 @@ class Worker:
                     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_. +()-]+@[A-Za-z0-9_.+-]+", spec):
                         raise ValueError("Select a versioned library from the registry results")
                     self.log(f"Installing {spec} into Lite's private library store")
-                    self.run_pio(["pkg", "install", "--global", "--library", spec])
+                    with self.package_lock():
+                        self.run_pio(["pkg", "install", "--global", "--library", spec])
                     completed = "resource:installed", {"spec": spec}
                 else:
-                    self.prepare_board(info)
+                    with self.package_lock():
+                        self.prepare_board(info)
                     completed = "resource:installed", {"spec": board}
                 if after is None:
                     # Stop and publication share ownership: a stopped request
@@ -617,6 +651,10 @@ class Worker:
             if self.developer_ready:
                 self.output.send("developer:ready", {"pid": self.developer_pid})
             return
+        if self.developer_lock is None:
+            self.developer_lock = try_lock(self.state / "developer-access.lock")
+            if self.developer_lock is None:
+                raise RuntimeError("Developer Access is already open in another Lite window.")
         log_path = self.state / "developer-access.log"
         log = log_path.open("wb")
         try:
@@ -626,6 +664,8 @@ class Worker:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, **options)
         except Exception:
             log.close()
+            self.developer_lock.close()
+            self.developer_lock = None
             raise
         self.developer_process = process
         self.developer_ready = False
@@ -665,6 +705,9 @@ class Worker:
             if self.developer_process is process:
                 self.developer_ready = False
                 self.developer_pid = None
+                if self.developer_lock is not None:
+                    self.developer_lock.close()
+                    self.developer_lock = None
                 self.output.send("developer:status", False)
             if result and not self.closing:
                 self.output.send("error", {"message": f"Developer Access could not start. Details: {log_path}"})
@@ -740,12 +783,13 @@ class Worker:
             self.api._stop_serial_monitor()
             from main.core.config import claim_serial_port
             if not claim_serial_port(value):
-                raise ValueError("Port is in use by another Lite workspace")
+                raise ValueError(f"{value} {PORT_IN_USE}")
             self.api.current_port = value
         elif cmd == "monitor":
             if request.get("connect"):
                 if not self.api.current_port:
                     raise ValueError("Select a connected port first")
+                self.require_port_owned()
                 self.api._start_serial_monitor()
             else:
                 self.api._stop_serial_monitor()
@@ -786,10 +830,95 @@ class Worker:
             while self.api._operation_worker_alive():
                 time.sleep(.2)
         self.api._stop_serial_monitor()
+        # Release the port and sketch at once: a window reopened while this
+        # worker finishes closing can select them again.
+        from main.core.config import claim_serial_port, set_active_sketch_dir
+        claim_serial_port("")
+        set_active_sketch_dir(None)
         self.api._serial_send_queue.stop()
         self.api._stop_serial_notifications()
-        from main.core.config import set_active_sketch_dir
-        set_active_sketch_dir(None)
+
+
+def try_lock(path):
+    """Open and exclusively lock `path` without waiting; None when it is held.
+    Process exit releases the lock, so a crashed window never strands it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("a+b")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return stream
+    except OSError:
+        stream.close()
+        return None
+
+
+def hold_lock(path, *, budget, cancel=None, notify=None, waiting=""):
+    """Wait for a shared-state lock within a finite elapsed-time budget."""
+    deadline = time.monotonic() + budget
+    announced = False
+    while (stream := try_lock(path)) is None:
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError("Stopped while waiting for another Lite window")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Another Lite window is still using shared tools. Try again when it finishes.")
+        if not announced and waiting:
+            announced = True
+            (notify or (lambda text: print(text, file=sys.stderr, flush=True)))(waiting)
+        time.sleep(.1)
+    return stream
+
+
+def live_workers(state, own=None):
+    """PIDs of other Lite windows' workers; each holds its own lock while alive."""
+    live = set()
+    for path in (state / "workers").glob("*.lock"):
+        if not path.stem.isdigit() or int(path.stem) == own:
+            continue
+        stream = try_lock(path)
+        if stream is None:
+            live.add(int(path.stem))
+        else:
+            stream.close()
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    return live
+
+
+def start_session(state):
+    """Register this window's worker and give it private scratch storage.
+
+    Several Lite windows share one state directory: settings, packages and the
+    backend snapshot. Each worker holds its own lock for its lifetime, keeps
+    per-window scratch under sessions/<pid>, and refreshes the shared backend
+    snapshot only while no other Lite window is running from it."""
+    pid = os.getpid()
+    lock = try_lock(state / "workers" / f"{pid}.lock")
+    if lock is None:
+        raise RuntimeError("Lite could not register this window. Close Lite and try again.")
+    others = live_workers(state, pid)
+    sessions = state / "sessions"
+    sessions.mkdir(exist_ok=True)
+    for folder in sessions.iterdir():
+        if folder.name.isdigit() and int(folder.name) != pid and int(folder.name) not in others and not folder.is_symlink():
+            shutil.rmtree(folder, ignore_errors=True)
+    session = sessions / str(pid)
+    session.mkdir(exist_ok=True)
+    with hold_lock(state / "engine.lock", budget=120,
+                   waiting="Waiting for another Lite window to finish starting..."):
+        if live_workers(state, pid) and (state / "engine-manifest.json").is_file():
+            engine = state / "engine"
+            print("Another Lite window is open; this window shares its backend snapshot.", file=sys.stderr, flush=True)
+        else:
+            engine = snapshot_engine(ORIGINAL, state)
+    return lock, session, engine
 
 
 def main():
@@ -799,25 +928,7 @@ def main():
     state.mkdir(parents=True, exist_ok=True)
     for folder in ("tmp", "data", "cache", "config", "windows-local", "windows-roaming"):
         (state / folder).mkdir(exist_ok=True)
-    # Hold a native lock for the worker lifetime: one Lite workspace owns the
-    # shared snapshot, settings and packages. A crash releases the lock.
-    lock = (state / "workspace.lock").open("a+b")
-    if sys.platform == "win32":
-        import msvcrt
-        lock.write(b"0")
-        lock.flush()
-        lock.seek(0)
-        try:
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
-            raise RuntimeError("Another Lite workspace is already using this state directory. Close it first.") from exc
-    else:
-        import fcntl
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError("Another Lite workspace is already using this state directory. Close it first.") from exc
-    engine = snapshot_engine(ORIGINAL, state)
+    lock, session, engine = start_session(state)
     os.environ.update(environment(state))
     sys.path.insert(0, str(engine))
     child_setup()
@@ -826,7 +937,10 @@ def main():
     sys.stdout = sys.stderr
     from PySide6.QtCore import QCoreApplication
     application = QCoreApplication.instance() or QCoreApplication([])
-    worker = Worker(state, output, main_core=main_core)
+    from main.core import config
+    # Ports are shared with the main app: read its live instances as well.
+    config._peer_instance_registries = lambda: ((Path.home() / ".mcu_gui_config.json", ORIGINAL / "src" / "gui_config.json"),)
+    worker = Worker(state, output, main_core=main_core, session=session)
     worker.api.refresh_board_catalog()
     output.send("ready", {"protocol": 1, "state_path": str(state), "host": platform.system()})
     worker.history()

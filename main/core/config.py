@@ -845,43 +845,69 @@ def add_recent_board(board_name: str) -> list[str]:
     return recent
 
 
+def _port_device(port) -> str:
+    match = re.match(r"(COM\d+|/dev/\S+)", str(port))
+    return (match.group(1) if match else str(port).split()[0]).upper()
+
+
+def _peer_instance_registries() -> "tuple[tuple[Path, ...], ...]":
+    """Instance registries of the other MCU Flasher product on this computer.
+
+    Each product keeps writing only its own registry. Serial port claims also
+    read the other product's live instances, so the main app and Lite can never
+    select one port at the same time. Each entry lists candidate files in the
+    order that product's own loader trusts them. Lite replaces this hook with
+    the main app's files."""
+    import os
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local")
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    return ((base / "mcu-flasher-lite" / "settings.json",),)
+
+
+def _peer_instances():
+    """Yield (pid, instance) records read from the other product's registry."""
+    for candidates in _peer_instance_registries():
+        for path in candidates:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            instances = data.get("instances") if isinstance(data, dict) else None
+            if isinstance(instances, dict):
+                yield from ((str(pid), inst) for pid, inst in instances.items() if isinstance(inst, dict))
+                break
+
+
+def _other_live_instances():
+    """Live instances of either product except this one, with their port selections."""
+    alive = _get_alive_pid_create_times()
+    own = _load_raw_config().get("instances", {})
+    for pid, inst in [*own.items(), *_peer_instances()]:
+        if pid == _INSTANCE_ID or not isinstance(inst, dict):
+            continue
+        if _instance_is_alive(pid, inst, alive):
+            yield pid, inst
+
+
 def port_occupied_owner(port: str | None) -> str | None:
-    """Return the owning PID (as string) if `port` is occupied by another live instance, else None."""
+    """Return the owning PID (as string) if `port` is occupied by another live
+    instance of either MCU Flasher product, else None."""
     if not port or str(port).startswith("─"):
         return None
-    match = re.match(r"(COM\d+|/dev/\S+)", str(port))
-    target = (match.group(1) if match else str(port).split()[0]).upper()
-    data = _load_raw_config()
-    alive = _get_alive_pid_create_times()
-    instances = data.get("instances", {})
-    for pid, inst in instances.items():
-        if pid == _INSTANCE_ID:
-            continue
-        if not _instance_is_alive(pid, inst, alive):
-            continue
-        p = inst.get("selected_port")
-        if p:
-            m = re.match(r"(COM\d+|/dev/\S+)", str(p))
-            dev = (m.group(1) if m else str(p).split()[0]).upper()
-            if dev == target:
-                return pid
+    target = _port_device(port)
+    for pid, inst in _other_live_instances():
+        selected = inst.get("selected_port")
+        if selected and _port_device(selected) == target:
+            return pid
     return None
 
 
 def get_occupied_ports() -> set[str]:
     """Retrieve set of COM port devices currently selected by other active instances."""
-    data = _load_raw_config()
     occupied = set()
-    
-    # Get currently alive PIDs (with create_time) to filter out stale instances
-    alive = _get_alive_pid_create_times()
-
-    instances = data.get("instances", {})
-    for pid, inst in instances.items():
-        if pid == _INSTANCE_ID:
-            continue
-        if not _instance_is_alive(pid, inst, alive):
-            continue
+    for _pid, inst in _other_live_instances():
         port = inst.get("selected_port")
         if port:
             match = re.match(r"(COM\d+|/dev/\S+)", str(port))
@@ -892,16 +918,62 @@ def get_occupied_ports() -> set[str]:
     return occupied
 
 
-def claim_serial_port(port: str) -> bool:
-    """Reserve a selection before connecting; two windows cannot claim one port."""
+def _try_peer_registry_locks():
+    """Take every peer registry's settings lock without waiting, or none."""
+    import contextlib
+    import os
+    stack = contextlib.ExitStack()
     try:
-        with config_lock(Path.home() / ".mcu_gui_config.json"):
-            _load_raw_config(fresh=True)
-            if port and port_occupied_owner(port):
+        for candidates in _peer_instance_registries():
+            registry = candidates[0]
+            if not registry.parent.is_dir():
+                continue  # That product never ran here; never create its folders.
+            stream = stack.enter_context(registry.with_name(registry.name + ".lock").open("a+b"))
+            if os.name == "nt":
+                import msvcrt
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                def release(stream=stream):
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                def release(stream=stream):
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            stack.callback(release)
+        return stack
+    except OSError:
+        stack.close()
+        return None
+
+
+def claim_serial_port(port: str) -> bool:
+    """Reserve a selection before connecting; two windows cannot claim one port.
+
+    The other product's settings lock is only ever tried while this one is
+    held, then both are released and retried, so the two apps cannot deadlock
+    by taking their locks in opposite orders."""
+    import random
+    deadline = time.monotonic() + 3
+    try:
+        while True:
+            with config_lock(Path.home() / ".mcu_gui_config.json"):
+                peers = _try_peer_registry_locks() if port else None
+                if peers is not None or not port:
+                    try:
+                        _load_raw_config(fresh=True)
+                        if port and port_occupied_owner(port):
+                            return False
+                        cfg = load_gui_config()
+                        cfg["selected_port"] = port or ""
+                        return save_gui_config(cfg)
+                    finally:
+                        if peers is not None:
+                            peers.close()
+            if time.monotonic() >= deadline:
                 return False
-            cfg = load_gui_config()
-            cfg["selected_port"] = port or ""
-            return save_gui_config(cfg)
+            time.sleep(random.uniform(.01, .05))
     except OSError:
         return False
 

@@ -1,10 +1,19 @@
 ---
 name: frontend-design
-description: "Maintain responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+## Lite modal dialogs
+
+Open sketch, Resources and the board picker are modal over a light black
+backdrop (stronger in Dark); the workspace behind takes no input and Escape
+closes the top dialog. Dialog button rows use `action_row()` so they are exactly
+as tall as their controls. Open sketch fits its content and scrolls only on
+short screens. Ports and recent sketches held by other windows stay listed,
+disabled, with "(in use)" or "(open in another window)" and a tooltip.
 
 ## Lite screen fit and independent Developer Access
 

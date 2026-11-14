@@ -40,6 +40,22 @@ without a checkbox; never bypass its source/dependency/output validation or merg
 the exact-board/framework workspaces. Keep monitor rows and viewports fixed,
 scrollbars reserved and widths stable while streaming. Preserve user scrollback.
 
+Several Lite windows may share one state directory. Each worker holds
+workers/<pid>.lock for life and keeps scratch under sessions/<pid>; refresh the
+backend snapshot under engine.lock only when no other worker is alive (the
+manifest is written last), serialize package changes with packages.lock and keep
+one Developer Access portal (developer-access.lock). Claim sketches through the
+backend's instance registry (one Lite window per sketch). Serial port claims also
+read the main app's live instances and main reads Lite's: each product writes only
+its own registry, and claims only try the other's lock so neither deadlocks.
+Choosing another sketch while one is open launches an independent window with
+`--project`. Project, board and Resources dialogs are modal: the top open dialog
+is egui's modal layer over a dimmed backdrop, the board picker stays above
+Resources and Escape closes the top one. Dialog action rows use `action_row()`;
+a centered layout given a scrolling window's remaining height would spread its
+buttons across it. Open sketch fits its content instead of egui's 420-point
+default.
+
 Light is the launch default; the SVG Light/Dark button changes visuals without
 reinitializing fonts, logs or selections. Keep Status and USB Port in separate
 fixed-height containers.

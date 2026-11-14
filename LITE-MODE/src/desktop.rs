@@ -83,6 +83,44 @@ pub fn open_directory(directory: &Path) -> Result<(), String> {
     }
 }
 
+fn window_command(executable: &Path, project: &str) -> Command {
+    let mut command = Command::new(executable);
+    command
+        .arg("--project")
+        .arg(project)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+/// Open another sketch in its own independent Lite window, like the main
+/// app's Project. Each window runs its own tool worker; port and sketch
+/// ownership is shared through the instance registries.
+pub fn open_window(project: &str) -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("Could not find Lite to open another window: {error}"))?;
+    let mut child = window_command(&executable, project)
+        .spawn()
+        .map_err(|error| format!("Could not open another Lite window: {error}"))?;
+    // Reap the independent window when it closes; it never ends with this one.
+    std::thread::Builder::new()
+        .name("lite-window".into())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .map(|_| ())
+        .map_err(|error| format!("Could not watch the new Lite window: {error}"))
+}
+
+/// The sketch a window was opened for: `--project <path>`.
+pub fn startup_project(args: &[String]) -> Option<String> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--project")
+        .map(|pair| pair[1].clone())
+        .filter(|path| !path.trim().is_empty())
+}
+
 #[cfg(test)]
 mod verification {
     use super::*;
@@ -115,6 +153,22 @@ mod verification {
             command.get_args().collect::<Vec<_>>(),
             vec![folder.as_os_str()]
         );
+    }
+
+    #[test]
+    fn another_window_receives_the_sketch_as_one_literal_argument() {
+        let project = "/original/My Sketch & $HOME [1]";
+        let command = window_command(Path::new("/lite/UBUNTU"), project);
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![
+                std::ffi::OsStr::new("--project"),
+                std::ffi::OsStr::new(project)
+            ]
+        );
+        let args = ["lite", "--project", project].map(String::from);
+        assert_eq!(startup_project(&args).as_deref(), Some(project));
+        assert_eq!(startup_project(&["lite".into(), "--project".into()]), None);
     }
 
     #[test]

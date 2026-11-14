@@ -43,7 +43,11 @@ native executables.
 1. **Open sketch** selects a folder containing saved `.ino`, `.cpp` or `.c` files
    at its root. You can also drop a folder or source file into the workspace.
    Edit in your usual editor and save before building. **Recent sketches** and
-   the Open sketch dialog retain your 10 most recently opened folders.
+   the Open sketch dialog retain your 10 most recently opened folders. Like the
+   main app, choosing another sketch while one is open opens it in a new Lite
+   window; each window keeps its own sketch. A sketch already open in another
+   Lite window is marked and cannot be opened twice. Open sketch, Resources and
+   the board picker stay in front of their window until closed (Escape closes them).
    Click a source filename, such as `MySketch.ino`, to open its original sketch
    directory in Ubuntu Files or Windows Explorer. File-manager launch errors
    appear in Lite; the link never opens the private build snapshot.
@@ -147,7 +151,7 @@ process groups retire only that operation's children, including redirector desce
 Each worker refreshes a private byte-for-byte copy of the main Python source.
 Build logic is reused, not independently rewritten. Lite never imports the main
 workspace GUI or starts its editor/assistant services. Backend source updates
-are picked up on the next Lite launch.
+are picked up on the next Lite launch while no other Lite window is open.
 
 Default writable state is separate from both the main app and original sketches:
 
@@ -161,9 +165,12 @@ packages and caches. Original root sources are read only; protected original
 cache/journal trees are not copied. The optional `MCU_LITE_STATE` override must be
 absolute. `MCU_LITE_PYTHON` can name a compatible interpreter, and `MCU_LITE_ROOT`
 can explicitly locate this folder. No override is necessary for ordinary use.
-One Lite workspace at a time owns the native state lock. This is separate from
-the original app's own workspace lock; avoid using both apps on the same physical
-serial port at once.
+Several Lite windows can share this state. Each window's worker registers
+itself and keeps its scratch files separate; windows take turns installing tools
+or libraries, and Developer Access opens in one Lite window at a time. A serial
+port selected in the main app or another Lite window is shown as **in use** and
+cannot be selected until that window releases it; the main app treats Lite's
+selections the same way. Connect and Upload check this again before starting.
 
 For tool reuse, Lite finds the main app's native PlatformIO store before changing
 its own environment: the main copy's `src/.platformio-mcu-gui` on Windows and

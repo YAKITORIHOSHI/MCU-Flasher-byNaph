@@ -1,5 +1,25 @@
 # Lite verification — updated 2026-11-14
 
+## November 14 — multiple windows, modal dialogs and shared ports
+
+Twenty-four Rust checks pass, including modal input blocking (the workspace and a
+covered Resources window refuse interaction), Escape, Open sketch fitting its
+content (neither 420-point blank space nor collapsed), compact dialog action rows
+and independent-window launch arguments. Strict Clippy passes for Ubuntu and the
+Windows GNU target. Ninety-five hardware-free worker checks include two real
+workers sharing one state directory (the second reuses the running backend
+snapshot), the main app's port claims refused in Lite and Lite's visible to the
+main app, Connect rechecks, a busy peer settings lock ending a claim within its
+budget, one Lite window per sketch, Stop during a package-lock wait and a single
+Developer Access portal. History/search (25), preparation (53) and Developer
+Access (25) checks and the main port/monitor/upload/project verifiers pass.
+
+Both launchers are rebuilt: Ubuntu x64 with the glibc 2.39 floor through
+cargo-zigbuild, Windows x64 as a GNU cross-build with GUI subsystem and icon.
+Eleven Glow previews from the rebuilt Ubuntu executable pass on an owned Xvfb.
+Native Windows, Windows 11 and physical USB port sharing remain separate gates.
+See `evidence/multi-window-2026-11-14.json`.
+
 ## November 14 — screen fit, visible portal and cancellation
 
 Local Ubuntu evidence covers the rebuilt Ubuntu x64 release, with the glibc 2.39

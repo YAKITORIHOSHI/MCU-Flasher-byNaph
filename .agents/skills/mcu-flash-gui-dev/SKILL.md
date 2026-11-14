@@ -1,9 +1,43 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+## November 14: Lite windows, modal dialogs and shared ports
+
+Lite allows several windows over one state directory. Each worker holds
+`workers/<pid>.lock` for life and keeps scratch under `sessions/<pid>`; stale
+sessions are removed only for workers whose lock is free. The backend snapshot is
+refreshed under `engine.lock` only when no other worker is alive, and its manifest
+is written last so others reuse only a complete copy. `packages.lock` serializes
+board preparation and library installs (Stop ends the wait), and
+`developer-access.lock` keeps one portal across Lite windows.
+
+Sketch ownership uses the backend's `set_active_sketch_dir` in Lite's own
+registry; the port poll also publishes `sketches.open_elsewhere` so recents are
+marked before a window is launched. Another sketch opens through
+`desktop::open_window` (`--project`, one literal argument; the child is reaped).
+Serial ports are shared across products: `main/core/config.py` reads the other
+product's live instances through `_peer_instance_registries()` (main: Lite's
+state `settings.json`; Lite overrides it with the main per-user and portable
+configs). Each product writes only its own registry. `claim_serial_port` holds
+its own settings lock and only tries the peer's, retrying with backoff inside a
+3-second budget, so the two apps cannot deadlock. Close releases port and sketch
+claims before slower backend cleanup.
+
+Project, board and Resources dialogs are modal: `modal_dialogs()` paints the
+backdrop and makes the top open window egui's modal layer (board picker above
+Resources). Use `action_row()` for dialog buttons; a centered `with_layout` given
+a scrolling window's remaining height spreads its buttons across it. Open sketch
+uses an inner auto-shrinking ScrollArea with `min_scrolled_height` equal to its
+cap, because the window's own vscroll keeps egui's 420-point default height.
+
+Build the Ubuntu launcher with `cargo zigbuild --target
+x86_64-unknown-linux-gnu.2.39` (the private `.tools/build-runtime`); a plain host
+build on a newer distribution raises the glibc floor. Windows cross-builds use
+the private `.tools/sysroot` MinGW toolchain.
 
 ## November 14: Lite screen fit, visible portal and cancellation
 
