@@ -251,9 +251,17 @@ runpy.run_path(script, run_name="__main__")
                     if pid is None:
                         continue
                     try:
-                        stopped = psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+                        process = psutil.Process(pid)
+                        stopped = process.status() == psutil.STATUS_ZOMBIE
+                        if not stopped:
+                            # Windows Job termination completes asynchronously:
+                            # allow a bounded moment for the terminated process to exit.
+                            process.wait(timeout=3)
+                            stopped = True
                     except psutil.NoSuchProcess:
                         stopped = True
+                    except psutil.TimeoutExpired:
+                        stopped = False
                     check(stopped, "owned registry parent/descendants have stopped: " + mode)
 
             worker.cancel.clear()

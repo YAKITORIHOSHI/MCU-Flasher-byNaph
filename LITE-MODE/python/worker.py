@@ -220,6 +220,8 @@ class Worker:
         self.session = Path(session) if session is not None else state / "sessions" / str(os.getpid())
         self.session.mkdir(parents=True, exist_ok=True)
         self.developer_lock = None
+        # Serializes the portal lock between launches and helper watchers.
+        self._developer_guard = threading.Lock()
         self.main_core = Path(main_core).resolve() if main_core is not None else None
         self._action_lock = threading.RLock()
         self.board_search = BoardSearch()
@@ -662,10 +664,13 @@ class Worker:
             if self.developer_ready:
                 self.output.send("developer:ready", {"pid": self.developer_pid})
             return
-        if self.developer_lock is None:
-            self.developer_lock = try_lock(self.state / "developer-access.lock")
+        with self._developer_guard:
+            # A finished helper's watcher must not release the lock this launch holds.
+            self.developer_process = None
             if self.developer_lock is None:
-                raise RuntimeError("Developer Access is already open in another Lite window.")
+                self.developer_lock = try_lock(self.state / "developer-access.lock")
+                if self.developer_lock is None:
+                    raise RuntimeError("Developer Access is already open in another Lite window.")
         log_path = self.state / "developer-access.log"
         log = log_path.open("wb")
         try:
@@ -675,8 +680,7 @@ class Worker:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, **options)
         except Exception:
             log.close()
-            self.developer_lock.close()
-            self.developer_lock = None
+            self._release_developer_lock()
             raise
         self.developer_process = process
         self.developer_ready = False
@@ -713,17 +717,26 @@ class Worker:
             result = process.wait()
             notice.cancel()
             log.close()
-            if self.developer_process is process:
+            with self._developer_guard:
+                current = self.developer_process is process
+            if current:
                 self.developer_ready = False
                 self.developer_pid = None
-                if self.developer_lock is not None:
-                    self.developer_lock.close()
-                    self.developer_lock = None
+                self._release_developer_lock(process)
                 self.output.send("developer:status", False)
             if result and not self.closing:
                 self.output.send("error", {"message": f"Developer Access could not start. Details: {log_path}"})
 
         threading.Thread(target=watch, name="LiteDeveloperAccess", daemon=True).start()
+
+    def _release_developer_lock(self, process=None):
+        """Release the cross-window portal lock; a stale helper's watcher cannot."""
+        with self._developer_guard:
+            if process is not None and self.developer_process is not process:
+                return
+            lock, self.developer_lock = self.developer_lock, None
+        if lock is not None:
+            lock.close()
 
     def activate_developer_access(self):
         process = self.developer_process

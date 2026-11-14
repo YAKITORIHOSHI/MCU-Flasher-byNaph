@@ -336,6 +336,25 @@ def main():
                 check("already open in another Lite window" in refusal({"cmd": "developer_access"}) and not launched.called,
                       "Developer Access opens in only one Lite window")
             portal.close()
+            # A finished helper's watcher racing a relaunch must not drop the new lock,
+            # and a failed launch reports its own error and frees the lock.
+            stale, current = object(), object()
+            worker.developer_lock = try_lock(state / "developer-access.lock")
+            worker.developer_process = current
+            worker._release_developer_lock(stale)
+            check(worker.developer_lock is not None, "a stale portal watcher cannot release a newer launch's lock")
+            worker.developer_process = None
+            with patch("subprocess.Popen", side_effect=OSError("fixture launch failure")):
+                try:
+                    worker.dispatch({"cmd": "developer_access"})
+                except OSError as exc:
+                    launched = str(exc)
+                else:
+                    launched = ""
+            probe = try_lock(state / "developer-access.lock")
+            check(launched == "fixture launch failure" and worker.developer_lock is None and probe is not None,
+                  "a failed portal launch reports its error and frees the portal lock")
+            probe.close()
             worker.close()
             child_state = base / "protocol-state"
             program = (
