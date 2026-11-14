@@ -880,15 +880,40 @@ def _peer_instances():
                 break
 
 
-def _other_live_instances():
-    """Live instances of either product except this one, with their port selections."""
-    alive = _get_alive_pid_create_times()
+# How port owners are named in messages. Lite swaps these two names.
+_OWN_PRODUCT_WINDOW = "another project window"
+_PEER_PRODUCT_WINDOW = "MCU Flasher Lite"
+
+
+def _port_claims():
+    """(pid, device, from_peer) for every port selected by another live window of
+    either product. Only the few PIDs that hold a port are checked, each directly,
+    so this is cheap enough to run when a port list opens."""
     own = _load_raw_config().get("instances", {})
-    for pid, inst in [*own.items(), *_peer_instances()]:
-        if pid == _INSTANCE_ID or not isinstance(inst, dict):
-            continue
-        if _instance_is_alive(pid, inst, alive):
-            yield pid, inst
+    claims = [(pid, inst, False) for pid, inst in own.items()]
+    claims += [(pid, inst, True) for pid, inst in _peer_instances()]
+    claims = [(pid, inst, peer) for pid, inst, peer in claims
+              if pid != _INSTANCE_ID and isinstance(inst, dict) and inst.get("selected_port")]
+    if not claims:
+        return []
+    try:
+        import psutil  # noqa: F401 - an empty inventory makes each PID be checked directly
+        alive = {}
+    except ImportError:
+        alive = None
+    return [(pid, _port_device(inst["selected_port"]), peer) for pid, inst, peer in claims
+            if _instance_is_alive(pid, inst, alive)]
+
+
+def port_owner_window(port: str | None) -> str | None:
+    """Name the other window holding `port` (e.g. "MCU Flasher Lite (PID 42)"), or None."""
+    if not port or str(port).startswith("─"):
+        return None
+    target = _port_device(port)
+    for pid, device, peer in _port_claims():
+        if device == target:
+            return f"{_PEER_PRODUCT_WINDOW if peer else _OWN_PRODUCT_WINDOW} (PID {pid})"
+    return None
 
 
 def port_occupied_owner(port: str | None) -> str | None:
@@ -897,25 +922,22 @@ def port_occupied_owner(port: str | None) -> str | None:
     if not port or str(port).startswith("─"):
         return None
     target = _port_device(port)
-    for pid, inst in _other_live_instances():
-        selected = inst.get("selected_port")
-        if selected and _port_device(selected) == target:
-            return pid
-    return None
+    return next((pid for pid, device, _peer in _port_claims() if device == target), None)
 
 
 def get_occupied_ports() -> set[str]:
     """Retrieve set of COM port devices currently selected by other active instances."""
-    occupied = set()
-    for _pid, inst in _other_live_instances():
-        port = inst.get("selected_port")
-        if port:
-            match = re.match(r"(COM\d+|/dev/\S+)", str(port))
-            dev = match.group(1) if match else str(port).split()[0]
-            if dev:
-                occupied.add(dev)
-                occupied.add(dev.upper())
-    return occupied
+    return {device for _pid, device, _peer in _port_claims()}
+
+
+def annotate_port_owners(ports: list) -> list:
+    """Copy a port list, marking ports another window of either product holds.
+
+    A window keeps its claim while its device is briefly absent, so the first
+    window to select a port keeps it until it chooses another port or closes."""
+    occupied = get_occupied_ports()
+    return [dict(port, occupied=_port_device(port.get("device", "")) in occupied)
+            if port.get("device") else dict(port) for port in ports]
 
 
 def _try_peer_registry_locks():
@@ -1288,6 +1310,8 @@ __all__ = [
     "load_recent_boards",
     "load_recent_projects",
     "port_occupied_owner",
+    "port_owner_window",
+    "annotate_port_owners",
     "remember_port_board",
     "save_gui_config",
     "set_active_sketch_dir",

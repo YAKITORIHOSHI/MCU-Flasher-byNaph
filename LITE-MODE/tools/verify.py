@@ -271,10 +271,20 @@ def main():
                         listed = {item["device"]: item["occupied"] for item in [data for event, data in output.events if event == "ports"][-1]}
                         check(listed == {"/dev/ttyFIXTURE0": True, "/dev/ttyFIXTURE1": False},
                               "the port list marks ports selected in other windows")
-                        check("another MCU Flasher or Lite window" in refusal({"cmd": "port", "value": "/dev/ttyFIXTURE0"})
+                        check(f"selected in MCU Flasher Lite (PID {holder.pid})" in refusal({"cmd": "port", "value": "/dev/ttyFIXTURE0"})
                               and worker.api.current_port != "/dev/ttyFIXTURE0", "selecting another window's port is refused")
                         worker.dispatch({"cmd": "port", "value": "/dev/ttyFIXTURE1"})
                         check(worker.api.current_port == "/dev/ttyFIXTURE1", "a free port can be selected")
+                    with patch.object(worker.api, "_scan_ports", return_value=fixture_ports[:1]), \
+                            patch.object(worker.api, "_stop_serial_monitor"):
+                        worker.ports()
+                    check(worker.api.current_port == "" and lite_config.load_gui_config().get("selected_port") == "/dev/ttyFIXTURE1",
+                          "a USB drop keeps this window's claim so no other window can take the port")
+                    worker.api._restore_returned_port("/dev/ttyFIXTURE1")
+                    check(worker.api.current_port == "/dev/ttyFIXTURE1" and not worker.api.serial_running,
+                          "a returning port is reselected without connecting")
+                    with patch.object(worker.api, "_scan_ports", return_value=fixture_ports), \
+                            patch.object(worker.api, "_stop_serial_monitor"):
                         worker.api.current_port = "/dev/ttyFIXTURE0"
                         check(refusal({"cmd": "monitor", "connect": True}) and not worker.api.serial_running,
                               "Connect rechecks that no other window selected the port")

@@ -48,6 +48,9 @@ one Developer Access portal (developer-access.lock). Claim sketches through the
 backend's instance registry (one Lite window per sketch). Serial port claims also
 read the main app's live instances and main reads Lite's: each product writes only
 its own registry, and claims only try the other's lock so neither deadlocks.
+The first selector keeps a port: a USB drop keeps the claim and Lite reselects
+its returning port without connecting; only another port, No port or closing
+releases it. Both hosts use the same claim code.
 Choosing another sketch while one is open launches an independent window with
 `--project`. Project, board and Resources dialogs are modal: the top open dialog
 is egui's modal layer over a dimmed backdrop, the board picker stays above

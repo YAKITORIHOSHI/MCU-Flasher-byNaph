@@ -241,7 +241,7 @@ from main.core.config import (
     load_gui_config, save_gui_config, load_recent_projects, add_recent_project,
     load_recent_boards, add_recent_board, get_theme_mode,
     _try_acquire_reset_cache_lock, _release_reset_cache_lock, port_occupied_owner,
-    claim_serial_port,
+    claim_serial_port, port_owner_window, annotate_port_owners, get_occupied_ports,
     _load_raw_config, _save_raw_config,
     find_project_window, focus_project_window, set_active_sketch_dir,
     get_project_remembered_board, set_project_remembered_board,
@@ -1041,9 +1041,17 @@ class MCUWebBackendAPI:
                             })
                             if self.current_port == dev and not self._serial_handoff_pending(dev):
                                 self._clear_disconnected_port(dev)
+                    returning = getattr(self, "_returning_port", "")
+                    if returning in added_devs and not self.current_port and not getattr(self, "is_busy", False):
+                        self._restore_returned_port(returning)
                     # Publish after clearing disconnected selections, so the
                     # GUI cannot race cleanup with a stale combo selection.
-                    self.emit("ports:updated", ports)
+                    self.emit("ports:updated", self._annotated_ports(ports))
+                else:
+                    # Another window selecting or releasing a port changes which
+                    # entries are in use without changing the device inventory.
+                    if get_occupied_ports() != getattr(self, "_port_owners", set()):
+                        self.emit("ports:updated", self._annotated_ports(ports))
                 # A declared USB reset can defer clearing the selection. Once
                 # its guard finishes/expires, clear it even without another
                 # inventory change; stale selections must not enable Upload.
@@ -1062,12 +1070,10 @@ class MCUWebBackendAPI:
             return
         self._stop_serial_monitor()
         self.current_port = ""
-        if not claim_serial_port(""):
-            self.emit("notification", {
-                "title": "Port settings unavailable",
-                "message": "The device disconnected, but its saved port selection could not be cleared.",
-                "type": "warning",
-            })
+        # Keep this window's claim while the device is absent: a USB drop or
+        # re-enumeration must not hand the port to another MCU Flasher or Lite
+        # window. Only choosing another port or closing the window releases it.
+        self._returning_port = port
         self.emit("port:selected", {"port": ""})
         self.emit("serial:status", {"connected": False, "port": "", "baud": self.current_baud})
         self._sync_project_hardware_state()
@@ -1084,7 +1090,7 @@ class MCUWebBackendAPI:
         self._last_known_ports = list(ports)
         sig = self._get_qt_signals()
         if sig:
-            sig.ports_updated.emit(ports)
+            sig.ports_updated.emit(self._annotated_ports(ports))
 
     # ──────────────────────────────────────────────────────────
     # JS-RPC: INITIAL STATE & CONFIG
@@ -3209,8 +3215,21 @@ class MCUWebBackendAPI:
         """Re-scan ports and notify frontend."""
         ports = self._scan_ports()
         self._last_known_ports = list(ports)
-        self.emit("ports:updated", ports)
+        self.emit("ports:updated", self._annotated_ports(ports))
         return ports
+
+    def _annotated_ports(self, ports):
+        """Mark ports another MCU Flasher or Lite window holds. Every published
+        list carries the marks, and the controls reuse the last one when the
+        dropdown opens, so a held port is never offered as selectable."""
+        self._port_owners = get_occupied_ports()
+        self._published_ports = annotate_port_owners(ports)
+        return list(self._published_ports)
+
+    def _restore_returned_port(self, port: str) -> None:
+        """Reselect this window's port when its device returns after a drop."""
+        self._returning_port = ""
+        self.select_port(port)
 
     def _extract_port_device(self, text: str) -> str:
         """Extract COM device (e.g. 'COM4') from port label or raw string."""
@@ -3393,12 +3412,13 @@ class MCUWebBackendAPI:
             })
             return False
         if not claim_serial_port(port):
-            owner = port_occupied_owner(port)
+            owner = port_owner_window(port)
             self.emit("notification", {"title": "Serial port unavailable",
-                      "message": f"{port} is selected in another project window (PID {owner})." if owner
+                      "message": f"{port} is selected in {owner}. Release it there first." if owner
                                  else "Could not save the serial port selection. Check your settings folder.",
                       "type": "warning"})
             return False
+        self._returning_port = ""
         self.current_port = port
         self.emit("port:selected", {"port": port})
         self._sync_project_hardware_state()
@@ -3607,6 +3627,17 @@ class MCUWebBackendAPI:
             # opening the port: a later request must not make an older open
             # look like it is already using the new baud rate.
             port, baud = self.current_port, self.current_baud
+            # Never open a port another MCU Flasher or Lite window holds, however
+            # this connection was requested.
+            owner = port_owner_window(port)
+            if owner:
+                self.emit("serial:status", {
+                    "generation": generation, "connected": False, "state": "disconnected",
+                    "port": port, "baud": baud,
+                })
+                self.emit("serial:log", {"stream": False, "newline": True, "tag": "warning",
+                                         "text": f"--- {port} is selected in {owner}; not connecting ---"})
+                return
 
             try:
                 from main.core.monitor_connection import open_passive_serial
@@ -7099,9 +7130,9 @@ class MCUWebBackendAPI:
         firmware_written = success = False
         self._restart_failed = False
         try:
-            owner = port_occupied_owner(monitor_port) if monitor_port else None
+            owner = port_owner_window(monitor_port) if monitor_port else None
             if owner:
-                raise RuntimeError(f"Port {monitor_port} is in use by another window (PID {owner}).")
+                raise RuntimeError(f"Port {monitor_port} is selected in {owner}.")
             if not can_skip and not self._compile_worker(is_upload=True):
                 return
             if self._stop_requested:

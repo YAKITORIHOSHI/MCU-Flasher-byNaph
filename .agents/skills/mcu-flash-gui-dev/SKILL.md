@@ -27,6 +27,28 @@ its own settings lock and only tries the peer's, retrying with backoff inside a
 3-second budget, so the two apps cannot deadlock. Close releases port and sketch
 claims before slower backend cleanup.
 
+Port claims are first-come on Ubuntu and Windows. `_clear_disconnected_port`
+keeps the claim and records `_returning_port`; when the device returns the port
+monitor calls `_restore_returned_port` (main reselects and reconnects; Lite's
+backend override only reselects). Releasing a claim on disconnect let a USB drop
+hand the port to the other app until the board was replugged. The monitor loop
+republishes `annotate_port_owners` lists when other windows' claims change, the
+toolbar disables ports marked occupied, refusals use `port_owner_window` and
+`_start_serial_monitor` refuses a port another window holds. The toolbar
+annotates ownership when its dropdown opens (`_port_claims` checks only the
+PIDs that hold a port, directly, so it is cheap on the GUI thread; raw
+`_last_known_ports` carries no marks). Held rows are disabled items;
+`_on_port_changed` checks `port_owner_window` before `select_port`, and a
+refusal restores the backend's real selection or none (`setCurrentIndex(-1)`),
+never row 0, then regrays the list.
+
+Ubuntu All Apps also lists MCU Flasher Lite (`install_desktop.lite_desktop_entry`,
+file `dev.naph.mcuflasher.lite.desktop` matching Lite's Wayland app ID, icon
+`mcu-flasher-lite`). `register_completed_installation` writes it after setup;
+`launch.py` calls `refresh_registered_lite` on normal launches so earlier
+installations gain it. Both touch only the owned installation whose main entry
+exists.
+
 Project, board and Resources dialogs are modal: `modal_dialogs()` paints the
 backdrop and makes the top open window egui's modal layer (board picker above
 Resources). Use `action_row()` for dialog buttons; a centered `with_layout` given

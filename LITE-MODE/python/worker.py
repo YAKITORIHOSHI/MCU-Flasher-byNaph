@@ -23,7 +23,6 @@ LITE = Path(__file__).resolve().parents[1]
 ORIGINAL = LITE.parent
 SOURCE_EXTENSIONS = {".ino", ".h", ".hpp", ".cpp", ".c"}
 MAX_FRAME = 256 * 1024
-PORT_IN_USE = "is selected in another MCU Flasher or Lite window. Choose another port or release it there."
 
 
 def developer_launch_options():
@@ -289,6 +288,17 @@ class Worker:
             def _get_qt_signals(self):
                 return None
 
+            def _restore_returned_port(self, port):
+                # Lite reselects its returning port but never opens it without Connect.
+                self._returning_port = ""
+                from main.core.config import claim_serial_port
+                with owner._action_lock:
+                    if self.current_port or not claim_serial_port(port):
+                        return
+                    self.current_port = port
+                owner.log(f"{port} is back; it stays selected in this window.", "info")
+                owner.status()
+
         self.api = LiteBackend()
         self.api.reset_on_baud_change = False
         self.api.clear_console_on_action = False
@@ -343,14 +353,14 @@ class Worker:
         devices = {p["device"] for p in ports}
         if self.api.current_port and self.api.current_port not in devices and not self.api.is_busy:
             self.api._stop_serial_monitor()
+            # Keep the claim while the device is absent so no other window can
+            # take it; the backend reselects it here when it returns.
+            self.api._returning_port = self.api.current_port
             self.api.current_port = ""
-            from main.core.config import claim_serial_port
-            claim_serial_port("")
-            self.log("Selected port disconnected", "warning")
+            self.log("Selected port disconnected; it stays reserved for this window until it returns.", "warning")
         self.last_ports = ports
-        from main.core.config import port_occupied_owner
-        self.output.send("ports", [dict(port, occupied=bool(port_occupied_owner(port["device"])))
-                                   for port in ports])
+        from main.core.config import annotate_port_owners
+        self.output.send("ports", annotate_port_owners(ports))
         from main.core.config import get_occupied_folders
         self.output.send("sketches", {"open_elsewhere": sorted(get_occupied_folders())})
 
@@ -406,9 +416,10 @@ class Worker:
             self.require_port_owned()
 
     def require_port_owned(self):
-        from main.core.config import port_occupied_owner
-        if port_occupied_owner(self.api.current_port):
-            raise ValueError(f"{self.api.current_port} {PORT_IN_USE}")
+        from main.core.config import port_owner_window
+        owner = port_owner_window(self.api.current_port)
+        if owner:
+            raise ValueError(f"{self.api.current_port} is selected in {owner}. Release it there first.")
 
     def pio_environment(self):
         core = self.state / "platformio" if sys.platform != "win32" else self.state / "engine/src/.platformio-mcu-gui"
@@ -781,9 +792,12 @@ class Worker:
             if value and value not in {item["device"] for item in self.api._scan_ports()}:
                 raise ValueError("Port is no longer connected")
             self.api._stop_serial_monitor()
-            from main.core.config import claim_serial_port
+            from main.core.config import claim_serial_port, port_owner_window
             if not claim_serial_port(value):
-                raise ValueError(f"{value} {PORT_IN_USE}")
+                owner = port_owner_window(value)
+                raise ValueError(f"{value} is selected in {owner}. Release it there first." if owner
+                                 else "Could not save the port selection. Check Lite's settings permissions.")
+            self.api._returning_port = ""
             self.api.current_port = value
         elif cmd == "monitor":
             if request.get("connect"):
@@ -940,6 +954,7 @@ def main():
     from main.core import config
     # Ports are shared with the main app: read its live instances as well.
     config._peer_instance_registries = lambda: ((Path.home() / ".mcu_gui_config.json", ORIGINAL / "src" / "gui_config.json"),)
+    config._OWN_PRODUCT_WINDOW, config._PEER_PRODUCT_WINDOW = "another Lite window", "the MCU Flasher app"
     worker = Worker(state, output, main_core=main_core, session=session)
     worker.api.refresh_board_catalog()
     output.send("ready", {"protocol": 1, "state_path": str(state), "host": platform.system()})

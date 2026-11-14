@@ -92,7 +92,8 @@ five-click Developer Access opens the existing authenticated portal.
 Stop stays visible with reason-specific enablement, and narrow windows switch
 between the monitor and scrollable Sketch & Connection controls. Like the main
 app, Lite opens each sketch in its own window. A serial port selected in either
-app is marked in use in the other and cannot be selected there.
+app is marked in use in the other and cannot be selected there. On Ubuntu, the
+installed app also lists MCU Flasher Lite in All Apps.
 See [Lite's guide](LITE-MODE/README.md). Bootstrap includes Lite and future public
 application folders automatically: checkouts use tracked files, and release ZIPs
 carry a generated source manifest. Private settings, caches and build scratch

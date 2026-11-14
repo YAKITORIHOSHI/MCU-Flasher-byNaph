@@ -11,6 +11,22 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 14 — MCU Flasher Lite in All Apps
+
+- On Ubuntu, MCU Flasher Lite now appears in All Apps beside MCU Flasher, with
+  its own icon. Existing installations add it on their next launch.
+
+## November 14 — Fair serial port ownership between the main app and Lite
+
+- The window that selects a serial port first keeps it, on Ubuntu and Windows.
+  A USB drop or re-enumeration no longer hands the port to another MCU Flasher
+  or Lite window; the owner reselects it when it returns, without a replug.
+- The main app's port list now grays out ports held by Lite or another project
+  window, marked "(in use)", so they cannot be chosen by mouse, keyboard or
+  scrolling; messages name the window to release it from.
+- Neither app opens a port that another window holds, however the connection
+  was requested.
+
 ## November 14 — Lite multiple sketches and shared serial ports
 
 - Lite opens several sketches at once, each in its own window, like the main app.

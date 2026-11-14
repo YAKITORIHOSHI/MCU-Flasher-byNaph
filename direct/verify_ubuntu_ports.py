@@ -50,7 +50,8 @@ class UbuntuPortChecks(unittest.TestCase):
         backend = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                        and node.name == "MCUWebBackendAPI")
         names = {"_scan_ports", "refresh_ports", "_port_monitor_loop", "_init_hardware",
-                 "_serial_handoff_pending", "_clear_disconnected_port"}
+                 "_serial_handoff_pending", "_clear_disconnected_port", "_restore_returned_port",
+                 "_annotated_ports"}
         functions = [node for node in backend.body if isinstance(node, ast.FunctionDef)
                      and node.name in names]
         if {node.name for node in functions} != names:
@@ -65,6 +66,8 @@ class UbuntuPortChecks(unittest.TestCase):
         scope = {"sys": SimpleNamespace(platform=host), "re": re,
                  "serial": SimpleNamespace(tools=SimpleNamespace(list_ports=SimpleNamespace(
                      comports=comports))), "claim_serial_port": claim,
+                 "get_occupied_ports": Mock(return_value=set()),
+                 "annotate_port_owners": lambda ports: [dict(port) for port in ports],
                  "WindowsError": OSError, "port_entry": self.helper.port_entry,
                  "ubuntu_port_entry": self.helper.port_entry, "ubuntu_ports": self.helper}
         exec(compile(self.fixture_tree, "<isolated-port-backend>", "exec"), scope)
@@ -164,6 +167,18 @@ class UbuntuPortChecks(unittest.TestCase):
         self.assertEqual(api.current_port, "")
         claim.assert_not_called()
 
+    def test_returning_port_is_reselected_by_its_owner(self):
+        api, comports, claim, _ = self.fixture([info(description="USB adapter")])
+        api._returning_port = "/dev/ttyUSB0"
+        api._init_hardware = Mock()
+        api._stop_port_monitor = StopAfterOnePoll()
+        api.select_port = Mock(return_value=True)
+        api.is_busy = False
+        api._port_monitor_loop()
+        api.select_port.assert_called_once_with("/dev/ttyUSB0")
+        self.assertEqual(api._returning_port, "")
+        claim.assert_not_called()
+
     def test_filtered_selection_removal_uses_existing_disconnect_cleanup(self):
         api, comports, claim, _ = self.fixture([info()])
         api.current_port = "/dev/ttyUSB0"
@@ -178,7 +193,9 @@ class UbuntuPortChecks(unittest.TestCase):
         self.assertEqual(api.current_port, "")
         self.assertEqual(api._last_known_ports, [])
         api._stop_serial_monitor.assert_called_once_with()
-        claim.assert_called_once_with("")
+        # The claim survives the drop so no other window can take the port.
+        claim.assert_not_called()
+        self.assertEqual(api._returning_port, "/dev/ttyUSB0")
         api._sync_project_hardware_state.assert_called_once_with()
         calls = api.emit.call_args_list
         names = [call.args[0] for call in calls]

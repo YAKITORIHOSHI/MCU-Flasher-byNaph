@@ -10,7 +10,8 @@ Bootstrap/release inventory code includes Lite and future public source files au
 
 ## Open Lite
 
-- **Ubuntu:** double-click the executable `UBUNTU`, or run `./LITE-MODE/run.sh`.
+- **Ubuntu:** open **MCU Flasher Lite** from All Apps (added by the installed
+  MCU Flasher), double-click the executable `UBUNTU`, or run `./LITE-MODE/run.sh`.
 - **Windows:** double-click `WINDOWS.exe`. `WINDOWS.cmd` is the build-and-launch
   fallback when the executable has not been built.
 
@@ -171,6 +172,9 @@ or libraries, and Developer Access opens in one Lite window at a time. A serial
 port selected in the main app or another Lite window is shown as **in use** and
 cannot be selected until that window releases it; the main app treats Lite's
 selections the same way. Connect and Upload check this again before starting.
+The first window to select a port keeps it, even if the board briefly
+disconnects: Lite reselects its returning port (without connecting), and the
+port is released only by choosing another port, choosing No port or closing.
 
 For tool reuse, Lite finds the main app's native PlatformIO store before changing
 its own environment: the main copy's `src/.platformio-mcu-gui` on Windows and

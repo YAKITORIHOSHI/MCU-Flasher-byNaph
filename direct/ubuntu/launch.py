@@ -602,6 +602,9 @@ def main(argv=None) -> int:
                 raise RuntimeError(problem)
             if window is not None:
                 window.log("The private runtime is ready.", "ok")
+        if label == "Ubuntu":
+            from direct.ubuntu.user_install import refresh_registered_lite
+            refresh_registered_lite(ROOT)
         return launch_workspace(arguments, env, desktop=desktop, window=window)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         report_error(str(exc), desktop=desktop, window=window)

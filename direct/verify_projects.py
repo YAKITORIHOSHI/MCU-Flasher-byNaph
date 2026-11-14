@@ -156,6 +156,11 @@ class ProjectChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(config, "_CONFIG_MEM_MTIME", 0))
         self.stack.enter_context(patch.object(config, "_INSTANCE_ID", "101"))
         self.stack.enter_context(patch.object(config, "_instance_is_alive", return_value=True))
+        # The other product's registry stays inside the fixture too.
+        (self.folder / "lite").mkdir()
+        self.lite_registry = self.folder / "lite" / "settings.json"
+        self.stack.enter_context(patch.object(config, "_peer_instance_registries",
+                                              lambda: ((self.lite_registry,),)))
         (self.folder / "sketch").mkdir()
         (self.folder / "sketch/demo.ino").write_text("void setup() {}\nvoid loop() {}\n")
         self.assertTrue(config._save_raw_config({"instances": {}, "shared": {}}))
@@ -423,6 +428,22 @@ class ProjectChecks(unittest.TestCase):
         with patch.object(config, "_INSTANCE_ID", "202"):
             self.assertTrue(config.set_active_sketch_dir(str(self.folder / "sketch")))
             self.assertTrue(config.claim_serial_port("COM999"))
+
+    def test_first_window_keeps_its_port_across_products(self):
+        self.assertTrue(config.claim_serial_port("COM999"))
+        self.lite_registry.write_text(json.dumps({"instances": {"303": {"selected_port": "COM997"}}}),
+                                      encoding="utf-8")
+        with patch.object(config, "_INSTANCE_ID", "202"):
+            self.assertEqual(config.port_owner_window("COM999 - Fixture"), "another project window (PID 101)")
+            self.assertEqual(config.port_owner_window("com997"), "MCU Flasher Lite (PID 303)")
+            self.assertFalse(config.claim_serial_port("COM997"), "A Lite window's port is refused in main")
+            marked = config.annotate_port_owners([{"device": "COM999"}, {"device": "COM997"}, {"device": "COM996"}])
+            self.assertEqual([port["occupied"] for port in marked], [True, True, False])
+        self.assertEqual(config.annotate_port_owners([{"device": "COM999"}])[0]["occupied"], False,
+                         "A window's own selection is never shown as in use")
+        # Lite cannot take main's port while the main window lives.
+        lite_view = config._load_raw_config()
+        self.assertEqual(lite_view["instances"]["101"]["selected_port"], "COM999")
 
     def test_settings_and_theme_share_one_transaction_without_overwriting_other_windows(self):
         from main.core.theme import Theme

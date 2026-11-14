@@ -521,35 +521,36 @@ class RuntimeChecks(unittest.TestCase):
             finally:
                 _release_reset_cache_lock(handle)
 
-    def test_disconnected_port_clears_claim_before_catalog_reaches_controls(self):
+    def test_disconnected_port_keeps_claim_before_catalog_reaches_controls(self):
         from main import web_bridge
         from unittest.mock import Mock
-        for persisted in (True, False):
-            api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
-            api.current_port, api.current_baud = "SIMULATED", 115200
-            api.is_busy = False
-            api._last_known_ports = [{"device": "SIMULATED"}]
-            api._stop_port_monitor = threading.Event()
-            api._init_hardware = Mock()
-            api._scan_ports = Mock(return_value=[])
-            api._stop_serial_monitor = Mock()
-            api._sync_project_hardware_state = Mock()
-            events = []
-            def emit(event, data):
-                events.append((event, data, api.current_port))
-                if event == "ports:updated":
-                    api._stop_port_monitor.set()
-            api.emit = emit
-            with patch.object(api._stop_port_monitor, "wait", return_value=False), \
-                    patch.object(web_bridge, "claim_serial_port", return_value=persisted) as claim:
-                api._port_monitor_loop()
-            claim.assert_called_once_with("")
-            api._stop_serial_monitor.assert_called_once()
-            names = [event for event, _, _ in events]
-            self.assertLess(names.index("port:selected"), names.index("ports:updated"))
-            self.assertEqual(events[-1][2], "")
-            if not persisted:
-                self.assertTrue(any(data.get("title") == "Port settings unavailable" for _, data, _ in events if isinstance(data, dict)))
+        api = web_bridge.MCUWebBackendAPI.__new__(web_bridge.MCUWebBackendAPI)
+        api.current_port, api.current_baud = "SIMULATED", 115200
+        api.is_busy = False
+        api._last_known_ports = [{"device": "SIMULATED"}]
+        api._stop_port_monitor = threading.Event()
+        api._init_hardware = Mock()
+        api._scan_ports = Mock(return_value=[])
+        api._stop_serial_monitor = Mock()
+        api._sync_project_hardware_state = Mock()
+        events = []
+        def emit(event, data):
+            events.append((event, data, api.current_port))
+            if event == "ports:updated":
+                api._stop_port_monitor.set()
+        api.emit = emit
+        with patch.object(api._stop_port_monitor, "wait", return_value=False), \
+                patch.object(web_bridge, "claim_serial_port") as claim, \
+                patch.object(web_bridge, "get_occupied_ports", return_value=set()), \
+                patch.object(web_bridge, "annotate_port_owners", side_effect=lambda ports: list(ports)):
+            api._port_monitor_loop()
+        # A USB drop keeps this window's claim; only another selection or closing releases it.
+        claim.assert_not_called()
+        self.assertEqual(api._returning_port, "SIMULATED")
+        api._stop_serial_monitor.assert_called_once()
+        names = [event for event, _, _ in events]
+        self.assertLess(names.index("port:selected"), names.index("ports:updated"))
+        self.assertEqual(events[-1][2], "")
 
     def test_old_serial_reader_cannot_disconnect_new_reader(self):
         from main import web_bridge

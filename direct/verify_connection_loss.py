@@ -333,6 +333,77 @@ class ConnectionLossChecks(unittest.TestCase):
         self.assertEqual(self.api._op_session_id, 2)
         self.assertFalse(self.api._operation_connection_loss)
 
+    def test_controls_never_offer_a_port_another_window_holds(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+        from PySide6.QtGui import QKeyEvent, QWheelEvent
+        from PySide6.QtWidgets import QApplication, QComboBox
+        app = QApplication.instance() or QApplication([])
+
+        class Combo(QComboBox):
+            def refresh_current_text(self):
+                pass
+
+        tree = ast.parse((ROOT / "main/qt/toolbar.py").read_text(encoding="utf-8"))
+        cls = next(row for row in tree.body if isinstance(row, ast.ClassDef) and row.name == "ControlsBar")
+        method = next(row for row in cls.body if isinstance(row, ast.FunctionDef) and row.name == "on_ports_updated")
+        method.decorator_list = []
+        namespace = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), "isolated_controls", "exec"), namespace)
+        combo = Combo()
+        self.api.current_port = ""
+        controls = SimpleNamespace(port_combo=combo, _backend=self.api,
+                                   _update_action_button_states_on_controls=Mock())
+        ports = [{"device": "COM5", "description": "Held by Lite", "occupied": True},
+                 {"device": "COM6", "description": "Free adapter", "occupied": False}]
+        with patch("main.core.config.load_gui_config", return_value={}):
+            namespace["on_ports_updated"](controls, ports)
+        held = combo.model().item(0)
+        self.assertFalse(held.isEnabled(), "A held port must not be selectable")
+        self.assertIn("(in use)", combo.itemText(0))
+        self.assertEqual(combo.currentIndex(), -1)
+        combo.setCurrentIndex(1)
+        app.sendEvent(combo, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Up, Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(combo.currentData(), "COM6", "Keyboard navigation skips the held port")
+        wheel = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, 120),
+                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                            Qt.ScrollPhase.NoScrollPhase, False)
+        app.sendEvent(combo, wheel)
+        self.assertEqual(combo.currentData(), "COM6", "Scrolling skips the held port")
+        # The port this window's backend owns is never disabled for itself.
+        self.api.current_port = "COM5"
+        with patch("main.core.config.load_gui_config", return_value={}):
+            namespace["on_ports_updated"](controls, [dict(ports[0], description="Now ours"), ports[1]])
+        self.assertTrue(combo.model().item(0).isEnabled())
+        self.api.current_port = ""
+
+    def test_a_held_port_is_never_selected_or_shown_selected(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QComboBox
+        QApplication.instance() or QApplication([])
+
+        class Combo(QComboBox):
+            def refresh_current_text(self):
+                pass
+
+        tree = ast.parse((ROOT / "main/qt/toolbar.py").read_text(encoding="utf-8"))
+        cls = next(row for row in tree.body if isinstance(row, ast.ClassDef) and row.name == "ControlsBar")
+        method = next(row for row in cls.body if isinstance(row, ast.FunctionDef) and row.name == "_on_port_changed")
+        namespace = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), "isolated_controls", "exec"), namespace)
+        combo = Combo()
+        combo.addItem("/dev/ttyUSB0  -  USB Serial", userData="/dev/ttyUSB0")
+        backend = SimpleNamespace(current_port="", select_port=Mock(return_value=True), emit=Mock())
+        controls = SimpleNamespace(port_combo=combo, _backend=backend, _refresh_ports=Mock(),
+                                   _update_action_button_states_on_controls=Mock())
+        combo.setCurrentIndex(0)  # The user picks the held port before the list was marked.
+        with patch("main.core.config.port_owner_window", return_value="MCU Flasher Lite (PID 38737)"):
+            namespace["_on_port_changed"](controls, 0)
+        backend.select_port.assert_not_called()
+        self.assertEqual(combo.currentIndex(), -1, "The refused port is never shown as selected")
+        self.assertIn("MCU Flasher Lite (PID 38737)", backend.emit.call_args.args[1]["message"])
+        controls._refresh_ports.assert_called_once_with()
+
     def test_controls_retain_only_a_declared_pending_handoff(self):
         class Combo:
             def __init__(self):

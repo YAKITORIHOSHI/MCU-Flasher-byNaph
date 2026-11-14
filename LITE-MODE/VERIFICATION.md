@@ -1,5 +1,19 @@
 # Lite verification — updated 2026-11-14
 
+## November 14 — first-come serial port ownership
+
+A reported takeover was traced through the kernel log: the CH340 board dropped
+off USB, the main app released its claim on disconnect, and Lite could then take
+the port until a replug. Claims now survive drops on both hosts. Ninety-seven
+Lite worker checks include a dropped port staying reserved and its return being
+reselected without connecting; main's Ubuntu-ports, runtime, projects (owner
+naming, cross-product marking), connection-loss, performance, monitor, upload
+and hygiene verifiers pass. The Lite Windows workflow runs the same checks natively.
+A real offscreen Qt combo confirms main disables held ports, with keyboard and
+wheel skipping them. The Ubuntu All Apps entry for Lite validates with
+desktop-file-validate; user-install checks cover setup registration, the
+next-launch refresh for earlier installations and portable folders staying out.
+
 ## November 14 — multiple windows, modal dialogs and shared ports
 
 Twenty-four Rust checks pass, including modal input blocking (the workspace and a

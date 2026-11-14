@@ -1,5 +1,16 @@
 # Lite 0.1.0 — updated 2026-11-14
 
+MCU Flasher Lite in All Apps:
+
+- The installed Ubuntu MCU Flasher registers MCU Flasher Lite in All Apps with
+  its own icon; existing installations add it on their next launch.
+
+Fair serial port ownership:
+
+- The first window to select a port keeps it on Ubuntu and Windows. A USB drop
+  keeps Lite's or the main app's claim, and Lite reselects its returning port
+  without connecting. Refusals name the window that holds the port.
+
 Multiple sketches, modal dialogs and shared serial ports:
 
 - Open several sketches at once: another sketch opens in its own Lite window,

@@ -1967,6 +1967,13 @@ class ControlsBar(QWidget):
         ports = getattr(self._backend, "_last_known_ports", [])
         if not isinstance(ports, list):
             ports = []
+        # Mark ports other windows hold as the list opens, not up to a monitor
+        # poll later: only the claiming PIDs are checked, so this stays cheap.
+        try:
+            from main.core.config import annotate_port_owners
+            ports = annotate_port_owners(ports)
+        except (OSError, ValueError):
+            ports = getattr(self._backend, "_published_ports", ports)
         self.on_ports_updated(ports)
 
     def _refresh_ports_and_show(self) -> None:
@@ -1990,12 +1997,25 @@ class ControlsBar(QWidget):
         if not self._backend:
             return
         port = self.port_combo.currentData() or ""
-        if self._backend.select_port(port) is False:
+        from main.core.config import port_owner_window
+        owner = port_owner_window(port) if port else None
+        if owner:
+            # Held by another MCU Flasher or Lite window: never select it here.
+            self._backend.emit("notification", {
+                "title": "Serial port unavailable",
+                "message": f"{port} is selected in {owner}. Release it there first.",
+                "type": "warning",
+            })
+        if owner or self._backend.select_port(port) is False:
+            # Refused: show the backend's real selection, or none, never the
+            # refused port, and gray the held port out at once.
             self.port_combo.blockSignals(True)
-            previous = self.port_combo.findData(self._backend.current_port or "")
-            self.port_combo.setCurrentIndex(max(0, previous))
+            owned = self._backend.current_port or ""
+            self.port_combo.setCurrentIndex(self.port_combo.findData(owned) if owned else -1)
             self.port_combo.blockSignals(False)
             self.port_combo.refresh_current_text()
+            if owner:
+                self._refresh_ports()
         self._update_action_button_states_on_controls()
 
     def _on_upload_speed_changed(self, speed: str) -> None:
@@ -2157,6 +2177,11 @@ class ControlsBar(QWidget):
     @Slot(list)
     def on_ports_updated(self, ports: list) -> None:
         """Refresh port combo from signal, preserving selection if still present."""
+        def port_label(port: dict) -> str:
+            # Ports held by another MCU Flasher or Lite window are marked, not hidden.
+            label = f"{port['device']}  -  {port['description']}"
+            return f"{label}  (in use)" if port.get("occupied") else label
+
         current_port = self.port_combo.currentData() or (self._backend.current_port if self._backend else "")
         if (current_port and self._backend
                 and not any(p.get("device") == current_port for p in ports)
@@ -2169,7 +2194,7 @@ class ControlsBar(QWidget):
             d = self.port_combo.itemData(i)
             if d:
                 existing_items.append((d, self.port_combo.itemText(i)))
-        new_items = [(p["device"], f"{p['device']}  -  {p['description']}") for p in ports]
+        new_items = [(p["device"], port_label(p)) for p in ports]
 
         if existing_items == new_items and existing_items:
             if current_port:
@@ -2187,8 +2212,15 @@ class ControlsBar(QWidget):
         restore_idx = -1
         if ports:
             for i, p in enumerate(ports):
-                label = f"{p['device']}  -  {p['description']}"
-                self.port_combo.addItem(label, userData=p["device"])
+                self.port_combo.addItem(port_label(p), userData=p["device"])
+                owned = getattr(self._backend, "current_port", "") if self._backend else ""
+                if p.get("occupied") and p["device"] != owned:
+                    # Held by another MCU Flasher or Lite window: listed, not selectable.
+                    item = self.port_combo.model().item(i)
+                    if item is not None:
+                        item.setEnabled(False)
+                        item.setToolTip("Selected in another MCU Flasher or Lite window")
+                    continue
                 if current_port and p["device"] == current_port:
                     restore_idx = i
 
@@ -2198,7 +2230,7 @@ class ControlsBar(QWidget):
                 cfg_port = load_gui_config().get("selected_port", "")
                 if cfg_port:
                     for i, p in enumerate(ports):
-                        if p["device"] == cfg_port:
+                        if p["device"] == cfg_port and not p.get("occupied"):
                             restore_idx = i
                             break
 

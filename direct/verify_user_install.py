@@ -163,6 +163,34 @@ class UserInstallChecks(unittest.TestCase):
         self.assertEqual(entry.stat().st_mtime_ns, before)
         self.assertEqual(len(list((self.data / 'applications').glob('*.desktop'))), 1)
 
+    def test_lite_joins_all_apps_after_setup_and_on_later_launches(self):
+        from direct.ubuntu.install_desktop import LITE_ENTRY, exec_argument
+        destination = self.stage()
+        lite = destination / 'LITE-MODE'
+        (lite / 'assets').mkdir(parents=True)
+        (lite / 'run.sh').write_text('#!/usr/bin/env bash\n')
+        (lite / 'assets/lite.png').write_bytes(b'lite icon')
+        entry = self.data / 'applications' / LITE_ENTRY
+        # Never before the main entry exists: that marks a completed setup.
+        self.assertFalse(install.refresh_registered_lite(destination, data_home=self.data))
+        self.assertFalse(entry.exists())
+        self.assertTrue(install.register_completed_installation(destination, data_home=self.data, report=lambda _text: None))
+        text = entry.read_text()
+        self.assertIn('Name=MCU Flasher Lite', text)
+        self.assertIn(exec_argument(str(lite / 'run.sh')), text)
+        self.assertIn('StartupWMClass=dev.naph.mcuflasher.lite', text)
+        self.assertEqual((self.data / 'icons/hicolor/256x256/apps/mcu-flasher-lite.png').read_bytes(), b'lite icon')
+        # An installation registered before Lite had an entry gains it on launch, once.
+        entry.unlink()
+        self.assertTrue(install.refresh_registered_lite(destination, data_home=self.data))
+        before = entry.stat().st_mtime_ns
+        self.assertTrue(install.refresh_registered_lite(destination, data_home=self.data))
+        self.assertEqual(entry.stat().st_mtime_ns, before)
+        self.assertFalse(install.refresh_registered_lite(self.source, data_home=self.data),
+                         'A portable folder never registers itself')
+        self.assertEqual(sorted(path.name for path in (self.data / 'applications').glob('*.desktop')),
+                         sorted([LITE_ENTRY, 'mcu-flasher.desktop']))
+
     def test_repeated_portable_setup_reuses_installed_copy_without_downgrading_or_copying_venv(self):
         destination = self.stage()
         installed = destination / 'main/web_bridge.py'

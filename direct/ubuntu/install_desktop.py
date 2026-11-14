@@ -81,6 +81,38 @@ def desktop_entry(root: Path, *, portable: bool = False) -> str:
     ))
 
 
+# Lite registers under its Wayland app ID, so GNOME pairs its window with this entry.
+LITE_ENTRY = "dev.naph.mcuflasher.lite.desktop"
+LITE_ICON = "mcu-flasher-lite"
+
+
+def lite_desktop_entry(root: Path) -> str:
+    """All Apps entry for the separate Lite workbench in this application folder."""
+    lite = root / "LITE-MODE"
+    return "\n".join((
+        "[Desktop Entry]", "Version=1.0", "Type=Application",
+        "Name=MCU Flasher Lite", "GenericName=MCU Lite",
+        "Comment=Lightweight compile, upload and serial monitor workbench",
+        "Exec=/bin/bash " + exec_argument(str(lite / "run.sh")),
+        "Path=" + string_value(str(lite)), "Icon=" + LITE_ICON,
+        "Terminal=false", "Categories=Development;Electronics;",
+        "Keywords=MCU;Lite;Arduino;Serial;Upload;",
+        "StartupNotify=true", "StartupWMClass=dev.naph.mcuflasher.lite", "",
+    ))
+
+
+def register_lite(root: Path, data_home: Path) -> bool:
+    """Register Lite in All Apps when this folder carries its Ubuntu launcher."""
+    lite = root / "LITE-MODE"
+    if not (lite / "run.sh").is_file() or not (lite / "assets/lite.png").is_file():
+        return False
+    write_if_changed(data_home / f"icons/hicolor/256x256/apps/{LITE_ICON}.png",
+                     (lite / "assets/lite.png").read_bytes(), 0o644)
+    write_if_changed(data_home / "applications" / LITE_ENTRY,
+                     lite_desktop_entry(root).encode("utf-8"), 0o755)
+    return True
+
+
 def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
     """Keep icon/theme directory timestamps stable on repeated registration."""
     if path.is_symlink():
@@ -129,6 +161,8 @@ def main(argv=None) -> int:
         for path, text in entries:
             write_if_changed(path, text.encode("utf-8"), 0o755)
             print(f"Shortcut created: {path}")
+        if args.install and register_lite(ROOT, data_home):
+            print(f"Shortcut created: {data_home / 'applications' / LITE_ENTRY}")
     except OSError as exc:
         print(f"Cannot register MCU Flasher's icon or shortcuts: {exc}", file=sys.stderr)
         return 1

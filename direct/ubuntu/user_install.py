@@ -236,7 +236,7 @@ def ensure_user_installation(source, *, data_home=None, report=print):
 
 
 def register_completed_installation(root, *, data_home=None, report=print):
-    from direct.ubuntu.install_desktop import desktop_entry, write_if_changed
+    from direct.ubuntu.install_desktop import desktop_entry, register_lite, write_if_changed
     root = Path(root).absolute()
     if root != installation_directory(data_home) or not is_owned_installation(root):
         return False
@@ -246,8 +246,28 @@ def register_completed_installation(root, *, data_home=None, report=print):
     write_if_changed(data_home / "icons/hicolor/256x256/apps/mcu-flasher.png", artwork, 0o644)
     write_if_changed(data_home / "applications/mcu-flasher.desktop",
                      desktop_entry(root).encode("utf-8"), 0o755)
-    report("MCU Flasher is installed and available in All Apps.")
+    lite = register_lite(root, data_home)
+    report("MCU Flasher and MCU Flasher Lite are installed and available in All Apps." if lite
+           else "MCU Flasher is installed and available in All Apps.")
     return True
+
+
+def refresh_registered_lite(root, *, data_home=None):
+    """Add Lite to All Apps for an installation that completed setup earlier.
+
+    Setup registers both entries; installations registered before Lite had an
+    entry gain it on their next normal launch. Only the owned installation
+    whose main entry exists is touched, and a failure never blocks launching."""
+    from direct.ubuntu.install_desktop import register_lite
+    root = Path(root).absolute()
+    try:
+        data_home = data_directory(data_home)
+        if (root != installation_directory(data_home) or not is_owned_installation(root)
+                or not (data_home / "applications/mcu-flasher.desktop").is_file()):
+            return False
+        return register_lite(root, data_home)
+    except (OSError, ValueError, RuntimeError):
+        return False
 
 
 def persistent_setup_root(source, *, report=print):
