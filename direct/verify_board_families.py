@@ -60,9 +60,10 @@ class BoardFamilyChecks(unittest.TestCase):
         self.stack.enter_context(patch.object(platform, "machine", return_value="x86_64"))
         self.stack.enter_context(patch.object(web_bridge, "_get_safe_platformio_core_dir",
                                             return_value=str(self.root / "native-core")))
-        # These fixtures check exact target/protocol dispatch with simulated tools;
-        # first-use tool preparation (verify_target_packages.py) has prepared them.
-        self.stack.enter_context(patch("src.modules.target_packages.target_ready", return_value=True))
+        if sys.platform != "win32":
+            # These fixtures check exact target/protocol dispatch with simulated tools;
+            # first-use tool preparation (verify_target_packages.py) has prepared them.
+            self.stack.enter_context(patch("src.modules.target_packages.target_ready", return_value=True))
         if sys.platform == "win32":
             # These long disposable paths can trigger Windows' compiler
             # junction helper. Its subprocess.run shares the Popen mock below
@@ -486,7 +487,7 @@ class BoardFamilyChecks(unittest.TestCase):
                 if not row[5]:
                     self.assertIn("native", toolbar.btn_upload.toolTip())
                     toolbar.btn_upload.click()
-                    self.assertEqual(launch.call_count, 1)
+                    self.assertEqual(launch.call_count, 1, [call.args[0] for call in launch.call_args_list])
                     self.assertEqual(launch.call_args.args[0][0], "SIMULATED_PIO")
                     self.assertNotIn("--upload-port", launch.call_args.args[0])
                 else:

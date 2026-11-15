@@ -84,10 +84,12 @@ class TargetResolutionChecks(unittest.TestCase):
             "MCU_PACKAGE_EVENTS_ROOT": str(self.sandbox / "package-events"),
         }))
         self.stack.enter_context(patch.object(package_jobs, "package_core_directory", return_value=self.sandbox / "core"))
-        # Compile's first-use tool preparation must never read or stamp this account's store.
-        self.stack.enter_context(patch.object(web_bridge, "_get_safe_platformio_core_dir",
-                                              return_value=str(self.sandbox / "core")))
-        self.stack.enter_context(patch("src.modules.target_packages.target_ready", return_value=True))
+        if sys.platform != "win32":
+            # Compile's first-use tool preparation (Linux/macOS) must never read or
+            # stamp this account's store; Windows keeps Bootstrap's preparation.
+            self.stack.enter_context(patch.object(web_bridge, "_get_safe_platformio_core_dir",
+                                                  return_value=str(self.sandbox / "core")))
+            self.stack.enter_context(patch("src.modules.target_packages.target_ready", return_value=True))
         (self.sandbox / "probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
         self.catalog = catalog_module.BoardCatalog({NAME: stale_selection()})
         self.stack.enter_context(patch.object(catalog_module, "SUPPORTED_BOARDS", self.catalog))
@@ -388,7 +390,8 @@ class TargetResolutionChecks(unittest.TestCase):
                 self.wait_idle()
             self.api._compile_worker.assert_not_called()
             self.assertIsNone(self.api.active_operation)
-            self.assertTrue(self.toolbar.btn_compile.isEnabled())
+            self.assertTrue(self.toolbar.btn_compile.isEnabled(),
+                            (self.api.is_busy, self.api._current_op_phase, self.events[-8:]))
 
     def test_upload_resolves_before_snapshot_and_source_hashing(self):
         self.api.current_port = "SIMULATED"
