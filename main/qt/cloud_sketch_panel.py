@@ -316,6 +316,9 @@ class CloudSketchPanel(QWidget):
         self.setObjectName("cloud-sketch-panel")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setMinimumSize(0, 0)
+        self._content_fit_timer = QTimer(self)
+        self._content_fit_timer.setSingleShot(True)
+        self._content_fit_timer.timeout.connect(self._fit_centered_content)
         self._setup_ui()
         self._finished.connect(self._finish_job, Qt.ConnectionType.QueuedConnection)
         self._job_phase.connect(self._on_job_phase, Qt.ConnectionType.QueuedConnection)
@@ -362,7 +365,9 @@ class CloudSketchPanel(QWidget):
         self._content_layout.setSpacing(7)
         self._scroll.setWidget(content)
         self._scroll.setAutoFillBackground(False)
-        self._scroll.viewport().setAutoFillBackground(False)
+        self._content_viewport = self._scroll.viewport()
+        self._content_viewport.setAutoFillBackground(False)
+        self._content_viewport.installEventFilter(self)
         content.setAutoFillBackground(False)
         outer.addWidget(self._scroll, 1)
 
@@ -657,7 +662,13 @@ class CloudSketchPanel(QWidget):
             field.installEventFilter(self)
 
     def eventFilter(self, watched, event):
-        if event.type() == QEvent.Type.FocusIn:
+        if self._closed:
+            return super().eventFilter(watched, event)
+        if watched is self._content_viewport and event.type() == QEvent.Type.Resize:
+            # Native scrollbar/screen changes can resize only the viewport.
+            # Fixed card widths must follow that final reading area too.
+            self._content_fit_timer.start(0)
+        elif event.type() == QEvent.Type.FocusIn:
             self._scroll.ensureWidgetVisible(watched, 8, 12)
         return super().eventFilter(watched, event)
 
@@ -1440,6 +1451,7 @@ class CloudSketchPanel(QWidget):
 
     def dispose(self):
         self._closed = True
+        self._content_fit_timer.stop()
         self._generation += 1
         self._password.clear()
 
@@ -1465,8 +1477,8 @@ class CloudSketchPanel(QWidget):
             self._restore_btn.setText("Restore" if compact else "Restore version")
             short = event.size().height() < 420
             self._sketches.setMinimumHeight(48 if short else 105)
-        if hasattr(self, "_scroll"):
-            QTimer.singleShot(0, self._fit_centered_content)
+        if hasattr(self, "_scroll") and not self._closed:
+            self._content_fit_timer.start(0)
 
     def _fit_centered_content(self):
         if self._closed or not hasattr(self, "_scroll"):

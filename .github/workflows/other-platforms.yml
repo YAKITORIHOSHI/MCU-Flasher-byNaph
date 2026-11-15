@@ -5,6 +5,7 @@ name: Other platforms
 # Those remain separate qualification gates, as audit/PLATFORM_VERIFICATION.md records.
 on:
   push:
+    branches: [main]
     paths:
       - .github/workflows/other-platforms.yml
       - LAUNCHER/**
@@ -116,8 +117,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: macos-14-apple-silicon
-            runner: macos-14
+          # GitHub retired every macOS 14 runner on 2026-11-02.
+          # https://github.com/actions/runner-images/issues/13518
+          # Keep the application minimum at macOS 14; native 14 needs a real host.
+          - name: macos-26-apple-silicon
+            runner: macos-26
           - name: macos-15-apple-silicon
             runner: macos-15
           - name: macos-15-intel

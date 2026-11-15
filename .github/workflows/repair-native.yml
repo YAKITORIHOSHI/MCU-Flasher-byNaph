@@ -2,6 +2,7 @@ name: Native repair checks
 
 on:
   push:
+    branches: [main]
     paths:
       - .github/workflows/repair-native.yml
       - main/qt/combo_popup.py

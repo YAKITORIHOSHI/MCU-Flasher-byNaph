@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -120,7 +121,11 @@ class ComboPopups(unittest.TestCase):
             self.assertEqual(image.pixelColor(x, y).alpha(), 0, (x, y))
         self.assertGreater(image.pixelColor(image.width()//2, image.height()//2).alpha(), 240)
 
-    def test_dropdowns_fade_and_slide_in_then_rest_exactly_where_they_were_placed(self):
+    @patch.dict(os.environ, {"MCU_FLASHER_REDUCED_MOTION": ""})
+    @patch.object(QApplication, "isEffectEnabled", return_value=True)
+    def test_dropdowns_fade_and_slide_in_then_rest_exactly_where_they_were_placed(self, _windows_effects):
+        # Exercise motion independently of the runner's Windows accessibility
+        # preference; the disabled preferences have their own real-popup checks.
         from main.qt.toolbar import CompactDropdownPopup
         Theme.apply_theme("default")
         APP.setStyleSheet(build_stylesheet("default"))
@@ -185,6 +190,57 @@ class ComboPopups(unittest.TestCase):
             host.close()
             host.deleteLater()
             APP.processEvents()
+
+    def test_windows_or_environment_motion_opt_out_shows_popups_at_rest(self):
+        from main.qt import motion
+        from main.qt.toolbar import CompactDropdownPopup
+
+        for windows_effects, reduced_motion in ((False, ""), (True, "1")):
+            with self.subTest(windows_effects=windows_effects, reduced_motion=reduced_motion), \
+                    patch.object(motion, "sys", SimpleNamespace(platform="win32")), \
+                    patch.object(QApplication, "isEffectEnabled", return_value=windows_effects), \
+                    patch.dict(os.environ, {"MCU_FLASHER_REDUCED_MOTION": reduced_motion}):
+                host = QWidget()
+                layout = QVBoxLayout(host)
+                combo = QComboBox(host)
+                combo.addItems(["9600", "115200", "460800"])
+                layout.addWidget(combo)
+                host.resize(320, 100)
+                host.show()
+                popup = None
+                try:
+                    APP.processEvents()
+                    self.assertFalse(motion.motion_enabled())
+                    combo.showPopup()
+                    material = combo._mcu_glass_popup
+                    self.assertIsNone(combo.view().graphicsEffect())
+                    APP.processEvents()
+                    self.assertFalse(material.motion.running())
+                    self.assertEqual(material.motion.progress(), 1.0)
+                    self.assertIsNone(material.motion._layer)
+                    self.assertIsNone(combo.view().graphicsEffect())
+                    self.assertTrue(combo.view().isVisibleTo(material.popup))
+                    QTest.keyClick(combo.view(), Qt.Key.Key_Down)
+                    QTest.keyClick(combo.view(), Qt.Key.Key_Return)
+                    self.assertEqual(combo.currentIndex(), 1)
+
+                    popup = CompactDropdownPopup(host)
+                    popup.add_button("Settings", lambda: None, "#000000", "#000000")
+                    popup.show_below(combo, min_width=150)
+                    APP.processEvents()
+                    self.assertFalse(popup._motion.running())
+                    self.assertEqual(popup._motion.progress(), 1.0)
+                    self.assertIsNone(popup._motion._layer)
+                    self.assertIsNone(popup._scroll.graphicsEffect())
+                    self.assertTrue(popup._scroll.isVisibleTo(popup))
+                    self.assertEqual(popup._scroll.geometry(), popup.rect())
+                finally:
+                    combo.hidePopup()
+                    if popup is not None:
+                        popup.close()
+                    host.close()
+                    host.deleteLater()
+                    APP.processEvents()
 
     def test_compact_actions_and_options_use_rounded_cached_material(self):
         from main.qt.toolbar import CompactDropdownPopup

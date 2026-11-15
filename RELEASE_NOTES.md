@@ -11,6 +11,22 @@ Installed copies update themselves from GitHub on their next launch; see
 
 ---
 
+## November 15 — Auto-Save editing and portable checks
+
+- Fix the blank Auto-Save delay field: its text and caret stay visible, and a
+  normal click allows typing and saving the delay in every theme.
+- Refit Cloud cards when their scroll viewport changes, keeping long values
+  within the dialog after scrollbar and display transitions.
+- Exercise popup animation separately from Windows and environment motion
+  opt-outs. Installation checks compare each host's native permissions, retaining
+  executable-mode checks on POSIX. Board fixtures declare their isolated library
+  search explicitly. Preserve the complete platform and display-scale matrices.
+- Keep development on `main`; automatic push checks target it without repeating
+  the full matrices for release tags.
+- Replace GitHub's retired macOS 14 runner with macOS 26, retaining macOS 15
+  Intel and Apple Silicon checks. The application minimum remains macOS 14;
+  current native macOS 14 qualification needs a separate host.
+
 ## November 15 — Bootstrap output and view cleanup
 
 - Preserve Windows startup-lock handoff through Python's environment launcher.

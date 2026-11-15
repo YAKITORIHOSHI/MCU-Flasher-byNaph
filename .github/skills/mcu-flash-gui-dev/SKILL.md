@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Develop MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, passive serial monitoring and platform verification."
+description: "Develop MCU Flasher's shipping PySide6 GUI, readable Auto-Save fields, native keyboard ownership, overload/include/library navigation, glass popovers and menus with entrance motion, compact tab reveal, pairing and atomic saves, Developer Access tickets, persistent Ubuntu setup, forward-only source updates, passive serial monitoring and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -12,6 +12,9 @@ uses explicit paper dropdowns; workspace dropdowns retain cached glass, fade and
 slide in, and Qt menus use GlassMenu. Navigation opens explicit includes and
 installed-library declarations before a first compile. Native Windows 11
 keyboard-routing verification remains pending until tested there.
+Auto-Save delay must retain a full-width native text editor without spin-button
+hit areas; styled `NoButtons` alone can hide its text. Verify mouse editing and
+saved values in every theme. Keep app and CI work on `main`.
 
 Use this skill when developing, debugging, or extending the **MCU Flash GUI** desktop application (`mcu_flash_gui.py`, `main/mcu_flash_gui.py`, `main/qt/`, `main/web_bridge.py`) and its supporting execution ecosystem on Windows 10/11.
 

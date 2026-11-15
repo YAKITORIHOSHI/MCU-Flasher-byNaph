@@ -50,7 +50,12 @@ class UserInstallChecks(unittest.TestCase):
         destination = self.stage()
         for name in additions:
             self.assertEqual((destination / name).read_text(), 'public fixture')
-        self.assertTrue((destination / 'LITE-MODE/UBUNTU').stat().st_mode & 0o111)
+        # copy2 preserves the host's native permissions. Windows chmod/stat
+        # cannot represent POSIX execute bits, while POSIX retains the 0755 above.
+        if os.name != 'nt':
+            self.assertEqual((self.source / 'LITE-MODE/UBUNTU').stat().st_mode & 0o111, 0o111)
+        self.assertEqual((destination / 'LITE-MODE/UBUNTU').stat().st_mode & 0o777,
+                         (self.source / 'LITE-MODE/UBUNTU').stat().st_mode & 0o777)
         self.assertFalse((destination / 'UnrelatedSketch').exists())
 
     def test_public_inventory_rejects_paths_outside_source_or_private_state(self):

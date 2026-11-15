@@ -1,5 +1,14 @@
 # Current application platform verification
 
+## November 15 hosted macOS runner continuation
+
+GitHub [retired all macOS 14 hosted runners on November 2, 2026](https://github.com/actions/runner-images/issues/13518).
+The Other platforms workflow now uses macOS 26 Apple Silicon alongside macOS 15
+Apple Silicon and Intel, retaining all checks. Application admission remains
+macOS 14 or newer; newer hosted runs do not qualify a native macOS 14 desktop.
+The latest runner results are tracked in GitHub Actions separately from the
+historical evidence below.
+
 ## November 11 editor/input and Ubuntu installation continuation
 
 The [editor/input verification record](EDITOR_INPUT_IMPROVEMENTS.md) maps each

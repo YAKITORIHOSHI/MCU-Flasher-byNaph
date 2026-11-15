@@ -5,6 +5,11 @@ needed for the next slice. Preserve historical failures and exact tested sources
 
 ## State and evidence
 
+- 15 November 2026: the migration workflow's isolated Python board-generation
+  fixtures explicitly provide the shipping API's library-search dependency with
+  an empty result. This repairs fixture drift after main/Lite shared-library
+  discovery; recipe, hashing and unchanged-write assertions remain. No Rust
+  service, platform gate or capability-ledger claim changes with this correction.
 - 5 November 2026: the shipping Python application now runs on Fedora, Linux Mint
   and macOS through its own adapters, and Tk is gone from it. Older bullets below
   that call those launcher entries availability notices, or describe a Tk browser,

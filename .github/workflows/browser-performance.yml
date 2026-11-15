@@ -2,6 +2,7 @@ name: Browser performance and sleep
 
 on:
   push:
+    branches: [main]
     paths:
       - .github/workflows/browser-performance.yml
       - main/qt/toolbar.py

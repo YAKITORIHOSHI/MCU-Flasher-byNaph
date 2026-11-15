@@ -217,8 +217,11 @@ class CloudUIChecks(unittest.TestCase):
         self.assertLessEqual(abs(actual - expected), rounding, (actual, expected))
 
     def assert_native_size(self, widget, expected):
-        for actual, wanted in zip((widget.width(), widget.height()), expected):
-            self.assert_native_coordinate(actual, wanted)
+        for axis, actual, wanted in zip(("width", "height"), (widget.width(), widget.height()), expected):
+            with self.subTest(axis=axis, minimum=widget.minimumSize(),
+                              hint=widget.minimumSizeHint(), platform=APP.platformName(),
+                              dpr=widget.devicePixelRatioF()):
+                self.assert_native_coordinate(actual, wanted)
 
     def assert_visible_in_ancestors(self, widget):
         self.assertTrue(widget.isVisible(), widget.objectName())
@@ -950,6 +953,12 @@ class CloudUIChecks(unittest.TestCase):
                         width, height = min(width, area.width() - 24), min(height, area.height() - 48)
                     dialog.resize(width, height)
                     self.settle_layout()
+                    # Native Qt can apply the previous tab/layout minimum before
+                    # resizeEvent dispatches compact margins and action labels.
+                    # Request the same size once after that reflow, retaining
+                    # exact final dimensions and all reading/visibility checks.
+                    dialog.resize(width, height)
+                    self.settle_layout()
                     # A native window will not go below what its fixed rows need.
                     needed = max(dialog.minimumHeight(), dialog.minimumSizeHint().height())
                     self.assert_native_size(dialog, (width, max(needed, height)))
@@ -1019,6 +1028,27 @@ class CloudUIChecks(unittest.TestCase):
                         self.assertEqual(panel._scroll.verticalScrollBar().maximum(), 0)
                         self.assertGreaterEqual(panel._sketches.height(), 48)
                     self.assertTrue(dialog.grab().save(str(self.output / f"{mode}-cloud-long-values-{width}-{height}.png")))
+
+    def test_cards_follow_viewport_changes_without_resizing_the_panel(self):
+        panel = self.panel()
+        for mode in ("default", "light", "solarized_dark"):
+            APP.setStyleSheet(build_stylesheet(mode))
+            panel.apply_theme(mode)
+            self.settle_layout()
+            original = panel.size()
+            for gutter in (90, 0):
+                # A native scroll gutter/screen transition can narrow only the
+                # viewport; fixed cards used to retain their previous widths.
+                panel._scroll.setViewportMargins(0, 0, gutter, 0)
+                self.settle_layout()
+                self.assertEqual(panel.size(), original)
+                width = min(700, panel._scroll.viewport().width() - 16)
+                self.assertEqual(panel._account_card.width(), width)
+                self.assertEqual(panel._management.width(), width)
+                self.assertEqual(panel._scroll.horizontalScrollBar().maximum(), 0)
+                self.assertFalse(panel._content_fit_timer.isActive())
+        panel.dispose()
+        self.assertFalse(panel._content_fit_timer.isActive())
 
     def test_many_sketches_scroll_inside_card_and_empty_header_stays_at_top(self):
         from src.modules.ui_metrics import WorkArea

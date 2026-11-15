@@ -494,8 +494,24 @@ class SettingsDialog(GlassDialog):
         delay_lbl = QLabel("Delay (ms):")
         as_row.addWidget(delay_lbl)
 
-        self.autosave_spin = QSpinBox()
-        self.autosave_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.autosave_spin = QSpinBox(autosave_box)
+        self.autosave_spin.setObjectName("autosave-delay")
+        # With a stylesheet, Qt's NoButtons mode can give the native line edit
+        # a one-pixel rectangle. Keep the normal edit-field layout and remove
+        # both button hit areas explicitly instead.
+        self.autosave_spin.setStyleSheet("""
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 0px; height: 0px; border: none;
+            }
+            QSpinBox::up-arrow, QSpinBox::down-arrow {
+                image: none; width: 0px; height: 0px;
+            }
+            QSpinBox QLineEdit {
+                background: transparent; border: none; border-radius: 0px;
+                padding: 0px; margin: 0px;
+            }
+        """)
+        self.autosave_spin.lineEdit().setTextMargins(9, 0, 9, 0)
         self.autosave_spin.setAccessibleName("Auto-save delay in milliseconds")
         self.autosave_spin.setRange(500, 10000)
         self.autosave_spin.setSingleStep(500)

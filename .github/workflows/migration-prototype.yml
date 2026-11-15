@@ -2,9 +2,10 @@ name: Rust migration compatibility prototype
 
 on:
   push:
-    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', '.github/workflows/migration-prototype.yml']
+    branches: [main]
+    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'main/web_bridge.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', 'direct/verify_platformio_board_compat.py', '.github/workflows/migration-prototype.yml']
   pull_request:
-    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', '.github/workflows/migration-prototype.yml']
+    paths: ['desktop/**', 'main/core/**', 'main/__init__.py', 'main/web_bridge.py', 'src/editor/**', 'src/assets/**', 'src/fonts/**', 'direct/verify_editor_review_ui.py', 'direct/verify_platformio_board_compat.py', '.github/workflows/migration-prototype.yml']
   workflow_dispatch:
     inputs:
       windows_only:

@@ -149,7 +149,7 @@ class ControlChecks(unittest.TestCase):
             while not ticks and time.monotonic() < deadline:
                 QTest.qWait(10)
             self.assertGreater(len(ticks), 0, "Qt stopped dispatching while Settings was open")
-            self.assertEqual(dialog.autosave_spin.buttonSymbols(), dialog.autosave_spin.ButtonSymbols.NoButtons)
+            self.assertFalse(dialog.autosave_spin.isReadOnly())
             dialog.cb_autosave.setChecked(True)
             dialog.autosave_spin.setFocus()
             dialog.autosave_spin.selectAll()
@@ -160,6 +160,50 @@ class ControlChecks(unittest.TestCase):
             QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             self.assertIsNone(controls._settings_dialog)
             self.assertEqual(window.findChildren(settings_module.SettingsDialog), [])
+
+    def test_autosave_delay_has_a_readable_hit_area_and_accepts_mouse_editing(self):
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QStyle, QStyleOptionSpinBox
+        from main.qt.theme import build_stylesheet
+
+        previous = APP.styleSheet()
+        self.addCleanup(APP.setStyleSheet, previous)
+        for mode in ("default", "light", "solarized_dark"):
+            with self.subTest(mode=mode), patch.object(settings_module, "get_autosave_settings", return_value=(True, 1500)), \
+                    patch("main.core.config.get_theme_mode", return_value=mode):
+                Theme.apply_theme(mode)
+                APP.setStyleSheet(build_stylesheet(mode))
+                dialog = self.settings()
+                dialog.show()
+                APP.processEvents()
+                field = dialog.autosave_spin
+                dialog.scroll.ensureWidgetVisible(field)
+                APP.processEvents()
+                edit = field.lineEdit()
+                margins = edit.textMargins()
+                needed = edit.fontMetrics().horizontalAdvance("10000") + margins.left() + margins.right()
+                self.assertGreaterEqual(edit.width(), needed, "The native editor clips the delay value")
+                self.assertGreaterEqual(edit.height(), edit.fontMetrics().height())
+                self.assertTrue(field.rect().contains(edit.geometry()))
+                option = QStyleOptionSpinBox()
+                option.initFrom(field)
+                option.buttonSymbols = field.buttonSymbols()
+                for control in (QStyle.SubControl.SC_SpinBoxUp, QStyle.SubControl.SC_SpinBoxDown):
+                    self.assertTrue(field.style().subControlRect(QStyle.ComplexControl.CC_SpinBox, option, control, field).isEmpty(),
+                                    "The delay field must not expose spin buttons")
+                QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=field.rect().center())
+                QTest.keyClick(field, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+                QTest.keyClicks(field, "2500")
+                field.interpretText()
+                self.assertEqual(field.value(), 2500)
+                self.assertEqual(edit.text(), "2500")
+                self.assertTrue(edit.hasFocus() or field.hasFocus())
+                if RENDER_DIR:
+                    field.grab().save(str(RENDER_DIR / f"autosave-delay-{mode}.png"))
+                dialog._save_and_apply()
+                self.assertEqual(self.save.call_args.args[0]["shared"]["autosave_delay_ms"], 2500)
+                self.assertTrue(self.save.call_args.args[0]["shared"]["autosave_enabled"])
+                dialog.close()
 
     def test_updates_never_ask_and_skip_survives_failed_persistence(self):
         dialog, gui, namespace = bootstrap_fixture()

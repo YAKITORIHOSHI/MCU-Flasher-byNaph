@@ -3,6 +3,7 @@ name: Windows Bootstrap restart
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - 'src/modules/bootstrap.py'
       - 'direct/verify_app_update.py'

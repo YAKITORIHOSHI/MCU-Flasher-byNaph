@@ -147,6 +147,8 @@ bracket pairing), compiler parallelism and serial options. Preferences are
 saved per user in `.mcu_gui_config.json`. **Offline Mode** prepares boards and
 libraries only from local packages; it does not block Cloud sketches or other
 network features.
+Enable **Auto-Save**, then type a delay from 500 to 10,000 ms in **Delay (ms)**.
+The field remains readable and editable in every theme, without spin buttons.
 
 ## Troubleshooting
 
@@ -177,6 +179,7 @@ LAUNCHER/    Native launcher entries
 - Contributor and assistant guidance lives in `.agents/skills/`. Platform
   verification status is recorded in
   [audit/PLATFORM_VERIFICATION.md](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/blob/main/audit/PLATFORM_VERIFICATION.md).
+- Keep application and CI work on `main`, the repository's only maintained branch.
 - Build public archives only with `direct/build_release.py`.
 
 ## License

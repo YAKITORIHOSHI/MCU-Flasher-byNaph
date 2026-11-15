@@ -125,7 +125,9 @@ class OnehorseChecks(unittest.TestCase):
                      "write_generated_text": lambda path, text: path.write_text(text, encoding="utf-8")}
         exec(compile(ast.Module(body=[method], type_ignores=[]), "actual-app-ini-generator", "exec"), namespace)
         api = SimpleNamespace(current_board="Onehorse", current_baud=115200, upload_speed="460800",
-                              _resolve_board_info=lambda *args: dict(self.info), _scan_includes_for_libs=lambda: [], emit=lambda *args: None)
+                              _resolve_board_info=lambda *args: dict(self.info),
+                              _library_search_directories=lambda core: [],
+                              _scan_includes_for_libs=lambda: [], emit=lambda *args: None)
         target = self.root / "generated"
         target.mkdir()
         with mock.patch.dict(os.environ, {"HOME": str(self.root / "home")}), mock.patch.object(os.path, "expanduser", lambda value: str(self.root / "home") if value == "~" else value):
@@ -278,7 +280,8 @@ finally:
                    "write_generated_text":lambda path,text:path.write_text(text,encoding="utf-8")}
         exec(compile(ast.Module(body=[method],type_ignores=[]),"actual-app-unoq-generator","exec"),namespace)
         api=SimpleNamespace(current_board="UNO Q",current_baud=115200,upload_speed="460800",
-                            _resolve_board_info=lambda *args:dict(info),_scan_includes_for_libs=lambda:[],emit=lambda *args:None)
+                            _resolve_board_info=lambda *args:dict(info),_library_search_directories=lambda core:[],
+                            _scan_includes_for_libs=lambda:[],emit=lambda *args:None)
         workspace=self.root/"project with spaces";workspace.mkdir()
         with mock.patch.object(os.path,"expanduser",lambda value:str(self.root/"home") if value=="~" else value):
             namespace["_generate_platformio_ini"](api,workspace)

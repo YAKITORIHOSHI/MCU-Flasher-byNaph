@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -499,8 +499,12 @@ Use translucent/frameless flags before first native show, antialiased alpha
 corners and no native square shadow or binary mask. Dispatch compact actions
 only after popup deletion, against a surviving owner, retaining live source
 button gating. Settings keeps one owned window-modal `open()`, deletes on close
-and keeps Auto-Save delay editable with `NoButtons`. Verify repeated open/close,
-Qt heartbeat, focus and popup release in `verify_controls` on native Windows.
+and keeps Auto-Save delay readable and editable without visible spin buttons or
+button hit areas. Styled Qt `NoButtons` can collapse the child editor to one
+pixel; retain the normal native edit layout with zero-size button subcontrols
+and a transparent child editor. Verify actual text width, ordinary mouse editing
+and saved values in every theme, alongside repeated open/close, Qt heartbeat,
+focus and popup release in `verify_controls` on native Windows.
 Installed-package Ctrl+F focuses its filter. The separate PyQt5/QScintilla sample
 viewer owns Ctrl+F/F3/Shift+F3/Escape and Ctrl+Click/F12. Never mix its toolkit with
 PySide6. Both editors share bounded disposable LLVM parsing in source_navigation.py, using
@@ -1339,7 +1343,8 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   Cloud tab as well as the standalone dialog with long names and compact sizes.
   Keep the Cloud host/scroll viewport/content transparent over the owner's glass;
   keep card/field/list reading surfaces on glass tokens and sync the standalone backdrop
-  palette with the panel when themes change.
+  palette with the panel when themes change. Refit fixed card widths when the
+  viewport alone resizes; coalesce work with an owned timer that stops on disposal.
   Push/Pull are explicit, with ETag/revision conflict handling,
   account/provider link validation, root UTF-8 source boundaries and bounded
   history. Pull confirms replacement, retains external recovery copies, validates

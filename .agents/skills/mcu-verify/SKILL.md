@@ -1,6 +1,6 @@
 ---
 name: mcu-verify
-description: "Verify deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Verify editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
 ---
 
 # Verify MCU Flasher changes
@@ -16,6 +16,26 @@ BootstrapRestartChecks uses real child processes, real atexit slot cleanup and
 literal spaced paths. Check native Windows venv relay adoption through the short
 bootstrap-handoff workflow; mocked relay cases alone cannot prove Toolhelp layout
 or actual parent PIDs. Keep missing-resume and unrelated-owner refusal cases.
+
+## Native control and fixture contracts
+
+- Auto-Save checks measure the native child editor against the longest delay and
+  its text margins, then use an ordinary mouse click to type and save a new value
+  in every theme. Assert empty spin-button hit areas; the `NoButtons` enum alone
+  does not prove usable geometry.
+- Animation fixtures explicitly enable effects and clear the reduced-motion
+  environment only for that case. Independently exercise both Windows animation
+  and environment opt-outs with real popups at rest, usable keyboard selection
+  and no concealed controls. Do not change the user's animation policy.
+- Installation copies compare destination permissions with the source's native
+  mode. POSIX also proves source execute bits; Windows cannot represent them.
+  Board-generation fixtures without libraries explicitly provide
+  `_library_search_directories` returning an empty list. Keep recipe/hash and
+  unchanged-write assertions, all hosts and all display scales.
+- Cloud fixtures narrow only the viewport and require exact card widths, zero
+  horizontal scrolling and a resting/disposed fit timer. Native selector checks
+  repeat the requested size once after compact reflow, retaining exact final
+  geometry and reporting the axis, minimum, hint and display scale on failure.
 
 ## Prepared resources and short Developer Access
 

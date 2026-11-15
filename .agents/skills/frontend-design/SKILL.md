@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: "Maintain safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -195,7 +195,11 @@ mask or retain a native square shadow. Verify corner pixels as well as native
 captures. Finish popup deletion before dispatching dialog actions. Settings
 uses one owned window-modal `open()` and deletes on close; never retain hidden
 settings pages or enter `exec()` from a popup click. Auto-Save delay has no spin
-buttons. Sample-viewer find controls must remain readable in all themes and
+buttons or button hit areas; its native text editor must fit the full value and
+caret with readable insets. Verify a normal mouse click, typing and saving in
+every theme. Styled `NoButtons` alone can collapse the child editor to one pixel;
+remove button subcontrols without losing the normal native edit layout.
+Sample-viewer find controls must remain readable in all themes and
 return focus without changing read-only source or its selected tab.
 
 Measure toolbar candidates with their actual font, native margins, spacing and
@@ -265,7 +269,9 @@ projects. Keep the current project's buffers, focus and terminal sessions when
 opening another window, and resolve unsaved changes before switching projects.
 Carry the same palette into native setup and the PySide6 browser on every host.
 Reflow folder, URL and version rows to the available width, with
-static rounded rims and smoked reading surfaces. Cloud host, viewport
+static rounded rims and smoked reading surfaces. Cloud cards follow the scroll
+viewport's resize, including gutter changes without a panel resize; coalesce
+fits with an owned timer and stop it on disposal. Cloud host, viewport
 and content remain transparent over the owning glass; synchronize the standalone
 dialog backdrop on theme changes. Keep AI Review/History on one compact row with
 optional metadata yielding before essential actions. Verify Glass, Frosted Light

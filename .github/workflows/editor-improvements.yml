@@ -2,6 +2,7 @@ name: Editor and input improvements
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
