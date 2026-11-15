@@ -4320,7 +4320,11 @@ class MCUWebBackendAPI:
         )
         name = self.current_board
         info = self._resolve_board_info(name)
-        if info:
+        # First-use tool preparation resolves before the guarded worker does: repair a
+        # cached row once per operation, and still check the target both times.
+        repaired = (getattr(self, "_op_session_id", 0), name)
+        if info and getattr(self, "_target_repaired_for", None) != repaired:
+            self._target_repaired_for = repaired
             needs_resolution = info.get("pio_resolved") is False or not info.get("board")
             if needs_resolution:
                 self.emit("console:log", {"text": f"  Resolving board definition for {name}…", "tag": "info", "newline": True})

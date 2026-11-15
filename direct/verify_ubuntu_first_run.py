@@ -365,16 +365,25 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     gui_result["screenshot"] = str(fixture / "cold-workspace.png")
     report["actual_gui"] = gui_result
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    certificate = json.loads((core / ".mcu-offline-ready.json").read_text(encoding="utf-8"))
-    if certificate.get("prepared_plan") != report["default_plan"]:
-        raise RuntimeError("Bootstrap did not certify the complete default package plan")
+    # Quick Bootstrap: SCons and the default plan's board list, no board toolchains.
+    # The first Compile below prepares the selected board's tools.
+    from src.modules.offline_bootstrap import CATALOG_MARKER, plan_hash
+    catalog = json.loads((core / CATALOG_MARKER).read_text(encoding="utf-8"))
+    if catalog.get("plan") != plan_hash(report["default_plan"]):
+        raise RuntimeError("Bootstrap did not prepare the default plan's board list")
+    for name in report["default_plan"]["platforms"]:
+        if not (core / "platforms" / name / "platform.json").is_file():
+            raise RuntimeError(f"Bootstrap did not prepare the {name} board definitions")
+    toolchains = sorted(path.name for path in (core / "packages").iterdir() if path.name != "tool-scons")
+    if (core / ".mcu-offline-ready.json").exists() or toolchains:
+        raise RuntimeError(f"Online Bootstrap downloaded board toolchains before they were needed: {toolchains}")
     python = runtime / "bin/python"
     check_log = fixture / "readiness-check.log"
     checked = _run([*launcher, "--check"], cwd=fixture, env=env,
                    log=check_log, timeout=180)
     if checked:
         raise RuntimeError(f"Native launcher readiness failed after Bootstrap; see {check_log}")
-    print("Full Bootstrap certificate and native launcher readiness: OK", flush=True)
+    print("Quick Bootstrap board list (no toolchains) and native launcher readiness: OK", flush=True)
     warm_log = fixture / "warm-launch.log"
     (fixture / "gui-result.json").unlink()  # A clean exit alone must not reuse the cold GUI observation.
     warm = _run([*launcher, "--project", str(sketch)], cwd=fixture, env=env,
@@ -388,16 +397,17 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     compile_fixture = app / "temp/audit/first-compile"
     compile_fixture.mkdir(parents=True)
     (compile_fixture / "core").symlink_to(core, target_is_directory=True)
+    compile_log = fixture / "compile-verifier.log"
+    # The first Compile downloads only this board's tools, then builds.
+    compiled = _run([str(python), "-B", str(app / "direct/verify_target_resolution.py"),
+                     "--compile-button-only", str(compile_fixture)],
+                    cwd=app, env=env, log=compile_log, timeout=1500)
+    if compiled:
+        raise RuntimeError(f"The real Compile-button integration failed; see {compile_log}")
     from direct.native_esp32_fixture import native_esp32_compilers
     compilers = native_esp32_compilers(core)
     report["native_compilers"] = [str(path) for path in compilers]
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    compile_log = fixture / "compile-verifier.log"
-    compiled = _run([str(python), "-B", str(app / "direct/verify_target_resolution.py"),
-                     "--compile-button-only", str(compile_fixture)],
-                    cwd=app, env=env, log=compile_log, timeout=360)
-    if compiled:
-        raise RuntimeError(f"The real Compile-button integration failed; see {compile_log}")
     build_result = json.loads((compile_fixture / "application-build-result.json").read_text())
     firmware = Path(build_result["firmware"])
     if not build_result.get("success") or not firmware.is_file():
@@ -414,15 +424,15 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     if runtime_checked:
         raise RuntimeError(f"The newly bootstrapped private runtime failed hardware-free checks; see {runtime_log}")
     report.update(success=True, actual_gui=gui_result, core=str(core),
-                  certified_platforms=certificate.get("platform_sources"),
-                  certificate=str(core / ".mcu-offline-ready.json"), readiness_exit_code=checked,
+                  board_list_files=catalog.get("files"),
+                  board_list=str(core / CATALOG_MARKER), readiness_exit_code=checked,
                   readiness_log=str(check_log), warm_launch_exit_code=warm, warm_launch_log=str(warm_log),
                   warm_gui=warm_gui_result,
                   compile_exit_code=compiled, compile_log=str(compile_log),
                   compile=build_result, firmware_bytes=firmware.stat().st_size,
                   runtime_exit_code=runtime_checked, runtime_log=str(runtime_log))
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"Native first-run Bootstrap -> actual workspace -> real ESP32 Compile: OK ({firmware.stat().st_size} firmware bytes)", flush=True)
+    print(f"Native first-run Bootstrap -> actual workspace -> real ESP32 Compile with first-use tools: OK ({firmware.stat().st_size} firmware bytes)", flush=True)
     print(f"Result: {result_path}", flush=True)
     return report
 

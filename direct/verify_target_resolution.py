@@ -84,6 +84,10 @@ class TargetResolutionChecks(unittest.TestCase):
             "MCU_PACKAGE_EVENTS_ROOT": str(self.sandbox / "package-events"),
         }))
         self.stack.enter_context(patch.object(package_jobs, "package_core_directory", return_value=self.sandbox / "core"))
+        # Compile's first-use tool preparation must never read or stamp this account's store.
+        self.stack.enter_context(patch.object(web_bridge, "_get_safe_platformio_core_dir",
+                                              return_value=str(self.sandbox / "core")))
+        self.stack.enter_context(patch("src.modules.target_packages.target_ready", return_value=True))
         (self.sandbox / "probe.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
         self.catalog = catalog_module.BoardCatalog({NAME: stale_selection()})
         self.stack.enter_context(patch.object(catalog_module, "SUPPORTED_BOARDS", self.catalog))
@@ -666,7 +670,8 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         toolbar._update_action_button_states()
         print("Clicking Compile through the application using an unresolved cached selection", flush=True)
         toolbar.btn_compile.click()
-        deadline = time.monotonic() + 240
+        # A board's first Compile also downloads its tools (quick Bootstrap).
+        deadline = time.monotonic() + 1200
         while api.is_busy and time.monotonic() < deadline:
             time.sleep(0.01)
         if api.is_busy:
