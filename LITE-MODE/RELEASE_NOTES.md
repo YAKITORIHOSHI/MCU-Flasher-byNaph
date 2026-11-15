@@ -1,181 +1,61 @@
-# Lite 0.1.0 — updated 2026-11-14
+# MCU Flasher Lite 0.1.0 — Release Notes
 
-One shared tool store and compact progress:
+**Platforms:** Ubuntu 24.04+ (x64; ARM64 with a native build) · Windows 10/11 (x64)
 
-- Main and Lite use the same physical native platform, framework, compiler and
-  installed-library store. Prepared builds run together; package changes wait
-  for active users. Tools are no longer copied into a second Lite store.
-- Automatically consolidate old Lite packages under both products' activity
-  guards. Compare duplicates byte for byte before deleting them, move unique
-  packages and preserve differing versions, settings, projects and recovery data.
-- Keep each package's file progress on one updating Build monitor line.
-- Run consolidation off the command thread with Stop available. Preserve a
-  requested startup sketch until the worker is idle, then open it once.
-- Check the headless worker and native portal dependencies at launch without
-  requiring the main editor's WebEngine or LLVM parser. An older installed
-  launcher can supply its verified private runtime without consuming `--lite`.
+MCU Flasher Lite is a lightweight native workbench for compiling, uploading and
+monitoring sketches you edit in your own editor. It ships inside MCU Flasher and
+uses the same build tools, boards and libraries. To open and use it, see the
+[Lite guide](README.md).
 
-Prepared resources and small-screen Developer Access:
+## What it does
 
-- Discover the main app's installed board manifests and configured downloaded
-  libraries. Keep exact catalog targets through unresolved refresh results and
-  clear invalid legacy default selections before Compile.
-- List installed libraries, all their sample source files and downloaded board
-  definitions. Open samples (including ZIP contents) in Lite's native read-only
-  paper viewer with C++ colors, copy, Ctrl+F, case matching and F3/Shift+F3.
-  Registry search remains under Find more libraries.
-- Start shared Bootstrap when Lite is opened first and return to Lite afterwards.
-  Prefer the prepared main Python environment, including on Windows, and use its
-  prepared native tools directly.
-- Keep ticket filters together on laptop screens; short portals scroll complete
-  metrics, controls and ticket content instead of compressing them out of view.
+- **Sketches.** Opens a sketch folder, or a dropped folder or source file, and
+  reads it without modifying it. Each sketch opens in its own Lite window, and
+  recent sketches and boards are remembered.
+- **Boards.** Searches the official PlatformIO board catalog by name, ID, vendor,
+  platform, MCU or framework, ranks exact matches first and suggests close
+  matches for typos.
+- **Compile, Upload and Clean.** Runs the main app's build and upload actions.
+  Missing tools are prepared automatically before the first build, and Upload
+  skips compiling when the saved build for that board still matches the sketch.
+- **Monitors.** Separate Build and Serial monitors with Follow, Copy and Clear.
+  Connecting never resets the board; the Connection panel holds the port, baud
+  rate and send controls.
+- **Shared tools.** Lite and the main app use one package store, so boards and
+  libraries prepared in either are available in both.
+- **Resources.** Lists installed boards and libraries with their example
+  sketches and source files, including those inside ZIPs, in a read-only code
+  viewer with syntax colors, copy and find. **Find more libraries** searches and
+  installs from the PlatformIO registry.
+- **Safe ports.** A serial port selected in one Lite or MCU Flasher window is
+  shown as in use and cannot be selected in another.
+- **Stop.** Always visible; it cancels preparation, searches and other work that
+  can be stopped safely, and explains when it cannot.
+- **Interface.** Light and Dark themes, layouts that fit small, scaled and
+  portrait screens, and a narrow view that switches between Monitor and
+  Sketch & Connection.
+- **Developer Access.** Opens the main app's private ticket portal with the same
+  account sign-in.
 
-MCU Flasher Lite in All Apps:
+## What it contains
 
-- The installed Ubuntu MCU Flasher registers MCU Flasher Lite in All Apps with
-  its own icon; existing installations add it on their next launch.
+| Path | Contents |
+| --- | --- |
+| `UBUNTU`, `WINDOWS.exe` | Ready-to-run Ubuntu x64 and Windows x64 executables |
+| `run.sh`, `WINDOWS.cmd` | Build-and-launch fallbacks |
+| `src/`, `Cargo.toml`, `Cargo.lock`, `build.rs` | The Rust interface source |
+| `python/` | The background worker that runs builds, uploads and searches |
+| `assets/` | Icons and interface images |
+| `tools/` | Optional runtime setup, native build and verification scripts |
 
-Fair serial port ownership:
+## Requirements
 
-- The first window to select a port keeps it on Ubuntu and Windows. A USB drop
-  keeps Lite's or the main app's claim, and Lite reselects its returning port
-  without connecting. Refusals name the window that holds the port.
+- MCU Flasher's first-launch setup (Bootstrap), which Lite runs automatically
+  the first time it is opened.
+- Rust only to rebuild the executables, not to use them.
 
-Multiple sketches, modal dialogs and shared serial ports:
+## Known limitations
 
-- Open several sketches at once: another sketch opens in its own Lite window,
-  and a sketch already open in one window cannot be opened in another.
-- Keep Open sketch, Resources and the board picker in front of their window
-  until closed; the workspace behind them is inactive and Escape closes them.
-- Fix the large empty space in Open sketch and the dialog action rows.
-- Never share a serial port with the main app: ports selected in another
-  MCU Flasher or Lite window are marked in use and refused, including at
-  Connect and Upload.
-- Reopening Lite right after closing it no longer reports that another
-  workspace is using its state.
-
-Screen fit, Developer Access and cancellation repair:
-
-- Show the owned Windows portal even with the borrowed backend's subprocess
-  hiding hook installed; report readiness only after native window visibility.
-- Keep the main application usable while Developer Access and its window-scoped
-  forms/notices are open. Reopening preserves maximization and closes safely with
-  the owning workspace.
-- Keep Stop visible in every state, with backend-authoritative enablement and
-  reason-specific tooltips. Protected firmware writes/restarts and cleanup finish normally.
-- Fit scaled/portrait/short desktops, pack complete action rows, reserve visible
-  scrollbar gutters outside Sketch/Connection cards, and keep monitor rims inside
-  the pane. Narrow windows offer Monitor and Sketch & Connection views.
-- Bound project, board and Resources windows and make short contents scrollable.
-  Preserve log history, selections, fonts and theme state while changing layout.
-- Run library searches in an owned helper with a 30-second elapsed budget;
-  cancellation cannot publish late results or success. Retire owned Windows Job
-  descendants or Ubuntu process groups without affecting other programs.
-- Bootstrap switches between Technical details and Activity summary with the
-  button naming the view it will open.
-- Add actual Rust renderer previews to Windows and Ubuntu CI alongside the
-  100–200% simulated widget matrix and real Qt portal checks. Windows 11,
-  mixed-monitor interaction and physical USB still need their own evidence.
-
-
-Windows interaction repair:
-
-- Match the main board picker: 48-pixel left-aligned rows, bounded/truncated
-  titles and subtitles, deduplicated recents, candidate selection, Select Board,
-  double-click/Enter confirmation, arrow navigation and Escape cancellation.
-- Count every completed logo click even when a slow native frame batches several
-  releases; prevent duplicate counting during a layout retry.
-- Reuse the current main Developer Access portal with a startup acknowledgement,
-  an owned Windows foreground permission handoff, and useful startup diagnostics.
-- Resolve Windows venv redirectors to the verified GUI child PID for readiness
-  and foreground permission; reject unrelated processes and ASFW_ANY.
-- Close the standalone helper on an accepted portal close. Read its narrow command
-  protocol without a buffered-stdin daemon lock during Python shutdown.
-- Windows Server 2025 CI passes for real helper processes and native portal layouts at
-  100/125/150/175/200 percent, plus Rust input/layout and worker regressions.
-- Include Cargo.lock in source installs and archives for reproducible --locked builds.
-- Preserve the shared paper/charcoal/yellow colorway and main authentication rules.
-
-Consistent colors:
-
-- Each color now has one meaning. Yellow marks primary actions and the
-  selected tab, coral marks Stop, Disconnect and errors, and everything else uses
-  one paper surface with an ink outline. The mint Connection panel and its
-  coral, blue and green fields are gone.
-- Recent sketches/boards, Copy, Clear, Send and Dismiss now match the other
-  buttons, and icons follow the theme's ink in Light and Dark.
-
-Access and color follow-up:
-
-- Theme labels/icons now show the active mode. Light shows Light mode; Dark shows
-  Dark mode. Hover text explains the switch to the other theme.
-- Colored Connection's panel and board/framework, port, baud and upload-speed
-  controls, retaining readable popups and existing readiness rules.
-- Five logo clicks followed by an 800 ms pause open the main Developer Access
-  portal. Reuse its authentication and ticket behavior with Lite-only local
-  state and credential namespace; repeat gestures foreground one owned window.
-- Include the supplied native executables in committed source and release ZIPs;
-  keep development evidence, private runtimes and build scratch out of bundles.
-
-Layout and logging follow-up:
-
-- Click a sketch source filename to open its original folder in the native file
-  manager; launch it off the GUI thread and report launch failures in Lite.
-- Removed promotional banners/footer, reduced header and panel spacing, and
-  expanded monitor output into the available height. Serial send controls now
-  belong to Connection. Status and USB port details each have their own container.
-- Added a Light/Dark mode button with dedicated SVG sun/moon assets. Light is
-  the launch default; both palettes cover the workspace, monitors and dialogs.
-- Honor uploader progress identities and legacy replacement hints, so updates
-  refresh their activity row instead of duplicating it. Preserve diagnostic
-  history, blank separators and table padding when removing decorative marks.
-
-Workbench follow-up:
-
-- Added persistent recent sketch and board menus, with the main app's 10-folder
-  and 5-board limits, duplicate removal and most-recent-first ordering.
-- Added indexed board search across names, IDs, vendors, platforms, MCUs and
-  frameworks; multiple-word matching, exact-match ranking and typo suggestions.
-  Library results prioritize exact names and exclude duplicate packages.
-- Stabilized Build/Serial output with fixed virtual rows, reserved scrollbars,
-  stable content widths and equal monitor viewport heights.
-- Compile requires a sketch and board/framework. Upload also requires a selected
-  connected port. Enforce readiness in the GUI and again in the worker.
-- Enabled automatic verified Skip Compile on Upload, including after Clean.
-  Preserve each sketch's separate board/framework builds; changed source,
-  dependencies or damaged/missing firmware force compilation.
-- Rebuilt the supplied Ubuntu and Windows executables for these GUI changes.
-  Real Uno/Nano builds and nine mocked upload-boundary decisions qualify reuse;
-  physical USB and native Windows verification remain pending.
-
-Preparation fix:
-
-- Compile and Upload automatically verify and prepare the selected board's full
-  build/upload dependency set before dispatch. No manual preparation is needed.
-- Fixed missing optional upload packages, including AVR `tool-avrdude`, by using
-  the platform's actual upload-target dependency configuration.
-- Reuse compatible main-app packages through verified independent copies;
-  download only missing requirements. Keep original package files untouched.
-- Stop cancels preparation before any upload starts; failures never replay an
-  upload. Interrupted package copies cannot be mistaken for installed tools.
-- Removed main-workspace tab suggestions from Lite logs and updated missing-tool
-  instructions for automatic preparation. Existing native launchers load the
-  updated Python tools after Lite is closed and reopened.
-
-- Added an isolated Rust/egui workbench and headless Python tool worker.
-- Reused Compile, Upload, Clean and passive monitor behavior from the existing
-  backend through a private source snapshot, settings and tool store.
-- Added root sketch snapshots, board/framework search, ports, upload speed,
-  separate Build/Serial monitors and serial send controls.
-- Added Library search/install and selected-board native tool preparation.
-- Added a paper/yellow/coral neobrutalist interface, hard shadows, original SVG
-  controls and a dedicated chip/bolt application icon, PNG and Windows ICO.
-- Added Ubuntu and Windows executable launchers, optional private Python setup,
-  reproducible native builds, integration checks and incremental-build fixtures.
-- Held build dispatch through catalog refresh and matched command acknowledgements
-  so stale status messages cannot unlock targets or prematurely permit closing.
-- Kept all new implementation and documentation in LITE-MODE. No shipping main
-  source, sketch, original runtime or protected journal is changed by this work.
-
-Windows native desktop/USB verification and the additional Ubuntu host gates
-listed in VERIFICATION.md are pending; cross-compilation is recorded separately.
+- Ubuntu ARM64 needs a native build (`UBUNTU_ARM64`).
+- Native Windows 11 and physical USB upload still need verification on real
+  hardware.

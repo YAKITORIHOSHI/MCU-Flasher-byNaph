@@ -1,233 +1,71 @@
-# MCU Flasher by Naph — Release Notes
+# MCU Flasher by Naph v11 — Release Notes
 
-**Version:** v11 (Stable) · **Released:** October 23, 2026 · **Updated:** November 15, 2026
+**Version:** v11 (Stable) · **Download:**
+[`MCU_Flasher-v11.zip`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/latest)
 
 **Platforms:** Windows 10/11 (AMD64) · Ubuntu 24.04+ (amd64, ARM64) ·
 Linux Mint 22.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
 
-Installed copies update themselves from GitHub on their next launch; see
-[Updates](README.md#updates). The full history of changes is in the
-[commit log](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/commits/main).
+MCU Flasher is a desktop workspace for writing, compiling, flashing and
+monitoring microcontroller firmware. A code editor, serial monitor, terminals
+and an optional AI assistant share one window. To download, clone and use it,
+see the [README](README.md).
 
 ---
 
-## November 15 — Auto-Save editing and portable checks
+## What it does
 
-- Fix the blank Auto-Save delay field: its text and caret stay visible, and a
-  normal click allows typing and saving the delay in every theme.
-- Refit Cloud cards when their scroll viewport changes, keeping long values
-  within the dialog after scrollbar and display transitions.
-- Exercise popup animation separately from Windows and environment motion
-  opt-outs. Installation checks compare each host's native permissions, retaining
-  executable-mode checks on POSIX. Board fixtures declare their isolated library
-  search explicitly. Preserve the complete platform and display-scale matrices.
-- Keep development on `main`; automatic push checks target it without repeating
-  the full matrices for release tags.
-- Replace GitHub's retired macOS 14 runner with macOS 26, retaining macOS 15
-  Intel and Apple Silicon checks. The application minimum remains macOS 14;
-  current native macOS 14 qualification needs a separate host.
+- **Build and flash.** Compiles and uploads with PlatformIO for AVR, ESP32,
+  ESP8266 and other installed targets. Unchanged sketches reuse their last
+  build, and every upload writes the complete firmware image set (on ESP32:
+  bootloader, partition table and application).
+- **Serial Monitor.** Opening, reconnecting and closing never reset the board.
+  The baud rate follows the sketch's `Serial.begin()`, with timestamps, pause,
+  copy and send. After an upload the boot log appears from its first line.
+- **Editor.** An offline Monaco editor with source tabs, live syntax checks,
+  bracket pairing, auto-save, Ctrl+Click / F12 into sketch and library headers,
+  and project-wide search.
+- **Projects.** Local sketches, new-project templates, temporary Ghost Sketches
+  and Cloud sketches with conflict-safe Push and Pull. Each project can open in
+  its own window.
+- **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
+  and an embedded OpenCode assistant whose file edits are highlighted for you
+  to accept or reject.
+- **Boards and libraries.** Browse, download and prepare board packages and
+  Arduino libraries, and read their example sketches. Offline Mode prepares
+  boards and libraries from local packages only.
+- **Board recovery.** Soft and Hard Reset reflash a board to a known state,
+  clearing lockups, boot loops and frozen sketches.
+- **Safe hardware use.** A serial port belongs to the window that selected it;
+  other MCU Flasher and Lite windows show it as in use. A window cannot close
+  while firmware is being written, erased or recovered.
+- **Setup and repair.** The first launch prepares a private Python runtime, the
+  required packages, the default board support and, on Windows, the CP210x and
+  CH34x USB drivers. A repair launch rebuilds anything missing.
+- **Interface.** Glass Dark, Frosted Light and Solarized Dark themes, an
+  automatic interface size, and layouts that fit monitors from 800×600 to 8K,
+  including half-screen tiling.
+- **MCU Flasher Lite.** A separate lightweight workbench for Ubuntu and Windows
+  that shares the prepared tools, boards and libraries with the main app.
+- **Developer Access.** Private issue tickets shared across your signed-in
+  devices.
 
-## November 15 — Bootstrap output and view cleanup
+## What the download contains
 
-- Preserve Windows startup-lock handoff through Python's environment launcher.
-  After an early restart failure, reclaim only an exclusively available slot;
-  a separate live owner keeps its lock. A short native Windows workflow checks
-  real environment launchers on Python 3.11 and 3.14.
-- Fall back to readable ASCII stage headings on legacy consoles while retaining
-  Bootstrap's stage and progress updates. Output failures remain visible.
-- Retire queued backdrop updates when their view closes and guard deleted native
-  widgets during reparenting and teardown.
-- Repair serial-ownership and platform fixtures, drain pending Qt cleanup, and
-  wait for both detached toolbar actions. Retain every display-scale check with
-  a finite longer budget for the full native matrix.
+| Path | Contents |
+| --- | --- |
+| `LAUNCHER/` | One launcher per system: `WINDOWS.exe`, `UBUNTU`, `UBUNTU_ARM64`, `LINUX_MINT`, `FEDORA`, `FEDORA_ARM64` and `MacOS.command` |
+| `mcu_flash_gui.py`, `main/`, `src/` | The application, its offline editor, fonts, icons and themes |
+| `src/_python/` | The private Windows Python runtime and its packages, so Windows needs no system Python |
+| `installers/` | Windows installers: CP210x and CH34x USB drivers, Microsoft WebView2, Arduino CLI, MSYS2 and Python |
+| `LITE-MODE/` | MCU Flasher Lite for Ubuntu and Windows |
+| `soft_reset/` | Recovery sketches for ESP32, ESP8266, AVR, STM32, RP2040, SAMD, nRF52, Renesas and Teensy boards |
+| `index_json/` | Board package catalogs |
+| `direct/` | Platform setup, launch and repair scripts, and hardware-free checks |
+| `cleaner/`, `DANGER-ZONE/` | Maintenance tools: cache and dependency cleanup, runtime reset and crash diagnostics |
 
-## November 14 — Lite prepared resources and laptop Developer Access
-
-- Use one physical native PlatformIO package store for main and Lite, including
-  newly installed libraries. Prepared builds can run together; only package
-  changes wait for active builds. Older Lite stores consolidate automatically:
-  move unique packages, retain differing versions, and delete duplicates only
-  after comparing their inventories and bytes. Settings, sketches and recovery
-  history stay in place.
-- Update each package's `Package files:` progress on one monitor line.
-- Keep automatic cleanup responsive to Stop and retain a sketch requested at
-  launch until catalog/preparation work finishes, then open it once.
-- Validate Lite's headless dependencies without requiring WebEngine, the main
-  editor or its LLVM parser. Reuse a verified installed runtime even when an
-  older installed launcher does not understand Lite's launch argument.
-- Keep Developer Access filters on one row at half-laptop width. Preserve readable
-  metrics and actions on shorter screens by scrolling the complete dashboard.
-- Lite discovers main-app native board manifests and configured library downloads.
-  Unresolved refresh entries cannot replace exact targets. Legacy invalid board
-  defaults no longer cause repeated “No verified PlatformIO definition” failures.
-- Resources lists installed/downloaded libraries and their sample sketch, header
-  and C++ files, including samples in ZIPs. Its native paper code viewer provides
-  syntax colors, selection/copy, Ctrl+F, case matching and F3/Shift+F3 navigation.
-  Boards lists downloaded definitions; Compile/Upload prepare tools automatically.
-- Opening Lite first runs the shared Bootstrap and returns to Lite after setup.
-  Windows prefers the prepared Python environment over the base interpreter.
-  Both workspaces use the prepared packages directly, without a second tool copy.
-
-## November 14 — MCU Flasher Lite in All Apps
-
-- On Ubuntu, MCU Flasher Lite now appears in All Apps beside MCU Flasher, with
-  its own icon. Existing installations add it on their next launch.
-- New app icons now show in All Apps and the dock right away, without logging
-  out. A Lite window opened before its entry existed shows its icon once reopened.
-
-## November 14 — Fair serial port ownership between the main app and Lite
-
-- The window that selects a serial port first keeps it, on Ubuntu and Windows.
-  A USB drop or re-enumeration no longer hands the port to another MCU Flasher
-  or Lite window; the owner reselects it when it returns, without a replug.
-- The main app's port list now grays out ports held by Lite or another project
-  window, marked "(in use)", so they cannot be chosen by mouse, keyboard or
-  scrolling; messages name the window to release it from.
-- Neither app opens a port that another window holds, however the connection
-  was requested.
-
-## November 14 — Lite multiple sketches and shared serial ports
-
-- Lite opens several sketches at once, each in its own window, like the main app.
-- The main app and Lite never select the same serial port: a port chosen in one
-  is shown as in use in the other and refused, including at Connect and Upload.
-- Lite's Open sketch, Resources and board picker stay in front until closed, and
-  the large empty space in Open sketch is fixed.
-- Reopening Lite right after closing it no longer reports that another workspace
-  is using its state.
-
-## November 14 — Lite screen fit, visible Developer Access and reliable Stop
-
-- Fix Windows staying closed after an automatic update said it was restarting:
-  the restarted Bootstrap now takes over the startup lock instead of reporting
-  that MCU Flasher is already starting.
-- Fix Windows Developer Access reporting Ready with no visible window: preserve
-  native GUI startup and verify the window before acknowledging readiness.
-- Keep the main workspace usable during Developer Access authentication, ticket
-  forms and notices. Reopening retains its maximized state; closing the workspace
-  retires its portal safely.
-- Keep Lite's Stop button visible. Enable it only for cancellable work and explain
-  protected writes, cleanup, idle and stopping states.
-- Fit Lite to scaled, short and portrait desktops. Keep complete action rows,
-  provide Monitor/Sketch & Connection views in narrow windows, reserve scrollbar
-  space outside cards, and keep dialogs and monitor rims within their panes.
-- Cancel library searches through an owned worker with a 30-second elapsed budget;
-  stopped work cannot publish late results or success. Retire only that operation's
-  child processes on Windows and Ubuntu.
-- Bootstrap's disclosure alternates **Technical details** and **Activity summary**.
-  Expand isolated Windows/Ubuntu CI to exercise the actual Rust renderer as well
-  as layout, portal, cancellation and backend regressions.
-
-## November 13 — Lite Windows interaction repair
-
-- Align the board picker with the main app: stable left-aligned rows, deduplicated
-  recent targets, explicit confirmation, keyboard navigation and bounded long names.
-- Preserve five logo clicks batched in one frame and avoid counting layout retries.
-  Add Developer Access startup acknowledgement, an owned Windows focus handoff,
-  startup diagnostics and clean standalone helper shutdown.
-- Native Windows Server 2025 CI passes on Python 3.11/3.14: widget/input checks,
-  the real portal at 100–200 percent, and worker/history/preparation checks. Keep Lite's existing colorway,
-  authentication, automatic preparation and exact-board firmware reuse.
-
-## November 13 — Isolated Lite workbench and complete Bootstrap sources
-
-- Added `LITE-MODE`: a separate Rust workbench with Python build/upload tools,
-  recent sketches/boards, search, stable monitors and automatic certified build reuse.
-- Added active Light/Dark labels, colored Connection controls, original-folder
-  filename links and five-click access to the existing authenticated developer portal.
-- Bootstrap now carries Lite and future public application files automatically
-  from tracked checkout files or the release's generated source manifest, while
-  excluding private state, runtimes and development scratch.
-- Lite supports Ubuntu and Windows. Windows release executables are cross-built;
-  native Server widget/portal/worker checks pass. Windows 11, native Rust rendering
-  and physical USB qualification remain manual gates.
-
-## November 13 — Assistant loading and Developer Access tickets
-
-- **Quieter Assistant startup.** Removed the elapsed-time counter from the
-  loading screen. Help for a slow start and startup output remain available.
-- **No ghost ticket when creating.** New ticket opens one dedicated form;
-  a card appears only after **Create ticket** succeeds. Cancelling adds nothing.
-- **Ticket deletions reach other devices.** A stale cache no longer brings
-  deleted tickets back, including after deleting the last ticket. A failed
-  cloud deletion restores its card and reports the failure. Tickets created
-  while disconnected remain available to sync when the connection returns.
-
-## November 12 (later) — Bootstrap window on Ubuntu, updates without questions
-
-- **Ubuntu has the Bootstrap window.** Updates, repairs and opening the app now
-  show the same Bootstrap window as Windows instead of a terminal or a small
-  progress box. Only the very first setup, before the app's runtime exists,
-  still uses a terminal.
-- **Updates no longer ask.** Updates are on by default and install without a
-  question on both systems. **Skip Updates** on Windows still turns them off.
-- **Much smaller updates.** An update reuses the files already installed and
-  never downloads the Windows driver installers or board catalogs it does not
-  replace. A typical update now takes seconds instead of minutes.
-- **No double downloads.** Opening MCU Flasher twice while an update is
-  downloading no longer downloads it twice; the second launch waits for the
-  first.
-- **A copied folder hands over to the installed app.** Launching an older
-  copy whose runtime needs repair now opens the installed app directly instead
-  of starting setup in a terminal.
-
-## November 12 — Faster updates and small-screen toolbars
-
-- **Updates show their progress.** Downloading an update shows a progress bar,
-  the transfer rate and the elapsed time, so a slow connection no longer looks
-  frozen. On Ubuntu, a launch from All Apps shows a progress window whose
-  **Cancel** opens the installed version instead.
-- **Updates download only what changed.** The first update downloads about
-  16 MB; later updates fetch only the changed files. Updating from the previous
-  version to this one took 13 files (0.4 MB, under 2 seconds) instead of 16 MB.
-- **A dropped connection no longer restarts the download.** The update tries
-  once more, then waits for the next launch and keeps what it already has.
-- **Faster start on Ubuntu.** The runtime check now runs while GitHub is being
-  checked for updates, instead of after it.
-- **Toolbars on small screens.** At half-screen widths the title, build actions
-  and project actions keep a clear, even space between them. **Actions** now
-  has its own icon. In the two-row Controls layout, the serial port field
-  extends to the upload speed, which lines up under the options button.
-
-## November 12 — Responsiveness and AI review
-
-- AI edits no longer freeze the window. The AI Changes tab refreshes once per
-  burst, only while visible.
-- Notifications and the AI review journal are written in the background, and
-  notification history is stored per sketch again.
-- A pending AI review that no longer matches its file after a restart is
-  dismissed with a notification; the file is left untouched.
-- Settings shows what the Automatic interface size selects on the current
-  display, and a size change offers **Restart now**.
-
-## November 11 — Uploads, editor and installation
-
-- Uploads write the complete ESP32 image set (bootloader, partition table and
-  application) and restart the board on the open Serial Monitor connection, so
-  the boot log appears in full.
-- The Serial Monitor follows the sketch's `Serial.begin()` rate.
-- Ctrl+Click / F12 opens library headers and declarations before the first
-  compile.
-- Terminal tabs and editor notices have visible close buttons in every theme;
-  menus and dropdowns use the workspace's glass style and short animations.
-- Installed copies receive updates again: a mis-recorded release revision had
-  stopped them.
-- Ubuntu installs the application for the current user and adds one All Apps
-  entry once setup completes.
-
-## Earlier v11 updates (October 23 – November 10)
-
-- **Serial:** passive monitoring that never resets the board on open or close;
-  bounded, responsive send and receive.
-- **Workspace:** glass themes, responsive layouts from 800×600 to 8K, a
-  detachable editor, compact Actions and Options menus, and an assistant
-  loading screen.
-- **Builds:** reuse of unchanged builds across actions and boards, faster
-  Windows setup, quieter build logs and clearer compiler hints.
-- **Projects:** Ghost Sketch, file management from source tabs, project-wide
-  search and Cloud sketches with conflict-safe Push and Pull.
-- **Platforms:** native launchers for Ubuntu (including ARM64 and Raspberry
-  Pi), Linux Mint, Fedora and macOS, with a PySide6 board and library browser.
+The archive holds project files at its root, without a wrapper folder. It
+contains no sketches, settings, accounts or build caches.
 
 ## Requirements
 
@@ -241,8 +79,6 @@ Installed copies update themselves from GitHub on their next launch; see
 - Windows on ARM is not supported.
 - USB upload on Linux Mint, Fedora and macOS has not yet been verified on
   physical hardware.
-- macOS builds are not notarized; the first launch needs Control-click → Open.
-- Keyboard routing on native Windows 11 is verified only on hosted Windows CI
-  so far.
-- An application update refreshes the source only. It does not replace the
-  bundled Windows runtime; download a new release archive for that.
+- macOS builds are not notarized; the first open needs Control-click → Open.
+- Keyboard handoff on native Windows 11 has so far been verified only on hosted
+  Windows CI.

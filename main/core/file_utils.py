@@ -1399,8 +1399,10 @@ def application_agent_guidance(project_dir) -> str:
         "Keep at least 12 logical pixels between the title, the build actions and the project actions: a narrow window splits the gaps evenly, a wide one centers the actions, and a layout that cannot keep them chooses a shorter title. The compact Actions button carries its list mark. In Controls' two-row short layout the port field runs on to the upload speed, which sits flush under the options button.\n"
         "- Accepted workspace closes must retire owned browser pages while Qt runs; preserve "
         "close vetoes and other workspaces. Verify normal process exit with `direct/verify_shutdown.py`.\n"
-        "- With behavior changes, update README, RELEASE_NOTES, relevant SKILL.md instructions "
-        "and descriptions, and existing agent metadata. Keep this application guidance template "
+        "- With behavior changes, update README (how to download, clone and use), RELEASE_NOTES "
+        "(what the release does and contains; never dated change or update entries; the same for "
+        "LITE-MODE), relevant SKILL.md instructions and descriptions, and existing agent metadata. "
+        "Change history belongs in commit messages. Keep this application guidance template "
         "and the checkout's AGENTS.md aligned without regenerating live project/cache metadata.\n\n"
     )
 
