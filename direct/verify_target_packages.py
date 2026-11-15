@@ -171,7 +171,7 @@ class FirstCompileChecks(unittest.TestCase):
     def backend(self, info=None):
         return SimpleNamespace(current_board="Arduino Uno", _stop_requested=False, upload_speed="",
                                _active_process=None, _current_op_phase=None,
-                               _resolve_requested_target=lambda action: True,
+                               _resolve_requested_target=lambda action, **_options: True,
                                _resolve_board_info=lambda name=None: dict(info or self.info),
                                emit=lambda name, data: self.events.append((name, data)))
 

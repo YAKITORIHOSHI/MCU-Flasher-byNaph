@@ -4233,7 +4233,7 @@ class MCUWebBackendAPI:
         """
         if sys.platform == "win32":
             return True
-        if not self._resolve_requested_target(action):
+        if not self._resolve_requested_target(action, hand_over=True):
             return False
         if self._stop_requested:
             self.emit("console:log", {"text": f"{action} cancelled before the build started.", "tag": "warning", "newline": True})
@@ -4312,19 +4312,23 @@ class MCUWebBackendAPI:
         self._current_op_phase = "resolving"
         return True
 
-    def _resolve_requested_target(self, action: str) -> bool:
-        """Repair an unresolved cached selection off the GUI thread before rejecting it."""
+    def _resolve_requested_target(self, action: str, *, hand_over: bool = False) -> bool:
+        """Repair an unresolved cached selection off the GUI thread before rejecting it.
+
+        First-use tool preparation resolves before the guarded worker does. It hands
+        its repair over (``hand_over``) so the worker's own call skips only that one
+        repair; both calls still check the target.
+        """
         from main.core.board_catalog import (
             _load_platformio_board_catalog, resolve_board_definition,
             load_registry_board_catalog, _save_board_catalog_cache,
         )
         name = self.current_board
         info = self._resolve_board_info(name)
-        # First-use tool preparation resolves before the guarded worker does: repair a
-        # cached row once per operation, and still check the target both times.
-        repaired = (getattr(self, "_op_session_id", 0), name)
-        if info and getattr(self, "_target_repaired_for", None) != repaired:
-            self._target_repaired_for = repaired
+        token = (getattr(self, "_op_session_id", 0), name)
+        repaired = getattr(self, "_target_repaired_for", None) == token
+        self._target_repaired_for = token if hand_over else None
+        if info and not repaired:
             needs_resolution = info.get("pio_resolved") is False or not info.get("board")
             if needs_resolution:
                 self.emit("console:log", {"text": f"  Resolving board definition for {name}…", "tag": "info", "newline": True})
