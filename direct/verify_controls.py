@@ -168,6 +168,15 @@ class ControlChecks(unittest.TestCase):
 
         previous = APP.styleSheet()
         self.addCleanup(APP.setStyleSheet, previous)
+        activation_host = self.own(QWidget())
+
+        def activate(widget):
+            widget.activateWindow()
+            deadline = time.monotonic() + 1.0
+            while APP.activeWindow() is not widget and time.monotonic() < deadline:
+                QTest.qWait(10)
+            self.assertIs(APP.activeWindow(), widget)
+
         for mode in ("default", "light", "solarized_dark"):
             with self.subTest(mode=mode), patch.object(settings_module, "get_autosave_settings", return_value=(True, 1500)), \
                     patch("main.core.config.get_theme_mode", return_value=mode):
@@ -175,10 +184,17 @@ class ControlChecks(unittest.TestCase):
                 APP.setStyleSheet(build_stylesheet(mode))
                 dialog = self.settings()
                 dialog.show()
-                APP.processEvents()
+                # Offscreen Qt can retain the previous QWindow activation after
+                # a dialog closes. Activate an owned host before the next dialog
+                # so its ordinary activation also updates QWidget keyboard focus.
+                activation_host.show()
+                activate(activation_host)
+                activate(dialog)
+                activation_host.hide()
                 field = dialog.autosave_spin
                 dialog.scroll.ensureWidgetVisible(field)
                 APP.processEvents()
+                dialog.cb_autosave.setFocus()
                 edit = field.lineEdit()
                 margins = edit.textMargins()
                 needed = edit.fontMetrics().horizontalAdvance("10000") + margins.left() + margins.right()
@@ -192,8 +208,10 @@ class ControlChecks(unittest.TestCase):
                     self.assertTrue(field.style().subControlRect(QStyle.ComplexControl.CC_SpinBox, option, control, field).isEmpty(),
                                     "The delay field must not expose spin buttons")
                 QTest.mouseClick(field, Qt.MouseButton.LeftButton, pos=field.rect().center())
-                QTest.keyClick(field, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
-                QTest.keyClicks(field, "2500")
+                focused = APP.focusWidget()
+                self.assertIn(focused, (field, edit), "Clicking the delay must transfer keyboard focus")
+                QTest.keyClick(focused, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+                QTest.keyClicks(focused, "2500")
                 field.interpretText()
                 self.assertEqual(field.value(), 2500)
                 self.assertEqual(edit.text(), "2500")
