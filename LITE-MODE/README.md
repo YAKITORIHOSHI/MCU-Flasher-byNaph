@@ -20,8 +20,8 @@ The launchers find their tools relative to themselves, so the complete project
 can be moved. This checkout supplies Ubuntu x64 and Windows x64 executables.
 Ubuntu ARM64 requires a native build, which produces `UBUNTU_ARM64`.
 
-The first launch goes through the main application's Bootstrap for runtime and
-configured board preparation, then opens Lite. Lite prefers that prepared private
+The first launch goes through the main application's Bootstrap for the runtime
+and the board list, in its setup window, then opens Lite. Lite prefers that prepared private
 Python environment; an existing Lite `.venv` remains a fallback. The worker does
 not install into the borrowed interpreter. For an optional separate tool runtime:
 

@@ -4184,7 +4184,7 @@ class MCUWebBackendAPI:
 
         try:
             self._operation_worker = threading.Thread(
-                target=self._compile_requested_worker, name="MCU_Compile", daemon=True
+                target=self._compile_requested_entry, name="MCU_Compile", daemon=True
             )
             self._operation_worker.start()
         except Exception as exc:
@@ -4198,6 +4198,119 @@ class MCUWebBackendAPI:
         self.active_operation = self._current_op_phase = None
         self.emit("operation:phase", {"phase": "idle", "is_busy": False})
         self.emit("window:closable", {"closable": True})
+
+    def _compile_requested_entry(self):
+        """Prepare a board's tools on its first compile, then build under the package lease."""
+        try:
+            if not self._prepare_target_tools("Compile"):
+                self._release_requested_operation()
+                return False
+        except Exception as exc:
+            self.emit("console:log", {"text": f"Board tool preparation failed: {exc}", "tag": "error", "newline": True})
+            self.emit("notification", {"title": "Build failed", "message": str(exc), "type": "error"})
+            self._release_requested_operation()
+            return False
+        return self._compile_requested_worker()
+
+    def _upload_requested_entry(self, cfg):
+        try:
+            if not self._prepare_target_tools("Upload"):
+                self._release_requested_operation()
+                return
+        except Exception as exc:
+            self.emit("console:log", {"text": f"Board tool preparation failed: {exc}", "tag": "error", "newline": True})
+            self.emit("notification", {"title": "Upload failed", "message": str(exc), "type": "error"})
+            self._release_requested_operation()
+            return
+        self._upload_requested_worker(cfg)
+
+    def _prepare_target_tools(self, action: str) -> bool:
+        """Download the selected board's compiler, framework and uploader the first time it is used.
+
+        Bootstrap prepares only the runtime and the board list. This runs before the
+        build takes its package-store lease, because preparation needs the writer lease.
+        Windows and Offline Mode keep Bootstrap's complete preparation.
+        """
+        if sys.platform == "win32":
+            return True
+        if not self._resolve_requested_target(action):
+            return False
+        if self._stop_requested:
+            self.emit("console:log", {"text": f"{action} cancelled before the build started.", "tag": "warning", "newline": True})
+            return False
+        info = dict(self._resolve_board_info(self.current_board) or {})
+        platform_name = str(info.get("platform", "")).strip()
+        board_id = str(info.get("board", "")).strip()
+        framework = str(info.get("framework", "arduino")).strip() or "arduino"
+        if info.get("backend") == "arduino-cli" or not platform_name or not board_id:
+            return True  # The build's own checks report an unresolved target.
+        from src.modules.offline_mode import offline_enabled
+        if offline_enabled():
+            return True
+        from main.core.target_profile import upload_configuration
+        from main.core.platformio_board_compat import board_compatibility_options
+        from src.modules.target_packages import configuration_text, target_ready
+        core = Path(_get_safe_platformio_core_dir(SCRIPT_DIR))
+        upload = upload_configuration(info, getattr(self, "upload_speed", "") or str(DEFAULT_UPLOAD_SPEED))
+        protocol = str(info.get("upload_protocol") or "").strip()
+        if target_ready(core, platform_name, board_id, framework, protocol):
+            return True
+        compatibility = "".join(f"{key} = {value}\n" for key, value in board_compatibility_options(info, core).items())
+        scratch = core / ".tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        config = scratch / f"target-{os.getpid()}-{threading.get_ident()}.ini"
+        config.write_text(configuration_text(platform_name, board_id, framework, upload + compatibility),
+                          encoding="utf-8")
+        command = [sys.executable, "-B", str(SCRIPT_DIR / "src/modules/target_packages.py"),
+                   "--core", str(core), "--config", str(config), "--protocol", protocol]
+        events = getattr(self, "_package_event_root", None)
+        if events is not None:
+            command += ["--events-root", str(events)]
+        env = dict(os.environ)
+        for key in ("MCU_FLASHER_OFFLINE_RUNTIME", "MCU_FLASHER_WORKSPACE_RUNTIME", "PIP_NO_INDEX",
+                    "PYTHONHOME", "PYTHONPATH"):
+            env.pop(key, None)
+        env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        self._current_op_phase = "preparing"
+        self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": True,
+                                      "op": "upload" if action == "Upload" else "compile"})
+        self.emit("console:log", {"text": "", "newline": True})
+        self.emit("console:log", {"text": f"  Preparing tools for {self.current_board} (first use of this board)…",
+                                  "tag": "header", "newline": True})
+        self.emit("console:log", {"text": "  Only this board's compiler, framework and uploader are downloaded, once.",
+                                  "tag": "dim", "newline": True})
+        started = time.monotonic()
+        try:
+            process = subprocess.Popen(command, cwd=str(SCRIPT_DIR), env=env, stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                       encoding="utf-8", errors="replace",
+                                       **_HOST_RUNTIME.process_options(session=True))
+            self._active_process = process
+            for raw in iter(process.stdout.readline, ""):
+                line = raw.rstrip()
+                if line:
+                    failed = "failed" in line.lower() or line.lower().startswith("error")
+                    self.emit("console:log", {"text": f"  {line}", "tag": "error" if failed else "info", "newline": True})
+            process.wait()
+        finally:
+            self._active_process = None
+            try:
+                config.unlink()
+            except OSError:
+                pass
+        if self._stop_requested:
+            self.emit("console:log", {"text": "Board tool preparation stopped. Downloaded packages are kept for next time.",
+                                      "tag": "warning", "newline": True})
+            return False
+        if process.returncode:
+            message = f"The tools for {self.current_board} could not be prepared. Check the network connection and try again."
+            self.emit("console:log", {"text": message, "tag": "error", "newline": True})
+            self.emit("notification", {"title": f"{action} failed", "message": message, "type": "error"})
+            return False
+        self.emit("console:log", {"text": f"  Board tools ready in {time.monotonic() - started:.0f} s.",
+                                  "tag": "success", "newline": True})
+        self._current_op_phase = "resolving"
+        return True
 
     def _resolve_requested_target(self, action: str) -> bool:
         """Repair an unresolved cached selection off the GUI thread before rejecting it."""
@@ -7042,7 +7155,7 @@ class MCUWebBackendAPI:
         self.emit("operation:phase", {"phase": "compile", "is_busy": True, "can_stop": False, "op": "upload"})
         self.emit("window:closable", {"closable": True})
         try:
-            self._operation_worker = threading.Thread(target=self._upload_requested_worker, args=(cfg,), name="MCU_Upload", daemon=True)
+            self._operation_worker = threading.Thread(target=self._upload_requested_entry, args=(cfg,), name="MCU_Upload", daemon=True)
             self._operation_worker.start()
         except Exception as exc:
             self._operation_worker = None

@@ -85,6 +85,8 @@ def main(argv=None) -> int:
     parser.add_argument("--plan", type=Path, help="Offline board/library package plan")
     parser.add_argument("--board-source", type=Path, action="append",
                         help="Arduino declaration source root; repeat for multiple roots")
+    parser.add_argument("--window-only", action="store_true",
+                        help="Prepare only what the Bootstrap window needs (first desktop run)")
     args = parser.parse_args(argv)
     if not sys.platform.startswith("linux"):
         print("This setup is for native Linux. Use direct/windows/run.vbs on Windows.", file=sys.stderr)
@@ -117,6 +119,8 @@ def main(argv=None) -> int:
         installed = persistent_setup_root(ROOT)
         if installed != ROOT:
             forwarded = ["--launch"] if args.launch else []
+            if args.window_only:
+                forwarded.append("--window-only")
             if args.project:
                 forwarded += ["--project", str(Path(args.project).absolute())]
             if args.new_window:
@@ -138,6 +142,17 @@ def main(argv=None) -> int:
         prepare_environment_directory(ENV_DIR)
         venv.EnvBuilder(with_pip=True, symlinks=True).create(ENV_DIR)
         python = ENV_DIR / "bin/python"
+        if args.window_only:
+            # Just the window's Qt, from the same PySide6 release line as the full runtime;
+            # the complete setup then runs inside the Bootstrap window.
+            stage = "Python dependencies"
+            print("Downloading the setup window's Qt (about 100 MB)...", flush=True)
+            subprocess.run([str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-user",
+                            "--prefer-binary", "--only-binary=PySide6-Essentials,shiboken6",
+                            "-r", str(ROOT / "direct/ubuntu/requirements-window.txt")],
+                           check=True, env=env, cwd=ROOT)
+            print("The setup window is ready.", flush=True)
+            return 0
         force_reinstall = needs_architecture_repair(ENV_DIR, architecture)
         if architecture == "arm64":
             from direct.ubuntu.arm_qt5 import install_bridge
@@ -176,10 +191,10 @@ def main(argv=None) -> int:
             command += ["--plan", str(args.plan)]
         for source in args.board_source or ():
             command += ["--board-source", str(source)]
-        # Existing package certificates need only a fresh declaration audit.
-        from src.modules.offline_bootstrap import load_plan, ready
-        if ready(core, load_plan(args.plan) if args.plan else None):
-            command += ["--coverage-only"]
+        # Quick mode unless Offline Mode or an explicit plan asks for every toolchain:
+        # each board's tools then download on its first compile. The private runtime
+        # chooses, because only it can read the package store (system Python lacks PlatformIO).
+        command += ["--auto"]
         from src.modules.package_jobs import package_store_lease
         stage = "native board toolchains"
         announce("Board toolchains")

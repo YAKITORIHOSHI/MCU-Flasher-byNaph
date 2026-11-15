@@ -1008,6 +1008,128 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
     log("Offline bootstrap package preparation complete. Workspace downloads are disabled.")
 
 
+CATALOG_MARKER = ".mcu-catalog-ready.json"
+CATALOG_SCHEMA = 1
+
+
+def catalog_ready(core, plan=None):
+    """Read-only gate for Bootstrap's quick mode: SCons and the board list, no toolchains.
+
+    Each board's compiler, framework and uploader are prepared on its first compile
+    (src/modules/target_packages.py). Offline Mode still requires ``ready``.
+    """
+    try:
+        core = Path(core)
+        data = json.loads((core / CATALOG_MARKER).read_text(encoding="utf-8"))
+        if (data.get("schema") != CATALOG_SCHEMA or data.get("host") != sys.platform
+                or data.get("architecture") != host_platform.machine()
+                or data.get("plan") != plan_hash(plan or load_plan())):
+            return False
+        if not all((ROOT / item).is_file() for item in ASSETS):
+            return False
+        files = data.get("files")
+        return (isinstance(files, list) and bool(files) and all((core / item).is_file() for item in files)
+                and _store_metadata_readable(core))
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, AttributeError, ImportError):
+        return False
+
+
+def prepare_catalog(core, plan=None, log=print):
+    """Bootstrap's quick mode: SCons, platform definitions, the board list and plan libraries.
+
+    Platform definitions are a few megabytes; their toolchains (gigabytes for every
+    ESP32 variant) download per board when it is first compiled.
+    """
+    from platformio.package.manager.library import LibraryPackageManager
+    from platformio.package.manager.platform import PlatformPackageManager
+    from platformio.platform.factory import PlatformFactory
+    from src.modules.bootstrap_package_recovery import atomic_package_writes, recover_packages
+    from src.modules.bootstrap_platformio import archive_paths, command
+    from src.modules.bootstrap_seed import prepare_scons
+    from src.modules.platformio_locks import package_locks
+    import subprocess
+    core = Path(os.path.abspath(core))
+    plan = _validate_plan(plan) if plan is not None else load_plan()
+    env = clean_bootstrap_environment()
+    for name in ("PLATFORMIO_SETTING_ENABLE_TELEMETRY", "PLATFORMIO_DISABLE_UPGRADE_CHECK"):
+        os.environ[name] = env[name]
+    for name, value in {"CORE": core, "PACKAGES": core / "packages", "PLATFORMS": core / "platforms",
+                        "GLOBALLIB": core / "lib", "CACHE": core / ".cache"}.items():
+        os.environ[f"PLATFORMIO_{name}_DIR"] = str(value)
+        env[f"PLATFORMIO_{name}_DIR"] = str(value)
+    core.mkdir(parents=True, exist_ok=True)
+    (core / CATALOG_MARKER).unlink(missing_ok=True)
+    if not all((ROOT / item).is_file() for item in ASSETS):
+        raise RuntimeError("Editor/terminal assets are missing from this application copy")
+    files = set()
+    with _bootstrap_http_timeouts(), package_locks(), archive_paths(), atomic_package_writes(core):
+        with timed_stage(log, "package recovery scan"):
+            recover_packages(core, log=log)
+        with timed_stage(log, "SCons preparation"):
+            scons = prepare_scons(core, log=log)
+        for item in ("package.json", ".piopm"):
+            files.add(str((Path(scons.path) / item).relative_to(core)))
+        platforms = PlatformPackageManager(str(core / "platforms"))
+        unavailable_targets = {}
+        for name in plan["platforms"]:
+            with timed_stage(log, f"board definitions: {name}"):
+                package = platforms.get_package(name) or platforms.install(name, skip_dependencies=True)
+            platform = PlatformFactory.new(package)
+            files.add(str((Path(package.path) / "platform.json").relative_to(core)))
+            log(f"Board list ready: {platform.title} ({len(platform.get_boards())} boards). "
+                "Each board's tools download the first time you compile for it.")
+            for board, frameworks in _unavailable_frameworks(platform).items():
+                unavailable_targets[(platform.name, board)] = frameworks
+        libraries = LibraryPackageManager(str(core / "lib"))
+        for spec in plan.get("libraries", []):
+            with timed_stage(log, f"library: {spec}"):
+                installed = libraries.get_package(spec) or libraries.install(spec)
+            files.add(str((Path(installed.path) / ".piopm").relative_to(core)))
+    with timed_stage(log, "board list"):
+        catalog = subprocess.run(command() + ["boards", "--json-output"], capture_output=True, text=True,
+                                 env=env, check=True, timeout=120,
+                                 creationflags=0x08000000 if sys.platform == "win32" else 0)
+    records = json.loads(catalog.stdout)
+    if not isinstance(records, list):
+        raise RuntimeError("PlatformIO returned an invalid board list")
+    for record in records:
+        unavailable = unavailable_targets.get((record.get("platform"), record.get("id")))
+        if unavailable:
+            declared = list(record.get("frameworks") or [])
+            record["declared_frameworks"] = declared
+            record["frameworks"] = [item for item in declared if item not in unavailable]
+            record["unavailable_frameworks"] = unavailable
+    (core / ".mcu-offline-catalog.json").write_text(json.dumps(records), encoding="utf-8")
+    files.add(".mcu-offline-catalog.json")
+    install_runtime_guard(core)
+    payload = {"schema": CATALOG_SCHEMA, "host": sys.platform, "architecture": host_platform.machine(),
+               "plan": plan_hash(plan), "files": sorted(files)}
+    temporary = core / (CATALOG_MARKER + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temporary, core / CATALOG_MARKER)
+    log(f"Board list prepared ({len(records)} boards). Board tools download on first compile.")
+
+
+def board_store_ready(core, plan=None):
+    """The launch gate: the complete preparation, or quick mode when Offline Mode is off."""
+    if ready(core, plan):
+        return True
+    from src.modules.offline_mode import offline_enabled
+    return not offline_enabled() and catalog_ready(core, plan)
+
+
+def board_stage_arguments(core, plan_path=None):
+    """How Bootstrap's board stage runs: complete only for Offline Mode or an explicit plan."""
+    from src.modules.offline_mode import offline_enabled
+    plan = load_plan(plan_path) if plan_path else None
+    if ready(core, plan):
+        # Existing package certificates need only a fresh declaration audit.
+        return ["--coverage-only"]
+    if plan_path or offline_enabled():
+        return []
+    return ["--catalog-only"]
+
+
 def prepare_runtime(core, log=print):
     """Prepare the online runtime without exhaustive offline board/library packs."""
     from src.modules.ubuntu_release import require_supported_ubuntu
@@ -1044,8 +1166,21 @@ def main(argv=None):
                         help="Prepare changed original Arduino targets and refresh coverage while reusing certified PlatformIO packages")
     parser.add_argument("--runtime-only", action="store_true",
                         help="Prepare only the online runtime, without exhaustive offline board/library packs")
+    parser.add_argument("--catalog-only", action="store_true",
+                        help="Prepare SCons and the board list; each board's tools download on its first compile")
+    parser.add_argument("--auto", action="store_true",
+                        help="Choose the mode here, in the private runtime that can read the package store")
     args = parser.parse_args(argv)
     try:
+        if args.auto:
+            mode = board_stage_arguments(args.core, args.plan)
+            args.coverage_only = "--coverage-only" in mode
+            args.catalog_only = "--catalog-only" in mode
+        if args.catalog_only:
+            if args.coverage_only or args.runtime_only:
+                raise ValueError("--catalog-only cannot be combined with another preparation mode")
+            prepare_catalog(args.core, load_plan(args.plan) if args.plan else None)
+            return 0
         if args.runtime_only:
             if args.coverage_only or args.plan or args.board_source:
                 raise ValueError("--runtime-only cannot be combined with an offline plan or coverage audit")

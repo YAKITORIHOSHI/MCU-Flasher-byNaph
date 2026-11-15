@@ -106,8 +106,9 @@ class PreparationChecks(unittest.TestCase):
         self.assertEqual(len(report["boards"]), 1)
         self.assertEqual(report["boards"][0]["name"], "Mystery Board")
         # Publishing an empty source-bound target report is app metadata, not
-        # a platform/core installation. No tools or package directories exist.
-        self.assertEqual({path.name for path in empty_store.iterdir()},
+        # a platform/core installation. No tools or package directories exist;
+        # the package-store lease keeps its reader markers beside them.
+        self.assertEqual({path.name for path in empty_store.iterdir()} - {".mcu-package-users"},
                          {".mcu-index-targets.json", ".mcu-bootstrap-board-coverage.json"})
 
     def test_both_nodemcu_revisions_resolve_to_independent_exact_ids(self):

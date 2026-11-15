@@ -132,25 +132,25 @@ class DesktopProgress:
     # theme): that is not a person pressing Cancel, so the update carries on.
     STARTUP_FAILURE_SECONDS = 1.0
 
-    def __init__(self, zenity: str):
+    def __init__(self, zenity: str, text: str = "Updating MCU Flasher from GitHub…", *, pulsate: bool = False):
         self._started = time.monotonic()
         self._finished = False
         self._process = subprocess.Popen(
-            [zenity, "--progress", "--title=MCU Flasher", "--width=520", "--percentage=0", "--auto-close",
-             "--text=Updating MCU Flasher from GitHub…"],
+            [zenity, "--progress", "--title=MCU Flasher", "--width=520", "--auto-close",
+             *(["--pulsate", "--no-cancel"] if pulsate else ["--percentage=0"]), "--text=" + text],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", start_new_session=True,
         )
 
     @classmethod
-    def open(cls, *, desktop: bool):
+    def open(cls, *, desktop: bool, text: str | None = None, pulsate: bool = False):
         if not desktop or not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
             return None
         zenity = shutil.which("zenity")
         if not zenity:
             return None
         try:
-            return cls(zenity)
+            return cls(zenity, *([text] if text else []), pulsate=pulsate)
         except OSError:
             return None
 
@@ -410,6 +410,55 @@ owned final location, without copying venvs or launching the old main workspace.
     return launch_workspace(arguments, env, desktop=not sys.stdin.isatty(), window=window)
 
 
+def open_first_run_window(env: dict[str, str]) -> tuple[BootstrapWindow | None, Path]:
+    """Give a first desktop run the real Bootstrap window instead of a terminal.
+
+    The window runs on the private runtime's Qt, which a first run does not have yet.
+    Install only that Qt (PySide6 Essentials, about 100 MB) into the final per-user
+    runtime first, behind a small native progress window, then open the Bootstrap
+    window for everything else. Returns (None, root) when this cannot work, and the
+    caller falls back to a terminal.
+    """
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return None, ROOT  # Never install anything for a window no desktop can show.
+    notice = DesktopProgress.open(desktop=True, text="Preparing MCU Flasher setup…", pulsate=True)
+    report = notice.message if notice is not None else (lambda text: print(text, flush=True))
+    root = ROOT
+    try:
+        root = persistent_setup_root(ROOT, report=report)
+        if not bootstrap_window_runtime_present(root):
+            report("Preparing the setup window…")
+            log_path = root / "logs" / f"ubuntu-window-setup-{time.strftime('%Y%m%d-%H%M%S')}.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("ab") as log:
+                # stdin is not a terminal: apt asks for the password in the desktop's dialog.
+                process = subprocess.Popen(["/usr/bin/python3", "-B", str(root / "direct/ubuntu/setup.py"),
+                                            "--window-only"], cwd=root, env=env, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                for raw in iter(process.stdout.readline, b""):
+                    log.write(raw)
+                    log.flush()
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if line and not line.startswith(("──", "--")):
+                        report(line[:200])
+                process.stdout.close()
+                if process.wait():
+                    print(f"The setup window could not be prepared; see {log_path}", file=sys.stderr)
+                    return None, root
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(f"The setup window could not be prepared: {exc}", file=sys.stderr)
+        return None, root
+    finally:
+        if notice is not None:
+            notice.finish()
+    return BootstrapWindow.open(root, env=env, subtitle="Runtime setup · Prepare your workspace"), root
+
+
+def bootstrap_window_runtime_present(root: Path) -> bool:
+    from direct.ubuntu.bootstrap_view import qt_runtime_present
+    return qt_runtime_present(root)
+
+
 def bootstrap_terminal(arguments: list[str], env: dict[str, str]) -> bool:
     from src.modules.ubuntu_release import require_supported_ubuntu
 
@@ -492,7 +541,8 @@ def owned_installation_elsewhere() -> Path | None:
 
 
 def forward_to_installation(installed: Path, arguments: list[str], env: dict[str, str], *,
-                            repair: bool, project: str | None, window: BootstrapWindow | None) -> int:
+                            repair: bool, project: str | None, window: BootstrapWindow | None,
+                            terminal: bool = False) -> int:
     """Continue this desktop launch in the installed copy, keeping any open window."""
     forwarded = list(arguments)
     if project:
@@ -501,7 +551,10 @@ def forward_to_installation(installed: Path, arguments: list[str], env: dict[str
         return launch_lite_with_owned_runtime(installed, forwarded, env, repair=repair, window=window)
     if repair:
         forwarded.insert(0, "--repair")
-    command = [sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"), "--desktop", *forwarded]
+    # A terminal launch stays one: the installed launcher must still keep a failure on
+    # screen and open the workspace detached, so the terminal can close.
+    mode = "--bootstrap-window" if terminal else "--desktop"
+    command = [sys.executable, "-B", str(installed / "direct/ubuntu/launch.py"), mode, *forwarded]
     if window is not None:
         window.hand_over(env)
     try:
@@ -615,7 +668,13 @@ def main(argv=None) -> int:
                 if window is None:
                     window = BootstrapWindow.open(ROOT, env=env, subtitle="Runtime setup · Prepare your workspace")
                 if window is None:
-                    # Before the private runtime has Qt (a first run), setup shows in a terminal.
+                    # A first run: prepare the window's Qt in the final runtime, then show it.
+                    window, window_root = open_first_run_window(env)
+                    if window is not None and window_root != ROOT:
+                        return forward_to_installation(window_root, arguments, env, repair=args.repair,
+                                                       project=project, window=window)
+                if window is None:
+                    # Only when the window cannot be prepared (no zenity, no network): a terminal.
                     terminal_arguments = (["--repair"] if args.repair else []) + arguments
                     if bootstrap_terminal(terminal_arguments, env):
                         return 0
@@ -633,7 +692,8 @@ def main(argv=None) -> int:
             if installed != ROOT:
                 if args.lite:
                     return forward_to_installation(installed, arguments, env, repair=args.repair,
-                                                   project=project, window=window)
+                                                   project=project, window=window,
+                                                   terminal=window is None and args.bootstrap_window)
                 if window is not None:
                     return forward_to_installation(installed, arguments, env, repair=args.repair,
                                                    project=project, window=window)

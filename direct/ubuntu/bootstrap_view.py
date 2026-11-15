@@ -9,7 +9,8 @@ The window outlives the launcher's restart after an update: ``hand_over`` leaves
 its pipe open across ``exec`` and names it in ``MCU_FLASHER_BOOTSTRAP_WINDOW``, and
 the restarted launcher ``adopt``s it. One window therefore covers the download, a
 repair the new source needs and opening the workspace. A first run, before the
-private runtime has Qt, still uses a terminal, as Windows uses its text console.
+private runtime has Qt, installs only the window's Qt first (``launch.open_first_run_window``),
+so it gets this window too; a terminal is only the fallback when that fails.
 """
 from __future__ import annotations
 

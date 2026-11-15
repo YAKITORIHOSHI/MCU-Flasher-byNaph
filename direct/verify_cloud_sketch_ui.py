@@ -977,7 +977,17 @@ class CloudUIChecks(unittest.TestCase):
                     # short monitor (Windows at 200% clamps this dialog to 312):
                     # only the sketch list's scroll viewport may give up height,
                     # and the checks below prove every action stays reachable.
-                    self.assert_native_size(dialog, (width, max(dialog.minimumHeight(), height)))
+                    expected_height = max(dialog.minimumHeight(), height)
+                    if APP.platformName() == "windows" and dialog.height() != expected_height:
+                        # Windows' minimum track size may instead follow the layout's
+                        # advisory minimum (330 rather than 312 at 200%, run to run).
+                        # Either fits the work area; nothing taller than the advisory minimum is allowed.
+                        advisory = max(expected_height, dialog.minimumSizeHint().height())
+                        self.assertGreaterEqual(dialog.height(), expected_height)
+                        self.assertLessEqual(dialog.height(), advisory)
+                        self.assertLessEqual(dialog.height(), dialog.screen().availableGeometry().height())
+                        expected_height = dialog.height()
+                    self.assert_native_size(dialog, (width, expected_height))
                     self.assert_only_scrolling_content_yields(dialog, panel)
                     self.assert_compact_sketch_header(panel)
                     self.reveal_in_scroll_ancestors(panel._refresh_btn)

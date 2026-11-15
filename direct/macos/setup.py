@@ -68,10 +68,10 @@ def main(argv=None) -> int:
             command += ["--plan", str(args.plan)]
         for source in args.board_source or ():
             command += ["--board-source", str(source)]
-        # Existing package certificates need only a fresh declaration audit.
-        from src.modules.offline_bootstrap import load_plan, ready
-        if ready(core, load_plan(args.plan) if args.plan else None):
-            command += ["--coverage-only"]
+        # Quick mode unless Offline Mode or an explicit plan asks for every toolchain:
+        # each board's tools then download on its first compile. The private runtime
+        # chooses, because only it can read the package store (system Python lacks PlatformIO).
+        command += ["--auto"]
         from src.modules.package_jobs import package_store_lease
         stage = "native board toolchains"
         with package_store_lease(core, mode="prepare", wait=True,

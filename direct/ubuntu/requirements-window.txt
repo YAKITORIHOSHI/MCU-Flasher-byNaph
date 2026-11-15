@@ -1,0 +1,4 @@
+# First desktop run: only the Bootstrap window's Qt, before the full runtime.
+# Keep the bounds equal to PySide6's in requirements.txt so the full install reuses it.
+PySide6-Essentials>=6.7,<6.12; python_version < "3.12"
+PySide6-Essentials>=6.7,<7; python_version >= "3.12"

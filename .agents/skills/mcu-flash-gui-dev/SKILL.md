@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -229,10 +229,33 @@ after 700 ms; end of input closes. `direct/ubuntu/bootstrap_view.py`:
 `run_logged` runs setup.py with stdin closed (pkexec for apt), a run log in
 `logs/` and `── [i/n] Stage ──` headings from `setup.py`'s `announce`.
 `launch.main` adopts first, opens the window for an update or a repair, forwards
-a portable copy to `owned_installation_elsewhere()` by exec with `--desktop`, and
-falls back to the terminal only when no private Qt exists. Launcher fixtures must
-patch `owned_installation_elsewhere`, `BootstrapWindow.open` and `.adopt`: this
-account has a real installation. Verify ubuntu_launcher, app_update and
+a portable copy to `owned_installation_elsewhere()` by exec with `--desktop`.
+With no private Qt yet (a first run), `open_first_run_window` installs the
+per-user copy, runs `setup.py --window-only` (system prerequisites through pkexec,
+the venv and `requirements-window.txt`: PySide6 Essentials only, same bounds as
+PySide6) behind a pulsating zenity window, then opens the Bootstrap window there
+and forwards with it. It does nothing without a display. The terminal is only the
+fallback when that fails; a forwarded terminal launch keeps `--bootstrap-window`
+(`forward_to_installation(..., terminal=True)`). Launcher fixtures must patch
+`owned_installation_elsewhere`, `BootstrapWindow.open`, `.adopt` and
+`open_first_run_window`: this account has a real installation.
+
+Quick board stage (Linux and macOS): setup passes `offline_bootstrap.py --auto`,
+which decides in the private runtime (system Python cannot import PlatformIO, so
+its old `ready()` check was always false and every repair re-ran the complete
+preparation). Without Offline Mode or an explicit plan it runs `--catalog-only`:
+SCons, platform definitions (`skip_dependencies`), the board list, the plan's
+libraries and `.mcu-catalog-ready.json`; `board_store_ready` accepts that marker
+unless Offline Mode is on. A fresh Bootstrap took 55 s here (was 30+ minutes for
+6.2 GB of every ESP32 variant's toolchains). Compile/Upload threads start at
+`_compile_requested_entry`/`_upload_requested_entry`, which run
+`_prepare_target_tools` before the guarded worker takes its package lease:
+`src/modules/target_packages.py` in a clean child (workspace runtime variables
+removed), a read-only pass under a use lease, then the writer lease only for
+missing packages, concurrent archive downloads, and a per-target stamp in
+`.mcu-targets/` checked with a few stat calls. Measured first use: Uno 8 s, NodeMCU
+17 s, ESP32 Dev 68 s (4.2 GB: espressif32 8.0.0 requires both toolchains and the
+debuggers). Verify target_packages. Verify ubuntu_launcher, app_update and
 `verify_ubuntu_bootstrap_window.py` (private runtime, offscreen, `--render-dir temp/...`).
 
 ## November 12 follow-up: small-screen toolbars, visible updates, faster Ubuntu launch

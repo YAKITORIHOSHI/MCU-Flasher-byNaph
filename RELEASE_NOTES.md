@@ -33,15 +33,18 @@ see the [README](README.md).
   to accept or reject.
 - **Boards and libraries.** Browse, download and prepare board packages and
   Arduino libraries, and read their example sketches. Offline Mode prepares
-  boards and libraries from local packages only.
+  every default board's tools in advance and uses local packages only.
 - **Board recovery.** Soft and Hard Reset reflash a board to a known state,
   clearing lockups, boot loops and frozen sketches.
 - **Safe hardware use.** A serial port belongs to the window that selected it;
   other MCU Flasher and Lite windows show it as in use. A window cannot close
   while firmware is being written, erased or recovered.
 - **Setup and repair.** The first launch prepares a private Python runtime, the
-  required packages, the default board support and, on Windows, the CP210x and
-  CH34x USB drivers. A repair launch rebuilds anything missing.
+  required packages, the board list and, on Windows, the default boards' tools
+  and the CP210x and CH34x USB drivers, in its own setup window. On Linux and macOS this takes about a
+  minute; each board's compiler and uploader download the first time you
+  compile for it, and only what that board needs. A repair launch rebuilds
+  anything missing.
 - **Interface.** Glass Dark, Frosted Light and Solarized Dark themes, an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
   including half-screen tiling.

@@ -775,6 +775,7 @@ class LauncherChecks(unittest.TestCase):
 
     def test_desktop_first_run_opens_one_setup_terminal(self):
         with patch.object(launch.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
+                patch.object(launch, "open_first_run_window", return_value=(None, self.root)), \
                 patch.object(launch, "runtime_problem", return_value="No runtime"), \
                 patch.object(launch, "bootstrap_terminal", return_value=True) as terminal, \
                 patch.object(launch, "launch_workspace", side_effect=AssertionError("GUI launched early")):
@@ -784,6 +785,7 @@ class LauncherChecks(unittest.TestCase):
     def test_missing_system_libraries_enter_desktop_bootstrap_before_runtime_validation(self):
         missing = preflight.MissingSystemDependencies(["libxcb-cursor0", "libxcb-xinerama0"])
         with patch.object(launch.sys, "stdin", SimpleNamespace(isatty=lambda: False)), \
+                patch.object(launch, "open_first_run_window", return_value=(None, self.root)), \
                 patch.object(preflight, "host_preflight", side_effect=missing), \
                 patch.object(launch, "runtime_problem", side_effect=AssertionError("Qt checked before OS repair")), \
                 patch.object(launch, "bootstrap_terminal", return_value=True) as terminal, \
@@ -1250,13 +1252,68 @@ class BootstrapWindowChecks(unittest.TestCase):
             self.assertEqual(launch.main(["--desktop"]), 4)
         self.assertEqual(window.finished[0], False)
 
-    def test_first_run_without_private_qt_still_uses_a_terminal(self):
+    def test_first_run_falls_back_to_a_terminal_only_when_the_window_cannot_be_prepared(self):
         with patch.object(launch.BootstrapWindow, "open", return_value=None), \
+                patch.object(launch, "open_first_run_window", return_value=(None, self.root)) as first, \
                 patch.object(launch, "runtime_problem", return_value="No runtime"), \
                 patch.object(launch, "bootstrap_terminal", return_value=True) as terminal, \
                 patch.object(launch, "launch_workspace", side_effect=AssertionError("GUI launched early")):
             self.assertEqual(launch.main(["--desktop", "--repair"]), 0)
+        first.assert_called_once()
         self.assertEqual(terminal.call_args.args[0], ["--repair"])
+
+    def test_first_run_without_private_qt_opens_the_bootstrap_window_in_the_installation(self):
+        """A first desktop run prepares the window's Qt and continues in the window, not a terminal."""
+        window, process, record = self.recorder()
+        installed = self.root / "Installed Ω"
+        installed.mkdir()
+        handed = []
+
+        def forward(target, arguments, env, **options):
+            handed.append((target, arguments, options))
+            return 0
+
+        with patch.object(launch.BootstrapWindow, "open", return_value=None), \
+                patch.object(launch, "open_first_run_window", return_value=(window, installed)), \
+                patch.object(launch, "runtime_problem", return_value="No runtime"), \
+                patch.object(launch, "forward_to_installation", side_effect=forward), \
+                patch.object(launch, "launch_workspace", side_effect=AssertionError("GUI launched early")):
+            self.assertEqual(launch.main(["--desktop", "--lite", "--project", "Sketch Ω"]), 0)
+        self.assertEqual(len(handed), 1)
+        target, arguments, options = handed[0]
+        self.assertEqual(target, installed)
+        self.assertEqual(arguments, ["--lite", "--project", "Sketch Ω"])
+        self.assertIs(options["window"], window)
+        process.stdin.close()
+        process.wait(timeout=10)
+
+    def test_first_run_window_never_installs_without_a_desktop(self):
+        with patch.dict(launch.os.environ, {}, clear=False), \
+                patch.object(launch.subprocess, "Popen", side_effect=AssertionError("Installer started")), \
+                patch.object(launch, "persistent_setup_root", side_effect=AssertionError("Installed")):
+            launch.os.environ.pop("DISPLAY", None)
+            launch.os.environ.pop("WAYLAND_DISPLAY", None)
+            self.assertEqual(launch.open_first_run_window({}), (None, launch.ROOT))
+
+    def test_terminal_launch_stays_a_terminal_launch_when_forwarded(self):
+        installed = self.root / "Installed Ω"
+        (installed / "direct/ubuntu").mkdir(parents=True)
+        (installed / "direct/ubuntu/launch.py").write_text(
+            'parser.add_argument("--lite")\n', encoding="utf-8")
+        commands = []
+
+        def exec_installed(path, command, env):
+            commands.append(command)
+            raise SystemExit(0)
+
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        for terminal, mode in ((True, "--bootstrap-window"), (False, "--desktop")):
+            with self.subTest(terminal=terminal), patch.object(launch.os, "execvpe", side_effect=exec_installed):
+                with self.assertRaises(SystemExit):
+                    launch.forward_to_installation(installed, ["--lite"], {}, repair=False, project=None,
+                                                   window=None, terminal=terminal)
+            self.assertEqual(commands[-1][3:], [mode, "--lite"])
 
     def test_portable_copy_with_a_stale_runtime_hands_over_to_the_installed_copy(self):
         installed = self.root / "Installed Ω"

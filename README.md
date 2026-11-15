@@ -69,11 +69,13 @@ latest version.
 
 1. Open the `LAUNCHER` folder and run the entry for your system (table above).
 2. **Bootstrap** prepares a private Python runtime, the required packages, the
-   default board support and, on Windows, the CP210x and CH34x USB drivers.
-   Linux may ask for your password to install system packages.
+   board list and, on Windows, the default boards' tools and the CP210x and
+   CH34x USB drivers, in its own setup window. Linux may ask for your password to install system packages.
    **Technical details** shows the installer output.
 3. Choose or create a project, then select a board and serial port in the
-   **Controls** bar.
+   **Controls** bar. On Linux and macOS, the first **Compile** for a board
+   downloads that board's compiler and uploader once (seconds for an Arduino
+   Uno, about a minute for an ESP32 on a fast connection).
 
 - **Ubuntu:** setup installs the application for your account in
   `~/.local/share/mcu-flasher/application` and adds **MCU Flasher** and
@@ -105,8 +107,8 @@ window is shown as in use in the others.
 
 **Settings** covers the theme, interface size, editor behaviour, compiler
 parallelism and serial options. To auto-save, enable **Auto-Save** and type a
-delay from 500 to 10,000 ms. **Offline Mode** prepares boards and libraries from
-local packages only.
+delay from 500 to 10,000 ms. **Offline Mode** prepares every default board's
+tools in advance and then uses local packages only.
 
 **MCU Flasher Lite** is a lightweight workbench for Ubuntu and Windows. Open
 `LITE-MODE/UBUNTU` or `LITE-MODE/WINDOWS.exe`; it uses the tools the main app

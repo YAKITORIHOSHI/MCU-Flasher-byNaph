@@ -189,20 +189,24 @@ def _check_qt_runtime_files(qt_root: Path, architecture: str, *, lite=False) -> 
 
 
 def bootstrap_ready(core) -> bool:
-    """A native launch needs native CLI tools and certified native board packs."""
+    """A native launch needs native CLI tools, SCons and the board list.
+
+    Board toolchains are prepared per board on first compile; Offline Mode still
+    requires Bootstrap's complete certificate (``board_store_ready``).
+    """
     from main.platforms.ubuntu_arduino import find_arduino_cli
     from main.platforms.ubuntu_opencode import find_opencode_cli
-    from src.modules.offline_bootstrap import ready
+    from src.modules.offline_bootstrap import board_store_ready
     from src.modules.offline_mode import startup_ready
-    # Old online installations only have SCons and no preparation certificate.
+    # Old online installations only have SCons and no board list.
     # Let the launcher repair those before showing an unusable board selector.
-    return bool(find_arduino_cli() and find_opencode_cli() and ready(core) and startup_ready(core))
+    return bool(find_arduino_cli() and find_opencode_cli() and board_store_ready(core) and startup_ready(core))
 
 
 def lite_bootstrap_ready(core) -> bool:
-    from src.modules.offline_bootstrap import ready
+    from src.modules.offline_bootstrap import board_store_ready
     from src.modules.offline_mode import startup_ready
-    return bool(ready(core) and startup_ready(core))
+    return bool(board_store_ready(core) and startup_ready(core))
 
 
 def check_qt_python_compatibility() -> None:

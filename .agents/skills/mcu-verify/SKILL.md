@@ -1,6 +1,6 @@
 ---
 name: mcu-verify
-description: "Verify editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits."
+description: "Verify editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
@@ -108,7 +108,13 @@ checks assert unchanged status text over time and retained slow-start help.
   the private runtime; `--render-dir temp/...` saves captures. It never runs setup.
 - `verify_ubuntu_launcher.py` `BootstrapWindowChecks` use recorder processes for
   the window; every launcher fixture patches `owned_installation_elsewhere`,
-  `BootstrapWindow.open` and `.adopt` so nothing reaches the real installation.
+  `BootstrapWindow.open`, `.adopt` and `open_first_run_window` so nothing reaches
+  the real installation.
+- `verify_target_packages.py` covers the quick board stage (`--auto`,
+  `catalog_ready`, Offline Mode's complete certificate), first-compile stamps and
+  the bridge's clean preparation child, with no downloads. A real end-to-end check
+  belongs in an isolated HOME/XDG copy under the scratchpad (setup.py, then
+  `target_packages.py` and a guarded `offline_platformio.py run` per board).
 - `verify_app_update.py` `IncrementalSourceChecks` cover installed-file reuse,
   never-installed paths and the one-update lock with real Git and a local bare
   server; `verify_bootstrap_updates.py` and `verify_controls.py` check that no

@@ -290,9 +290,25 @@ class UbuntuBootstrapChecks(unittest.TestCase):
         with patch("main.platforms.ubuntu_arduino.find_arduino_cli", return_value="fixture-arduino"), \
                 patch("main.platforms.ubuntu_opencode.find_opencode_cli", return_value="fixture-opencode"), \
                 patch("src.modules.offline_bootstrap.ready", return_value=False) as boards, \
+                patch("src.modules.offline_bootstrap.catalog_ready", return_value=False) as catalog, \
+                patch("src.modules.offline_mode.offline_enabled", return_value=False), \
                 patch("src.modules.offline_mode.startup_ready", return_value=True):
             self.assertFalse(preflight.bootstrap_ready(self.root))
-        boards.assert_called_once_with(self.root)
+        boards.assert_called_once_with(self.root, None)
+        catalog.assert_called_once_with(self.root, None)
+
+    def test_quick_board_list_opens_online_but_not_offline_mode(self):
+        """Bootstrap's quick mode (board list, no toolchains) suffices unless Offline Mode is on."""
+        for offline, expected in ((False, True), (True, False)):
+            with self.subTest(offline=offline), \
+                    patch("main.platforms.ubuntu_arduino.find_arduino_cli", return_value="fixture-arduino"), \
+                    patch("main.platforms.ubuntu_opencode.find_opencode_cli", return_value="fixture-opencode"), \
+                    patch("src.modules.offline_bootstrap.ready", return_value=False), \
+                    patch("src.modules.offline_bootstrap.catalog_ready", return_value=True), \
+                    patch("src.modules.offline_mode.offline_enabled", return_value=offline), \
+                    patch("src.modules.offline_mode.startup_ready", return_value=True):
+                self.assertIs(preflight.bootstrap_ready(self.root), expected)
+                self.assertIs(preflight.lite_bootstrap_ready(self.root), expected)
 
     def test_certified_boards_still_require_selected_runtime_mode_ready(self):
         with patch("main.platforms.ubuntu_arduino.find_arduino_cli", return_value="fixture-arduino"), \
