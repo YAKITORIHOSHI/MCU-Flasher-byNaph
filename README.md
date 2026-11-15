@@ -144,6 +144,7 @@ main/        PySide6 interface (main/qt) and core services (main/core)
 src/         Runtime modules, offline editor assets, fonts and icons
 direct/      Platform launchers, setup scripts and hardware-free verifiers
 LAUNCHER/    Native launcher entries
+LITE-MODE/   Lite mode launcher entries
 ```
 
 - From a clone, run the app with its private runtime:
