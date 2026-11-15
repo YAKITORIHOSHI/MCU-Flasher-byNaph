@@ -662,7 +662,8 @@ def verify_built_pipeline(sandbox, *, display_name=NAME, selection=None, artifac
         stack.enter_context(patch.object(web_bridge.os.path, "expanduser", new=lambda value:
                                         str(sandbox) if value == "~" else original_expanduser(value)))
         from main.core import config
-        stack.enter_context(patch.object(config, "_load_raw_config", new=lambda: {"shared": {}, "instances": {}}))
+        stack.enter_context(patch.object(config, "_load_raw_config",
+                                         new=lambda *_args, **_kwargs: {"shared": {}, "instances": {}}))
         window = QMainWindow()
         toolbar = PrimaryToolbar(api, window)
         window.addToolBar(toolbar)
