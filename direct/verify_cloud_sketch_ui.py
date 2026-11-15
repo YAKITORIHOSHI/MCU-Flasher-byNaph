@@ -254,6 +254,19 @@ class CloudUIChecks(unittest.TestCase):
         return (panel._scroll.viewport().height() >= panel._scroll.widget().minimumSizeHint().height()
                 + panel._sketch_header.height() * 2)
 
+    def assert_only_scrolling_content_yields(self, dialog, panel):
+        """Below its layout's advisory minimum, only the Cloud scroll viewport may shorten."""
+        fixed = [(dialog.layout(), dialog._body_card), (panel.layout(), None)]
+        for layout, holder in fixed:
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                widget = item.widget()
+                if widget is not None and (widget is holder or widget.isHidden() or isinstance(widget, QScrollArea)):
+                    continue
+                self.assertGreaterEqual(item.geometry().height(), item.minimumSize().height(),
+                                        (type(widget or item.layout() or item).__name__, item.geometry().getRect(),
+                                         item.minimumSize().toTuple(), dialog.size().toTuple()))
+
     def assert_compact_sketch_header(self, panel):
         card, header, listing = panel._sketches_card, panel._sketch_header, panel._sketches
         layout = card.layout()
@@ -945,7 +958,7 @@ class CloudUIChecks(unittest.TestCase):
                 APP.setStyleSheet(build_stylesheet(mode))
                 dialog._apply_dialog_theme(mode)
                 panel.apply_theme(mode)
-                for width, height in ((720, 560), (900, 650), (400, 360)):
+                for width, height in ((720, 560), (900, 650), (400, 360), (400, 312)):
                     if APP.platformName() == "windows" or (sys.platform.startswith("linux") and APP.platformName() == "xcb"):
                         # Couple native DPI with this monitor's real work area;
                         # offscreen fixtures retain the exact 720x560 selector.
@@ -959,9 +972,13 @@ class CloudUIChecks(unittest.TestCase):
                     # exact final dimensions and all reading/visibility checks.
                     dialog.resize(width, height)
                     self.settle_layout()
-                    # A native window will not go below what its fixed rows need.
-                    needed = max(dialog.minimumHeight(), dialog.minimumSizeHint().height())
-                    self.assert_native_size(dialog, (width, max(needed, height)))
+                    # fit_dialog declares the hard minimum explicitly. Qt may
+                    # size below the layout's advisory minimumSizeHint on a
+                    # short monitor (Windows at 200% clamps this dialog to 312):
+                    # only the sketch list's scroll viewport may give up height,
+                    # and the checks below prove every action stays reachable.
+                    self.assert_native_size(dialog, (width, max(dialog.minimumHeight(), height)))
+                    self.assert_only_scrolling_content_yields(dialog, panel)
                     self.assert_compact_sketch_header(panel)
                     self.reveal_in_scroll_ancestors(panel._refresh_btn)
                     self.assert_visible_in_ancestors(panel._refresh_btn)

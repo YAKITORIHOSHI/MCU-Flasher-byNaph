@@ -350,9 +350,40 @@ def check_monitor(render_dir: Path | None) -> int:
         frame_w = window.frameGeometry().width() - window.geometry().width()
         frame_h = window.frameGeometry().height() - window.geometry().height()
 
+        def settle(limit=8.0, quiet=.3):
+            """Wait for queued fits to land, not for a fixed time.
+
+            The 4-core Intel macOS runner, running two monitors at once, was still
+            applying the toolbar inset and pane fit 0.3 seconds after a resize, so the
+            tool-switch check recorded that late settle as movement. Something that never
+            stops moving still fails there: this returns at the limit.
+            """
+            watcher = Moves()
+            watched = (window, window._primary_toolbar, window._controls_toolbar, window.centralWidget(),
+                       window._h_splitter, window._v_splitter, window._editor_area, window._bottom_tabs)
+            timers = [timer for timer in (getattr(window, "_layout_timer", None),
+                                          getattr(window._primary_toolbar, "_reflow_timer", None),
+                                          getattr(window._controls_bar, "_controls_reflow_timer", None))
+                      if timer is not None]
+            for widget in watched:
+                widget.installEventFilter(watcher)
+            try:
+                deadline = time.monotonic() + limit
+                seen, still = -1, time.monotonic()
+                while time.monotonic() < deadline:
+                    pump(.03)
+                    now = time.monotonic()
+                    if watcher.count != seen or any(timer.isActive() for timer in timers):
+                        seen, still = watcher.count, now
+                    elif now - still >= quiet:
+                        break
+            finally:
+                for widget in watched:
+                    widget.removeEventFilter(watcher)
+
         def place(width, height):
             window.setGeometry(area.x() + frame_w // 2, area.y() + frame_h // 2, width - frame_w, height - frame_h)
-            pump(.3)
+            settle()
 
         place(area.width() // 2, area.height())
         if window.frameGeometry().width() > area.width() // 2:
@@ -370,7 +401,7 @@ def check_monitor(render_dir: Path | None) -> int:
         check_workspace(window, "full")
         # Directly from full screen: the narrowest window anyone can drag to.
         window.resize(window.minimumWidth(), window.minimumHeight())
-        pump(.3)
+        settle()
         check_workspace(window, "smallest")
         place(area.width(), area.height())
 
@@ -380,7 +411,7 @@ def check_monitor(render_dir: Path | None) -> int:
         pump(.1)
         placed = window._editor_area.height()
         window.toggle_ai_panel(True)
-        pump(.35)
+        settle()
         # A narrower tool pane can genuinely need more height for its reflowed controls.
         tools = window._bottom_tabs
         if (window._h_splitter.orientation().name == "Horizontal" and window._editor_area.height() != placed

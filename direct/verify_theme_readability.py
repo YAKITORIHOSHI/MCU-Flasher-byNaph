@@ -144,23 +144,32 @@ class ThemeReadabilityChecks(unittest.TestCase):
 
     def test_notification_expiry_preserves_new_actions_and_restarts_for_latest_message(self):
         window = self.status_window()
-        window._notification_timer.setInterval(100)
+        # Windows delivers timers on a ~16 ms tick and a loaded runner adds more, so
+        # every step keeps 150 ms of margin. Without the restart, the first notice's
+        # 400 ms deadline would clear the latest one before the check at ~500 ms;
+        # with it, expiry comes at ~650 ms.
+        window._notification_timer.setInterval(400)
         window._on_notification({"message": "First notice"})
-        QTest.qWait(65)
+        QTest.qWait(250)
         window._on_notification({"message": "Latest notice"})
-        QTest.qWait(65)
+        QTest.qWait(250)
         self.assertEqual(window._status_label.text(), "Latest notice")
-        QTest.qWait(65)
+        # Native timer delivery can arrive after its nominal deadline. Preserve
+        # the restart assertion above, then await the actual expiry within a bound.
+        deadline = time.monotonic() + 2.0
+        while window._status_label.text() != "Ready" and time.monotonic() < deadline:
+            QTest.qWait(10)
         self.assertEqual(window._status_label.text(), "Ready")
 
         window._on_notification({"type": "error", "message": "Previous action failed"})
         window._active_operation = "compile"
         window._on_console_progress({"action": "Compiling"})
-        QTest.qWait(120)
+        # The error notice's own deadline passes while the operation runs.
+        QTest.qWait(550)
         self.assertEqual(window._status_label.text(), "Compiling…")
         self.assertEqual(window._status_label.styleSheet(), "")
         window._on_notification({"message": "Compiling diagnostic"})
-        deadline = time.monotonic() + 1.0
+        deadline = time.monotonic() + 2.0
         while window._status_label.text() != "Compiling…" and time.monotonic() < deadline:
             QTest.qWait(10)
         self.assertEqual(window._status_label.text(), "Compiling…")

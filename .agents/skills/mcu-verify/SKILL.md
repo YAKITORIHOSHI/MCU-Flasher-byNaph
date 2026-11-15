@@ -135,7 +135,11 @@ Run source_navigation, editor_features, editor_review_ui, library_samples,
 combo_popups, controls, serial_view, svg_icons, app_update, user_install,
 release_sources and monitor_matrix. Popup tests wait for `PopupMotion.running()`
 to end before sampling resting pixels; the monitor matrix waits for compact tab
-reveals and allows only the tab strip itself to change width. Half-height window
+reveals and allows only the tab strip itself to change width. After each resize
+or assistant toggle it waits, within a bound, until the workspace stops moving and
+its fit timers are idle: a fixed delay was too short on the Intel macOS runner.
+Windows CI at 200% clamps the project selector below its advisory minimum; only
+the Cloud scroll viewport may yield there. Timer tests keep 150 ms of margin. Half-height window
 requests must be refused (three quarters is the minimum).
 
 ## Editor and input improvement gates
