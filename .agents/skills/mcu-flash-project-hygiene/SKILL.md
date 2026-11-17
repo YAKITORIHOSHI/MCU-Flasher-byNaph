@@ -1,9 +1,14 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain SMB-safe source saves, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
+description: "Maintain SMB-safe source saves and release packaging, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+Release packaging may run from an SMB/GVfs checkout. Only an unsupported host
+chmod on its owned scratch ZIP is optional; ZIP entry permissions, every byte
+hash, complete runtime inventory and genuine access/I/O failures remain checked.
+Keep release artifacts and audit reports in persistent project temp storage.
 
 Ghost Sketch publication handles SMB/GVfs refusing rename over an existing empty
 folder: only EEXIST/ENOTEMPTY permits the POSIX fallback, after rechecking the

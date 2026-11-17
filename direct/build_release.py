@@ -8,6 +8,7 @@ Project files sit directly at the ZIP root, without a checkout-name wrapper.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -315,7 +316,15 @@ def build(output, report_dir):
         for path in runtime_files:
             if digest_file(path) != runtime_entries[path.relative_to(ROOT).as_posix()]['sha256']:
                 raise RuntimeError(f'Private Windows runtime changed during verification: {path}')
-        temporary.chmod(0o644)
+        try:
+            temporary.chmod(0o644)
+        except OSError as error:
+            # SMB/GVfs may expose synthetic host modes. ZIP entry permissions
+            # were independently verified above; only this scratch file's
+            # unsupported mode change is optional.
+            if (error.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS)
+                    and getattr(error, 'winerror', None) != 50):
+                raise
         # Exclusive creation also works across drives and on exFAT. If publication
         # fails, remove only the partial file this attempt actually created.
         identity = None

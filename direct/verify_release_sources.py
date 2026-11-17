@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+import errno
 import hashlib
 import io
 import json
@@ -150,15 +151,19 @@ class ReleaseArchiveChecks(unittest.TestCase):
             path = self.project / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-            if name in build_release.REQUIRED_LAUNCHERS and not name.endswith(('.exe', '.md')):
-                path.chmod(0o755)
-        self.git('init', '-q')
+        # Git initializes config with chmod, which GVfs cannot provide. Keep
+        # only this fixture's Git metadata native; source/output remain on the
+        # shared filesystem so the archive publication path is exercised there.
+        metadata = tempfile.TemporaryDirectory(prefix='mcu-release-git-')
+        self.addCleanup(metadata.cleanup)
+        self.git('init', '-q', '--separate-git-dir', str(Path(metadata.name) / 'metadata'))
         self.git('config', 'core.autocrlf', 'false')
         self.git('add', '--force', '--', *committed)
-        # Force Unix launcher modes even when this verifier runs on Windows.
-        for name in build_release.REQUIRED_LAUNCHERS:
-            if not name.endswith(('.exe', '.md')):
-                self.git('update-index', '--chmod=+x', '--', name)
+        # Record every archived mode in Git: Windows and SMB may expose
+        # synthetic working modes, including executable data files.
+        for name in committed:
+            executable = name in build_release.REQUIRED_LAUNCHERS and not name.endswith(('.exe', '.md'))
+            self.git('update-index', '--chmod=+x' if executable else '--chmod=-x', '--', name)
         hooks = self.fixture / 'empty-hooks'
         hooks.mkdir()
         self.git('-c', 'user.name=Release Fixture', '-c', 'user.email=fixture@localhost',
@@ -242,6 +247,20 @@ class ReleaseArchiveChecks(unittest.TestCase):
             build_release.bundled_revision_entry('not-a-commit')
         with self.assertRaises(RuntimeError):
             build_release.bundled_revision_entry('1' * 40, 'yesterday')
+
+    def test_unsupported_scratch_permissions_preserve_verified_archive_modes(self):
+        with patch.object(build_release.os, 'chmod', side_effect=OSError(errno.ENOTSUP, 'fixture SMB mode')):
+            manifest = self.build()
+        self.assertEqual(manifest['sha256'], hashlib.sha256(self.output.read_bytes()).hexdigest())
+        with zipfile.ZipFile(self.output) as bundle:
+            self.assertEqual(bundle.getinfo('LAUNCHER/UBUNTU').external_attr >> 16 & 0o777, 0o755)
+            self.assertEqual(bundle.getinfo('LAUNCHER/WINDOWS.exe').external_attr >> 16 & 0o777, 0o644)
+
+    def test_real_scratch_permission_failure_still_prevents_publication(self):
+        with patch.object(build_release.os, 'chmod', side_effect=PermissionError(errno.EACCES, 'fixture denied mode')):
+            with self.assertRaises(PermissionError):
+                self.build()
+        self.assertFalse(self.output.exists())
 
     def test_incomplete_runtime_refuses_publication(self):
         (self.project / 'src/_python' / build_release.REQUIRED_RUNTIME[-1]).unlink()

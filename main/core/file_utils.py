@@ -1383,7 +1383,7 @@ def application_agent_guidance(project_dir) -> str:
         "during verification. Run verifiers with `DISPLAY` and `WAYLAND_DISPLAY` removed, or through "
         "`direct/run_verifiers.py`, and give native dialogs an owned recorder: "
         "a fixture must never open a real window on the developer's desktop.\n"
-        "- Before Fresh cleanup, finish checks that need the private runtime. Prepare public "
+        "- Network packaging may ignore only unsupported host chmod on its owned scratch ZIP; archive entry modes and hashes remain mandatory. Before Fresh cleanup, finish checks that need the private runtime. Prepare public "
         "archives from committed defaults with `direct/build_release.py`; put project files directly "
         "at the ZIP root without a wrapper folder, retain the complete "
         "private Windows runtime and verify installer hashes, archive contents and Git integrity "

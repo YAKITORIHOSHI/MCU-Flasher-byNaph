@@ -1,9 +1,13 @@
 ---
 name: mcu-verify
-description: "Verify SMB source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
+
+Release archive fixtures use Git index modes on SMB hosts. Unsupported chmod on
+the owned scratch ZIP must retain verified 0755/0644 ZIP entry modes; real access
+errors must prevent publication. Keep complete archive/runtime/hash validation.
 
 Ghost Sketch publication handles SMB/GVfs refusing rename over an existing empty
 folder: only EEXIST/ENOTEMPTY permits the POSIX fallback, after rechecking the

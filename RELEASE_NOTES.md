@@ -72,6 +72,8 @@ see the [README](README.md).
 
 The archive holds project files at its root, without a wrapper folder. It
 contains no sketches, settings, accounts or build caches.
+Release archives can be built from network checkouts while retaining native
+launcher permissions inside the ZIP.
 
 ## Requirements
 

@@ -160,6 +160,8 @@ LITE-MODE/   Lite mode launcher entries
 - Run the hardware-free checks with `python direct/run_verifiers.py`.
 - Contributor guidance lives in `.agents/skills/`. Work happens on `main`.
 - Build release archives only with `direct/build_release.py`.
+  Network checkouts are supported; ZIP permissions are verified independently
+  of the share's support for host file modes.
 
 ## License
 
