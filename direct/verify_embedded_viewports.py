@@ -280,10 +280,9 @@ class EmbeddedViewportChecks(unittest.TestCase):
         self.load("index.html")
         wait_for(lambda: self.js("!!window.editorInstance && !!window.monaco"), "Monaco did not initialize")
         for width, height in ((421, 251), (517, 303), (639, 389), (700, 420)):
-            self.view.setMaximumSize(width, height)
-            self.host.resize(width, height)
-            wait_for(lambda: self.view.width() <= width and abs(self.js("innerWidth") - self.view.width()) <= 1,
-                     "The fixture view did not settle")
+            # Windows can finish the width before the height. Wait for both
+            # native/Chromium axes before capturing the sheet's host viewport.
+            self.fit_host(width, height)
             self.js(f"window.setGlassBackdrop({json.dumps(page_backdrop_for(self.view))}); true")
             QTest.qWait(30)
             sheet = self.state("""const box = document.getElementById('app-container').getBoundingClientRect();

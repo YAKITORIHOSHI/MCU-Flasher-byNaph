@@ -1,9 +1,15 @@
 ---
 name: mcu-verify
-description: "Verify SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
+
+Fractional editor-sheet checks use fit_host to wait for both Qt and Chromium
+viewport axes before publishing the backdrop dimensions. A width-only wait can
+observe a transient Windows height at 200% scale. Preserve the exact sheet-bound
+assertions and the full 100/125/150/175/200% matrix; do not hide the failure by
+widening tolerances or dropping a scale.
 
 Release archive fixtures use Git index modes on SMB hosts. Unsupported chmod on
 the owned scratch ZIP must retain verified 0755/0644 ZIP entry modes; real access
