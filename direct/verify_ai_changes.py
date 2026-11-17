@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import errno
 import sys
 from pathlib import Path
 import tempfile
@@ -60,6 +61,20 @@ class AIChangesChecks(unittest.TestCase):
                 {key: dict(value) for key, value in watcher._pending_settle.items()},
                 dict(watcher._save_versions), True)
         return watcher._scan_project(request)
+
+    def test_share_reject_undo_redo_restore_complete_utf8_and_crlf_sources(self):
+        from main.core import file_utils
+        path = self.root / 'Shared sketch.ino'
+        before, after = '// before µ\r\n', '// AI edit λ\r\n'
+        path.write_bytes(after.encode('utf-8'))
+        with patch.object(file_utils.os, 'chmod', side_effect=OSError(errno.ENOTSUP, 'fixture SMB mode')):
+            self.manager.queue_ai_edit_snapshot(path, before, after)
+            self.assertTrue(self.manager.reject_ai_edit(str(path))['success'])
+            self.assertEqual(path.read_bytes(), before.encode('utf-8'))
+            self.assertTrue(self.manager.undo_ai_edit_decision()['success'])
+            self.assertEqual(path.read_bytes(), after.encode('utf-8'))
+            self.assertTrue(self.manager.redo_ai_edit_decision()['success'])
+            self.assertEqual(path.read_bytes(), before.encode('utf-8'))
 
     def test_prompt_groups_per_file_decisions_persist_and_history_clear_preserves_review(self):
         first = {"id": "prompt-1", "prompt": "Update the sensor and header"}

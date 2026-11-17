@@ -320,6 +320,10 @@ class Worker:
                 owner.status()
 
         self.api = LiteBackend()
+        # Use the main catalog's board defaults. Older Lite versions exposed a
+        # framework selector; its saved overrides must not silently select a
+        # different build target now that board selection owns this choice.
+        self.api._board_frameworks = {}
         if self.api.current_board not in self.boards or target_problem(self.api._resolve_board_info()):
             # The main backend's legacy default is not a user selection.
             self.api.current_board = ""
@@ -931,12 +935,8 @@ class Worker:
             self.api.select_board(name)
             info = self.api._resolve_board_info(name)
             self.output.send("target", {"name": name, "platform": info.get("platform", ""),
-                "frameworks": info.get("frameworks") or [info.get("framework", "arduino")],
                 "framework": info.get("framework", "arduino")})
             self.history(expected_board=name)
-        elif cmd == "framework":
-            if not self.api.set_board_framework(self.api.current_board, str(request.get("value", ""))):
-                raise ValueError("Framework is not available for this board")
         elif cmd == "port":
             value = str(request.get("value", ""))
             # Select without opening: only the explicit Connect action attaches.

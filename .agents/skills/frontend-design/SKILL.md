@@ -1,10 +1,16 @@
 ---
 name: frontend-design
-description: "Maintain readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
+
+Lite's Connection card goes directly from Board/Recent boards to Serial port.
+Selecting a board configures the main catalog's default platform/framework; do
+not expose a second framework/platform dropdown or stale override selection.
+Keep the internal exact target for action readiness and preserve short layouts.
+
 
 PageBackdrop coalesces geometry events through an owned single-shot QTimer.
 Validate native widget lifetimes, stop queued updates and remove ancestor filters

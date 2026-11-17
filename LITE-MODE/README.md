@@ -58,8 +58,10 @@ native executables.
    ID, vendor, platform, MCU or framework. Multiple words match across these
    fields; exact names/IDs rank first, and misspellings offer labeled closest
    matches. **Recent boards** retains the last 5 selections. Select the exact
-   board and one of its declared frameworks. No board or port is automatically
-   chosen. Both histories persist in Lite's private settings.
+   board; Lite uses the main app's catalog default for its platform and framework,
+   with no separate selector. Earlier Lite framework choices are ignored.
+   No board or port is automatically chosen. Both histories persist in Lite's
+   private settings.
 3. **Compile and Upload prepare their tools automatically.** Main and Lite use
    one native package store, so prepared tools are used directly. Only missing
    requirements are downloaded once. The check

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import errno
 from pathlib import Path
 import sys
 import tempfile
@@ -43,6 +44,52 @@ class FileAccessChecks(unittest.TestCase):
             file_utils.write_source_text(self.path, after, expected=self.before)
         self.assertEqual(self.path.read_bytes(), after.encode('utf-8'))
         self.assertEqual(len(calls), 3)
+        self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
+
+    def test_share_without_unix_permissions_saves_complete_utf8_bytes(self):
+        after = 'void setup() { /* shared µ */ }\r\nvoid loop() {}\r\n'
+        for code in {errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS}:
+            with self.subTest(errno=code):
+                self.path.write_bytes(self.before)
+                with patch.object(file_utils.os, 'chmod', side_effect=OSError(code, 'fixture unsupported mode')):
+                    file_utils.write_source_text(self.path, after, expected=self.before)
+                self.assertEqual(self.path.read_bytes(), after.encode('utf-8'))
+                self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
+
+    def test_permission_and_storage_errors_still_fail_without_replacing_the_source(self):
+        for code in (errno.EACCES, errno.EIO, errno.ENOSPC):
+            with self.subTest(errno=code):
+                with patch.object(file_utils.os, 'chmod', side_effect=OSError(code, 'fixture failed mode')):
+                    with self.assertRaises(OSError) as caught:
+                        file_utils.write_source_text(self.path, 'new buffer', expected=self.before)
+                self.assertEqual(caught.exception.errno, code)
+                self.assertEqual(self.path.read_bytes(), self.before)
+                self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
+
+    def test_windows_share_can_decline_mode_changes_but_fsync_errors_remain_authoritative(self):
+        unsupported = OSError('fixture Windows server does not support attributes')
+        unsupported.winerror = 50
+        with patch.object(file_utils.os, 'chmod', side_effect=unsupported):
+            file_utils.write_source_text(self.path, 'saved buffer', expected=self.before)
+        self.assertEqual(self.path.read_bytes(), b'saved buffer')
+        for code in (errno.EIO, errno.ENOSPC, errno.ENOTSUP):
+            with self.subTest(errno=code):
+                self.path.write_bytes(self.before)
+                with patch.object(file_utils.os, 'fsync', side_effect=OSError(code, 'fixture failed flush')):
+                    with self.assertRaises(OSError) as caught:
+                        file_utils.write_source_text(self.path, 'new buffer', expected=self.before)
+                self.assertEqual(caught.exception.errno, code)
+                self.assertEqual(self.path.read_bytes(), self.before)
+                self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
+
+    def test_unsupported_modes_do_not_bypass_external_edit_or_replace_errors(self):
+        with patch.object(file_utils.os, 'chmod', side_effect=OSError(errno.ENOTSUP, 'fixture unsupported mode')):
+            with self.assertRaisesRegex(RuntimeError, 'changed on disk'):
+                file_utils.write_source_text(self.path, 'new buffer', expected=b'outdated source')
+            with patch.object(file_utils.os, 'replace', side_effect=OSError(errno.EIO, 'fixture failed write')):
+                with self.assertRaises(OSError):
+                    file_utils.write_source_text(self.path, 'new buffer', expected=self.before)
+        self.assertEqual(self.path.read_bytes(), self.before)
         self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
 
     def test_persistent_lock_or_concurrent_source_change_preserves_original_bytes(self):

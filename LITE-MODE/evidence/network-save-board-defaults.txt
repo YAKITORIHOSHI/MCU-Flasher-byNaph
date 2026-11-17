@@ -1,0 +1,16 @@
+Native host: Linux-6.8.0-1068-raspi-aarch64-with-glibc2.39
+Working-tree verification; baseline e2b4a7d781210a091eaecfdc260f83a3605ca890
+Cargo check --locked: PASS
+Strict all-target Clippy: PASS
+Cargo test --locked: 27 PASS
+Worker: 102 PASS
+Preparation: 53 PASS
+History/search/readiness: 25 PASS
+Native renderer on owned Xvfb: 16 PASS, including configured-board capture
+SMB manual/Auto-Save, retained failures, AI recovery and Ghost Sketch checks: PASS
+Windows x64 and Ubuntu x64 cross builds: PASS; all 29 compiled source/asset files match
+Windows additional DLLs: none; maximum glibc: 2.39
+UBUNTU sha256: d76c1df5a608ba55c3198ac6bae9d189d2f15526e72c5fc1e92b9f2997e5cf34
+WINDOWS.exe sha256: 81ae8d28f9062562b98a2ae7d0d896d993bf101c7053c97a3d8d55852e03ef4b
+Native Windows 11 and physical USB: not exercised
+Full runtime limits reproduced on clean HEAD; see local temp/audit/network-save-checks/REPORT.md

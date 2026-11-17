@@ -24,10 +24,12 @@ see the [README](README.md).
   copy and send. After an upload the boot log appears from its first line.
 - **Editor.** An offline Monaco editor with source tabs, live syntax checks,
   bracket pairing, auto-save, Ctrl+Click / F12 into sketch and library headers,
-  and project-wide search.
+  and project-wide search. Save and Auto-Save support writable SMB/network
+  folders whose permissions are managed by the share.
 - **Projects.** Local sketches, new-project templates, temporary Ghost Sketches
   and Cloud sketches with conflict-safe Push and Pull. Each project can open in
-  its own window.
+  its own window. Ghost Sketch saves support new and empty network folders,
+  preserving the temporary original and refusing occupied destinations.
 - **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
   and an embedded OpenCode assistant whose file edits are highlighted for you
   to accept or reject.
@@ -50,6 +52,7 @@ see the [README](README.md).
   including half-screen tiling.
 - **MCU Flasher Lite.** A separate lightweight workbench for Ubuntu and Windows
   that shares the prepared tools, boards and libraries with the main app.
+  Choosing a board configures its platform and default framework automatically.
 - **Developer Access.** Private issue tickets shared across your signed-in
   devices.
 

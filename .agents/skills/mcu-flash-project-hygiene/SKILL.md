@@ -1,9 +1,24 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
+description: "Maintain SMB-safe source saves, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+Ghost Sketch publication handles SMB/GVfs refusing rename over an existing empty
+folder: only EEXIST/ENOTEMPTY permits the POSIX fallback, after rechecking the
+original directory identity. rmdir must refuse newly added contents; preserve a
+replaced destination and the temporary original. Verify ghost_sketch on the
+share and in native owned fixtures.
+
+Source saves preserve permissions only where supported. A share's unsupported
+chmod must not prevent a complete atomic save; ignore only unsupported-mode
+errors on the staged sibling, with genuine access, fsync, write, replacement and
+conflict failures remaining authoritative. Verify AI recovery in owned fixtures
+without reading or changing a live backup journal. Lite derives the selected
+board's platform/framework from Main's catalog default and ignores obsolete
+Lite framework preferences; no framework dropdown belongs in Connection.
+
 
 ## Shared resource discovery
 

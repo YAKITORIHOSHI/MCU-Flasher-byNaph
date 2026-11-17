@@ -69,6 +69,8 @@ and handoff. Enable the main backend's certified Skip Compile on every Upload,
 without a checkbox; never bypass its source/dependency/output validation or merge
 the exact-board/framework workspaces. Keep monitor rows and viewports fixed,
 scrollbars reserved and widths stable while streaming. Preserve user scrollback.
+Board selection uses the main catalog's default platform/framework automatically;
+do not expose a framework dropdown or apply old Lite framework overrides.
 
 Several Lite windows may share one state directory. Each worker holds
 workers/<pid>.lock for life and keeps scratch under sessions/<pid>; refresh the

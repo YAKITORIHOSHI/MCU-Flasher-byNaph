@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 from pathlib import Path
 import sys
@@ -10,14 +11,15 @@ import tempfile
 import threading
 import time
 import unittest
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'direct'))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import verify_embedded_viewports as embedded
-from main.qt.editor_panel import EditorBridgeAPI
+from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel
 
 
 class EditorFeatures(unittest.TestCase):
@@ -298,6 +300,54 @@ class EditorFeatures(unittest.TestCase):
             self.assertTrue(results[0][2]['value']['success'])
         finally:
             release.set(); timer.stop(); bridge.deleteLater()
+
+    def test_manual_and_auto_save_acknowledge_network_source_only_after_native_write(self):
+        from main.core import file_utils
+        from main.web_bridge import MCUWebBackendAPI, _sketch_ram_cache
+        root = Path(self.project)
+        root.mkdir()
+        path = Path(self.path)
+        path.write_bytes(b'// original\r\n')
+        user_saves = []
+        backend = SimpleNamespace(sketch_dir_path=root, modified_files={},
+            update_skip_compile_availability=lambda: None, ai_review_manager=None,
+            ai_watcher=SimpleNamespace(note_user_save=lambda *args: user_saves.append(args)))
+        backend.save_file = MethodType(MCUWebBackendAPI.save_file, backend)
+        bridge = EditorBridgeAPI(backend)
+        self.addCleanup(bridge.deleteLater)
+        self.addCleanup(lambda: _sketch_ram_cache.invalidate(path))
+        token = bridge.begin_renderer_load()
+        replies = []
+        bridge.editor_storage_ready.connect(lambda *args: replies.append(args))
+        for mode in ('manual', 'auto'):
+            with self.subTest(mode=mode):
+                content = f'// {mode} save µ\r\nvoid setup() {{}}\r\n'
+                self.js(f"fixture.hold=true; fixture.saved=null; fixture.outcome=null;"
+                        f"editorInstance.getModel().setValue({json.dumps(content)}); true")
+                flush = lambda: self.js("window.saveAllFilesSafe().then(()=>fixture.outcome='saved')"
+                                        ".catch(()=>fixture.outcome='failed'); true")
+                if mode == 'manual':
+                    self.js("window.saveActiveFile().then(()=>fixture.outcome='saved')"
+                            ".catch(()=>fixture.outcome='failed'); true")
+                else:
+                    panel = SimpleNamespace(_backend=backend, _autosave_enabled=True,
+                                            trigger_save_all=flush)
+                    MonacoEditorPanel._on_autosave_timeout(panel)
+                embedded.wait_for(lambda: self.js('!!fixture.saved'), 'The editor never requested its source save')
+                self.assertTrue(self.js('__mcuProjectFileStore.active().isDirty'))
+                request = self.state('return fixture.saves.at(-1);')
+                prior = len(replies)
+                with patch.object(file_utils.os, 'chmod', side_effect=OSError(errno.ENOTSUP, 'fixture SMB mode')):
+                    self.assertTrue(bridge.request_editor_storage(token, mode, 'save_file', json.dumps(request)))
+                    embedded.wait_for(lambda: len(replies) > prior, 'The native source save did not acknowledge')
+                result = replies[-1][2]['value']
+                self.assertTrue(result['success'], result)
+                # Monaco preserves the source's line endings when changing text.
+                self.assertEqual(path.read_bytes(), request['content'].encode('utf-8'))
+                self.js(f"fixture.saved({json.dumps(result)}); true")
+                embedded.wait_for(lambda: self.js("fixture.outcome === 'saved'"), 'The saved model was not acknowledged')
+                self.assertFalse(self.js('__mcuProjectFileStore.active().isDirty'))
+        self.assertEqual(len(user_saves), 2, 'Manual and automatic saves must both bypass AI review')
 
 
 if __name__ == '__main__':

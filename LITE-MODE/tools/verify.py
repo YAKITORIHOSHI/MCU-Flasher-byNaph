@@ -108,6 +108,13 @@ def main():
         child_setup()
         from PySide6.QtCore import QCoreApplication
         app = QCoreApplication.instance() or QCoreApplication([])
+        from main.core.config import load_gui_config, save_gui_config
+        records = json.loads((ROOT / "assets/boards.json").read_text(encoding="utf-8"))
+        multi = next(record for record in records if record["id"] == "esp32dev" and record["platform"] == "espressif32")
+        multi_name = f"{multi['name']} [{multi['platform']}:{multi['id']}]"
+        settings = load_gui_config()
+        settings["board_frameworks"] = {multi_name: "espidf"}
+        save_gui_config(settings)
         with patch("serial.tools.list_ports.comports", return_value=[]), \
                 patch("main.web_bridge.MCUWebBackendAPI._scan_ports", return_value=[]):
             output = Recorder()
@@ -120,6 +127,18 @@ def main():
             found = [data for event, data in output.events if event == "boards"][-1]["items"]
             check(any(item["name"] == "Arduino Uno [atmelavr:uno]" for item in found), "exact boards are searchable before packages are installed")
             check(len(worker.boards) > 1000, "bundled catalog supplies a broad board picker")
+            worker.dispatch({"cmd": "board", "name": multi_name})
+            target = [data for event, data in output.events if event == "target"][-1]
+            check(target["framework"] == worker.boards[multi_name]["framework"] == "arduino",
+                  "board selection uses the main catalog default despite a saved Lite framework override")
+            check(worker.api._resolve_board_info(multi_name)["framework"] == "arduino",
+                  "preparation and builds use the same automatic framework as the interface")
+            try:
+                worker.dispatch({"cmd": "framework", "value": "espidf"})
+            except ValueError:
+                check(True, "the retired framework command cannot change the automatic target")
+            else:
+                check(False, "the retired framework command cannot change the automatic target")
             worker.source = source
             worker.api.sketch_dir_path = staged
             for cmd, method in [("compile", "compile_sketch"), ("upload", "upload_sketch"), ("clean", "clean_cache")]:

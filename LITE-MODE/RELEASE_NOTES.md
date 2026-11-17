@@ -14,7 +14,8 @@ uses the same build tools, boards and libraries. To open and use it, see the
   recent sketches and boards are remembered.
 - **Boards.** Searches the official PlatformIO board catalog by name, ID, vendor,
   platform, MCU or framework, ranks exact matches first and suggests close
-  matches for typos.
+  matches for typos. Selecting a board sets its platform and default framework
+  using the main app's catalog, without a separate framework dropdown.
 - **Compile, Upload and Clean.** Runs the main app's build and upload actions.
   Missing tools are prepared automatically before the first build, and Upload
   skips compiling when the saved build for that board still matches the sketch.

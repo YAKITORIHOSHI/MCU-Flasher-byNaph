@@ -1,9 +1,24 @@
 ---
 name: mcu-verify
-description: "Verify editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify SMB source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
+
+Ghost Sketch publication handles SMB/GVfs refusing rename over an existing empty
+folder: only EEXIST/ENOTEMPTY permits the POSIX fallback, after rechecking the
+original directory identity. rmdir must refuse newly added contents; preserve a
+replaced destination and the temporary original. Verify ghost_sketch on the
+share and in native owned fixtures.
+
+File-access checks cover writable shares that reject chmod, complete UTF-8/CRLF
+writes, retained originals on access/storage/replace failures and expected-byte
+conflicts. Run editor_features/storage and AI reject/undo/redo with owned files
+on the actual share when available. A successful read is not save evidence.
+Lite worker checks seed an obsolete framework override and require the main
+catalog default for both target events and build resolution. The retired
+framework command cannot change it; keep Rust layout/Clippy/test checks.
+
 
 Glass checks include deleting a page with a queued backdrop refresh and retaining
 its Python wrapper without another page call. Platform checks exercise cp1252

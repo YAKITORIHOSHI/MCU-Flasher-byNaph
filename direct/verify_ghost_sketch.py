@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import errno
 import importlib.util
 import os
 from pathlib import Path
@@ -79,6 +80,48 @@ class GhostSketchChecks(unittest.TestCase):
         with self.assertRaises((FileExistsError, ValueError)):
             self.ghost.promote_ghost_project(source, target)
         self.assertIn("void setup()", (target / "GhostSketch.ino").read_text())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX network-directory replacement fallback')
+    def test_share_can_refuse_rename_over_the_same_empty_save_destination(self):
+        source = self.create()
+        target = self.root / 'Empty network folder'
+        target.mkdir()
+        rename, calls = os.rename, []
+        def publish(stage, destination):
+            calls.append(destination)
+            if len(calls) == 1:
+                self.assertTrue(target.is_dir())
+                raise OSError(errno.ENOTEMPTY, 'fixture SMB refuses directory replacement')
+            self.assertFalse(target.exists())
+            return rename(stage, destination)
+        with patch.object(self.ghost.os, 'rename', side_effect=publish):
+            self.assertEqual(self.ghost.promote_ghost_project(source, target), target)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual((target / 'GhostSketch.ino').read_bytes(), (source / 'GhostSketch.ino').read_bytes())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX network-directory replacement fallback')
+    def test_share_fallback_preserves_new_contents_and_replaced_destination_owners(self):
+        source = self.create()
+        for replaced in (False, True):
+            with self.subTest(replaced=replaced):
+                target = self.root / ('Replaced folder' if replaced else 'Newly occupied folder')
+                target.mkdir()
+                other = self.root / 'Other owner'
+                if replaced:
+                    other.mkdir()
+                rename = os.rename
+                def changed_destination(stage, destination):
+                    if replaced:
+                        target.rmdir()
+                        rename(other, target)
+                    (target / 'User file.txt').write_bytes(b'keep this external content')
+                    raise OSError(errno.ENOTEMPTY, 'fixture destination changed during save')
+                with patch.object(self.ghost.os, 'rename', side_effect=changed_destination):
+                    with self.assertRaises(OSError):
+                        self.ghost.promote_ghost_project(source, target)
+                self.assertEqual((target / 'User file.txt').read_bytes(), b'keep this external content')
+                self.assertTrue(self.ghost.is_ghost_project(source))
+                self.assertEqual(list(self.root.glob('.mcu-ghost-save-*')), [])
 
     def test_source_changes_during_staging_refuse_publication(self):
         source = self.create()

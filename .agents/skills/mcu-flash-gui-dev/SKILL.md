@@ -1,9 +1,27 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain SMB-safe saves, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
+
+Ghost Sketch publication handles SMB/GVfs refusing rename over an existing empty
+folder: only EEXIST/ENOTEMPTY permits the POSIX fallback, after rechecking the
+original directory identity. rmdir must refuse newly added contents; preserve a
+replaced destination and the temporary original. Verify ghost_sketch on the
+share and in native owned fixtures.
+
+Save user sources through write_source_text. SMB/GVfs can write and atomically
+replace files while rejecting chmod on the staged sibling. Ignore only explicit
+unsupported-mode errors (ENOTSUP/ENOSYS or Windows ERROR_NOT_SUPPORTED); preserve
+real permission/I/O/fsync/replace failures, expected-byte checks and exact model
+acknowledgements. Verify real share writes, Auto-Save and AI reject/undo/redo in
+owned fixtures; never modify live recovery journals.
+Lite selects the main catalog's default platform/framework with its board. Keep
+that framework internally for readiness/build identity; expose no framework
+selector and ignore legacy Lite framework overrides without changing Main's
+settings or resolution policy.
+
 
 PageBackdrop owns its queued refresh timer, checks Shiboken native validity and
 retires ancestor filters when the source view is destroyed. Bootstrap's legacy

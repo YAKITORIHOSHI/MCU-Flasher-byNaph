@@ -105,6 +105,11 @@ The window cannot be closed while firmware is being written, erased or
 recovered, so a board is never left half-flashed. A serial port selected in one
 window is shown as in use in the others.
 
+Sketches can stay in writable SMB/network folders. Save, Save All and Auto-Save
+replace complete source files even when the share does not support Unix
+permissions. Failed saves keep the editor buffer available to retry.
+Ghost Sketch can also save into a new or empty folder on a network share.
+
 **Settings** covers the theme, interface size, editor behaviour, compiler
 parallelism and serial options. To auto-save, enable **Auto-Save** and type a
 delay from 500 to 10,000 ms. **Offline Mode** prepares every default board's

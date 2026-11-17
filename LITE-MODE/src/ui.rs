@@ -699,7 +699,6 @@ pub struct LiteApp {
     board_total: usize,
     board_fuzzy: bool,
     board_loading: bool,
-    frameworks: Vec<String>,
     framework: String,
     ports: Vec<Port>,
     port: String,
@@ -814,7 +813,6 @@ impl LiteApp {
             board_total: 0,
             board_fuzzy: false,
             board_loading: false,
-            frameworks: vec![],
             framework: String::new(),
             ports: vec![],
             port: String::new(),
@@ -875,6 +873,13 @@ impl LiteApp {
         };
         app.build_log.push("MCU Flasher / Lite\nOpen a sketch folder, select its exact board, then Compile or Upload.", "info", true);
         if offline_preview {
+            if std::env::args().any(|arg| arg == "--preview-target") {
+                app.event(Event {
+                    event: "target".into(),
+                    data: json!({"name": "ESP32 Development Board [espressif32:esp32dev]",
+                        "platform": "espressif32", "framework": "arduino"}),
+                });
+            }
             if std::env::args().any(|arg| arg == "--preview-sketch") {
                 app.source = if cfg!(windows) {
                     "C:\\Preview\\Blink"
@@ -982,7 +987,7 @@ impl LiteApp {
         } else if self.board.is_empty() {
             Some("Choose a board first")
         } else if self.framework.is_empty() {
-            Some("Choose the board's framework first")
+            Some("Choose a supported board first")
         } else if upload
             && (self.port.is_empty() || !self.ports.iter().any(|port| port.device == self.port))
         {
@@ -1175,8 +1180,6 @@ impl LiteApp {
                 self.board = text("name");
                 self.platform = text("platform");
                 self.framework = text("framework");
-                self.frameworks =
-                    serde_json::from_value(data["frameworks"].clone()).unwrap_or_default();
             }
             "console:log" => self.build_log.push_progress(
                 &text("text"),
@@ -1732,22 +1735,6 @@ impl LiteApp {
                 });
                 if let Some(name) = recent {
                     self.choose_board(name);
-                }
-                if !self.frameworks.is_empty() {
-                    ui.add_space(6.0);
-                    caption(ui, "Framework");
-                    let previous = self.framework.clone();
-                    egui::ComboBox::from_id_salt("framework")
-                        .width(ui.available_width())
-                        .selected_text(&self.framework)
-                        .show_ui(ui, |ui| {
-                            for name in &self.frameworks {
-                                ui.selectable_value(&mut self.framework, name.clone(), name);
-                            }
-                        });
-                    if previous != self.framework {
-                        self.send(json!({"cmd": "framework", "value": self.framework}));
-                    }
                 }
                 ui.add_space(6.0);
                 caption(ui, "Serial port");
@@ -2732,7 +2719,6 @@ mod verification {
                 app.files = (0..12)
                     .map(|n| format!("{n}_{}.hpp", "long_source_name".repeat(12)))
                     .collect();
-                app.frameworks = vec!["arduino".into()];
                 app.framework = "arduino".into();
                 for _ in 0..5 {
                     let _ = ctx.run(

@@ -49,8 +49,10 @@ def main():
             read_fd, write_fd = os.pipe()
             server_log = (destination / "xvfb.log").open("wb")
             try:
+                # Keep one server between captures; a reset would republish
+                # displayfd after its startup reader has been retired.
                 server = subprocess.Popen([xvfb, "-displayfd", str(write_fd), "-screen", "0",
-                    "4000x2400x24", "-nolisten", "tcp"], pass_fds=(write_fd,),
+                    "4000x2400x24", "-noreset", "-nolisten", "tcp"], pass_fds=(write_fd,),
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 def drain_server():
                     remaining = 65536
@@ -76,6 +78,7 @@ def main():
         cases = [
             ("wide", "1140x800", []),
             ("wide-dark", "1140x800", ["--preview-dark"]),
+            ("configured-board", "1140x800", ["--preview-sketch", "--preview-target"]),
             ("compact", "700x560", ["--preview-sketch"]),
             ("compact-dark", "700x560", ["--preview-dark"]),
             ("short", "496x300", ["--preview-error"]),

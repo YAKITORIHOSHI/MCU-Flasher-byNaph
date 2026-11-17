@@ -7,6 +7,7 @@ them; publishing a saved copy never removes the original recovery material.
 from __future__ import annotations
 
 import json
+import errno
 import os
 from pathlib import Path
 import re
@@ -142,7 +143,22 @@ def promote_ghost_project(project_path: str | Path, destination: str | Path,
                 target.rmdir()
         elif target.exists() or target.is_symlink():
             raise FileExistsError("The selected project folder already exists.")
-        os.rename(stage, target)
+        try:
+            os.rename(stage, target)
+        except OSError as error:
+            # GVfs/SMB may reject replacing even an empty directory. Use the
+            # Windows publication sequence only after that precise refusal,
+            # checking that it is still the originally selected empty folder.
+            if (os.name == "nt" or destination_identity is None
+                    or error.errno not in (errno.EEXIST, errno.ENOTEMPTY)):
+                raise
+            current = target.lstat()
+            if (not stat.S_ISDIR(current.st_mode)
+                    or (current.st_dev, current.st_ino) !=
+                    (destination_identity.st_dev, destination_identity.st_ino)):
+                raise FileExistsError("The selected folder changed while saving. Choose an empty folder.") from error
+            target.rmdir()  # Atomically refuses any newly added contents.
+            os.rename(stage, target)
         return target
     finally:
         if stage.exists():
