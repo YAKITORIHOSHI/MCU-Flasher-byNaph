@@ -123,6 +123,59 @@ def _lit(top: str, bottom: str) -> str:
     return f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:1 {bottom})"
 
 
+def _liquid(top: str, middle: str, bottom: str) -> str:
+    """Liquid Glass body: lit where light enters, clear through the middle, and a
+    softer return along the bottom where the sheet's thickness bends light back."""
+    return (f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:0.52 {middle}, "
+            f"stop:1 {bottom})")
+
+
+def liquid_button_sheet(theme_mode: str = "default", role: str = "glass", *, radius: int = 12,
+                        selector: str = "QPushButton", font_size: int = 12,
+                        padding: str = "4px 16px") -> str:
+    """One Liquid Glass action: a specular top edge, a clear body and a lensed bottom.
+
+    ``role`` is "glass" (neutral), "accent" (the primary action) or "danger".
+    Use a radius of half the button's height for a capsule.
+    """
+    pal = get_palette(theme_mode)
+    tokens = glass_tokens(theme_mode)
+    bright = pal.get("TEXT_BRIGHT", "#ffffff")
+    cyan, red = pal.get("CYAN", "#00d2ff"), pal.get("RED", "#e74c3c")
+    if role == "accent":
+        fill = _liquid(tokens["accent_top"], tokens["accent_bottom"], tokens["accent_top"])
+        hover = _liquid(tokens["accent_hover_top"], tokens["accent_hover_bottom"], tokens["accent_hover_top"])
+        rim, lit_rim = pal.get("BORDER_LIT", cyan), cyan
+    elif role == "danger":
+        fill = _liquid(_translucent(red, 120), _translucent(red, 64), _translucent(red, 96))
+        hover = _liquid(_translucent(red, 160), _translucent(red, 96), _translucent(red, 130))
+        rim, lit_rim = _translucent(red, 180), red
+    else:
+        fill, hover = tokens["button"], tokens["button_hover"]
+        rim, lit_rim = tokens["button_rim"], pal.get("BORDER_LIT", cyan)
+    spec, floor = tokens["button_spec"], tokens["button_floor"]
+    return f"""
+{selector}:enabled {{
+    background: {fill}; color: {bright}; border: 1px solid {rim};
+    border-top-color: {spec}; border-bottom-color: {floor};
+    border-radius: {radius}px; padding: {padding}; font-size: {font_size}px; font-weight: 600;
+}}
+{selector}:enabled:hover {{
+    background: {hover}; color: {bright}; border: 1px solid {lit_rim};
+    border-top-color: {spec}; border-radius: {radius}px;
+}}
+{selector}:enabled:pressed {{
+    background: {tokens["button_pressed"]}; color: {bright}; border: 1px solid {lit_rim};
+    border-radius: {radius}px;
+}}
+{selector}:disabled {{
+    background: {tokens["button_disabled"]}; color: {tokens["disabled_ink"]};
+    border: 1px solid {_translucent(bright, 26)}; border-radius: {radius}px;
+    padding: {padding}; font-size: {font_size}px; font-weight: 600;
+}}
+"""
+
+
 def css_color(value: str) -> str:
     """A Qt stylesheet color for a web page: Qt's alpha runs to 255, CSS's to 1."""
     if not value.startswith("rgba("):
@@ -143,8 +196,11 @@ def glass_tokens(theme_mode: str = "default") -> dict[str, str]:
                       reading="rgba(255, 255, 255, 176)", reading_alt="rgba(255, 255, 255, 70)",
                       reading_rim="rgba(255, 255, 255, 210)", well="rgba(255, 255, 255, 190)",
                       chip=cyan, chip_ink="#ffffff", handle=_translucent(bright, 88),
-                      button=_lit("rgba(255, 255, 255, 214)", "rgba(255, 255, 255, 138)"),
-                      button_hover=_lit("rgba(255, 255, 255, 250)", "rgba(255, 255, 255, 190)"),
+                      button=_liquid("rgba(255, 255, 255, 232)", "rgba(255, 255, 255, 146)",
+                                     "rgba(255, 255, 255, 192)"),
+                      button_hover=_liquid("rgba(255, 255, 255, 255)", "rgba(255, 255, 255, 196)",
+                                           "rgba(255, 255, 255, 226)"),
+                      button_spec="rgba(255, 255, 255, 255)", button_floor="rgba(31, 35, 40, 46)",
                       button_pressed="rgba(255, 255, 255, 96)", button_disabled="rgba(255, 255, 255, 72)",
                       button_rim=_translucent(bright, 58), disabled_ink="#5f6b76",
                       accent_top=_translucent(cyan, 66), accent_bottom=_translucent(cyan, 30),
@@ -154,8 +210,11 @@ def glass_tokens(theme_mode: str = "default") -> dict[str, str]:
                       reading=_translucent(deepest, 170), reading_alt="rgba(255, 255, 255, 8)",
                       reading_rim="rgba(255, 255, 255, 34)", well=_translucent(deepest, 150),
                       chip=bright, chip_ink=deepest, handle=_translucent(bright, 74),
-                      button=_lit("rgba(255, 255, 255, 22)", "rgba(255, 255, 255, 8)"),
-                      button_hover=_lit("rgba(255, 255, 255, 34)", "rgba(255, 255, 255, 16)"),
+                      button=_liquid("rgba(255, 255, 255, 26)", "rgba(255, 255, 255, 7)",
+                                     "rgba(255, 255, 255, 16)"),
+                      button_hover=_liquid("rgba(255, 255, 255, 38)", "rgba(255, 255, 255, 14)",
+                                           "rgba(255, 255, 255, 24)"),
+                      button_spec="rgba(255, 255, 255, 128)", button_floor="rgba(255, 255, 255, 30)",
                       button_pressed="rgba(0, 0, 0, 64)", button_disabled="rgba(255, 255, 255, 8)",
                       button_rim="rgba(255, 255, 255, 62)",
                       disabled_ink="#a3b6c9" if theme_mode == "default" else "#a8c2c8",
@@ -229,6 +288,7 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     translucent = _translucent
     glass_values = glass_tokens(theme_mode)
     lit = _lit
+    liquid = _liquid
     selected, rim = glass_values["selected"], glass_values["rim"]
     glass, glass_highlight = glass_values["glass"], glass_values["glass_highlight"]
     well, disabled_ink = glass_values["well"], glass_values["disabled_ink"]
@@ -242,9 +302,11 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     button, button_hover = glass_values["button"], glass_values["button_hover"]
     button_pressed, button_disabled = glass_values["button_pressed"], glass_values["button_disabled"]
     button_rim = glass_values["button_rim"]
+    button_spec, button_floor = glass_values["button_spec"], glass_values["button_floor"]
     accent_top, accent_bottom = glass_values["accent_top"], glass_values["accent_bottom"]
     accent_hover_top, accent_hover_bottom = glass_values["accent_hover_top"], glass_values["accent_hover_bottom"]
     glass_button_ids = ("btn-clean", "btn-reload", "btn-project", "btn-download", "btn-detach-editor",
+                        "btn-attach-editor",
                         "btn-toggle-editor", "btn-toggle-monitors", "btn-settings", "btn-ai-assistant",
                         "btn-copy-console", "btn-clear-console", "btn-serial-send", "btn-terminal-new",
                         "btn-terminal-restart", "btn-terminal-clear", "btn-terminal-open")
@@ -1244,37 +1306,57 @@ QGroupBox, QDialog QGroupBox {{ background: {glass}; border: 1px solid {rim}; bo
 QGroupBox, QDialog QGroupBox, QGroupBox::title {{ color: {accent_on_reading}; }}
 QGroupBox::title {{ background: transparent; }}
 
+/* Primary actions: Liquid Glass accent capsules. */
+QPushButton[role="primary"]:enabled, QDialogButtonBox QPushButton:first-child:enabled {{
+    background: {liquid(accent_top, accent_bottom, accent_top)}; color: {text_bright};
+    border: 1px solid {border_lit}; border-top-color: {button_spec}; border-radius: 11px;
+}}
+QPushButton[role="primary"]:enabled:hover, QDialogButtonBox QPushButton:first-child:enabled:hover {{
+    background: {liquid(accent_hover_top, accent_hover_bottom, accent_hover_top)}; color: {text_bright};
+    border: 1px solid {cyan}; border-top-color: {button_spec};
+}}
+QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:enabled,
+QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:enabled:hover,
+QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:enabled:pressed,
+QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:disabled {{
+    min-height: 34px; max-height: 34px; padding: 0 26px; border-radius: 17px; font-size: 12px;
+}}
+
 /* Actions are glass too: a lit fill and a rim, never a solid block. */
 {buttons(glass_button_ids, ":enabled", plain=True)} {{
-    background: {button}; color: {text_bright}; border: 1px solid {button_rim}; border-radius: 10px;
+    background: {button}; color: {text_bright}; border: 1px solid {button_rim};
+    border-top-color: {button_spec}; border-bottom-color: {button_floor}; border-radius: 11px;
 }}
 {buttons(glass_button_ids, ":enabled:hover", plain=True)} {{
     background: {button_hover}; color: {text_bright}; border: 1px solid {border_lit};
+    border-top-color: {button_spec};
 }}
 {buttons(glass_button_ids, ":enabled:pressed", plain=True)} {{
     background: {button_pressed}; color: {text_bright}; border: 1px solid {cyan};
 }}
 {buttons((*glass_button_ids, *accent_button_ids, "btn-stop"), ":disabled", plain=True)} {{
     background: {button_disabled}; color: {disabled_ink};
-    border: 1px solid {translucent(text_bright, 26)}; border-radius: 10px;
+    border: 1px solid {translucent(text_bright, 26)}; border-radius: 11px;
 }}
 {buttons(accent_button_ids, ":enabled")} {{
-    background: {lit(accent_top, accent_bottom)}; color: {text_bright};
-    border: 1px solid {border_lit}; border-radius: 10px;
+    background: {liquid(accent_top, accent_bottom, accent_top)}; color: {text_bright};
+    border: 1px solid {border_lit}; border-top-color: {button_spec}; border-radius: 11px;
 }}
 {buttons(accent_button_ids, ":enabled:hover")} {{
-    background: {lit(accent_hover_top, accent_hover_bottom)}; color: {text_bright}; border: 1px solid {cyan};
+    background: {liquid(accent_hover_top, accent_hover_bottom, accent_hover_top)}; color: {text_bright};
+    border: 1px solid {cyan}; border-top-color: {button_spec};
 }}
 {buttons(accent_button_ids, ":enabled:pressed")} {{
     background: {accent_bottom}; color: {text_bright}; border: 1px solid {cyan};
 }}
 QPushButton#btn-stop:enabled {{
-    background: {lit(translucent(red, 110), translucent(red, 62))}; color: {text_bright};
-    border: 1px solid {red}; border-radius: 10px;
+    background: {liquid(translucent(red, 120), translucent(red, 62), translucent(red, 96))}; color: {text_bright};
+    border: 1px solid {red}; border-top-color: {button_spec}; border-radius: 11px;
 }}
 QPushButton#btn-stop:enabled:hover {{ background: {lit(translucent(red, 150), translucent(red, 92))}; color: {text_bright}; }}
 QPushButton:checked, QDialog QPushButton:checked {{
-    background: {lit(accent_top, accent_bottom)}; border: 1px solid {cyan}; color: {text_bright};
+    background: {liquid(accent_top, accent_bottom, accent_top)}; border: 1px solid {cyan};
+    border-top-color: {button_spec}; color: {text_bright};
 }}
 QPushButton:checked:hover, QDialog QPushButton:checked:hover {{
     background: {lit(accent_hover_top, accent_hover_bottom)}; border: 1px solid {border_lit}; color: {text_bright};

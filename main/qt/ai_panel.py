@@ -36,7 +36,7 @@ except ImportError:
 from main.core.config import _load_raw_config, _save_raw_config
 from main.core.log_colors import glass_inks
 from main.core.theme import Theme, get_palette
-from main.qt.assistant_loader import AssistantLoader
+from main.qt.assistant_loader import AssistantLoader, restart_controls, set_restart_visible, style_restart_controls
 from main.qt.theme import glass_tokens
 
 _this_file = Path(__file__).resolve()
@@ -113,6 +113,12 @@ class AIPanel(QWidget):
 
         self._status_badge = QLabel("Starting…", icon_name="time")
         hl.addWidget(self._status_badge)
+        # Restart sits beside the status, set apart by a divider.
+        self._restart_divider, self._btn_restart = restart_controls(header, self._restart_session)
+        hl.addSpacing(4)
+        hl.addWidget(self._restart_divider, 0, Qt.AlignmentFlag.AlignVCenter)
+        hl.addSpacing(4)
+        hl.addWidget(self._btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
 
         hl.addStretch()
 
@@ -143,6 +149,7 @@ class AIPanel(QWidget):
         self._title_lbl.setStyleSheet(f"color: {glass_inks(mode)['system']}; font-size: 11px; font-weight: 700;")
         self._embed_container.setStyleSheet(f"background: {palette['BG_DARKEST']};")
         self._loader_card.apply_theme(mode)
+        style_restart_controls(self._restart_divider, self._btn_restart, mode)
         self._set_badge(*self._badge)
 
     def _set_badge(self, icon_name: str, text: str, ink: str) -> None:
@@ -153,6 +160,19 @@ class AIPanel(QWidget):
         semantic = {"GREEN": "success", "RED": "error", "YELLOW": "warning", "CYAN": "system"}.get(ink, "normal")
         self._status_badge.setStyleSheet(
             f"color: {glass_inks(self._theme)[semantic]}; font-size: 11px; font-weight: 600;")
+        self._update_restart()
+
+    def _update_restart(self) -> None:
+        if hasattr(self, "_btn_restart"):
+            set_restart_visible(self._restart_divider, self._btn_restart, bool(self._is_active), self.width())
+
+    def _restart_session(self) -> None:
+        """Start a fresh OpenCode session in the current project; nothing typed earlier is replayed."""
+        if not self._is_active or self.isHidden():
+            return
+        self.reset_for_project(self._get_sketch_dir())
+        self._set_badge("reload", "Restarting…", "TEXT_DIM")
+        self._loader_card.show_progress("Restarting OpenCode…", 0, title="Opening OpenCode")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -161,6 +181,7 @@ class AIPanel(QWidget):
 
     def set_responsive_width(self, width: int) -> None:
         self._status_badge.setVisible(width >= 180)
+        self._update_restart()
         if hasattr(self, "_title_lbl") and self._title_lbl:
             if width >= 340:
                 self._title_lbl.set_icon("ai")
@@ -324,6 +345,7 @@ class AIPanel(QWidget):
                 creationflags=0x08000000 if sys.platform == "win32" else 0,
             )
             self._is_active = True
+            self._update_restart()
             self._poll_attempts = 0
             self._loader_card.show_progress("Starting a session…", 1)
             self._embed_poll_timer.start()
@@ -604,6 +626,7 @@ class AIPanel(QWidget):
         self._ai_hwnd = None
         self._is_embedded = False
         self._is_active = False
+        self._update_restart()
 
     def closeEvent(self, event) -> None:
         self._stop_ai()

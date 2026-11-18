@@ -1078,34 +1078,10 @@ class BoardSearchDialog(GlassDialog):
         self.btn_frame.setStyleSheet(f"QFrame#board-footer {{ background: {glass['glass']}; border: none; border-top: 1px solid {glass['rim']}; }}")
         self.lbl_count.setStyleSheet(f"color: {text_dim}; font-size: 11px;")
 
-        self.btn_cancel.setStyleSheet(f"""
-            QPushButton:enabled {{
-                background-color: {btn_stop};
-                color: #ffffff;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 4px;
-                font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                font-size: 11px;
-            }}
-            QPushButton:enabled:hover {{ background-color: {btn_stop_h}; border-color: {pal.get('RED', '#e74c3c')}; }}
-            QPushButton:enabled:pressed {{ background-color: {btn_stop}; border-color: {pal.get('RED', '#e74c3c')}; }}
-            QPushButton:disabled {{ background-color: {bg_mid}; color: {text_dim}; border: 1px solid {border}; }}
-        """)
-
-        self.btn_select.setStyleSheet(f"""
-            QPushButton:enabled {{
-                background-color: {btn_compile};
-                color: #ffffff;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 4px;
-                font-family: 'Montserrat', 'Segoe UI', sans-serif;
-                font-size: 11px;
-                font-weight: bold;
-            }}
-            QPushButton:enabled:hover {{ background-color: {btn_compile_h}; border-color: {pal.get('GREEN', '#4ec994')}; }}
-            QPushButton:enabled:pressed {{ background-color: {btn_compile}; border-color: {pal.get('GREEN', '#4ec994')}; }}
-            QPushButton:disabled {{ background-color: {bg_mid}; color: {text_dim}; border: 1px solid {border}; }}
-        """)
+        # Liquid Glass capsules: Cancel is a neutral sheet, Select Board the accent.
+        from main.qt.theme import liquid_button_sheet
+        self.btn_cancel.setStyleSheet(liquid_button_sheet(theme_mode, "glass", radius=16, font_size=12))
+        self.btn_select.setStyleSheet(liquid_button_sheet(theme_mode, "accent", radius=16, font_size=12))
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -1216,7 +1192,7 @@ class BoardSearchDialog(GlassDialog):
         self.lbl_count = QLabel(f"{len(self.all_boards)} boards available")
 
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.setFixedSize(85, 30)
+        self.btn_cancel.setFixedSize(92, 32)
         self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.reject)
         self._actions_row = QHBoxLayout()
@@ -1224,7 +1200,7 @@ class BoardSearchDialog(GlassDialog):
         self._actions_row.addWidget(self.btn_cancel)
 
         self.btn_select = QPushButton("Select Board")
-        self.btn_select.setFixedSize(110, 30)
+        self.btn_select.setFixedSize(122, 32)
         self.btn_select.setEnabled(False)
         self.btn_select.setCursor(Qt.CursorShape.ArrowCursor)
         self.btn_select.clicked.connect(self._confirm_selection)

@@ -14,7 +14,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout, QSizePolicy
 
 from main.core.theme import Theme, get_palette
-from main.qt.assistant_loader import AssistantLoader
+from main.qt.assistant_loader import AssistantLoader, restart_controls, set_restart_visible, style_restart_controls
 from main.core.log_colors import glass_inks, glass_terminal_colors
 from main.qt.glass import PageBackdrop, page_surface
 from main.qt.icons import icon
@@ -236,6 +236,12 @@ class PosixAIPanel(QWidget):
         row.addWidget(self._title, 1)
         self._status_badge = QLabel("Ready", self._header)
         row.addWidget(self._status_badge)
+        # Restart sits beside the status, set apart by a divider.
+        self._restart_divider, self._btn_restart = restart_controls(self._header, self._restart_session)
+        row.addSpacing(4)
+        row.addWidget(self._restart_divider, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addSpacing(4)
+        row.addWidget(self._btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self._header)
         self._body = QWidget(self)
         self._stack = QStackedLayout(self._body)
@@ -379,6 +385,14 @@ class PosixAIPanel(QWidget):
         self._requested = False
         self.ensure_started()
 
+    def _restart_session(self):
+        """Start a fresh OpenCode session in the current project; nothing typed earlier is replayed."""
+        if not self._is_active:
+            return
+        self._discard_view()
+        self._requested = False
+        self.ensure_started()
+
     def _hide_panel(self):
         owner = self.window()
         if owner is not self and hasattr(owner, "toggle_ai_panel"):
@@ -426,6 +440,7 @@ class PosixAIPanel(QWidget):
         self._title.setText(title)
         self._status_badge.setText(status_text)
         self._status_badge.setToolTip(status)
+        set_restart_visible(self._restart_divider, self._btn_restart, self._is_active, width)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -446,6 +461,7 @@ class PosixAIPanel(QWidget):
         self._title.setStyleSheet(f"color: {inks['system']}; font-size: 11px; font-weight: 700;")
         ink = inks['success' if self._state == "active" else 'error' if self._state == "error" else 'normal']
         self._status_badge.setStyleSheet(f"color: {ink}; font-size: 10px; font-weight: 600;")
+        style_restart_controls(self._restart_divider, self._btn_restart, self._theme)
 
     def apply_theme(self, mode):
         self._theme = mode
@@ -480,11 +496,13 @@ class PosixAIPanel(QWidget):
         # or cloud project opened. Reveal will start the new project lazily.
         if was_active and not self.isHidden():
             self.ensure_started()
+        self._refresh_header(self.width())
 
     def _stop_ai(self):
         self._closing = True
         self._requested = False
         self._discard_view()
+        self._refresh_header(self.width())
 
     def closeEvent(self, event):
         if self._closing:

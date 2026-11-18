@@ -36,6 +36,12 @@ PANE_SHADOW = 8
 # White added to a dark theme's sheet at its brightest corner, of 255. main/core/theme.py's
 # GLASS_WORST depends on these, and direct/verify_glass.py checks the two against each other.
 SHEET_TINT_TOP, SHEET_REFLECTION = 16, 6
+# Liquid Glass edge lensing: logical width of the bright band inside a sheet's rim,
+# and its strongest white alpha on light and dark themes.
+LENS_BAND, LENS_LIGHT, LENS_DARK = 8, 30, 12
+# Liquid Glass specular on the rim: how far it reaches along an edge (logical pixels)
+# and its added white alpha on light and dark themes.
+SPECULAR_REACH, SPECULAR_LIGHT, SPECULAR_DARK = 120.0, 160, 80
 # Height of the soft shading behind the menu and status text, which sit straight on the scene.
 _EDGE_SHADE = 34
 
@@ -238,6 +244,19 @@ def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bo
     highlight = 1 / ratio
     painter.drawRoundedRect(bounds.adjusted(highlight, highlight, -highlight, -highlight),
                             max(0, radius - highlight), max(0, radius - highlight))
+    # Liquid Glass lensing: the sheet's thickness bends light toward its edges, so a soft
+    # band just inside the rim is brighter than the middle. It starts two pixels in, leaving
+    # the rim its own crisp line, and fades smoothly so no ring reads as an edge.
+    band = int(min(LENS_BAND, bounds.width() / 4, bounds.height() / 4))
+    for step in range(2, band + 1):
+        share = (1 - (step - 2) / max(1, band - 1)) ** 2
+        alpha = round((LENS_LIGHT if light else LENS_DARK) * share)
+        if alpha <= 0:
+            continue
+        painter.setPen(QPen(QColor(255, 255, 255, alpha), 1.0))
+        inset = step - .5
+        painter.drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset),
+                                max(0, radius - inset), max(0, radius - inset))
     painter.restore()
 
     # One device pixel wide: bright where light falls, fading along the sheet's far side.
@@ -250,6 +269,25 @@ def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bo
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawPath(path)
+    # Liquid Glass specular: light enters at the top-left corner and leaves, fainter, at the
+    # bottom-right. Each is a short stretch of the rim, so no long edge turns into a bright line.
+    reach = min(SPECULAR_REACH, bounds.width() * .35)
+    band = radius + 2
+    for edge_x, edge_y, toward, alpha in (
+            (bounds.left(), bounds.top(), 1, SPECULAR_LIGHT if light else SPECULAR_DARK),
+            (bounds.right(), bounds.bottom() - band, -1, (SPECULAR_LIGHT if light else SPECULAR_DARK) // 2)):
+        if reach <= 0 or alpha <= 0:
+            continue
+        glow = QLinearGradient(edge_x, 0, edge_x + toward * reach, 0)
+        glow.setColorAt(0, QColor(255, 255, 255, alpha))
+        glow.setColorAt(1, QColor(255, 255, 255, 0))
+        painter.save()
+        painter.setClipRect(QRectF(min(edge_x, edge_x + toward * reach), edge_y, reach, band))
+        specular = QPen(glow, 1)
+        specular.setCosmetic(True)
+        painter.setPen(specular)
+        painter.drawPath(path)
+        painter.restore()
     painter.end()
     return image
 

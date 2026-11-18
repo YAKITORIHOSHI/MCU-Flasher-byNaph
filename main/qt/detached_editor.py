@@ -132,8 +132,8 @@ class EditorDetachedPlaceholder(QWidget):
         lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         btn_attach = QPushButton("Attach Editor", self)
+        # A Liquid Glass capsule like the workspace's other glass actions (theme.py).
         btn_attach.setObjectName("btn-attach-editor")
-        btn_attach.setProperty("role", "primary")
         btn_attach.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_attach.clicked.connect(self.attach_requested.emit)
 

@@ -32,7 +32,8 @@ see the [README](README.md).
   preserving the temporary original and refusing occupied destinations.
 - **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
   and an embedded OpenCode assistant whose file edits are highlighted for you
-  to accept or reject.
+  to accept or reject. Once started, **Restart** beside its status opens a
+  fresh session.
 - **Boards and libraries.** Browse, download and prepare board packages and
   Arduino libraries, and read their example sketches. Offline Mode prepares
   every default board's tools in advance and uses local packages only.
@@ -47,7 +48,8 @@ see the [README](README.md).
   Windows, in its own setup window. Any other board's compiler and uploader
   download the first time you compile for it. A repair launch rebuilds
   anything missing.
-- **Interface.** Glass Dark, Frosted Light and Solarized Dark themes, an
+- **Interface.** Liquid Glass surfaces (specular rims and edge lensing) and
+  capsule actions in Glass Dark, Frosted Light and Solarized Dark themes, an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
   including half-screen tiling.
 - **MCU Flasher Lite.** A separate lightweight workbench for Ubuntu and Windows

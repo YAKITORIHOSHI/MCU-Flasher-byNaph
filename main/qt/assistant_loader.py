@@ -244,3 +244,39 @@ class AssistantLoader(QFrame):
         self._hint.setStyleSheet(f"color: {palette['TEXT_DIM']}; font-size: 11px; background: transparent;")
         self._mark.setPixmap(icon("ai", palette["CYAN"], size=36).pixmap(36, 36))
         self._trace.set_inks(palette["CYAN"], palette["BORDER"], palette["BG_DARKEST"])
+
+
+def restart_controls(parent: QWidget, on_restart) -> tuple[QFrame, QPushButton]:
+    """A divider and a Restart capsule for an assistant header, hidden until a session was started."""
+    from main.qt.icons import ActionButton
+    divider = QFrame(parent)
+    divider.setObjectName("assistant-divider")
+    divider.setFixedSize(1, 16)
+    button = ActionButton("Restart", parent, icon_name="reload")
+    button.setObjectName("btn-assistant-restart")
+    button.setFixedHeight(24)
+    button.setIconSize(QSize(13, 13))
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setToolTip("Start a fresh AI assistant session in this project")
+    button.setAccessibleName("Restart AI assistant")
+    button.setAutoDefault(False)
+    button.clicked.connect(lambda *_: on_restart())
+    divider.hide()
+    button.hide()
+    return divider, button
+
+
+def style_restart_controls(divider: QFrame, button: QPushButton, mode: str) -> None:
+    from main.qt.theme import liquid_button_sheet
+    divider.setStyleSheet(f"QFrame#assistant-divider {{ background: {glass_tokens(mode)['rim']}; border: none; }}")
+    button.setStyleSheet(liquid_button_sheet(mode, "glass", radius=12, selector="QPushButton#btn-assistant-restart",
+                                             font_size=11, padding="2px 11px"))
+
+
+def set_restart_visible(divider: QFrame, button: QPushButton, visible: bool, width: int) -> None:
+    """Shown only once the assistant was started; icon-only when the header is narrow."""
+    compact = width < 300
+    button.setText("" if compact else "Restart")
+    button.setFixedWidth(28 if compact else button.sizeHint().width())
+    divider.setVisible(visible)
+    button.setVisible(visible)
