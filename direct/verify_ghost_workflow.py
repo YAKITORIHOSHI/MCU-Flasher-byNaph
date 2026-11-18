@@ -317,24 +317,26 @@ class GhostWorkflowChecks(unittest.TestCase):
         window.close()
         self.until(lambda: not isValid(window), "saved detached workspace destruction")
 
-    def test_clean_ghost_close_cancel_discard_and_save_wait_for_real_controller(self):
+    def test_untouched_ghost_closes_unasked_and_edited_close_cancel_and_save_wait_for_real_controller(self):
         api = self.backend()
         project = api.sketch_dir_path
         window, _page = self.workspace(api)
         self.assertFalse(any(api.modified_files.values()))
+        self.questions.reset_mock()
         self.questions.return_value = QMessageBox.StandardButton.Cancel
-        self.assertFalse(window.close())
-        self.assertTrue(window.isVisible())
-        self.assertTrue(project.exists())
-        self.questions.return_value = QMessageBox.StandardButton.Discard
-        window.close()
-        self.until(lambda: not isValid(window) and not project.exists(), "accepted clean-Ghost discard")
+        window.close()  # Nothing was typed: nothing to keep, so no question.
+        self.until(lambda: not isValid(window) and not project.exists(), "untouched Ghost closes unasked")
+        self.questions.assert_not_called()
         api = self.backend()
         project = api.sketch_dir_path
         window, page = self.workspace(api)
         text = "// saved through close prompt\nvoid setup() {}\nvoid loop() {}\n"
         self.assertTrue(self.js(page, "window.editorInstance.setValue(" + json.dumps(text) + "); true"))
         self.until(lambda: any(api.modified_files.values()), "close-save dirty acknowledgement")
+        self.questions.return_value = QMessageBox.StandardButton.Cancel
+        self.assertFalse(window.close())
+        self.assertTrue(window.isVisible())
+        self.assertTrue(project.exists())
         (self.root / "SavedOnClose").mkdir()  # Taken: the save goes to "SavedOnClose (1)" unasked.
         target = self.root / "SavedOnClose (1)"
         self.questions.return_value = QMessageBox.StandardButton.Save

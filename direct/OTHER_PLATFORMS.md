@@ -8,7 +8,7 @@ three systems yet.
 
 | System | CPU | Entry in `LAUNCHER/` | Packages installed by |
 | --- | --- | --- | --- |
-| Linux Mint 22.x | amd64 | `LINUX_MINT` | `apt-get`, using Ubuntu 24.04 names |
+| Linux Mint 22.x / 23.x | amd64 | `LINUX_MINT` | `apt-get`, using its Ubuntu 24.04 / 26.04 base names |
 | Fedora 44 or newer | x86_64, aarch64 | `FEDORA`, `FEDORA_ARM64` | `dnf` |
 | macOS 14 or newer | Intel, Apple Silicon | `MacOS.command` | Nothing system-wide |
 

@@ -1009,14 +1009,62 @@ def _prepare(core, plan, log, jobs=None, event=None, requested_targets=None, boa
 
 
 CATALOG_MARKER = ".mcu-catalog-ready.json"
-CATALOG_SCHEMA = 1
+# 2: Bootstrap also prepares the default boards' tools (DEFAULT_TARGETS), so
+# installations made by the catalog-only stage run Bootstrap once more.
+CATALOG_SCHEMA = 2
+# One common board per default platform. Bootstrap prepares exactly the
+# packages its first compile would (target_packages.py, same per-target stamp),
+# so these build without a download; other boards still prepare on first use.
+DEFAULT_TARGETS = {"atmelavr": "uno", "espressif8266": "nodemcuv2", "espressif32": "esp32dev"}
+
+
+def prepare_default_targets(core, plan, log=print):
+    """Install the default boards' compilers, frameworks and uploaders during Bootstrap.
+
+    A board whose download fails is reported and left to its first compile, so a
+    slow mirror never blocks the launch. Returns the boards that are ready.
+    """
+    from platformio.package.manager.platform import PlatformPackageManager
+    from platformio.platform.factory import PlatformFactory
+    from src.modules.target_packages import configuration_text, prepare as prepare_target, target_ready
+    core = Path(core)
+    frameworks = list(plan.get("frameworks") or ["arduino"])
+    framework = "arduino" if "arduino" in frameworks else frameworks[0]
+    scratch = core / ".tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    platforms = PlatformPackageManager(str(core / "platforms"))
+    prepared = []
+    for name in plan["platforms"]:
+        board = DEFAULT_TARGETS.get(name)
+        package = platforms.get_package(name) if board else None
+        if package is None:
+            continue
+        config = scratch / f"bootstrap-target-{board}.ini"
+        try:
+            manifest = PlatformFactory.new(package).board_config(board)
+            title = manifest.get("name", board)
+            protocol = str(manifest.get("upload.protocol", "") or "").strip()
+            if target_ready(core, name, board, framework, protocol):
+                log(f"Board tools already prepared: {title}.")
+                prepared.append(board)
+                continue
+            extra = f"upload_protocol = {protocol}\n" if protocol else ""
+            config.write_text(configuration_text(name, board, framework, extra), encoding="utf-8")
+            with timed_stage(log, f"board tools: {title}"):
+                prepare_target(config, core, protocol=protocol, log=log)
+            prepared.append(board)
+        except Exception as error:  # Left to that board's first compile.
+            log(f"Board tools for {board} were not prepared ({error}); they download on its first compile.")
+        finally:
+            config.unlink(missing_ok=True)
+    return prepared
 
 
 def catalog_ready(core, plan=None):
-    """Read-only gate for Bootstrap's quick mode: SCons and the board list, no toolchains.
+    """Read-only gate for Bootstrap's quick mode: SCons, the board list and default boards' tools.
 
-    Each board's compiler, framework and uploader are prepared on its first compile
-    (src/modules/target_packages.py). Offline Mode still requires ``ready``.
+    Other boards' compilers, frameworks and uploaders are prepared on their first
+    compile (src/modules/target_packages.py). Offline Mode still requires ``ready``.
     """
     try:
         core = Path(core)
@@ -1076,8 +1124,7 @@ def prepare_catalog(core, plan=None, log=print):
                 package = platforms.get_package(name) or platforms.install(name, skip_dependencies=True)
             platform = PlatformFactory.new(package)
             files.add(str((Path(package.path) / "platform.json").relative_to(core)))
-            log(f"Board list ready: {platform.title} ({len(platform.get_boards())} boards). "
-                "Each board's tools download the first time you compile for it.")
+            log(f"Board list ready: {platform.title} ({len(platform.get_boards())} boards).")
             for board, frameworks in _unavailable_frameworks(platform).items():
                 unavailable_targets[(platform.name, board)] = frameworks
         libraries = LibraryPackageManager(str(core / "lib"))
@@ -1085,6 +1132,7 @@ def prepare_catalog(core, plan=None, log=print):
             with timed_stage(log, f"library: {spec}"):
                 installed = libraries.get_package(spec) or libraries.install(spec)
             files.add(str((Path(installed.path) / ".piopm").relative_to(core)))
+        prepare_default_targets(core, plan, log=log)
     with timed_stage(log, "board list"):
         catalog = subprocess.run(command() + ["boards", "--json-output"], capture_output=True, text=True,
                                  env=env, check=True, timeout=120,
@@ -1107,7 +1155,8 @@ def prepare_catalog(core, plan=None, log=print):
     temporary = core / (CATALOG_MARKER + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(temporary, core / CATALOG_MARKER)
-    log(f"Board list prepared ({len(records)} boards). Board tools download on first compile.")
+    log(f"Board list prepared ({len(records)} boards). Default boards' tools are ready; "
+        "other boards' tools download on their first compile.")
 
 
 def board_store_ready(core, plan=None):

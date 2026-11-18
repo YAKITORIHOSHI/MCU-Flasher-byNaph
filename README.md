@@ -21,7 +21,7 @@ optional AI assistant in one window.
 | --- | --- | --- |
 | Windows 10 / 11 | AMD64 | `LAUNCHER/WINDOWS.exe` |
 | Ubuntu 24.04 or newer | amd64, ARM64 (incl. Raspberry Pi 4/5) | `LAUNCHER/UBUNTU`, `LAUNCHER/UBUNTU_ARM64` |
-| Linux Mint 22.x | amd64 | `LAUNCHER/LINUX_MINT` |
+| Linux Mint 22.x / 23.x | amd64 | `LAUNCHER/LINUX_MINT` |
 | Fedora 44 or newer | x86_64, aarch64 | `LAUNCHER/FEDORA`, `LAUNCHER/FEDORA_ARM64` |
 | macOS 14 or newer | Intel, Apple Silicon | `LAUNCHER/MacOS.command` |
 
@@ -69,17 +69,16 @@ latest version.
 
 1. Open the `LAUNCHER` folder and run the entry for your system (table above).
 2. **Bootstrap** prepares a private Python runtime, the required packages, the
-   board list and, on Windows, the default boards' tools and the CP210x and
-   CH34x USB drivers, in its own setup window. Linux may ask for your password to install system packages.
+   board list and the default boards' tools (Arduino Uno, NodeMCU, ESP32 Dev
+   Module), plus the CP210x and CH34x USB drivers on Windows, in its own setup window. Linux may ask for your password to install system packages.
    **Technical details** shows the installer output.
 3. Choose or create a project, then select a board and serial port in the
-   **Controls** bar. On Linux and macOS, the first **Compile** for a board
-   downloads that board's compiler and uploader once (seconds for an Arduino
-   Uno, about a minute for an ESP32 on a fast connection).
+   **Controls** bar. On Linux and macOS, the first **Compile** for any other
+   board downloads that board's compiler and uploader once.
 
-- **Ubuntu:** setup installs the application for your account in
-  `~/.local/share/mcu-flasher/application` and adds **MCU Flasher** and
-  **MCU Flasher Lite** to All Apps. Start it from there afterwards.
+- **Ubuntu, Linux Mint and Fedora:** setup installs the application for your
+  account in `~/.local/share/mcu-flasher/application` and adds **MCU Flasher**
+  to All Apps (with **MCU Flasher Lite** on Ubuntu and Mint). Start it from there afterwards.
 - **macOS:** the app is not notarized. Open a downloaded copy the first time
   with Control-click → **Open** (on macOS 15 or newer: **System Settings →
   Privacy & Security → Open Anyway**).

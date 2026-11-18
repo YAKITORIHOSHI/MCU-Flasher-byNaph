@@ -253,7 +253,7 @@ from main.core.file_utils import (
     hide_internal_project_metadata,
     get_project_root_source_files, robust_rmtree,
     is_unc_or_network_path, _unc_share_root, classify_platformio_failure,
-    retry_transient_file_operation, write_source_text,
+    retry_transient_file_operation, write_source_text, project_source_path,
 )
 from main.core.toolchain import (
     find_pio_executable, ensure_platformio, _refresh_platformio_core_environment,
@@ -1189,8 +1189,8 @@ class MCUWebBackendAPI:
         if getattr(self, "_cloud_project_operation", False):
             return {"success": False, "error": "Wait for cloud synchronization to finish before saving."}
         try:
-            p = Path(file_path).resolve()
-            if p.parent != Path(self.sketch_dir_path).resolve():
+            p = project_source_path(file_path, self.sketch_dir_path)
+            if p is None:
                 return {"success": False, "error": "Library previews are read-only. Save project source files only."}
             encoded = content.encode("utf-8")
             try:
@@ -1201,7 +1201,10 @@ class MCUWebBackendAPI:
                 ensure_file_writable(p)
                 write_source_text(p, content, expected=previous)
             _sketch_ram_cache.set_content(p, content)
-            self.modified_files[str(p)] = False
+            # The editor marks buffers dirty by its own path spelling, which a
+            # network share may resolve differently; clear every spelling.
+            for key in {str(file_path), str(p)}:
+                self.modified_files[key] = False
             self.update_skip_compile_availability()
             if hasattr(self, "ai_watcher") and self.ai_watcher:
                 self.ai_watcher.note_user_save(p, content)

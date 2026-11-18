@@ -762,7 +762,8 @@ class ProjectDialog(GlassDialog):
         """Create temporary source storage only after workspace choice/protection."""
         if self._is_busy():
             return
-        self._tabs.setCurrentIndex(1)
+        # Stay on the page the user is viewing; report on that page's status line.
+        status = self._current_status_label()
         result = {}
         def create(in_new_window):
             if self._backend:
@@ -782,7 +783,15 @@ class ProjectDialog(GlassDialog):
         import tempfile
         import uuid
         target = str(Path(tempfile.gettempdir()) / ("ghost-sketch-" + uuid.uuid4().hex))
-        self._dispatch_project_action(target, "Ghost Sketch", create, accepted, self._new_status)
+        self._dispatch_project_action(target, "Ghost Sketch", create, accepted, status)
+
+    def _current_status_label(self):
+        page = self._tabs.currentWidget()
+        for label in (getattr(self, "_existing_status", None), getattr(self, "_new_status", None),
+                      getattr(self, "_open_projects_status", None)):
+            if label is not None and page is not None and page.isAncestorOf(label):
+                return label
+        return self._new_status
 
     def _setup_recents_tab(self) -> None:
         tab, layout, actions = self._make_tab("Recent")
@@ -951,13 +960,43 @@ class ProjectDialog(GlassDialog):
             f"Files to create: {', '.join(files)}{include_note}"
         )
 
-    def _browse_folder(self) -> None:
-        # Reset every Browse click to the user's OS Documents location, not
-        # the active sketch or the native dialog's last-used folder.
-        start = (
+    def _recent_start_dir(self) -> str:
+        """Start browsing where the latest sketch lives; Documents only without history."""
+        try:
+            recents = self._backend.get_recent_projects() if self._backend else []
+        except Exception:
+            recents = []
+        for entry in recents or []:
+            try:
+                project = Path(entry)
+                if project.is_dir() and not is_application_codebase_dir(project):
+                    return str(project.parent if project.parent.is_dir() else project)
+            except (OSError, TypeError, ValueError):
+                continue
+        return (
             QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
             or str(Path.home() / "Documents")
         )
+
+    def open_with_native_picker(self) -> bool:
+        """Open a sketch straight from the system file picker.
+
+        Returns False when the built-in selector must be shown to report a
+        problem or to wait for a pending save; True when nothing is left to show.
+        """
+        self._tabs.setCurrentIndex(0)
+        self._open_path_edit.clear()
+        self._existing_status.setText("")
+        self._browse_folder()
+        if not self._open_path_edit.text().strip():
+            return True
+        self._open_existing()
+        if self.result() == QDialog.DialogCode.Accepted:
+            return True
+        return bool(self.isEnabled() and not self._existing_status.text().strip())
+
+    def _browse_folder(self) -> None:
+        start = self._recent_start_dir()
         # Selecting a source file keeps that exact file as the editor's initial
         # tab; backend validation still applies to its containing project root.
         selected, _ = QFileDialog.getOpenFileName(

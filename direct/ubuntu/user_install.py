@@ -271,7 +271,8 @@ def refresh_registered_lite(root, *, data_home=None):
 
 
 def persistent_setup_root(source, *, report=print):
+    # Every admitted distribution (Ubuntu, Linux Mint, Fedora) keeps one per-user
+    # installation; linux_distribution() still refuses anything unrecognized.
     from src.modules.ubuntu_release import linux_distribution
-    if linux_distribution().family != "ubuntu":
-        return Path(source)
+    linux_distribution()
     return ensure_user_installation(source, report=report)

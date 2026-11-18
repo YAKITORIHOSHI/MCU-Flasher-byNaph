@@ -92,6 +92,39 @@ class FileAccessChecks(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), self.before)
         self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
 
+    def test_share_that_refuses_staging_or_replacing_saves_into_the_file(self):
+        for code in (errno.ENOTSUP, errno.EXDEV, errno.EEXIST):
+            with self.subTest(replace=code):
+                self.path.write_bytes(self.before)
+                with patch.object(file_utils.os, 'replace', side_effect=OSError(code, 'fixture share refused replace')):
+                    file_utils.write_source_text(self.path, 'share buffer', expected=self.before)
+                self.assertEqual(self.path.read_bytes(), b'share buffer')
+                self.assertEqual(list(self.root.glob('.mcu-save-*')), [])
+        self.path.write_bytes(self.before)
+        with patch.object(file_utils.tempfile, 'mkstemp', side_effect=OSError(errno.EOPNOTSUPP, 'fixture no staging')):
+            file_utils.write_source_text(self.path, 'staged nowhere', expected=self.before)
+        self.assertEqual(self.path.read_bytes(), b'staged nowhere')
+        # Access denied on replace writes in place only on a network share.
+        denied = PermissionError(errno.EACCES, 'fixture share denies delete')
+        denied.winerror = 5
+        for network in (False, True):
+            with self.subTest(network=network):
+                self.path.write_bytes(self.before)
+                with patch.object(file_utils.os, 'replace', side_effect=denied), \
+                        patch.object(file_utils, '_on_network_mount', return_value=network):
+                    if network:
+                        file_utils.write_source_text(self.path, 'network buffer', expected=self.before)
+                    else:
+                        with self.assertRaises(PermissionError):
+                            file_utils.write_source_text(self.path, 'network buffer', expected=self.before)
+                self.assertEqual(self.path.read_bytes(), b'network buffer' if network else self.before)
+        # The in-place write keeps the conflict check.
+        self.path.write_text('external edit')
+        with patch.object(file_utils.os, 'replace', side_effect=OSError(errno.ENOTSUP, 'fixture')):
+            with self.assertRaisesRegex(RuntimeError, 'changed on disk'):
+                file_utils.write_source_text(self.path, 'share buffer', expected=self.before)
+        self.assertEqual(self.path.read_text(), 'external edit')
+
     def test_persistent_lock_or_concurrent_source_change_preserves_original_bytes(self):
         with patch.object(file_utils.os, 'replace', side_effect=PermissionError('held by fixture')):
             with self.assertRaises(PermissionError):

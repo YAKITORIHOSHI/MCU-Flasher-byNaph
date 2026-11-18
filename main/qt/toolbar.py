@@ -666,7 +666,7 @@ class PrimaryToolbar(QToolBar):
 
     def _on_sketch_label_click(self, event) -> None:
         if event.button() == Qt.MouseButton.RightButton:
-            self._on_new_project()
+            self._open_project_picker()
         elif self._backend:
             self._backend.open_in_explorer()
 
@@ -757,6 +757,18 @@ class PrimaryToolbar(QToolBar):
         dlg = ProjectDialog(self._backend, parent=self._workspace(), open_in_new_window=True)
         dlg.exec()
         dlg.deleteLater()
+
+    def _open_project_picker(self) -> None:
+        """Right-click: the system picker opens first, at the latest sketch's folder."""
+        if self._is_busy():
+            return
+        from main.qt.project_dialog import ProjectDialog
+        dlg = ProjectDialog(self._backend, parent=self._workspace(), open_in_new_window=True)
+        try:
+            if not dlg.open_with_native_picker():
+                dlg.exec()
+        finally:
+            dlg.deleteLater()
 
     def _open_download_manager(self) -> None:
         if self._is_busy():

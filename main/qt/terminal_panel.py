@@ -369,15 +369,18 @@ class TerminalPanel(QWidget):
         # 2. Empty state card
         self._empty_card = QFrame(self._stack)
         self._empty_card.setObjectName("terminal-empty")
-        self._empty_card.setStyleSheet("QFrame { background: #0a0e14; border: none; }")
+        # Only the message and its actions show; the placeholder paints no box.
+        self._empty_card.setStyleSheet("QFrame#terminal-empty { background: transparent; border: none; }")
         el = QVBoxLayout(self._empty_card)
-        el.setContentsMargins(8, 4, 8, 4)
+        el.setContentsMargins(16, 10, 16, 10)
         el.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        el.setSpacing(4)
+        el.setSpacing(10)
 
         self._lbl_no_term = QLabel("No active terminal sessions")
         lbl_no_term = self._lbl_no_term
-        lbl_no_term.setStyleSheet("font-size: 13px; font-weight: 600;")
+        lbl_no_term.setStyleSheet(
+            "QLabel { background: transparent; border: none; font-size: 14px; font-weight: 600; padding: 4px 12px; }")
+        lbl_no_term.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_no_term.setWordWrap(True)
         el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -445,7 +448,7 @@ class TerminalPanel(QWidget):
         else:
             self._btn_open_pwsh.setText("+ PowerShell (pwsh)")
             self._btn_open_cmd.setText("+ Command Prompt (cmd)")
-        self._lbl_no_term.setVisible(self._stack.height() >= 60)
+        self._lbl_no_term.setVisible(self._stack.height() >= 84)
 
     def _tick_spinner(self) -> None:
         self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)
@@ -1139,7 +1142,7 @@ class TerminalPanel(QWidget):
         if hasattr(self, "_loader_card") and self._loader_card:
             self._loader_card.setStyleSheet(f"QFrame#terminal-loader {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
         if hasattr(self, "_empty_card") and self._empty_card:
-            self._empty_card.setStyleSheet(f"QFrame#terminal-empty {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
+            self._empty_card.setStyleSheet("QFrame#terminal-empty { background: transparent; border: none; }")
         if hasattr(self, "_embed_container") and self._embed_container:
             self._embed_container.setStyleSheet(f"background: {bg_darkest};")
         if hasattr(self, "_btn_open_pwsh") and self._btn_open_pwsh:

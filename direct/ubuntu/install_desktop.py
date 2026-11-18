@@ -61,6 +61,23 @@ def exec_argument(value: str) -> str:
     return '"' + string_value(escaped).replace("%", "%%") + '"'
 
 
+def _host_label() -> str:
+    try:
+        from src.modules.ubuntu_release import linux_label
+        return linux_label()
+    except Exception:
+        return "Ubuntu"
+
+
+def lite_supported() -> bool:
+    """Lite's native launcher is qualified on Ubuntu and Linux Mint (its Ubuntu base)."""
+    try:
+        from src.modules.ubuntu_release import linux_distribution
+        return linux_distribution().family in ("ubuntu", "linuxmint")
+    except Exception:
+        return False
+
+
 def desktop_entry(root: Path, *, portable: bool = False) -> str:
     if portable:
         # Field codes must be outside quotes. Do not embed %k in shell source,
@@ -76,7 +93,7 @@ def desktop_entry(root: Path, *, portable: bool = False) -> str:
         "Exec=" + command, *location, "Icon=mcu-flasher",
         "Terminal=false", "Categories=Development;Electronics;",
         "StartupNotify=true", "StartupWMClass=MCU Flasher by Naph", "Actions=Repair;", "",
-        "[Desktop Action Repair]", "Name=Repair Ubuntu runtime",
+        "[Desktop Action Repair]", "Name=Repair " + _host_label() + " runtime",
         "Exec=" + command + " --repair", "",
     ))
 
@@ -104,7 +121,8 @@ def lite_desktop_entry(root: Path) -> str:
 def register_lite(root: Path, data_home: Path) -> bool:
     """Register Lite in All Apps when this folder carries its Ubuntu launcher."""
     lite = root / "LITE-MODE"
-    if not (lite / "run.sh").is_file() or not (lite / "assets/lite.png").is_file():
+    if (not lite_supported() or not (lite / "run.sh").is_file()
+            or not (lite / "assets/lite.png").is_file()):
         return False
     install_icon(data_home, LITE_ICON, (lite / "assets/lite.png").read_bytes())
     write_if_changed(data_home / "applications" / LITE_ENTRY,

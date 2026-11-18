@@ -30,6 +30,24 @@ _LOOP = re.compile(r"\bvoid\s+loop\s*\(", re.MULTILINE)
 _WINDOWS_RESERVED = re.compile(r"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$", re.IGNORECASE)
 
 
+_STARTER_FILE = "GhostSketch.ino"
+_STARTER_SOURCE = "void setup() {\n\n}\n\nvoid loop() {\n\n}\n"
+
+
+def ghost_project_unchanged(project_path: str | Path | None) -> bool:
+    """True when the temporary sketch still holds only its untouched starter file."""
+    if not project_path:
+        return False
+    try:
+        project = Path(project_path)
+        sources = [path for path in project.iterdir() if path.suffix.lower() in SOURCE_EXTENSIONS]
+        if len(sources) != 1 or sources[0].name != _STARTER_FILE or not sources[0].is_file():
+            return False
+        return sources[0].read_bytes() == _STARTER_SOURCE.encode("utf-8")
+    except (OSError, ValueError):
+        return False
+
+
 def _ghost_store_root() -> Path:
     return app_cache_dir() / "ghost-sketches"
 
@@ -41,8 +59,7 @@ def create_ghost_project_path() -> Path:
     session = Path(tempfile.mkdtemp(prefix="ghost-", dir=store))
     project = session / _PROJECT_NAME
     project.mkdir()
-    (project / "GhostSketch.ino").write_text(
-        "void setup() {\n\n}\n\nvoid loop() {\n\n}\n", encoding="utf-8", newline="")
+    (project / "GhostSketch.ino").write_text(_STARTER_SOURCE, encoding="utf-8", newline="")
     (session / _MARKER).write_bytes(_MARKER_BYTES)
     return project
 

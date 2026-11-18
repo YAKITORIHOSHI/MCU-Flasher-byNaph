@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Quick Bootstrap and first-compile board tools, in owned fixtures; never downloads.
 
-Bootstrap prepares SCons and the board list; a board's own build/upload packages
-are prepared the first time it is compiled (src/modules/target_packages.py).
+Bootstrap prepares SCons, the board list and the default boards' build/upload
+packages; any other board's packages are prepared the first time it is compiled
+(src/modules/target_packages.py).
 """
 from __future__ import annotations
 
@@ -111,6 +112,37 @@ class QuickBootstrapChecks(unittest.TestCase):
                     patch.object(offline_bootstrap, "load_plan", return_value={"schema": 1, "platforms": ["x"]}), \
                     patch("src.modules.offline_mode.offline_enabled", return_value=offline):
                 self.assertEqual(offline_bootstrap.board_stage_arguments(self.core, plan), expected)
+
+    def test_bootstrap_prepares_default_boards_and_never_blocks_on_one(self):
+        manifests = {"uno": {"name": "Arduino Uno", "upload.protocol": "arduino"},
+                     "nodemcuv2": {"name": "NodeMCU 1.0", "upload.protocol": "esptool"},
+                     "esp32dev": {"name": "Espressif ESP32 Dev Module", "upload.protocol": "esptool"}}
+        packages = SimpleNamespace(get_package=lambda name: SimpleNamespace(name=name))
+        factory = SimpleNamespace(new=lambda package: SimpleNamespace(board_config=lambda board: manifests[board]))
+        calls = []
+
+        def fake_prepare(config, core, *, protocol="", log=print, **_):
+            text = Path(config).read_text(encoding="utf-8")
+            calls.append((Path(config).name, protocol, text))
+            if "nodemcuv2" in text:
+                raise RuntimeError("mirror unavailable")
+            return {"changed": True}
+
+        plan = {"schema": 1, "platforms": ["atmelavr", "espressif8266", "espressif32", "ststm32"],
+                "frameworks": ["arduino"]}
+        logs = []
+        with patch("platformio.package.manager.platform.PlatformPackageManager", return_value=packages), \
+                patch("platformio.platform.factory.PlatformFactory", factory), \
+                patch.object(target_packages, "prepare", side_effect=fake_prepare), \
+                patch.object(target_packages, "target_ready",
+                             side_effect=lambda core, platform, board, *_: board == "esp32dev"):
+            ready = offline_bootstrap.prepare_default_targets(self.core, plan, log=logs.append)
+        self.assertEqual(ready, ["uno", "esp32dev"])
+        self.assertEqual([(name, protocol) for name, protocol, _ in calls],
+                         [("bootstrap-target-uno.ini", "arduino"), ("bootstrap-target-nodemcuv2.ini", "esptool")])
+        self.assertIn("board = uno\nframework = arduino\nupload_protocol = arduino\n", calls[0][2])
+        self.assertTrue(any("nodemcuv2" in line and "first compile" in line for line in logs))
+        self.assertEqual(list((self.core / ".tmp").iterdir()), [])
 
     def test_quick_store_needs_its_marker_files_and_this_host(self):
         self.assertFalse(offline_bootstrap.catalog_ready(self.core))

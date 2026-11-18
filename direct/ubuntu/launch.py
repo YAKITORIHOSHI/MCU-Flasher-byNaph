@@ -530,8 +530,7 @@ def owned_installation_elsewhere() -> Path | None:
     from src.modules.ubuntu_release import linux_distribution
     from direct.ubuntu.user_install import installation_directory, is_owned_installation
     try:
-        if linux_distribution().family != "ubuntu":
-            return None
+        linux_distribution()  # Admission only: every supported distribution installs per user.
         destination = installation_directory()
     except (OSError, RuntimeError):
         return None
@@ -593,8 +592,9 @@ def main(argv=None) -> int:
     try:
         if args.lite:
             from src.modules.ubuntu_release import linux_distribution
-            if linux_distribution().family != "ubuntu":
-                raise RuntimeError("Lite currently supports native Ubuntu 24.04+ and Windows 10/11 x64 only.")
+            if linux_distribution().family not in ("ubuntu", "linuxmint"):
+                raise RuntimeError("Lite currently supports native Ubuntu 24.04+, Linux Mint 22+ "
+                                   "and Windows 10/11 x64 only.")
         if not args.check and hasattr(os, "geteuid") and os.geteuid() == 0:
             raise RuntimeError(f"Run MCU Flasher as your normal {label} desktop account, without sudo.")
         if args.install_shortcut and not args.check:
@@ -732,9 +732,8 @@ def main(argv=None) -> int:
                 raise RuntimeError(problem)
             if window is not None:
                 window.log("The private runtime is ready.", "ok")
-        if label == "Ubuntu":
-            from direct.ubuntu.user_install import refresh_registered_lite
-            refresh_registered_lite(ROOT)
+        from direct.ubuntu.user_install import refresh_registered_lite
+        refresh_registered_lite(ROOT)
         return launch_workspace(arguments, env, desktop=desktop, window=window)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         report_error(str(exc), desktop=desktop, window=window)

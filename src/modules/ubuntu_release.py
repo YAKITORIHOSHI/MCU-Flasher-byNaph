@@ -18,12 +18,12 @@ MINIMUM_FEDORA = 44
 MINIMUM_MACOS = (14, 0)
 # A Mint release is defined by its Ubuntu base. Debian-based LMDE has no
 # UBUNTU_CODENAME and stays refused until it has its own qualification.
-MINT_UBUNTU_BASES = {22: ("noble", (24, 4))}
+MINT_UBUNTU_BASES = {22: ("noble", (24, 4)), 23: ("resolute", (26, 4))}
 REQUIREMENT = "MCU Flasher requires Ubuntu 24.04 or newer."
-MINT_REQUIREMENT = "MCU Flasher requires Linux Mint 22.x, based on Ubuntu 24.04."
+MINT_REQUIREMENT = "MCU Flasher requires Linux Mint 22.x or 23.x, based on Ubuntu 24.04 or 26.04."
 FEDORA_REQUIREMENT = "MCU Flasher requires Fedora 44 or newer."
 MACOS_REQUIREMENT = "MCU Flasher requires macOS 14 or newer."
-ANY_LINUX_REQUIREMENT = "MCU Flasher requires Ubuntu 24.04 or newer, Linux Mint 22.x or Fedora 44 or newer."
+ANY_LINUX_REQUIREMENT = "MCU Flasher requires Ubuntu 24.04 or newer, Linux Mint 22.x/23.x or Fedora 44 or newer."
 
 
 @dataclass(frozen=True)

@@ -375,6 +375,10 @@ class PosixTerminalPanel(QWidget):
         self._empty = QLabel("No terminal sessions\nChoose New Bash to start a shell in this project.", self._stack)
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setWordWrap(True)
+        # Only the text shows: no box behind it, and room around it at any size.
+        self._empty.setObjectName("terminal-empty")
+        self._empty.setStyleSheet(
+            "QLabel#terminal-empty { background: transparent; border: none; font-size: 14px; padding: 18px 24px; }")
         self._stack.addWidget(self._empty)
         self._tabs = QTabWidget(self._stack)
         session_tabs = ClosableTerminalTabs(self._tabs)

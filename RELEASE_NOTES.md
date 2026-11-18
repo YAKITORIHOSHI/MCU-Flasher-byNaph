@@ -4,7 +4,7 @@
 [`MCU_Flasher-v11.zip`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/latest)
 
 **Platforms:** Windows 10/11 (AMD64) · Ubuntu 24.04+ (amd64, ARM64) ·
-Linux Mint 22.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
+Linux Mint 22.x/23.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
 
 MCU Flasher is a desktop workspace for writing, compiling, flashing and
 monitoring microcontroller firmware. A code editor, serial monitor, terminals
@@ -42,10 +42,10 @@ see the [README](README.md).
   other MCU Flasher and Lite windows show it as in use. A window cannot close
   while firmware is being written, erased or recovered.
 - **Setup and repair.** The first launch prepares a private Python runtime, the
-  required packages, the board list and, on Windows, the default boards' tools
-  and the CP210x and CH34x USB drivers, in its own setup window. On Linux and macOS this takes about a
-  minute; each board's compiler and uploader download the first time you
-  compile for it, and only what that board needs. A repair launch rebuilds
+  required packages, the board list and the default boards' tools (Arduino
+  Uno, NodeMCU and ESP32 Dev Module), plus the CP210x and CH34x USB drivers on
+  Windows, in its own setup window. Any other board's compiler and uploader
+  download the first time you compile for it. A repair launch rebuilds
   anything missing.
 - **Interface.** Glass Dark, Frosted Light and Solarized Dark themes, an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,

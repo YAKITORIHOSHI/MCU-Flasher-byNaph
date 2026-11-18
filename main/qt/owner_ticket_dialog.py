@@ -364,21 +364,21 @@ class TicketFields(QWidget):
         self.title.setPlaceholderText("Briefly describe the issue")
         layout.addWidget(field("Title", self.title, self))
         self.category = combo(list(categories or CATEGORIES), self, ticket.get("category", CATEGORIES[0]))
-        category_field = field("Category", self.category, self)
-        category_field.layout().removeWidget(self.category)
-        category_controls = QWidget(category_field)
-        category_controls_layout = QHBoxLayout(category_controls)
-        category_controls_layout.setContentsMargins(0, 0, 0, 0)
-        category_controls_layout.setSpacing(6)
-        category_controls_layout.addWidget(self.category, 1)
-        self.btn_remove_category = button("", category_controls,
-            lambda: self.category_remove_requested.emit(self.category.currentText()), role="icon", vector="clear")
-        self.btn_remove_category.setFixedWidth(36)
-        self.btn_remove_category.setAccessibleName("Remove selected category")
-        self.btn_remove_category.setToolTip("Remove this custom category after reassigning its tickets")
-        category_controls_layout.addWidget(self.btn_remove_category)
-        category_field.layout().addWidget(category_controls)
-        category_entry = QWidget(category_field)
+        self.severity = combo(SEVERITIES, self, ticket.get("severity", "Medium"))
+        self.status = combo(STATUSES, self, ticket.get("status", "Open"))
+        # Category, Severity and Status are three equal caption/dropdown pairs,
+        # so their captions and controls share one top line and one width.
+        self.classifications = ResponsiveGrid([
+            field("Category", self.category, self),
+            field("Severity", self.severity, self),
+            field("Status", self.status, self),
+        ], self, cell_width=170)
+        group = QVBoxLayout()
+        group.setContentsMargins(0, 0, 0, 0)
+        group.setSpacing(8)
+        group.addWidget(self.classifications)
+        # Category management spans the group's width under the dropdowns.
+        category_entry = QWidget(self)
         category_row = QHBoxLayout(category_entry)
         category_row.setContentsMargins(0, 0, 0, 0)
         category_row.setSpacing(8)
@@ -387,26 +387,25 @@ class TicketFields(QWidget):
         self.category_input.setAccessibleName("New ticket category")
         self.category_input.returnPressed.connect(self._request_category_add)
         self.btn_add_category = button("+", category_entry, self._request_category_add, role="category-add")
-        self.btn_add_category.setFixedWidth(42)
         self.btn_add_category.setToolTip("Add a category")
         self.btn_add_category.setAccessibleName("Add category")
+        self.btn_remove_category = button("", category_entry,
+            lambda: self.category_remove_requested.emit(self.category.currentText()), role="icon", vector="clear")
+        self.btn_remove_category.setAccessibleName("Remove selected category")
+        self.btn_remove_category.setToolTip("Remove the selected custom category after reassigning its tickets")
+        edge = max(36, self.category_input.sizeHint().height())
+        for action in (self.btn_add_category, self.btn_remove_category):
+            action.setFixedSize(edge, edge)
         category_row.addWidget(self.category_input, 1)
         category_row.addWidget(self.btn_add_category)
-        category_field.layout().addWidget(category_entry)
-        self.severity = combo(SEVERITIES, self, ticket.get("severity", "Medium"))
-        self.status = combo(STATUSES, self, ticket.get("status", "Open"))
-        self.classifications = ResponsiveGrid([
-            category_field,
-            field("Severity", self.severity, self),
-            field("Status", self.status, self),
-        ], self, cell_width=170)
-        layout.addWidget(self.classifications)
-        # Feedback belongs to the classification group, spanning its width.
-        # Keeping it outside an individual grid cell avoids unequal row heights
-        # and gives wrapped errors room without shifting adjacent controls.
+        category_row.addWidget(self.btn_remove_category)
+        group.addWidget(category_entry)
+        # Feedback belongs to the classification group, spanning its width,
+        # so wrapped errors never give one grid cell a taller row.
         self.category_feedback = label("", self, "metadata", wrap=True)
         self.category_feedback.hide()
-        layout.addWidget(self.category_feedback)
+        group.addWidget(self.category_feedback)
+        layout.addLayout(group)
         self.severity.currentTextChanged.connect(lambda value: retone(self.severity, SEVERITY_TONES.get(value, "muted")))
         self.status.currentTextChanged.connect(lambda value: retone(self.status, STATUS_TONES.get(value, "muted")))
         retone(self.severity, SEVERITY_TONES.get(self.severity.currentText(), "muted"))
@@ -639,6 +638,8 @@ class CreateTicketDialog(_TaskPortal):
         self.content.addWidget(self.scroll, 1)
 
         footer = QHBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+        footer.setSpacing(10)
         footer.addStretch(1)
         self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.btn_cancel)
@@ -773,6 +774,8 @@ class EditTicketDialog(_TaskPortal):
         layout.addStretch(1)
         self.content.addWidget(self.scroll, 1)
         footer = QHBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+        footer.setSpacing(10)
         footer.addStretch(1)
         self.btn_cancel = button("Cancel", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.btn_cancel)
@@ -899,6 +902,8 @@ class CloudSettingsDialog(_TaskPortal):
         layout.addStretch(1)
         self.content.addWidget(self.scroll, 1)
         footer = QHBoxLayout()
+        footer.setContentsMargins(0, 4, 0, 0)
+        footer.setSpacing(10)
         footer.addStretch(1)
         self.close_button = button("Close", self.backdrop, self.reject, role="quiet")
         footer.addWidget(self.close_button)

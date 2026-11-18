@@ -399,16 +399,113 @@ def retry_transient_file_operation(operation, attempts: int = 8,
         raise last_error
 
 
+# The share cannot stage a sibling or replace a file: no file data is at risk.
+_ATOMIC_UNSUPPORTED_ERRNOS = (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV, errno.EEXIST)
+_ATOMIC_UNSUPPORTED_WINERRORS = (1, 17, 50, 87, 183)
+_NETWORK_FILESYSTEMS = ("cifs", "smb3", "smbfs", "nfs", "nfs4", "fuse.gvfsd-fuse", "fuse.sshfs", "fuse.rclone")
+
+
+def _on_network_mount(path) -> bool:
+    """Windows UNC/mapped drives, or a Linux SMB/NFS/GVfs mount holding *path*."""
+    if is_unc_or_network_path(path):
+        return True
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        target = os.path.abspath(path)
+        best, kind = "", ""
+        with open("/proc/self/mounts", encoding="utf-8", errors="replace") as mounts:
+            for line in mounts:
+                fields = line.split()
+                if len(fields) < 3:
+                    continue
+                point = fields[1].replace("\\040", " ")
+                if (target == point or target.startswith(point.rstrip("/") + "/")) and len(point) > len(best):
+                    best, kind = point, fields[2]
+        return kind in _NETWORK_FILESYSTEMS
+    except OSError:
+        return False
+
+
+def _atomic_step_unsupported(error, target) -> bool:
+    """True when staging or replacing failed because the storage refuses that step.
+
+    Locks, read-only files, full disks and I/O errors stay authoritative. A
+    network share that grants writing but not deleting/renaming reports access
+    denied on replace; only there may the buffer be written into the file.
+    """
+    if error.errno in _ATOMIC_UNSUPPORTED_ERRNOS or getattr(error, "winerror", None) in _ATOMIC_UNSUPPORTED_WINERRORS:
+        return True
+    if sys.platform == "win32":
+        return getattr(error, "winerror", None) == 5 and _on_network_mount(target)
+    return error.errno in (errno.EPERM, errno.EACCES) and _on_network_mount(target)
+
+
+def _write_in_place(target, encoded, check) -> None:
+    def write():
+        check()
+        with Path(target).open("r+b") as stream:
+            stream.write(encoded)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+    retry_transient_file_operation(write, attempts=6, delay=0.08)
+
+
+def project_source_path(path, project_root):
+    """Return *path* when it is a file directly inside *project_root*, else None.
+
+    Network shares can resolve differently per call (mapped drive vs UNC on
+    Windows, GVfs/CIFS mounts on Linux), so the unresolved and the resolved
+    forms are compared separately; either agreeing identifies a root source.
+    """
+    if not path or not project_root:
+        return None
+    candidate, root = Path(path), Path(project_root)
+    forms = []
+    try:
+        forms.append((candidate.resolve(), root.resolve()))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    forms.append((candidate.absolute(), root.absolute()))
+    for file_form, root_form in forms:
+        if os.path.normcase(os.path.normpath(str(file_form.parent))) == \
+                os.path.normcase(os.path.normpath(str(root_form))):
+            return file_form
+    return None
+
+
 def write_source_text(path, content, *, expected):
-    """Save a user buffer atomically; retain disk bytes on locks or conflicts."""
+    """Save a user buffer atomically; retain disk bytes on locks or conflicts.
+
+    A network share (SMB/NAS on Windows, GVfs or CIFS on Linux) may refuse the
+    staged sibling or replacing an existing file. Only then is the buffer
+    written into the existing file, after the same conflict check.
+    """
     import stat
     target = Path(path)
+    encoded = content.encode("utf-8")
+
+    def unchanged_on_disk():
+        try:
+            current = target.read_bytes()
+        except FileNotFoundError:
+            current = None
+        if current != expected:
+            raise RuntimeError("The file changed on disk while saving. Your buffer and the external changes were preserved; compare them before saving again.")
+
     mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
-    descriptor, name = tempfile.mkstemp(prefix=".mcu-save-", suffix=".tmp", dir=target.parent)
+    try:
+        descriptor, name = tempfile.mkstemp(prefix=".mcu-save-", suffix=".tmp", dir=target.parent)
+    except OSError as error:
+        if mode is None or not _atomic_step_unsupported(error, target):
+            raise
+        _write_in_place(target, encoded, unchanged_on_disk)
+        return
     staged = Path(name)
     try:
         with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content.encode("utf-8"))
+            stream.write(encoded)
             stream.flush()
             os.fsync(stream.fileno())
         if mode is not None:
@@ -423,14 +520,14 @@ def write_source_text(path, content, *, expected):
                     raise
 
         def publish():
-            try:
-                current = target.read_bytes()
-            except FileNotFoundError:
-                current = None
-            if current != expected:
-                raise RuntimeError("The file changed on disk while saving. Your buffer and the external changes were preserved; compare them before saving again.")
+            unchanged_on_disk()
             os.replace(staged, target)
-        retry_transient_file_operation(publish, attempts=6, delay=0.08)
+        try:
+            retry_transient_file_operation(publish, attempts=6, delay=0.08)
+        except OSError as error:
+            if mode is None or not _atomic_step_unsupported(error, target):
+                raise
+            _write_in_place(target, encoded, unchanged_on_disk)
     finally:
         try:
             staged.unlink(missing_ok=True)
@@ -1388,7 +1485,7 @@ def application_agent_guidance(project_dir) -> str:
         "at the ZIP root without a wrapper folder, retain the complete "
         "private Windows runtime and verify installer hashes, archive contents and Git integrity "
         "before pushing. Local settings and protected state stay out of the release.\n"
-        "- Linux and macOS Bootstrap is quick: SCons, the default plan's platform definitions, board list and libraries (`offline_bootstrap.py --auto` chooses `--catalog-only`, gated by `catalog_ready`/`board_store_ready`). Offline Mode or an explicit plan keeps the complete preparation and certificate. Compile and Upload prepare the selected exact target's required build/upload packages before the build's package lease (`_prepare_target_tools`, `src/modules/target_packages.py`): a separate process outside the workspace guard, a reader first and the writer lease only while something is missing, with a per-target stamp so later builds cost a few stat calls. Never fetch other chips' toolchains or optional debuggers. Verify target_packages.\n- Bootstrap dependency work uses finite elapsed-time budgets, never console-silence "
+        "- Linux and macOS Bootstrap is quick: SCons, the default plan's platform definitions, board list, libraries and the default boards' tools (`DEFAULT_TARGETS`: Uno, NodeMCU, ESP32 Dev; same per-target stamps as Compile; a failed board is left to its first compile) (`offline_bootstrap.py --auto` chooses `--catalog-only`, gated by `catalog_ready`/`board_store_ready`). Offline Mode or an explicit plan keeps the complete preparation and certificate. Compile and Upload prepare the selected exact target's required build/upload packages before the build's package lease (`_prepare_target_tools`, `src/modules/target_packages.py`): a separate process outside the workspace guard, a reader first and the writer lease only while something is missing, with a per-target stamp so later builds cost a few stat calls. Never fetch other chips' toolchains or optional debuggers. Verify target_packages.\n- Bootstrap dependency work uses finite elapsed-time budgets, never console-silence "
         "retries. Preserve cancellation of owned children, independent staged-package "
         "verification and native copy semantics; measure performance only in owned temp "
         "fixtures and retain phase timings without reducing declared coverage.\n"

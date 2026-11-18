@@ -140,6 +140,10 @@ class GhostSketchController(QObject):
         if not self.temporary and not self.needs_recovery:
             callback(True)
             return
+        if not self.needs_recovery and self._unchanged():
+            # Nothing was typed into the starter sketch: there is nothing to keep.
+            callback(True)
+            return
         parent = QApplication.activeModalWidget() or self.workspace
         message = ("The project files were saved, but the editor has not confirmed its new paths. "
                    "Save retries the editor update. Discard leaves the saved files on disk and closes this workspace."
@@ -155,6 +159,14 @@ class GhostSketchController(QObject):
             self.request_save(callback=lambda: callback(True), failure_callback=lambda: callback(False))
         else:
             callback(choice == QMessageBox.StandardButton.Discard)
+
+    def _unchanged(self) -> bool:
+        backend = self.workspace._backend
+        modified = getattr(backend, "modified_files", None) or {}
+        if any(bool(flag) for flag in modified.values()):
+            return False
+        from main.core.ghost_sketch import ghost_project_unchanged
+        return ghost_project_unchanged(getattr(backend, "sketch_dir_path", None))
 
     def request_save(self, callback=None, failure_callback=None) -> None:
         if self.is_saving:

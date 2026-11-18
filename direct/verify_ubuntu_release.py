@@ -64,8 +64,16 @@ class ReleaseChecks(unittest.TestCase):
                 self.assertEqual(release.require_supported_ubuntu(), (24, 4))
                 distribution = release.linux_distribution()
                 self.assertEqual((distribution.label, distribution.package_manager), ("Linux Mint", "apt"))
+        # Mint 23 uses the Ubuntu 26.04 (resolute) base.
+        for version in ("23", "23.1"):
+            record = {"ID": "linuxmint", "ID_LIKE": "ubuntu debian", "VERSION_ID": version,
+                      "UBUNTU_CODENAME": "resolute"}
+            with self.subTest(version=version), patch.object(release.sys, "platform", "linux"), \
+                    patch.object(release.platform, "freedesktop_os_release", return_value=record):
+                self.assertEqual(release.require_supported_ubuntu(), (26, 4))
         refused = [{"VERSION_ID": "21.3", "UBUNTU_CODENAME": "jammy"},   # Below the Ubuntu 24.04 base.
-                   {"VERSION_ID": "23", "UBUNTU_CODENAME": "resolute"},  # No reviewed policy yet.
+                   {"VERSION_ID": "24", "UBUNTU_CODENAME": "future"},    # No reviewed policy yet.
+                   {"VERSION_ID": "23", "UBUNTU_CODENAME": "noble"},     # Version and base disagree.
                    {"VERSION_ID": "22.1", "UBUNTU_CODENAME": "jammy"},   # Version and base disagree.
                    {"VERSION_ID": "6", "DEBIAN_CODENAME": "bookworm"},   # LMDE has a separate base.
                    {"VERSION_ID": "22.1"}]

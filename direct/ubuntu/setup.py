@@ -205,9 +205,9 @@ def main(argv=None) -> int:
         announce("Finishing setup")
         from src.modules.default_board_folders import prepare_default_board_folders
         prepare_default_board_folders(python, env=env)
-        if label == "Ubuntu":
-            stage = "Applications registration"
-            register_completed_installation(ROOT)
+        # Ubuntu, Linux Mint and Fedora all list MCU Flasher in their app menus.
+        stage = "Applications registration"
+        register_completed_installation(ROOT)
         print(f"{label} runtime ready. Launch with: bash direct/ubuntu/run.sh")
         if args.launch:
             command = [str(python), str(ROOT / "mcu_flash_gui.py")]
