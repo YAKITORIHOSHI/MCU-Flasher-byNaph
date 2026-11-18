@@ -2048,154 +2048,9 @@ def _install_python_update(package_id: str) -> bool:
     return False
 
 
-def _opencode_installed_version() -> str | None:
-    """Return the installed OpenCode version string (e.g. '1.1.28') with a fast non-blocking timeout."""
-    cli_path = check_opencode_cli()
-    if not cli_path:
-        return None
-
-    # Fast path 1: Check if sibling/parent node_modules package.json exists (<1ms, no subprocess)
-    try:
-        p_cli = Path(cli_path)
-        candidate_pkgs = [
-            p_cli.parent / "node_modules" / "opencode-ai" / "package.json",
-            p_cli.parent.parent / "package.json",
-            p_cli.parent / "package.json",
-        ]
-        for pkg_json in candidate_pkgs:
-            if pkg_json.is_file():
-                data = json.loads(pkg_json.read_text(encoding="utf-8"))
-                if data.get("name") in ("opencode-ai", "opencode") and data.get("version"):
-                    return str(data["version"]).strip()
-    except Exception:
-        pass
-
-    # Fast path 2: Run [cli_path, "--version"] with a 2.0s non-blocking timeout
-    test_target = cli_path
-    is_script = str(cli_path).lower().endswith((".cmd", ".bat"))
-    if is_script and sys.platform == "win32":
-        sibling_exe = Path(cli_path).parent / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
-        if sibling_exe.is_file() and _is_valid_pe_binary(sibling_exe):
-            test_target = str(sibling_exe)
-            is_script = False
-
-    try:
-        result = subprocess.run(
-            [test_target, "--version"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            shell=is_script if sys.platform == "win32" else False,
-            creationflags=_hidden_subprocess_flags(),
-            timeout=2.0,
-        )
-        if result.returncode == 0:
-            import re
-            m = re.search(r"(\d+\.\d+[\.\d\w\-]*)", result.stdout or "")
-            if m:
-                return m.group(1).strip()
-    except Exception:
-        pass
-
-    return None
-
-
-def check_opencode_update() -> dict:
-    """Check OpenCode AI Assistant for updates with a non-blocking 2.0s socket timeout.
-
-    Handles offline states cleanly without blocking startup.
-    Returns: {"name": "opencode", "installed": str|None, "latest": str|None,
-              "update_available": bool, "error": str|None}
-    """
-    installed = _opencode_installed_version()
-    if installed is None:
-        if not check_opencode_cli():
-            return {"name": "opencode", "installed": None, "latest": None,
-                    "update_available": False, "error": "not installed"}
-
-    # Non-blocking network check: if offline, return immediately without waiting
-    if not _is_network_reachable(timeout=1.5):
-        return {"name": "opencode", "installed": installed, "latest": None,
-                "update_available": False, "error": "network unavailable — skipping"}
-
-    latest = None
-    body = _fetch_url("https://registry.npmjs.org/opencode-ai/latest", timeout=2)
-    if body:
-        try:
-            data = json.loads(body)
-            latest = data.get("version")
-        except Exception:
-            pass
-
-    if latest is None:
-        return {"name": "opencode", "installed": installed, "latest": None,
-                "update_available": False, "error": "could not reach npm registry"}
-
-    update_available = False
-    if installed and latest:
-        try:
-            update_available = _version_tuple(latest) > _version_tuple(installed)
-        except Exception:
-            update_available = False
-
-    return {
-        "name": "opencode",
-        "installed": installed,
-        "latest": latest,
-        "update_available": update_available,
-        "error": None,
-    }
-
-
-def _upgrade_opencode(target_version: str) -> bool:
-    """Upgrade OpenCode AI Assistant via npm to target_version."""
-    if is_any_opencode_process_running():
-        warn("OpenCode AI Assistant process is currently active; skipping upgrade.")
-        return False
-
-    npm_cmd = _find_usable_npm_cmd()
-    if not npm_cmd:
-        warn("npm is not available; cannot upgrade OpenCode AI Assistant.")
-        return False
-
-    install_cmd = [
-        npm_cmd,
-        "install",
-        "-g",
-        "--no-audit",
-        "--no-fund",
-        "--no-update-notifier",
-        "--loglevel=error",
-        "--fetch-retries=2",
-        "--fetch-retry-mintimeout=2000",
-        "--fetch-retry-maxtimeout=10000",
-        "--allow-scripts=opencode-ai",
-        f"opencode-ai@{target_version}",
-    ]
-    try:
-        res = subprocess.run(
-            install_cmd,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            shell=sys.platform == "win32" and str(npm_cmd).lower().endswith((".cmd", ".bat")),
-            creationflags=_hidden_subprocess_flags(),
-            timeout=90,
-        )
-        _refresh_node_npm_path()
-        return res.returncode == 0
-    except Exception as exc:
-        warn(f"OpenCode upgrade failed: {exc}")
-        return False
-
-
 _UPDATE_CHECK_PACKAGES = [
     "python", "pip", "pyserial", "psutil", "pywebview",
-    "pywinpty", "websockets", "esptool", "pyside6", "platformio", "arduino-cli", "opencode",
+    "pywinpty", "websockets", "esptool", "pyside6", "platformio", "arduino-cli",
 ]
 
 
@@ -2320,8 +2175,9 @@ def run_update_checks():
         ("pyside6",    lambda: check_pip_package_update("PySide6", "PySide6.QtWidgets")),
         ("platformio", lambda: check_pio_update()),
         ("arduino-cli",lambda: check_arduino_cli_update()),
-        ("opencode",   lambda: globals().get("check_opencode_update", lambda: {"name": "opencode", "installed": None, "latest": None, "update_available": False, "error": None})()),
     ]
+    # OpenCode is not checked: Bootstrap installs it once when it is missing
+    # and never updates or reinstalls it (see ensure_opencode_cli).
     if sys.platform == "win32":
         checks.append(("pywin32", lambda: check_pip_package_update("pywin32")))
 
@@ -2371,10 +2227,9 @@ def run_update_checks():
         return "up_to_date"
 
     # ── Prompt / auto-update ─────────────────────────────────
-    pip_updates      = [r for r in updates_found if r["name"] not in ("arduino-cli", "python", "opencode")]
-    cli_updates      = [r for r in updates_found if r["name"] == "arduino-cli"]
-    python_updates   = [r for r in updates_found if r["name"] == "python"]
-    opencode_updates = [r for r in updates_found if r["name"] == "opencode"]
+    pip_updates    = [r for r in updates_found if r["name"] not in ("arduino-cli", "python")]
+    cli_updates    = [r for r in updates_found if r["name"] == "arduino-cli"]
+    python_updates = [r for r in updates_found if r["name"] == "python"]
 
     # Updates install without a question. Skip Updates is the only opt-out, and a
     # change to it during the installs below still stops the remaining ones.
@@ -2461,25 +2316,6 @@ def run_update_checks():
             else:
                 warn(f"arduino-cli {r['latest']} was installed, but the executable found reports "
                      f"{found or 'no version'}; the update will be offered again.")
-
-    if opencode_updates:
-        if _update_check_skip_reason():
-            return "skipped"
-        r = opencode_updates[0]
-        status(f"Upgrading OpenCode AI Assistant {r['installed']} → {r['latest']}...")
-        if _upgrade_opencode(r["latest"]):
-            try:
-                actual = _opencode_installed_version()
-                verified = actual is not None and _version_tuple(actual) >= _version_tuple(r["latest"])
-            except Exception as exc:
-                actual, verified = None, False
-                warn(f"Could not verify OpenCode AI Assistant after update: {exc}")
-            if verified:
-                ok(f"OpenCode AI Assistant upgraded and verified at {actual}")
-            else:
-                warn(f"OpenCode AI Assistant update was not verified (found {actual or 'no version'}); continuing")
-        else:
-            warn("Failed to upgrade OpenCode AI Assistant — continuing")
 
     return "updates_available"
 
@@ -8550,6 +8386,52 @@ def find_running_opencode_exe() -> Optional[str]:
     return None
 
 
+def _opencode_image_running() -> bool:
+    """Find a running opencode.exe with a native process snapshot, without psutil.
+
+    Bootstrap can run before psutil is importable, and psutil can be denied a
+    process's details; either made OpenCode open in a terminal look absent.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", wintypes.LONG),
+                        ("dwFlags", wintypes.DWORD), ("szExeFile", wintypes.WCHAR * 260)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        kernel.Process32FirstW.restype = wintypes.BOOL
+        kernel.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        kernel.Process32NextW.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+        snapshot = kernel.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
+        if snapshot in (None, ctypes.c_void_p(-1).value):
+            return False
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            found = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+            while found:
+                if entry.szExeFile.casefold() == "opencode.exe":
+                    return True
+                found = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel.CloseHandle(snapshot)
+    except Exception:
+        pass
+    return False
+
+
 def is_any_opencode_process_running() -> bool:
     """Check whether an OpenCode AI Assistant process is currently active."""
     try:
@@ -8571,7 +8453,7 @@ def is_any_opencode_process_running() -> bool:
                 continue
     except Exception:
         pass
-    return False
+    return _opencode_image_running()
 
 
 def _is_valid_pe_binary(path: Path | str) -> bool:
@@ -8650,6 +8532,7 @@ def check_opencode_cli() -> Optional[str]:
                 ])
             elif env_var == "USERPROFILE":
                 candidates.extend([
+                    p_base / ".opencode" / "bin" / "opencode.exe",
                     p_base / "AppData" / "Roaming" / "npm" / "opencode.cmd",
                     p_base / "AppData" / "Roaming" / "npm" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe",
                     p_base / "AppData" / "Roaming" / "npm" / "opencode.exe",
@@ -8995,8 +8878,24 @@ def _install_nodejs_lts() -> bool:
     return _install_nodejs_lts_direct()
 
 
+def _existing_opencode_installation() -> str | None:
+    """Name an OpenCode that is already here, without running it.
+
+    A failed or slow ``--version`` is not evidence of absence: with OpenCode
+    open in a terminal, Bootstrap took it for missing, uninstalled it and
+    downloaded it again while the running executable was locked, leaving a
+    half-removed npm package behind.
+    """
+    running = find_running_opencode_exe()
+    if running:
+        return running
+    if is_any_opencode_process_running():
+        return "running in another window"
+    return check_opencode_cli()
+
+
 def ensure_opencode_cli() -> bool:
-    """Ensure OpenCode CLI is installed and usable."""
+    """Install OpenCode only when none is installed; never update or reinstall it."""
 
     def _cli_works(path: str | None) -> bool:
         if not path:
@@ -9034,31 +8933,10 @@ def ensure_opencode_cli() -> bool:
         except Exception:
             return False
 
-    running_cli = find_running_opencode_exe()
-    if running_cli:
-        ok(f"OpenCode AI Assistant is active and running ({running_cli})")
+    existing = _existing_opencode_installation()
+    if existing:
+        ok(f"OpenCode AI Assistant is installed ({existing}); Bootstrap keeps it as it is.")
         return True
-    if is_any_opencode_process_running():
-        ok("OpenCode AI Assistant is active and running in an external session.")
-        return True
-
-    existing_cli = check_opencode_cli()
-    if _cli_works(existing_cli):
-        ok(f"OpenCode AI Assistant is already installed ({existing_cli})")
-        return True
-
-    # If OpenCode is actively in use or its binary is locked, do not attempt destructive npm operations
-    if is_any_opencode_process_running():
-        ok("OpenCode AI Assistant process detected in another window; skipping npm install.")
-        return True
-
-    if existing_cli and Path(existing_cli).is_file():
-        try:
-            with open(existing_cli, "a"):
-                pass
-        except OSError:
-            ok(f"OpenCode binary is currently locked by an active process ({existing_cli}); skipping npm reinstall.")
-            return True
 
     section("Installing OpenCode AI Assistant")
     npm_cmd = _find_usable_npm_cmd()
@@ -9091,7 +8969,7 @@ def ensure_opencode_cli() -> bool:
         except Exception:
             pass
 
-    status("Refreshing OpenCode AI Assistant installation via npm...")
+    status("Installing OpenCode AI Assistant via npm...")
     if _gui:
         _gui.start_busy()
 
@@ -9120,22 +8998,11 @@ def ensure_opencode_cli() -> bool:
         return subprocess.CompletedProcess(cmd, returncode=proc.returncode, stdout=stdout or "")
 
     try:
-        if is_any_opencode_process_running():
-            ok("OpenCode AI Assistant is active in another window; skipping npm install.")
+        # Installing Node.js can take minutes; look once more before writing.
+        existing = _existing_opencode_installation()
+        if existing:
+            ok(f"OpenCode AI Assistant is installed ({existing}); Bootstrap keeps it as it is.")
             return True
-        uninstall_cmd = [
-            npm_cmd,
-            "uninstall",
-            "-g",
-            "--no-audit",
-            "--no-fund",
-            "--no-update-notifier",
-            "opencode-ai",
-        ]
-        try:
-            _npm_run_with_kill_guard(uninstall_cmd, timeout=15)
-        except Exception:
-            pass
 
         install_cmd = [
             npm_cmd,
@@ -11182,23 +11049,24 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         gui.root.after(0, lambda: gui.log_section("Checking OpenCode AI Assistant"))
         if sys.platform == "win32":
-            # If already installed and working, pass immediately without network dependency
-            if check_opencode_cli() and ensure_opencode_cli():
-                gui.root.after(0, lambda: gui.log_ok("OpenCode AI Assistant is verified and ready."))
-            else:
-                # Missing — internet connection is required to install it
-                if not _is_network_reachable(timeout=2.0):
-                    _fail_and_exit(
-                        "OpenCode AI Assistant",
-                        "Internet connection is required to download and install OpenCode AI Assistant. Setup cannot proceed.",
-                    )
-                    return
-                elif not ensure_opencode_cli():
-                    _fail_and_exit(
-                        "OpenCode AI Assistant",
-                        "The required OpenCode AI Assistant is missing or could not be installed automatically.",
-                    )
-                    return
+            # An installed OpenCode, running or not, is kept as it is: Bootstrap
+            # neither updates nor reinstalls it, and needs no network for it.
+            opencode_found = _existing_opencode_installation()
+            if opencode_found:
+                gui.root.after(0, lambda: gui.log_ok(
+                    f"OpenCode AI Assistant is installed ({opencode_found}); Bootstrap keeps it as it is."))
+            elif not _is_network_reachable(timeout=2.0):
+                _fail_and_exit(
+                    "OpenCode AI Assistant",
+                    "Internet connection is required to download and install OpenCode AI Assistant. Setup cannot proceed.",
+                )
+                return
+            elif not ensure_opencode_cli():
+                _fail_and_exit(
+                    "OpenCode AI Assistant",
+                    "The required OpenCode AI Assistant is missing or could not be installed automatically.",
+                )
+                return
 
 
         # ── Update checks ─────────────────────────────────────────────

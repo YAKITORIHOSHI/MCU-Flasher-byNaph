@@ -132,33 +132,55 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
         binary.write_bytes(b"#!/bin/sh\n# Never executed\n")
         binary.chmod(0o755)
         self.which.return_value = str(binary)
-        self.run.return_value = subprocess.CompletedProcess([], 0, "opencode 1.17.2\n")
         self.assertEqual(self.ensure(), str(binary))
         self.open.assert_not_called()
+        self.run.assert_not_called()
         self.assertFalse(self.directory.exists())
         self.assertEqual(binary.read_bytes(), b"#!/bin/sh\n# Never executed\n")
-        self.assertEqual(self.run.call_args.args[0], [str(binary), "--version"])
-        self.assertNotEqual(self.run.call_args.kwargs["cwd"], str(self.app))
 
-    def test_managed_certificate_hash_and_version_are_checked_without_redownload(self):
+    def test_managed_certificate_hash_is_checked_without_probe_or_redownload(self):
         installed = self.ensure()
         self.open.reset_mock()
         self.run.reset_mock()
         self.assertEqual(self.ensure(), installed)
         self.open.assert_not_called()
-        self.assertEqual(self.run.call_args.args[0], [installed, "--version"])
+        self.run.assert_not_called()
 
-    def test_failed_external_command_uses_owned_binary_without_overwriting_external(self):
+    def test_installed_opencode_that_cannot_answer_is_kept_without_download(self):
+        # OpenCode open in a terminal once made --version fail, and Bootstrap
+        # then downloaded and replaced a working installation.
+        installed = self.ensure()
+        before = {path.name: path.read_bytes() for path in self.directory.iterdir()}
+        self.open.reset_mock()
+        self.run.reset_mock()
+        for failure in (subprocess.CompletedProcess([], 1, "database is locked\n"),
+                        subprocess.TimeoutExpired(["opencode", "--version"], 20)):
+            with self.subTest(failure=type(failure).__name__):
+                self.run.side_effect = failure if isinstance(failure, Exception) else None
+                self.run.return_value = failure
+                self.assertEqual(self.ensure(), installed)
+        self.open.assert_not_called()
+        self.run.assert_not_called()
+        self.assertEqual({path.name: path.read_bytes() for path in self.directory.iterdir()}, before)
+
+    def test_external_command_that_cannot_answer_is_kept_without_download(self):
         binary = self.home / ".local/bin/opencode"
         binary.parent.mkdir(parents=True)
-        binary.write_bytes(b"#!/bin/sh\n# Broken command fixture\n")
+        binary.write_bytes(b"#!/bin/sh\n# Busy command fixture\n")
         binary.chmod(0o755)
         self.which.return_value = str(binary)
-        self.run.side_effect = lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1 if argv[0] == str(binary) else 0, setup.VERSION)
-        installed = self.ensure()
-        self.assertEqual(installed, str(self.directory / "opencode"))
-        self.assertEqual(discovery.find_opencode_cli(), installed)
-        self.assertEqual(binary.read_bytes(), b"#!/bin/sh\n# Broken command fixture\n")
+        self.run.return_value = subprocess.CompletedProcess([], 1, "")
+        self.assertEqual(self.ensure(), str(binary))
+        self.open.assert_not_called()
+        self.run.assert_not_called()
+        self.assertFalse(self.directory.exists())
+        self.assertEqual(binary.read_bytes(), b"#!/bin/sh\n# Busy command fixture\n")
+
+    def damage_owned_binary(self):
+        """A changed owned binary no longer matches its certificate, so it counts as missing."""
+        binary = self.directory / "opencode"
+        binary.write_bytes(elf_binary() + b"damaged")
+        binary.chmod(0o755)
 
     def test_failed_hash_truncation_and_download_errors_do_not_publish_installation(self):
         for failure in ("digest", "truncation", "http"):
@@ -193,6 +215,7 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
 
     def test_failed_staged_version_keeps_previous_owned_binary_and_certificate(self):
         self.ensure()
+        self.damage_owned_binary()
         before = {path.name: path.read_bytes() for path in self.directory.iterdir()}
         self.run.side_effect = lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1 if argv[0] == str(self.directory / "opencode") else 0, "0.0.1")
         with self.assertRaisesRegex(RuntimeError, "--version"):
@@ -201,6 +224,7 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
 
     def test_failed_atomic_promotion_restores_the_previous_owned_installation(self):
         self.ensure()
+        self.damage_owned_binary()
         before = {path.name: path.read_bytes() for path in self.directory.iterdir()}
         self.run.side_effect = lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 1 if argv[0] == str(self.directory / "opencode") else 0, setup.VERSION)
         replace = setup.os.replace
@@ -267,7 +291,7 @@ class OpenCodeBootstrapChecks(unittest.TestCase):
                 self.assertEqual(first.result(timeout=5), second.result(timeout=5))
             self.assertEqual(downloads.call_count, 1)
         self.open.assert_called_once()
-        self.assertEqual(self.run.call_count, 2)
+        self.assertEqual(self.run.call_count, 1)
         self.assertEqual(discovery.find_opencode_cli(), str(self.directory / "opencode"))
         self.assertEqual({p.name for p in self.directory.parent.iterdir()}, {"opencode", ".opencode.lock"})
 

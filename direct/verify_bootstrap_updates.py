@@ -372,6 +372,96 @@ class UpdateChecks(unittest.TestCase):
         self.assertEqual(namespace["run_update_checks"](), "offline")
         namespace["dim"].assert_any_call(f"Update target: {target}")
 
+    def test_opencode_is_never_checked_or_updated(self):
+        namespace, _reachable, _checks, summary = self.update_stage_fixture(None, online=True)
+        namespace["check_opencode_update"] = Mock(side_effect=AssertionError("OpenCode update check"))
+        namespace["_upgrade_opencode"] = Mock(side_effect=AssertionError("OpenCode upgrade"))
+        self.assertEqual(namespace["run_update_checks"](), "up_to_date")
+        self.assertNotIn("opencode", summary.call_args.args[0])
+        source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
+        for removed in ("def check_opencode_update", "def _upgrade_opencode", '"uninstall"', "opencode-ai@"):
+            self.assertNotIn(removed, source)
+
+
+class OpenCodeInstallChecks(unittest.TestCase):
+    """Windows Bootstrap installs OpenCode once and never reinstalls it; nothing is executed."""
+
+    def setUp(self):
+        (ROOT / "temp/audit").mkdir(parents=True, exist_ok=True)
+        fixture = tempfile.TemporaryDirectory(prefix="opencode-install-", dir=ROOT / "temp/audit")
+        self.addCleanup(fixture.cleanup)
+        self.commands = []
+        self.installed = False
+        self.messages = []
+        source = ROOT / "src/modules/bootstrap.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        names = {"_existing_opencode_installation", "ensure_opencode_cli", "is_any_opencode_process_running"}
+        test = self
+
+        class Process:
+            returncode = 0
+
+            def __init__(self, command, **_options):
+                test.commands.append(list(command))
+                test.installed = "install" in command
+
+            def communicate(self, timeout=None):
+                return "", None
+
+        import subprocess as real_subprocess
+        self.namespace = dict(
+            sys=sys, Path=Path, os=__import__("os"), SCRIPT_DIR=Path(fixture.name), _gui=None,
+            section=Mock(), status=Mock(), warn=Mock(),
+            ok=lambda message: self.messages.append(("ok", message)),
+            fail=lambda message: self.messages.append(("fail", message)),
+            find_running_opencode_exe=Mock(return_value=None), _opencode_image_running=Mock(return_value=False),
+            check_opencode_cli=lambda: "C:/npm/opencode.cmd" if self.installed else None,
+            _find_usable_npm_cmd=Mock(return_value="C:/nodejs/npm.cmd"), _install_nodejs_lts=Mock(),
+            _refresh_node_npm_path=Mock(), _hidden_subprocess_flags=lambda: 0,
+            _is_valid_pe_binary=lambda path: False, _heal_opencode_postinstall=lambda path: False,
+            _summarize_process_output=lambda result: "",
+            shutil=SimpleNamespace(which=lambda name: None),
+            subprocess=SimpleNamespace(Popen=Process, run=Mock(side_effect=AssertionError("version probe")),
+                                       CompletedProcess=real_subprocess.CompletedProcess,
+                                       TimeoutExpired=real_subprocess.TimeoutExpired, PIPE=-1, STDOUT=-2,
+                                       DEVNULL=-3, list2cmdline=real_subprocess.list2cmdline))
+        exec(compile(ast.Module(body=[node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[]),
+            str(source), "exec"), self.namespace)
+        # psutil may be absent in the runtime that runs Bootstrap.
+        self.namespace["is_any_opencode_process_running"] = Mock(return_value=False)
+
+    def test_installed_opencode_is_kept_even_when_it_would_not_answer(self):
+        self.installed = True
+        self.assertTrue(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(self.commands, [])
+        self.namespace["_find_usable_npm_cmd"].assert_not_called()
+        self.namespace["subprocess"].run.assert_not_called()
+        self.assertIn("keeps it as it is", self.messages[-1][1])
+
+    def test_opencode_running_in_a_terminal_counts_as_installed(self):
+        self.namespace["is_any_opencode_process_running"].return_value = True
+        self.assertTrue(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(self.commands, [])
+        self.namespace["_find_usable_npm_cmd"].assert_not_called()
+
+    def test_running_detection_does_not_need_psutil(self):
+        detect = self.namespace["_opencode_image_running"]
+        exec(compile(ast.Module(body=[node for node in ast.parse(
+            (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")).body
+            if isinstance(node, ast.FunctionDef) and node.name == "is_any_opencode_process_running"],
+            type_ignores=[]), "bootstrap.py", "exec"), self.namespace)
+        detect.return_value = True
+        with patch.dict(sys.modules, {"psutil": None}):
+            self.assertTrue(self.namespace["is_any_opencode_process_running"]())
+        detect.assert_called_once_with()
+
+    def test_missing_opencode_is_installed_once_without_uninstall(self):
+        self.assertTrue(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.commands[0][:3], ["C:/nodejs/npm.cmd", "install", "-g"])
+        self.assertEqual(self.commands[0][-1], "opencode-ai")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

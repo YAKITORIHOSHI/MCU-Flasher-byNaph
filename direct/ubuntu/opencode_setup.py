@@ -216,7 +216,12 @@ def _installation_lock(tools: Path):
 
 
 def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str:
-    """Reuse a working native CLI or atomically prepare the pinned owned binary."""
+    """Keep an installed native CLI as it is, or atomically prepare the pinned owned binary.
+
+    Installed OpenCode is never probed, updated or downloaded again. Its
+    ``--version`` is not evidence of absence: with OpenCode open in a terminal
+    the probe could fail, and Bootstrap then downloaded and replaced it.
+    """
     from src.modules.ubuntu_release import require_supported_ubuntu
     require_supported_ubuntu()
     if sys.platform == "win32":
@@ -242,17 +247,12 @@ def ensure_opencode_cli(*, root: Path | None = None, env=None, log=print) -> str
         candidate = (_native_executable(directory / "opencode")
                      if state and state.get("architecture", "linux-amd64") == architecture else None)
         if candidate and _sha256(Path(candidate)) == state.get("binary_sha256"):
-            version = _version(candidate, environment)
-            if version:
-                log(f"OpenCode {version} is verified and ready ({candidate}).")
-                return candidate
+            log(f"OpenCode {state.get('version') or VERSION} is installed ({candidate}); Bootstrap keeps it as it is.")
+            return candidate
         existing = find_opencode_cli()
         if existing and Path(existing) != directory / "opencode":
-            version = _version(existing, environment)
-            if version:
-                log(f"OpenCode {version} is verified and ready ({existing}).")
-                return existing
-            log("The current OpenCode command could not be verified; preparing the app-owned native binary.")
+            log(f"OpenCode is installed ({existing}); Bootstrap keeps it as it is.")
+            return existing
         with tempfile.TemporaryDirectory(prefix=".opencode-prepare-", dir=tools) as temporary:
             staging = Path(temporary)
             archive = staging / archive_name

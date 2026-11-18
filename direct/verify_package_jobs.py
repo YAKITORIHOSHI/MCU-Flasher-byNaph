@@ -408,6 +408,7 @@ class PackageJobChecks(unittest.TestCase):
                          _explicit_setup_requested=Mock(return_value=False),
                          _stream_offline_setup_output=Mock(), _cp210x_driver_status_message=Mock(return_value=(True, 'Fixture')),
                          check_cp210x_driver=Mock(return_value=True), check_opencode_cli=Mock(return_value=True),
+                         _existing_opencode_installation=Mock(return_value='C:/fixture/opencode.cmd'),
                          ensure_opencode_cli=Mock(return_value=True), run_update_checks=Mock(),
                          _write_startup_health_snapshot=Mock(return_value=False),
                          _cleanup_platformio_prebuilt_archive=Mock(return_value=True),
