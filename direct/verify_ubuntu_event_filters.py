@@ -249,6 +249,23 @@ class UbuntuEventFilterChecks(unittest.TestCase):
         self.assertFalse(follow.scrollbar_held)
         self.assertEqual(bar.value(), bar.maximum())
 
+    def test_clicking_text_while_reading_earlier_output_keeps_the_position(self):
+        # Selecting a line to copy while scrolled up never jumps to the last line.
+        owner, view, follow = self.log()
+        for number in range(200):
+            view.appendPlainText(f"line {number}")
+        self.process()
+        bar = view.verticalScrollBar()
+        bar.setValue(12)
+        self.process()
+        self.assertTrue(follow.user_scrolled_up)
+        QCoreApplication.sendEvent(view.viewport(), mouse_event(QEvent.Type.MouseButtonPress))
+        QCoreApplication.sendEvent(view.viewport(), mouse_event(QEvent.Type.MouseButtonRelease))
+        self.process()
+        self.assertFalse(follow.scrollbar_held)
+        self.assertEqual(bar.value(), 12)
+        self.assertTrue(follow.user_scrolled_up)
+
     def test_lost_mouse_grab_and_deactivation_resume_only_enabled_auto(self):
         owner, view, follow = self.log()
         bar = view.verticalScrollBar()

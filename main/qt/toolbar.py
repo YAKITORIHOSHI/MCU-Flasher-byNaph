@@ -429,6 +429,13 @@ class PrimaryToolbar(QToolBar):
                                              "#1a4a6e", "#1f5a88")
         self.btn_save_all.clicked.connect(self._do_save_all)
         ac_layout.addWidget(self.btn_save_all)
+        self._autosave_on = None
+        try:
+            from main.qt.signals import signals as _save_signals
+            # A bound slot: Qt disconnects it when this toolbar is destroyed.
+            _save_signals.autosave_settings_changed.connect(self._on_autosave_settings_changed)
+        except Exception:
+            pass
 
         # Reload (Dark Gray)
         self.btn_reload = _make_action_btn("Reload", "Reload current file from disk", "btn-reload",
@@ -784,7 +791,44 @@ class PrimaryToolbar(QToolBar):
         show_cloud_dialog(self._backend, parent=window,
                           on_pulled=getattr(self._workspace(), "_on_cloud_project_pulled", None))
 
+    @Slot(bool, int)
+    def _on_autosave_settings_changed(self, enabled: bool, _delay_ms: int) -> None:
+        self.refresh_save_actions(autosave=enabled)
+
+    def refresh_save_actions(self, autosave: bool | None = None) -> None:
+        """Save and Save All follow the sketch's storage and Auto-Save.
+
+        - Ghost Sketch (no folder yet, no Auto-Save): only Save, which chooses its folder.
+        - A sketch on disk with Auto-Save on: neither; edits save themselves.
+        - A sketch on disk with Auto-Save off: both.
+        """
+        if autosave is None:
+            if self._autosave_on is None:
+                try:
+                    from main.core.config import get_autosave_settings
+                    self._autosave_on = bool(get_autosave_settings()[0])
+                except Exception:
+                    self._autosave_on = False
+        else:
+            self._autosave_on = bool(autosave)
+        ghost = getattr(self._backend, "is_ghost_sketch", False) is True
+        if ghost:
+            save, save_all = True, False
+            save_tip = "Save this Ghost Sketch to a folder (Ctrl+S)"
+            all_tip = "Save All is unavailable for a Ghost Sketch: use Save to choose its folder"
+        elif self._autosave_on:
+            save = save_all = False
+            save_tip = all_tip = "Auto-Save is on: changes are saved automatically"
+        else:
+            save = save_all = True
+            save_tip, all_tip = "Save current file (Ctrl+S)", "Save all open files (Ctrl+Shift+S)"
+        for button, enabled, tip in ((self.btn_save, save, save_tip), (self.btn_save_all, save_all, all_tip)):
+            button.setEnabled(enabled)
+            button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor)
+
     def update_sketch_label(self, path: str) -> None:
+        self.refresh_save_actions()
         self._current_sketch_path = path
         p = Path(path)
         text = p.name if p.name else path
@@ -1022,7 +1066,8 @@ class PrimaryToolbar(QToolBar):
         option.text = text
         if plain_icon:
             option.icon = QIcon()
-        content = QSize(option.fontMetrics.horizontalAdvance(text), option.fontMetrics.height())
+        # QPushButton.sizeHint measures this way; an advance can be a pixel narrower.
+        content = option.fontMetrics.size(Qt.TextFlag.TextShowMnemonic, text)
         if not option.icon.isNull():
             content.setWidth(content.width() + option.iconSize.width() + 6)
             content.setHeight(max(content.height(), option.iconSize.height()))
@@ -1692,15 +1737,8 @@ class ControlsBar(QWidget):
         self.board_selector.setMaximumWidth(420)
         self.board_selector.clicked.connect(self._open_board_search_dialog)
 
-        self.btn_search_board = QPushButton("", icon_name="search")
-        self.btn_search_board.setObjectName("btn-search-board")
-        self.btn_search_board.setFixedSize(26, 26)
-        self.btn_search_board.setToolTip("Search & Select MCU Board")
-        self.btn_search_board.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_search_board.clicked.connect(self._open_board_search_dialog)
-
+        # The board field is the picker's only entry: clicking it opens the search.
         board_row.addWidget(self.board_selector)
-        board_row.addWidget(self.btn_search_board)
 
         board_group.addWidget(lbl_board)
         board_group.addLayout(board_row)
@@ -2145,35 +2183,25 @@ class ControlsBar(QWidget):
             mw.toggle_monitors_pane()
 
     def set_editor_detached(self, detached: bool) -> None:
-        from main.core.theme import Theme
+        """Detached reads as an active Liquid Glass accent, sized exactly like the normal toggle.
+
+        The monitors stay in the main window while the editor is detached, so Hide
+        Monitors is neither shown nor clickable until the editor is attached again."""
+        self._editor_detached_state = bool(detached)
+        self.btn_toggle_monitors.setEnabled(not detached)
         if detached:
+            self.btn_toggle_monitors.setVisible(False)
+        elif not getattr(self, "_is_compact", False):
+            self.btn_toggle_monitors.setVisible(True)
+        if hasattr(self, "_controls_reflow_timer"):
+            self._controls_reflow_timer.start(0)
+        if detached:
+            from main.qt.theme import liquid_button_sheet
+            from main.core.theme import Theme
             self.btn_detach_editor.setText("Attach Editor")
-            self.btn_detach_editor.setStyleSheet(
-                "QPushButton#btn-detach-editor:enabled {"
-                f"  background-color: {Theme.ORANGE};"
-                "  color: #ffffff;"
-                f"  border: 1px solid {Theme.BORDER};"
-                "  border-radius: 4px;"
-                "  padding: 3px 8px;"
-                "  font-size: 11px;"
-                "  font-weight: 600;"
-                "}"
-                "QPushButton#btn-detach-editor:enabled:hover {"
-                f"  background-color: {Theme.ORANGE};"
-                f"  border: 1px solid {Theme.CYAN};"
-                "  color: #ffffff;"
-                "}"
-                "QPushButton#btn-detach-editor:enabled:pressed {"
-                f"  background-color: {Theme.BG_MID};"
-                f"  border: 1px solid {Theme.CYAN};"
-                "  color: #ffffff;"
-                "}"
-                "QPushButton#btn-detach-editor:disabled {"
-                f"  background-color: {Theme.BG_DARK};"
-                f"  color: {Theme.TEXT_DIM};"
-                f"  border: 1px solid {Theme.BORDER};"
-                "}"
-            )
+            self.btn_detach_editor.setStyleSheet(liquid_button_sheet(
+                getattr(Theme, "active_theme", "default") or "default", "accent", radius=11,
+                selector="QPushButton#btn-detach-editor", font_size=10.5, padding="2px 6px"))
         else:
             self.btn_detach_editor.setText("Detach Editor")
             self.btn_detach_editor.setStyleSheet("")
@@ -2327,12 +2355,6 @@ class ControlsBar(QWidget):
             "Board selection is locked while compiling or uploading firmware."
             if locked else "Click to search & select MCU board"
         )
-        self.btn_search_board.setEnabled(not locked)
-        self.btn_search_board.setCursor(Qt.CursorShape.ArrowCursor if locked else Qt.CursorShape.PointingHandCursor)
-        self.btn_search_board.setToolTip(
-            "Board selection is locked while compiling or uploading firmware."
-            if locked else "Search & Select MCU Board"
-        )
 
         # Port selection controls
         self.port_combo.setEnabled(not locked)
@@ -2400,6 +2422,8 @@ class ControlsBar(QWidget):
     def apply_theme(self, theme_name: str) -> None:
         for button in self.findChildren(QPushButton):
             button.refresh_icon()
+        if getattr(self, "_editor_detached_state", False):
+            self.set_editor_detached(True)  # Its local sheet carries theme colors.
         if hasattr(self, "board_selector"):
             self.board_selector.update()
         if hasattr(self, "port_combo"):
@@ -2444,7 +2468,6 @@ class ControlsBar(QWidget):
         for index, group in enumerate(groups):
             group.setDirection(QBoxLayout.Direction.LeftToRight if short else QBoxLayout.Direction.TopToBottom)
             self._group_labels[index].setVisible(not short or (index == 2 and getattr(self, "_speed_caption_inline", False)))
-        self.btn_search_board.setVisible(not tiny)
         self.cb_timestamp.setVisible(not tiny)
         self.cb_skip_compile.setVisible(not tiny)
         if tiny:
@@ -2553,8 +2576,10 @@ class ControlsBar(QWidget):
             if tiny:
                 board_width, port_width = 70, 100
             speed_width = self._get_adaptive_upload_speed_width()
-            actions = (self.btn_detach_editor, self.btn_toggle_editor, self.btn_toggle_monitors,
-                       self.btn_settings, self.btn_ai)
+            detached = getattr(self, "_editor_detached_state", False)
+            actions = tuple(button for button in (self.btn_detach_editor, self.btn_toggle_editor,
+                                                  self.btn_toggle_monitors, self.btn_settings, self.btn_ai)
+                            if not (detached and button is self.btn_toggle_monitors))
             # Revealing OpenCode changes its label to "Hide AI". Reserve the
             # larger state so that click cannot change Controls' row count and
             # move the editor's horizontal divider.
@@ -2579,7 +2604,7 @@ class ControlsBar(QWidget):
             # Stacked above its field the caption shares the field's width. On one row it
             # needs its own, so it is the first thing to yield there.
             one_row = tiny or self._short_window
-            fields = board_width + (0 if tiny else self.btn_search_board.width() + 4) + port_width + (
+            fields = board_width + port_width + (
                 speed_width if one_row else max(speed_width, caption))
             compact = tiny or width < fields + workspace + _CONTROLS_CHROME
             compact_workspace = checkboxes + PrimaryToolbar._button_width(
@@ -2594,7 +2619,7 @@ class ControlsBar(QWidget):
                 # monitors, and need no scrolling marquee once they fit.
                 board_width += min(spare // 2, max(0, 420 - board_width))
                 port_width += min(spare // 4, max(0, 320 - port_width))
-            signature = (width, board_width, port_width, speed_width, fields, workspace,
+            signature = (detached, width, board_width, port_width, speed_width, fields, workspace,
                          compact, abbreviate, self._short_window, self._tiny_window, self._cramped_window,
                          self._speed_caption_inline, self.font().toString())
             if signature == getattr(self, "_controls_signature", None):
@@ -2606,6 +2631,8 @@ class ControlsBar(QWidget):
             self._is_compact = compact
             for button in actions:
                 button.setVisible(not compact)
+            if detached:
+                self.btn_toggle_monitors.setVisible(False)
             self.btn_opt_dropdown.setVisible(compact)
             if not compact and self._opt_popup is not None:
                 self._opt_popup.close()
@@ -2647,8 +2674,7 @@ class ControlsBar(QWidget):
         # 1. Detach / Attach Editor
         detached = getattr(mw, "_editor_detached", False) or (self.btn_detach_editor.text() == "Attach Editor")
         det_text = "Attach Editor" if detached else "Detach Editor"
-        det_bg = Theme.ORANGE if detached else "#2d7d46"
-        det_hover = "#d35400" if detached else "#38a058"
+        det_bg, det_hover = Theme.BTN_CLEAR, Theme.BTN_CLEAR_H  # Glass like its neighbors.
         popup.add_button(
             det_text,
             self.btn_detach_editor.click,
@@ -2668,16 +2694,17 @@ class ControlsBar(QWidget):
             enabled=self.btn_toggle_editor.isEnabled(),
         )
 
-        # 3. Hide / Show Monitors
-        monitors_visible = getattr(mw, "_monitors_pane_visible", True)
-        mon_text = "Hide Monitors" if monitors_visible else "Show Monitors"
-        popup.add_button(
-            mon_text,
-            self.btn_toggle_monitors.click,
-            Theme.BTN_CLEAR,
-            Theme.BTN_CLEAR_H,
-            enabled=self.btn_toggle_monitors.isEnabled(),
-        )
+        # 3. Hide / Show Monitors (absent while the editor is detached: the monitors stay)
+        if not detached:
+            monitors_visible = getattr(mw, "_monitors_pane_visible", True)
+            mon_text = "Hide Monitors" if monitors_visible else "Show Monitors"
+            popup.add_button(
+                mon_text,
+                self.btn_toggle_monitors.click,
+                Theme.BTN_CLEAR,
+                Theme.BTN_CLEAR_H,
+                enabled=self.btn_toggle_monitors.isEnabled(),
+            )
 
         # 4. Settings
         popup.add_button(

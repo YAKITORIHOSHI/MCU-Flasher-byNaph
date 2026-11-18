@@ -372,14 +372,14 @@ class TerminalPanel(QWidget):
         # Only the message and its actions show; the placeholder paints no box.
         self._empty_card.setStyleSheet("QFrame#terminal-empty { background: transparent; border: none; }")
         el = QVBoxLayout(self._empty_card)
-        el.setContentsMargins(16, 10, 16, 10)
+        el.setContentsMargins(8, 10, 8, 10)
         el.setAlignment(Qt.AlignmentFlag.AlignCenter)
         el.setSpacing(10)
 
         self._lbl_no_term = QLabel("No active terminal sessions")
         lbl_no_term = self._lbl_no_term
         lbl_no_term.setStyleSheet(
-            "QLabel { background: transparent; border: none; font-size: 14px; font-weight: 600; padding: 4px 12px; }")
+            "QLabel { background: transparent; border: none; font-size: 14px; font-weight: 600; padding: 4px 4px; }")
         lbl_no_term.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_no_term.setWordWrap(True)
         el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)

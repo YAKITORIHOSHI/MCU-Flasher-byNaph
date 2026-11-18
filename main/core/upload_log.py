@@ -24,6 +24,45 @@ def _bounded(value: object, size: int = 1024) -> str:
     return str(value).encode("utf-8")[:size].decode("utf-8", errors="ignore")
 
 
+def target_board_fields(info: dict, board_name: str, *, port: str = "", upload_speed: str = "",
+                        backend: str = "PlatformIO", upload: bool = False) -> list[tuple[str, str]]:
+    """The one Target Board table: what was selected, shown once per operation on every OS."""
+    info = dict(info or {})
+    fields = [("Board", _bounded(board_name) or "Selected target")]
+    target = info.get("arduino_fqbn") if backend == "Arduino CLI" else ":".join(
+        str(info.get(key) or "") for key in ("platform", "board"))
+    if target and target != ":":
+        fields.append(("Target", _bounded(target)))
+    if info.get("framework"):
+        fields.append(("Framework", _bounded(info["framework"])))
+    if not upload:
+        return fields
+    if port:
+        fields.append(("Port", _bounded(port)))
+    if info.get("upload_protocol"):
+        fields.append(("Protocol", _bounded(info["upload_protocol"])))
+    is_esp = str(info.get("platform") or "").lower() in {"espressif32", "espressif8266"}
+    if upload_speed:
+        fields.append(("Upload Speed", f"{upload_speed} baud ({'selected' if is_esp else 'board default'})"))
+    elif port:
+        fields.append(("Upload Speed", "Board recipe default"))
+    else:
+        fields.append(("Transport", "USB / programmer"))
+    return fields
+
+
+def target_board_shown(api) -> bool:
+    return getattr(api, "_target_board_session", None) == getattr(api, "_op_session_id", 0)
+
+
+def show_target_board(api, fields) -> None:
+    """Print the Target Board table unless this operation already did."""
+    if target_board_shown(api):
+        return
+    api._target_board_session = getattr(api, "_op_session_id", 0)
+    api._print_info_box("Target Board", fields)
+
+
 class UploadLog:
     """Format one upload stream without touching hardware or operation state."""
 
@@ -66,23 +105,10 @@ class UploadLog:
         self._emit("=" * 50, "header")
         self._emit(f"   UPLOADING ({self.backend})", "header")
         self._emit("=" * 50, "header")
-        fields = [("Board", self.board_name or "Selected target")]
-        target = self.info.get("arduino_fqbn") if self.backend == "Arduino CLI" else ":".join(
-            str(self.info.get(key) or "") for key in ("platform", "board"))
-        if target and target != ":":
-            fields.append(("Target", _bounded(target)))
-        if self.port:
-            fields.append(("Port", self.port))
-        if self.info.get("upload_protocol"):
-            fields.append(("Protocol", _bounded(self.info["upload_protocol"])))
-        if self.upload_speed:
-            origin = "selected" if self.is_esp else "board default"
-            fields.append(("Upload Speed", f"{self.upload_speed} baud ({origin})"))
-        elif self.port:
-            fields.append(("Upload Speed", "Board recipe default"))
-        else:
-            fields.append(("Transport", "USB / programmer"))
-        self.api._print_info_box("Upload Target", fields)
+        # A compile earlier in this Upload already printed the Target Board table.
+        show_target_board(self.api, target_board_fields(
+            self.info, self.board_name, port=self.port, upload_speed=self.upload_speed,
+            backend=self.backend, upload=True))
         self.api.emit("console:progress", {"action": "Uploading"})
 
     def _connection_row(self, status: str) -> None:
@@ -91,7 +117,7 @@ class UploadLog:
         self._connection = status
         text, tag = {
             "connecting": ("  Connecting to bootloader…", "magenta"),
-            # The board is already named in the Upload Target box above.
+            # The board is already named in the Target Board table above.
             "connected": ("  Connected to the bootloader", "success"),
             "failed": ("  Connection failed", "error"),
             "stopped": ("  ■ Connection stopped", "info"),
@@ -110,8 +136,8 @@ class UploadLog:
         if self._chip_shown or not model:
             return
         self._chip_shown = True
-        # The model is the first row; repeating it as the title only doubled it.
-        self.api._print_info_box("Chip Information", list(self._chip.items()))
+        # What the connected chip reported about itself, not the catalog entry.
+        self.api._print_info_box("Actual Board", list(self._chip.items()))
         self._show_memory()
 
     def _phase_row(self, phase: str, text: str, tag: str = "info") -> None:
@@ -129,9 +155,10 @@ class UploadLog:
         bar = "▰" * filled + "▱" * (24 - filled)
         icon = "" if percent >= 100 else ""
         suffix = f" | {detail}" if detail else ""
+        # One line of loading for the whole upload: writing, then verifying, replace it in place.
         self._emit(f"  {icon} {label:<14} [ {bar} ] {percent:5.1f}%{suffix}",
                    "success" if percent >= 100 else "info",
-                   progress_key=f"{getattr(self.api, '_op_session_id', 0)}:upload-{label}")
+                   progress_key=f"{getattr(self.api, '_op_session_id', 0)}:upload-progress")
 
     def _consume_programmer(self, clean: str) -> bool:
         """Format known AVR/BOSSA/DFU/OpenOCD records; leave other output intact."""
@@ -281,7 +308,7 @@ class UploadLog:
             return True
         rate = re.fullmatch(r"Changing baud rate to (\d+)\.{0,3}|Changed\.", clean, re.IGNORECASE)
         if rate:
-            # The selected rate is already in the Upload Target box; only a
+            # The selected rate is already in the Target Board table; only a
             # different rate is news.
             if rate.group(1) and rate.group(1) != self.upload_speed:
                 self._emit(f"  Upload baud changed by the programmer: {rate.group(1)}", "dim")
@@ -356,4 +383,4 @@ class UploadLog:
         if restart:
             fields.append(("Restart", _bounded(restart, 160)))
         fields.append(("Upload Time", f"{round(max(0.0, float(duration)), 2)}s"))
-        self.api._print_info_box("Upload Summary", fields)
+        self.api._print_info_box("Upload Time", fields)

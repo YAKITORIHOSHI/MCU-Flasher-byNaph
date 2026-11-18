@@ -401,7 +401,7 @@ class QtResponsiveChecks(ControlChecks):
             toolbar.set_responsive_width(width)
             pump()
             self.assertLessEqual(host.width(), width, 'A layout minimum forced the window wider')
-            for field in (controls.board_selector, controls.btn_search_board, controls.port_combo,
+            for field in (controls.board_selector, controls.port_combo,
                           controls.upload_speed_combo, controls.cb_timestamp, controls.cb_skip_compile):
                 self.contained(field, controls)
             if controls.cb_timestamp.isVisible() and controls.cb_skip_compile.isVisible():
@@ -456,7 +456,7 @@ class QtResponsiveChecks(ControlChecks):
         host.resize(320, 620)
         pump()
         self.assertLessEqual(controls.height(), 80, 'Short-window chrome must leave room for tool controls')
-        for field in (controls.board_selector, controls.btn_search_board, controls.port_combo,
+        for field in (controls.board_selector, controls.port_combo,
                       controls.upload_speed_combo, controls.cb_timestamp, controls.cb_skip_compile,
                       controls.btn_opt_dropdown):
             self.assertTrue(field.isVisible())

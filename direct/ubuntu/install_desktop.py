@@ -70,7 +70,12 @@ def _host_label() -> str:
 
 
 def lite_supported() -> bool:
-    """Lite's native launcher is qualified on Ubuntu and Linux Mint (its Ubuntu base)."""
+    """Lite's native launcher is qualified on Ubuntu and Linux Mint (its Ubuntu base).
+
+    Only Linux distributions are restricted; other hosts keep their own Lite rules."""
+    import sys
+    if not sys.platform.startswith("linux"):
+        return True
     try:
         from src.modules.ubuntu_release import linux_distribution
         return linux_distribution().family in ("ubuntu", "linuxmint")

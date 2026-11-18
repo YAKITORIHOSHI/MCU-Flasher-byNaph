@@ -80,7 +80,7 @@ class UbuntuLoggingChecks(unittest.TestCase):
                          ["", "=" * 50, "   UPLOADING (PlatformIO)", "=" * 50])
         self.assertEqual(logs[2]["tag"], "header")
         details = dict(api.boxes[0][1])
-        self.assertEqual(api.boxes[0][0], "Upload Target")
+        self.assertEqual(api.boxes[0][0], "Target Board")
         self.assertEqual(details["Port"], "/dev/fixture0")
         self.assertEqual(details["Board"], "Fixture ESP32 Dev Module")
         self.assertEqual(details["Upload Speed"], "921600 baud (selected)")
@@ -104,17 +104,17 @@ class UbuntuLoggingChecks(unittest.TestCase):
         for line in lines:
             self.assertTrue(log.consume(line), line)
         log.finish(True, 4.12)
-        chip_boxes = [fields for title, fields in api.boxes if title.endswith(" Information")]
+        chip_boxes = [fields for title, fields in api.boxes if title == "Actual Board"]
         self.assertEqual(len(chip_boxes), 1)
         self.assertEqual(dict(chip_boxes[0])["MAC Address"], "00:11:22:33:44:55")
         self.assertNotIn("Flash Size", dict(chip_boxes[0]))
         text = api.text()
-        self.assertLess(text.index("Chip Information"), text.index("Flashing"))
+        self.assertLess(text.index("Actual Board"), text.index("Flashing"))
         self.assertIn("Chip Model  : ESP32-D0WD-V3 (revision v3.1)", text)
         self.assertIn("[1/4] Bootloader", text)
         self.assertIn("[4/4] Firmware", text)
-        self.assertIn("Upload Summary", text)
-        # Port and speed appear once, in the Upload Target box.
+        self.assertIn("Upload Time", text)
+        # Port and speed appear once, in the Target Board table.
         self.assertEqual(text.count("/dev/fixture0"), 1)
         self.assertIn("921600 baud (selected)", text)
         self.assertIn("4.12s", text)
@@ -123,9 +123,13 @@ class UbuntuLoggingChecks(unittest.TestCase):
         self.assertIn("| verified", text)
         self.assertNotIn("Flash data verified.", text)
         self.assertIn("Written     : 1 region, 17,536 bytes", text)
-        connection = [row for row in api.logs() if row.get("progress_key")]
+        connection = [row for row in api.logs() if str(row.get("progress_key", "")).endswith(":upload-connection")]
         self.assertEqual(len({row["progress_key"] for row in connection}), 1)
         self.assertIn("Connected", connection[-1]["text"])
+        # One line of loading for every flashed region.
+        flashing = [row for row in api.logs() if str(row.get("progress_key", "")).endswith(":upload-flash")]
+        self.assertTrue(flashing)
+        self.assertEqual(len({row["progress_key"] for row in flashing}), 1)
         count = len(api.events)
         log.finish(True, 9.0)
         self.assertEqual(count, len(api.events))
@@ -141,7 +145,7 @@ class UbuntuLoggingChecks(unittest.TestCase):
         self.assertIn("Crystal", text)
         self.assertIn("40MHz", text)
         self.assertIn("Flash Size: 4MB", text)
-        # The selected rate is already in the Upload Target box.
+        # The selected rate is already in the Target Board table.
         self.assertNotIn("Changing baud rate to 921600", text)
         self.assertNotIn("921600", text)
         self.assertTrue(log.consume("Changing baud rate to 460800..."))
@@ -157,8 +161,8 @@ class UbuntuLoggingChecks(unittest.TestCase):
                 self.assertFalse(log.consume("A fatal error occurred: Failed to connect to ESP32"))
                 log.finish(False, 5.0, stopped=stopped)
                 self.assertNotIn("Upload successful", api.text())
-                self.assertNotIn("Upload Summary", api.text())
-                self.assertEqual([title for title, _ in api.boxes], ["Upload Target"])
+                self.assertNotIn("Upload Time", api.text())
+                self.assertEqual([title for title, _ in api.boxes], ["Target Board"])
                 self.assertIn("Connection stopped" if stopped else "Connection failed", api.text())
 
     def test_v5_image_stage_remains_locked_as_the_write_pointer_advances(self):
@@ -169,7 +173,7 @@ class UbuntuLoggingChecks(unittest.TestCase):
             self.assertTrue(log.consume(line), line)
         self.assertIn("[3/4] Boot App", api.text())
         self.assertNotIn("[4/4] Firmware", api.text())
-        self.assertIn("Chip Information", api.text())
+        self.assertIn("Actual Board", api.text())
 
     def test_native_nonserial_programmer_does_not_claim_port_speed_or_esp_chip(self):
         info = {"platform": "ststm32", "board": "fixture", "framework": "cmsis",
@@ -206,7 +210,9 @@ class UbuntuLoggingChecks(unittest.TestCase):
         self.assertIn("115200 baud", api.text())
         self.assertNotIn("921600", api.text())
 
-    def test_board_info_is_actual_bounded_metadata_and_boxed_once(self):
+    def test_catalog_board_metadata_is_consumed_without_a_box(self):
+        # PlatformIO's HARDWARE line is the catalog entry, not the connected chip:
+        # the Target Board and Actual Board tables replace the old Board Information box.
         api = Collector()
         log = UbuntuBuildInfo(api, api.info, api.current_board)
         for line in ("PLATFORM: Espressif 32 (6.12.0) > Espressif ESP32 Dev Module",
@@ -216,13 +222,8 @@ class UbuntuLoggingChecks(unittest.TestCase):
             self.assertTrue(log.consume(f" - tool-fixture-{i} @ 1.0.0"))
         self.assertFalse(log.consume("Building in release mode..."))
         log.flush()
-        self.assertEqual(len(api.boxes), 1)
-        details = dict(api.boxes[0][1])
-        self.assertEqual(details["Target"], "espressif32:esp32dev")
-        self.assertEqual(details["Hardware"], "ESP32 240MHz, 320KB RAM, 4MB Flash")
+        self.assertEqual(api.boxes, [])
         self.assertLessEqual(len(log.packages), 24)
-        self.assertLessEqual(len(details["Packages"].encode("utf-8")), 4096)
-        self.assertIn("Package details", details)
 
     def test_custom_metadata_and_diagnostics_are_not_summarized_as_standard_records(self):
         api = Collector()

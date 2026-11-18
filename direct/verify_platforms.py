@@ -377,8 +377,8 @@ class PlatformChecks(unittest.TestCase):
         self.assertIn("UPLOADING (PlatformIO)", shown_text)
         self.assertNotIn("\u2b06", shown_text, "Application upload headers use SVG status marks")
         self.assertIn("Fixture Arduino Uno", shown_text)
-        self.assertIn("Upload Target", shown_text)
-        self.assertIn("Upload Summary", shown_text)
+        self.assertIn("Target Board", shown_text)
+        self.assertIn("Upload Time", shown_text)
 
     def native_log_fixture(self, lines, code=0, host="linux", reset_expected=False, reset_ok=True):
         from main import web_bridge
@@ -429,9 +429,9 @@ class PlatformChecks(unittest.TestCase):
             "Hard resetting via RTS pin...", "================ [SUCCESS] Took 1.20 seconds ================",
         ])
         text = "\n".join(payload["text"] for name, payload in events if name == "console:log")
-        for expected in ("UPLOADING (PlatformIO)", "Upload Speed : 921600", "Chip Information",
+        for expected in ("UPLOADING (PlatformIO)", "Upload Speed : 921600", "Actual Board",
                          "ESP32-D0WD-V3 (revision v3.1)", "00:11:22:33:44:55", "Flashing [4/4] Firmware",
-                         "| verified", "Upload Summary", "Upload successful", "Hard reset by esptool"):
+                         "| verified", "Upload Time", "Upload successful", "Hard reset by esptool"):
             self.assertIn(expected, text)
         for redundant in ("Connected to Fixture", "Flash data verified.", "[SUCCESS] Took"):
             self.assertNotIn(redundant, text)
@@ -449,7 +449,7 @@ class PlatformChecks(unittest.TestCase):
         self.assertIn("Serial data stream stopped", text)
         self.assertIn("firmware may be incomplete", text)
         self.assertNotIn("Upload successful", text)
-        self.assertNotIn("Upload Summary", text)
+        self.assertNotIn("Upload Time", text)
 
     def test_windows_native_upload_uses_the_same_formatted_presentation(self):
         events = self.native_log_fixture([
@@ -461,7 +461,7 @@ class PlatformChecks(unittest.TestCase):
         self.assertIn("ESP32-D0WD-V3", text)
         self.assertIn("Flashing", text)
         self.assertIn("UPLOADING (PlatformIO)", text)
-        self.assertIn("Upload Summary", text)
+        self.assertIn("Upload Time", text)
 
     def test_native_upload_without_programmer_restart_runs_the_declared_reset(self):
         events = self.native_log_fixture(["Writing at 0x00010000... (100 %)", "[SUCCESS]"], reset_expected=True)

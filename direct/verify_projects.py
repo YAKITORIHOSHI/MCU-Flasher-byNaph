@@ -1179,10 +1179,11 @@ class ProjectChecks(unittest.TestCase):
                     dialog._new_parent_edit.text(), dialog._new_preview_lbl.text(),
                     dialog._template_combo.currentData(), dialog._cb_include_h.isChecked(),
                     dialog._cb_include_cpp.isChecked())
-        actions = ((dialog._btn_cancel_existing, dialog._btn_open_existing),
-                   (dialog._btn_cancel_new, dialog._btn_create),
-                   (dialog._btn_clear_recents, dialog._btn_cancel_recent, dialog._btn_open_recent),
-                   (dialog._btn_refresh_projects, dialog._btn_cancel_open, dialog._focus_project_btn))
+        # No Cancel actions: the window's own close button (and Esc) closes the selector.
+        actions = ((dialog._btn_open_existing,),
+                   (dialog._btn_create,),
+                   (dialog._btn_clear_recents, dialog._btn_open_recent),
+                   (dialog._btn_refresh_projects, dialog._focus_project_btn))
         pages = ("existing", "new", "recent", "open")
         try:
             with patch("main.qt.responsive.work_area", return_value=WorkArea(0, 0, 1920, 1080)):

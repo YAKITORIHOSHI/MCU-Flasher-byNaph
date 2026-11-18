@@ -869,6 +869,27 @@ class ControlChecks(unittest.TestCase):
         self.assertTrue(toolbar.btn_compile.isEnabled())
         self.assertFalse(toolbar.btn_upload.isEnabled())
 
+    def test_save_actions_follow_ghost_sketch_and_auto_save(self):
+        window = self.own(QMainWindow())
+        toolbar = PrimaryToolbar(self.backend, window)
+        window.addToolBar(toolbar)
+        cases = ((False, False, True, True),   # A sketch on disk, Auto-Save off: both.
+                 (False, True, False, False),  # Auto-Save on: edits save themselves.
+                 (True, False, True, False),   # Ghost Sketch: only Save, which picks its folder.
+                 (True, True, True, False))    # Ghost Sketch never auto-saves.
+        for ghost, autosave, save, save_all in cases:
+            with self.subTest(ghost=ghost, autosave=autosave), \
+                    patch.object(type(self.backend), "is_ghost_sketch", new=ghost, create=True):
+                toolbar.refresh_save_actions(autosave=autosave)
+                self.assertEqual((toolbar.btn_save.isEnabled(), toolbar.btn_save_all.isEnabled()), (save, save_all))
+        # Settings broadcasts Auto-Save changes; the toolbar follows without a project switch.
+        from main.qt.signals import signals
+        with patch.object(type(self.backend), "is_ghost_sketch", new=False, create=True):
+            signals.autosave_settings_changed.emit(True, 1500)
+            self.assertFalse(toolbar.btn_save.isEnabled() or toolbar.btn_save_all.isEnabled())
+            signals.autosave_settings_changed.emit(False, 1500)
+            self.assertTrue(toolbar.btn_save.isEnabled() and toolbar.btn_save_all.isEnabled())
+
     def test_compact_actions_respect_live_state_and_release_popup(self):
         window = self.own(QMainWindow())
         toolbar = PrimaryToolbar(self.backend, window)

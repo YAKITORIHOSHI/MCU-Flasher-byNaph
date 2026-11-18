@@ -405,6 +405,12 @@ _ATOMIC_UNSUPPORTED_WINERRORS = (1, 17, 50, 87, 183)
 _NETWORK_FILESYSTEMS = ("cifs", "smb3", "smbfs", "nfs", "nfs4", "fuse.gvfsd-fuse", "fuse.sshfs", "fuse.rclone")
 
 
+def is_network_storage(path) -> bool:
+    """Network storage on any OS: Windows UNC paths and mapped drives, or a Linux
+    SMB/NFS/GVfs/SSHFS mount (Ubuntu, Fedora, Mint) holding *path*."""
+    return _on_network_mount(path)
+
+
 def _on_network_mount(path) -> bool:
     """Windows UNC/mapped drives, or a Linux SMB/NFS/GVfs mount holding *path*."""
     if is_unc_or_network_path(path):

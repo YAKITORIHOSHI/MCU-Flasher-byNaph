@@ -34,6 +34,9 @@ from main.qt.taskbar import window_hidden, window_shown
 from src.modules.ui_palette import readable_foreground, setup_text_palette
 
 from main.core.constants import is_application_codebase_dir
+
+# The project selector opens at this share of the usable screen height.
+PROJECT_SELECTOR_HEIGHT = 0.8
 from main.core.project_scaffold import create_project_scaffold, sanitized_project_name
 
 # Supported sketch file extensions
@@ -289,6 +292,10 @@ class ProjectDialog(GlassDialog):
             screen = active_screen(self)
             if screen:
                 avail = screen.availableGeometry()
+                # Open at 80% of the usable screen height (taskbars and panels excluded).
+                height = min(avail.height(), max(self.minimumHeight(), round(avail.height() * PROJECT_SELECTOR_HEIGHT)))
+                if height != self.height():
+                    self.resize(self.width(), height)
                 x = avail.x() + max(0, (avail.width() - self.width()) // 2)
                 y = avail.y() + max(0, (avail.height() - self.height()) // 2)
                 self.move(x, y)
@@ -699,9 +706,7 @@ class ProjectDialog(GlassDialog):
         self._existing_preview_bottom_stretch_index = layout.count()
         layout.addStretch(1)
         actions.addStretch()
-        self._btn_cancel_existing = self._action("Cancel", "secondary", self.reject, tab)
         self._btn_open_existing = self._action("Open project", "primary", self._open_existing, tab)
-        actions.addWidget(self._btn_cancel_existing)
         actions.addWidget(self._btn_open_existing)
 
     def _setup_new_tab(self) -> None:
@@ -753,9 +758,7 @@ class ProjectDialog(GlassDialog):
         layout.addWidget(self._new_status)
         layout.addStretch()
         actions.addStretch()
-        self._btn_cancel_new = self._action("Cancel", "secondary", self.reject, tab)
         self._btn_create = self._action("Create project", "primary", self._create_project, tab)
-        actions.addWidget(self._btn_cancel_new)
         actions.addWidget(self._btn_create)
 
     def _create_ghost_sketch(self) -> None:
@@ -808,9 +811,7 @@ class ProjectDialog(GlassDialog):
         self._btn_clear_recents = self._action("Clear history", "secondary", self._clear_recents, tab)
         actions.addWidget(self._btn_clear_recents)
         actions.addStretch()
-        self._btn_cancel_recent = self._action("Cancel", "secondary", self.reject, tab)
         self._btn_open_recent = self._action("Open selected", "primary", self._open_selected_recent, tab)
-        actions.addWidget(self._btn_cancel_recent)
         actions.addWidget(self._btn_open_recent)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1524,11 +1525,9 @@ class ProjectDialog(GlassDialog):
         self._open_projects_status.setWordWrap(True)
         layout.addWidget(self._open_projects_status)
         self._btn_refresh_projects = self._action("Refresh", "secondary", self._load_open_projects, tab)
-        self._btn_cancel_open = self._action("Cancel", "secondary", self.reject, tab)
         self._focus_project_btn = self._action("Show window", "primary", self._focus_open_project, tab)
         actions.addWidget(self._btn_refresh_projects)
         actions.addStretch()
-        actions.addWidget(self._btn_cancel_open)
         actions.addWidget(self._focus_project_btn)
         self._tabs.currentChanged.connect(lambda index: self._load_open_projects()
                                           if self._tabs.widget(index) is tab else None)

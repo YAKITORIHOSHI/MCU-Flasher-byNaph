@@ -28,6 +28,9 @@ class LogFollow(QObject):
         self.resume_on_release = bool(resume_on_release or hold_to_pause)
         self.scrollbar_held = False
         self.user_scrolled_up = False
+        # A hold that began in the text (a click, or selecting a line to copy).
+        self._text_hold = False
+        self._text_hold_following = False
         self._depth = 0
         self._content_revision = 0
         self._plain = isinstance(view, QPlainTextEdit)
@@ -186,6 +189,12 @@ class LogFollow(QObject):
     def _finish_release(self):
         if not isValid(self.view) or self.scrollbar_held or self._bar.isSliderDown():
             return
+        text_hold, self._text_hold = self._text_hold, False
+        if text_hold and not self._text_hold_following:
+            # Clicking or selecting text while reading earlier output keeps the
+            # reader there; only a click made while following resumes following.
+            self._sync_scroll()
+            return
         if self.resume_on_release and self.enabled:
             self._resume_scroll()
         else:
@@ -232,7 +241,10 @@ class LogFollow(QObject):
                 self._release()
         elif obj in (self.view, self.view.viewport()) and kind == QEvent.Type.MouseButtonPress:
             if self.hold_to_pause and event.button() == Qt.MouseButton.LeftButton:
+                following = not self.user_scrolled_up
                 self._press()
+                self._text_hold = True
+                self._text_hold_following = following
             else:
                 self._cancel_settle()
         elif obj in (self.view, self.view.viewport()) and kind in (QEvent.Type.Wheel, QEvent.Type.KeyPress):

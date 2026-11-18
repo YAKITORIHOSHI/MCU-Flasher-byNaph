@@ -320,7 +320,8 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     installed = app
     if sys.platform.startswith('linux'):
         from src.modules.ubuntu_release import linux_distribution
-        if linux_distribution().family == 'ubuntu':
+        # Ubuntu, Linux Mint and Fedora each install per user (user_install.persistent_setup_root).
+        if linux_distribution().family in ('ubuntu', 'linuxmint', 'fedora'):
             installed = fixture / 'data/mcu-flasher/application'
     runtime = installed / (".venv-macos" if sys.platform == "darwin" else ".venv-linux")
     if core.exists() or runtime.exists():
@@ -351,9 +352,9 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
         from direct.ubuntu.user_install import is_owned_installation
         menu = fixture / 'data/applications/mcu-flasher.desktop'
         if not is_owned_installation(installed) or not menu.is_file() or str(installed) not in menu.read_text():
-            raise RuntimeError('Successful Ubuntu Bootstrap did not publish the owned per-user installation and menu entry')
+            raise RuntimeError('Successful Bootstrap did not publish the owned per-user installation and menu entry')
         if (portable_app / '.venv-linux').exists():
-            raise RuntimeError('Ubuntu Bootstrap created its runtime in the portable source instead of the final installation')
+            raise RuntimeError('Bootstrap created its runtime in the portable source instead of the final installation')
         report.update(installation_root=str(installed), applications_entry=str(menu),
                       portable_source_preserved=portable_app.is_dir())
         app = installed
@@ -365,18 +366,22 @@ def execute(fixture: Path, timeout: int, *, allow_small_runner=False) -> dict:
     gui_result["screenshot"] = str(fixture / "cold-workspace.png")
     report["actual_gui"] = gui_result
     result_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    # Quick Bootstrap: SCons and the default plan's board list, no board toolchains.
-    # The first Compile below prepares the selected board's tools.
-    from src.modules.offline_bootstrap import CATALOG_MARKER, plan_hash
+    # Quick Bootstrap: SCons, the default plan's board list and the default boards' tools
+    # (DEFAULT_TARGETS), never the complete offline preparation. Other boards prepare on first Compile.
+    from src.modules.offline_bootstrap import CATALOG_MARKER, DEFAULT_TARGETS, plan_hash
     catalog = json.loads((core / CATALOG_MARKER).read_text(encoding="utf-8"))
     if catalog.get("plan") != plan_hash(report["default_plan"]):
         raise RuntimeError("Bootstrap did not prepare the default plan's board list")
     for name in report["default_plan"]["platforms"]:
         if not (core / "platforms" / name / "platform.json").is_file():
             raise RuntimeError(f"Bootstrap did not prepare the {name} board definitions")
-    toolchains = sorted(path.name for path in (core / "packages").iterdir() if path.name != "tool-scons")
-    if (core / ".mcu-offline-ready.json").exists() or toolchains:
-        raise RuntimeError(f"Online Bootstrap downloaded board toolchains before they were needed: {toolchains}")
+    if (core / ".mcu-offline-ready.json").exists():
+        raise RuntimeError("Online Bootstrap ran the complete offline preparation")
+    expected = [DEFAULT_TARGETS[name] for name in report["default_plan"]["platforms"] if name in DEFAULT_TARGETS]
+    stamps = sorted((core / ".mcu-targets").glob("*.json")) if (core / ".mcu-targets").is_dir() else []
+    if len(stamps) < len(expected):
+        raise RuntimeError(f"Bootstrap prepared {len(stamps)} of the default boards' tools {expected}")
+    report["bootstrap_prepared_targets"] = expected
     python = runtime / "bin/python"
     check_log = fixture / "readiness-check.log"
     checked = _run([*launcher, "--check"], cwd=fixture, env=env,

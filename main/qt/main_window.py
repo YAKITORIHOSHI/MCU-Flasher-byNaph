@@ -673,10 +673,6 @@ class MCUMainWindow(QMainWindow):
         bridge.file_menu_requested.connect(self._show_project_file_menu, Qt.ConnectionType.QueuedConnection)
 
         # Page 1: Detached Placeholder
-        from main.qt.detached_editor import EditorDetachedPlaceholder
-        self._placeholder_widget = EditorDetachedPlaceholder(self._editor_area)
-        self._placeholder_widget.attach_requested.connect(self.attach_editor)
-        self._editor_area.addWidget(self._placeholder_widget)
 
         self._editor_area.setCurrentWidget(self._editor_panel)
         self._v_splitter.addWidget(self._editor_area)
@@ -1810,8 +1806,8 @@ class MCUMainWindow(QMainWindow):
 
     def toggle_monitors_pane(self) -> None:
         """Show/hide the Monitors pane (Build Console / Serial Monitor tabs)."""
-        if self._editor_detached and not self._ai_visible:
-            return
+        if self._editor_detached:
+            return  # The monitors stay with the main window while the editor is detached.
 
         if self._monitors_pane_visible:
             if not self._editor_pane_visible and not self._editor_detached:

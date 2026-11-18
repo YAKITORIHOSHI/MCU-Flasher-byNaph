@@ -18,14 +18,17 @@ see the [README](README.md).
 - **Build and flash.** Compiles and uploads with PlatformIO for AVR, ESP32,
   ESP8266 and other installed targets. Unchanged sketches reuse their last
   build, and every upload writes the complete firmware image set (on ESP32:
-  bootloader, partition table and application).
+  bootloader, partition table and application). The console lists Libraries,
+  Target Board, Compile Time, Actual Board (what the connected chip reports) and
+  Upload Time, with one-line progress for flashing and repeat full builds.
 - **Serial Monitor.** Opening, reconnecting and closing never reset the board.
   The baud rate follows the sketch's `Serial.begin()`, with timestamps, pause,
   copy and send. After an upload the boot log appears from its first line.
 - **Editor.** An offline Monaco editor with source tabs, live syntax checks,
   bracket pairing, auto-save, Ctrl+Click / F12 into sketch and library headers,
   and project-wide search. Save and Auto-Save support writable SMB/network
-  folders whose permissions are managed by the share.
+  folders whose permissions are managed by the share. With Auto-Save on, edits
+  save themselves; a Ghost Sketch offers only Save, which chooses its folder.
 - **Projects.** Local sketches, new-project templates, temporary Ghost Sketches
   and Cloud sketches with conflict-safe Push and Pull. Each project can open in
   its own window. Ghost Sketch saves support new and empty network folders,

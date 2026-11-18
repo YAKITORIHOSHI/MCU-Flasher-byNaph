@@ -253,7 +253,7 @@ from main.core.file_utils import (
     hide_internal_project_metadata,
     get_project_root_source_files, robust_rmtree,
     is_unc_or_network_path, _unc_share_root, classify_platformio_failure,
-    retry_transient_file_operation, write_source_text, project_source_path,
+    retry_transient_file_operation, write_source_text, project_source_path, is_network_storage,
 )
 from main.core.toolchain import (
     find_pio_executable, ensure_platformio, _refresh_platformio_core_environment,
@@ -1316,7 +1316,10 @@ class MCUWebBackendAPI:
             from src.modules.platform_runtime import app_cache_dir
             identity = hashlib.sha256(str(target).casefold().encode("utf-8")).hexdigest()[:24]
             return app_cache_dir() / "sync_workspaces" / identity
-        if not is_unc_or_network_path(target):
+        # Network shares on every OS build in fast local storage: Windows UNC and
+        # mapped drives, and Linux SMB/NFS/GVfs mounts (writing thousands of
+        # objects to a share made every compile slow).
+        if not is_network_storage(target):
             return None
         proj_hash = hashlib.sha1(str(target).lower().encode("utf-8")).hexdigest()[:12]
         proj_name = re.sub(r'[^A-Za-z0-9_.-]', '_', target.name) or "project"
@@ -2134,13 +2137,25 @@ class MCUWebBackendAPI:
             except Exception:
                 flash_str = "N/A"
 
-            self._print_chip_info_box(chip_model, [
-                ("Chip Model",  chip_model),
-                ("Features",    features),
-                ("MAC Address", mac),
-                ("Crystal",     crystal_str),
-                ("Flash Size",  flash_str),
-            ])
+            # Exactly what this chip reports: package and revision, PSRAM, USB mode.
+            try:
+                description = str(esp_device.get_chip_description() or chip_model)
+            except Exception:
+                description = chip_model
+            psram = re.search(r"(?:Embedded\s+)?PSRAM\s+(\d+\s*MB(?:\s*\([^)]*\))?)", features, re.IGNORECASE)
+            usb_mode = ""
+            try:
+                usb_mode = str(esp_device.get_usb_mode() or "")
+            except Exception:
+                pass
+            fields = [("Chip", description), ("Features", features)]
+            if psram:
+                fields.append(("PSRAM", psram.group(1)))
+            fields += [("Flash Size", f"{flash_str} (detected)" if flash_str != "N/A" else "Not reported"),
+                       ("Crystal", crystal_str), ("MAC Address", mac)]
+            if usb_mode:
+                fields.append(("USB Mode", usb_mode))
+            self._print_chip_info_box(chip_model, fields)
             return True
         except Exception as e:
             self.emit("console:log", {
@@ -4501,11 +4516,19 @@ class MCUWebBackendAPI:
         self.emit("console:log", {"text": f"   COMPILING ({compiler_name})", "tag": "header", "newline": True})
         self.emit("console:log", {"text": "=" * 50, "tag": "header", "newline": True})
         self.emit("console:log", {"text": f"  Sketch : {self.sketch_dir_path}", "tag": "dim", "newline": True})
-        if self.current_board:
-            self.emit("console:log", {"text": f"  Board  : {self.current_board}", "tag": "dim", "newline": True})
         self.emit("console:log", {"text": f"  Tool   : {compiler_name}", "tag": "dim", "newline": True})
         self.emit("console:log", {"text": f"  Store  : {core_dir}", "tag": "dim", "newline": True})
-        self.emit("console:log", {"text": "", "newline": True})
+        if self.current_board:
+            # One Target Board table per operation, on every OS; an Upload adds its port and speed.
+            from main.core.upload_log import show_target_board, target_board_fields
+            from main.core.target_profile import requires_upload_port, serial_upload_speed
+            target_info = dict(self._resolve_board_info(build_board) or {})
+            show_target_board(self, target_board_fields(
+                target_info, self.current_board, upload=is_upload,
+                port=(self.current_port or "") if is_upload and requires_upload_port(target_info) else "",
+                upload_speed=serial_upload_speed(target_info, getattr(self, "upload_speed", "")) if is_upload else ""))
+        else:
+            self.emit("console:log", {"text": "", "newline": True})
 
         if is_upload:
             self.emit("console:log", {
@@ -4522,7 +4545,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": f"  Source  : Network share ({_share})", "tag": "info", "newline": True})
 
         cache_root = self._board_workspace_dir(build_board)
-        if is_remote:
+        if is_remote or is_network_storage(self.sketch_dir_path):
             self.emit("console:log", {"text": f"  Workspace: Local fast storage ({cache_root.name})", "tag": "info", "newline": True})
 
         # Check the actual env build directory — not just the .pio root — so the
@@ -4733,6 +4756,41 @@ class MCUWebBackendAPI:
                 from main.platforms.ubuntu_logs import UbuntuBuildInfo
                 _ubuntu_build_info = UbuntuBuildInfo(self, binfo, self.current_board or "")
             _dependency_graph_active = [False]
+            _libraries: list[tuple[str, str]] = []
+            _libraries_shown = [False]
+            _compiled_files = [0]
+            # A full build of a target built before knows its file count from last time,
+            # so it shows "Compiling 28/61 files" with a loading bar. A first-ever or
+            # incremental build cannot know its total and lists every step instead.
+            _files_record = None
+            _expected_files = [0]
+            try:
+                _files_record = self._board_workspace_dir(build_board) / ".mcu-build-files.json"
+                _build_dir_now = self._board_build_dir(build_board)
+                if not (_build_dir_now.is_dir() and any(_build_dir_now.rglob("*.o"))):
+                    _expected_files[0] = max(0, int(json.loads(_files_record.read_text(encoding="utf-8"))["files"]))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, NameError):
+                _expected_files[0] = 0  # Unknown total: every step gets its own line.
+            _files_key = f"{getattr(self, '_op_session_id', 0)}:compile-files"
+
+            def _files_bar(step: str, *, final: bool = False) -> None:
+                done = _compiled_files[0]
+                total = max(_expected_files[0], done, 1)
+                pct = 100.0 if final else min(99.9, done * 100.0 / total)
+                filled = int(pct * 24 / 100)
+                bar = "▰" * filled + "▱" * (24 - filled)
+                label = f"Compiled {done}/{max(total, done)} files" if final else f"Compiling {done}/{total} files"
+                detail = f" · {step}" if step and not final else ""
+                self.emit("console:log", {"text": f"  {label} [ {bar} ] {pct:5.1f}%{detail}",
+                                          "tag": "success" if final else "info", "newline": True,
+                                          "progress_key": _files_key})
+
+            def _show_libraries() -> None:
+                """The Library table: every library this build links, with its version."""
+                if _libraries_shown[0]:
+                    return
+                _libraries_shown[0] = True
+                self._print_info_box("Libraries", _libraries or [("Libraries", "None (core only)")])
             _in_error_block = [False]
             _error_block_type = ["error"]
             _last_progress_text: list[str | None] = [None]
@@ -4751,13 +4809,14 @@ class MCUWebBackendAPI:
             _scons_cache_hit = re.compile(r"^Retrieved\s+\S.*\s+from cache\s*$", re.IGNORECASE)
             _cache_hits = [0]
             _build_progress_pattern = re.compile(
-                r"^(?P<action>Compiling|Archiving|Linking|Building|Generating partitions|Checking size|"
+                r"^(?P<action>Compiling|Archiving|Indexing|Linking|Building|Generating partitions|Checking size|"
                 r"Retrieving maximum program size)\s+(?P<target>.+)$",
                 re.IGNORECASE,
             )
             _build_artifact_suffixes = {
                 "compiling": (".o", ".obj"),
                 "archiving": (".a", ".lib"),
+                "indexing": (".a", ".lib"),
                 "linking": (".elf", ".axf", ".out", ".exe"),
                 "building": (".bin", ".hex", ".uf2", ".elf"),
                 "generating partitions": (".bin",),
@@ -4797,7 +4856,6 @@ class MCUWebBackendAPI:
                 r'Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"|'
                 r"esptool(?:\.py)? v\d+(?:\.\d+)+(?:-[\w.-]+)?|"
                 r"Creating (?:esp32[\w-]*|esp8266) image\.{3}|"
-                r"Merged \d+ ELF sections?|"
                 r"Successfully created (?:esp32[\w-]*|esp8266) image\.?)",
                 re.IGNORECASE,
             )
@@ -4917,11 +4975,18 @@ class MCUWebBackendAPI:
                 # follows the normal routing path.
                 if _dependency_graph_active[0]:
                     if line_clean.lstrip().startswith("|"):
+                        graph = re.match(r"^((?:\|\s{3})*)\|--\s+(.+?)\s+@\s+([^\s(]+)", line_clean.strip())
+                        if graph and len(_libraries) < 64:
+                            nested = "  ↳ " if graph.group(1) else ""
+                            _libraries.append((nested + graph.group(2).strip()[:48], graph.group(3)[:32]))
                         continue
                     _dependency_graph_active[0] = False
+                    _show_libraries()
                 if line_clean.strip().casefold() == "dependency graph":
                     _dependency_graph_active[0] = True
                     continue
+                if line_clean.strip().casefold() == "no dependencies":
+                    _show_libraries()
 
                 # PlatformIO downloads native packages itself on Linux. Keep
                 # those installations protected just like Windows bootstrap.
@@ -5021,6 +5086,15 @@ class MCUWebBackendAPI:
                     _build_promotion_pattern.match(line_clean) or is_build_decoration
                     or _build_routine_pattern.fullmatch(line_clean)
                 ):
+                    continue
+                merged = re.fullmatch(r"Merged (\d+) ELF sections?\.?", line_clean.strip(), re.IGNORECASE)
+                if merged and not (is_linker_error or is_gcc_diagnostic or is_context_header or _in_error_block[0]
+                                   or is_generic_error or is_generic_warning):
+                    # A firmware image step in its own color: orange, apart from archive/index.
+                    count = int(merged.group(1))
+                    _ensure_post_deps_divider()
+                    self.emit("console:log", {"text": f"  Merged    {count} ELF section{'s' if count != 1 else ''}",
+                                              "tag": "orange", "newline": True})
                     continue
 
                 # Route line display
@@ -5136,34 +5210,39 @@ class MCUWebBackendAPI:
                         self.emit("console:log", {"text": line_clean, "tag": "dim", "newline": True})
                 elif is_scons_progress:
                     progress_action, progress_target = build_progress
-                    _prog_text = None
-                    _prog_tag = "dim"
-                    if progress_action == "linking":
-                        _prog_text, _prog_tag = "  Linking...", "dim"
-                    elif progress_action in ("checking size", "retrieving maximum program size"):
-                        _prog_text, _prog_tag = "  Checking firmware size...", "dim"
-                    elif progress_action == "compiling":
-                        filename = progress_target.rsplit("/", 1)[-1]
-                        _prog_text = f"  Compiling {filename}..."
-                        _prog_tag = "info"
+                    # Every build step on its own line, with the path a person recognizes:
+                    # PlatformIO's .pio/build/<env>/ prefix and the object suffix are dropped.
+                    shown = re.sub(r"^(?:.*/)?\.pio/build/[^/]+/", "", progress_target)
+                    shown = re.sub(r"\.(?:o|obj)$", "", shown, flags=re.IGNORECASE) or progress_target
+                    _prog_text, _prog_tag = None, "info"
+                    if progress_action == "compiling":
+                        _prog_text = f"  Compiling {shown}"
+                        _compiled_files[0] += 1
                     elif progress_action == "archiving":
-                        _prog_text, _prog_tag = "  Archiving...", "dim"
+                        _prog_text, _prog_tag = f"  Archiving {shown}", "purple"
+                    elif progress_action == "indexing":
+                        _prog_text, _prog_tag = f"  Indexing  {shown}", "system"
+                    elif progress_action == "linking":
+                        _prog_text = f"  Linking   {shown}"
+                    elif progress_action in ("checking size", "retrieving maximum program size"):
+                        _prog_text = "  Checking firmware size"
                     elif progress_action in ("building", "generating partitions"):
-                        target_name = progress_target.rsplit("/", 1)[-1]
+                        target_name = shown.rsplit("/", 1)[-1]
                         if "bootloader" in target_name.lower():
-                            _prog_text = f"  Building bootloader image ({target_name})..."
-                            _prog_tag = "info"
+                            _prog_text = f"  Building bootloader image ({target_name})"
                         elif progress_action == "generating partitions" or "partition" in target_name.lower():
-                            _prog_text = f"  Building partition table ({target_name})..."
-                            _prog_tag = "info"
+                            _prog_text = f"  Building partition table ({target_name})"
                         elif "firmware" in target_name.lower() or target_name.endswith((".bin", ".hex")):
-                            _prog_text = f"  Building firmware image ({target_name})..."
-                            _prog_tag = "info"
+                            _prog_text = f"  Building firmware image ({target_name})"
                         else:
-                            _prog_text = f"  Building {target_name}..."
-                            _prog_tag = "info"
+                            _prog_text = f"  Building {target_name}"
 
-                    if _prog_text and (progress_action == "compiling" or _prog_text != _last_progress_text[0]):
+                    if _expected_files[0] and progress_action in ("compiling", "archiving", "indexing"):
+                        # Known total: one loading line; the current step rides along.
+                        _ensure_post_deps_divider()
+                        _last_progress_text[0] = _prog_text
+                        _files_bar(shown)
+                    elif _prog_text and (progress_action == "compiling" or _prog_text != _last_progress_text[0]):
                         _ensure_post_deps_divider()
                         _last_progress_text[0] = _prog_text
                         self.emit("console:log", {"text": _prog_text, "tag": _prog_tag, "newline": True})
@@ -5176,10 +5255,23 @@ class MCUWebBackendAPI:
 
             if _ubuntu_build_info is not None:
                 _ubuntu_build_info.flush()
+            if _compiled_files[0] and _expected_files[0]:
+                _files_bar("", final=True)
+            elif _compiled_files[0]:
+                self.emit("console:log", {"text": f"  Compiled {_compiled_files[0]} source files", "tag": "success",
+                                          "newline": True})
             if _cache_hits[0]:
                 self.emit("console:log", {"text": f"  Reused {_cache_hits[0]} compiled files from the build cache.", "tag": "dim", "newline": True})
             self._active_process.stdout.close()
             rc = self._active_process.wait()
+            if rc == 0 and _files_record is not None:
+                # Remember this target's file count: its next full build shows N/total.
+                try:
+                    objects = sum(1 for _ in self._board_build_dir(build_board).rglob("*.o"))
+                    if objects:
+                        _files_record.write_text(json.dumps({"files": objects}), encoding="utf-8")
+                except OSError:
+                    pass
 
             duration = round(time.time() - start_time, 2)
             was_stopped = getattr(self, "_stop_requested", False) or (sys.platform != "win32" and rc < 0)
@@ -5783,8 +5875,8 @@ class MCUWebBackendAPI:
         self.emit("console:log", {"text": "", "newline": True})
 
     def _print_chip_info_box(self, chip_model: str, fields: list[tuple[str, str]]) -> None:
-        """Render a boxed chip-info panel into the build console."""
-        self._print_info_box(f"{chip_model} Information", fields)
+        """Render what the connected chip reported: the Actual Board table on every OS."""
+        self._print_info_box("Actual Board", fields)
 
     def _upload_status_key(self, kind: str) -> str:
         """Keep mutable connection rows scoped to the current operation."""
@@ -5890,10 +5982,11 @@ class MCUWebBackendAPI:
 
         note_label = f" | {note}" if note else ""
         progress_text = f"  {icon} Flashing {stage_str}{label} [ {bar} ] | {pct:5.1f}%{size_label}{note_label}"
+        # One line of loading for the whole upload: each region replaces the last.
         self.emit("console:log", {
             "text": progress_text,
             "tag": "success" if pct >= 100.0 else "info",
-            "replace_pattern": rf"(?:Flashing)\s+{re.escape(stage_str + label)}\s*\[",
+            "progress_key": f"{getattr(self, '_op_session_id', 0)}:upload-flash",
             "newline": True,
         })
         self.emit("console:progress", {"action": "Uploading"})
@@ -8614,13 +8707,7 @@ class MCUWebBackendAPI:
                             )
                         except Exception:
                             pass
-                    if "Flash Size" not in _chip_info:
-                        try:
-                            configured_flash, _ = normalized_board_memory_options(binfo)
-                            if configured_flash:
-                                _chip_info["Flash Size"] = f"{configured_flash} (configured, not auto-detected)"
-                        except Exception:
-                            pass
+                    # Only what the chip reported: a catalog flash size is not this board's.
                     _chip_info_shown[0] = True
                     fields = list(_chip_info.items())
                     self._print_chip_info_box(display_model, fields)

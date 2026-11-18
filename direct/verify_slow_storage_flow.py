@@ -30,6 +30,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 import shiboken6
 from main.core import ai_review
+from main.core.file_utils import project_source_path
 
 APP = QApplication.instance() or QApplication([])
 
@@ -121,6 +122,7 @@ class StorageFlowChecks(unittest.TestCase):
                        get_project_build_cache_root=lambda project: Path(project) / "fixture-cache",
                        get_sketch_files_fast=lambda project: sorted(Path(project).glob("*.ino")),
                        retry_transient_file_operation=lambda operation, **_: operation(),
+                       project_source_path=project_source_path,
                        load_gui_config=lambda: {}, get_optimal_compiler_jobs=Mock(return_value=2))
         exec(compile(ast.Module(body=[ram, cls], type_ignores=[]), "isolated_storage_backend", "exec"), self.ns)
         api = self.ns["MCUWebBackendAPI"]()

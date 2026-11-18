@@ -125,6 +125,20 @@ class FileAccessChecks(unittest.TestCase):
                 file_utils.write_source_text(self.path, 'share buffer', expected=self.before)
         self.assertEqual(self.path.read_text(), 'external edit')
 
+    def test_linux_network_mounts_are_network_storage_on_every_distribution(self):
+        from unittest.mock import mock_open
+        mounts = ("/dev/sda2 / ext4 rw 0 0\n"
+                  "//nas/share /mnt/nas cifs rw 0 0\n"
+                  "gvfsd-fuse /run/user/1000/gvfs fuse.gvfsd-fuse rw 0 0\n"
+                  "server:/export /mnt/my\\040nfs nfs4 rw 0 0\n")
+        with patch.object(file_utils.sys, "platform", "linux"), \
+                patch("builtins.open", mock_open(read_data=mounts)):
+            self.assertTrue(file_utils.is_network_storage("/mnt/nas/Sketch"))
+            self.assertTrue(file_utils.is_network_storage("/run/user/1000/gvfs/smb-share:server=nas,share=x/Sketch"))
+            self.assertTrue(file_utils.is_network_storage("/mnt/my nfs/Sketch"))
+            self.assertFalse(file_utils.is_network_storage("/home/owner/Documents/Sketch"))
+            self.assertFalse(file_utils.is_network_storage("/mnt/nasty/Sketch"))
+
     def test_persistent_lock_or_concurrent_source_change_preserves_original_bytes(self):
         with patch.object(file_utils.os, 'replace', side_effect=PermissionError('held by fixture')):
             with self.assertRaises(PermissionError):

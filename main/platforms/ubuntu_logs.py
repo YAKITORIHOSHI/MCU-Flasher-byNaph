@@ -91,28 +91,11 @@ class UbuntuBuildInfo:
         return False
 
     def flush(self) -> None:
-        if self._shown:
-            return
+        """PlatformIO's metadata block stays out of the console.
+
+        Its HARDWARE line lists the catalog entry's specs, which differ from the
+        connected chip; the Target Board and Actual Board tables cover both."""
         self._shown = True
-        fields: list[tuple[str, str]] = []
-        if self.board_name:
-            fields.append(("Board", self.board_name))
-        platform = str(self.info.get("platform") or "").strip()
-        board = str(self.info.get("board") or "").strip()
-        if platform and board:
-            fields.append(("Target", _bounded(f"{platform}:{board}")))
-        if self.info.get("framework"):
-            fields.append(("Framework", _bounded(self.info["framework"])))
-        if self.platform:
-            fields.append(("Platform", self.platform))
-        if self.hardware:
-            fields.append(("Hardware", self.hardware))
-        if self.packages:
-            fields.append(("Packages", "; ".join(self.packages)))
-        if self.packages_omitted:
-            fields.append(("Package details", "Additional package metadata omitted"))
-        if fields:
-            self.api._print_info_box("Board Information", fields)
 
 
 # Compatibility name for the existing Ubuntu presentation probes.

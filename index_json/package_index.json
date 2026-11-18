@@ -21773,7 +21773,7 @@
               "size": "3583929"
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/tools/arduinoOTA/arduinoOTA_1.4.1_Linux_ARM64.tar.gz",
               "archiveFileName": "arduinoOTA_1.4.1_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:01081746bc8ec0ae879c89b518301937b2040abfb13c0e3f43e182de47edbbf7",
@@ -23823,6 +23823,75 @@
         },
         {
           "name": "dfu-util",
+          "version": "0.11.0-arduino6",
+          "systems": [
+            {
+              "host": "aarch64-linux-gnu",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-linux_arm64.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-linux_arm64.tar.gz",
+              "checksum": "SHA-256:e88ce1fa7b75405552df82688777fb32e17fd1d74c1bc7a9563596f1c6e830e0",
+              "size": "953469"
+            },
+            {
+              "host": "arm-linux-gnueabihf",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-linux_arm.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-linux_arm.tar.gz",
+              "checksum": "SHA-256:9eb78d56bff7ee1e8e9d5dd9f7c0c171f8d14b7f1d8d9ad9a3423a5234db1c98",
+              "size": "760193"
+            },
+            {
+              "host": "arm64-apple-darwin",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-darwin_arm64.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-darwin_arm64.tar.gz",
+              "checksum": "SHA-256:25ff88faf26779bae11101d04d1b2449822f27a6c1523f5197f0a295c75ab9f7",
+              "size": "82603"
+            },
+            {
+              "host": "arm64-mingw32",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-windows_arm64.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-windows_arm64.tar.gz",
+              "checksum": "SHA-256:c4f3566f739d1ac52dc622d8ff7211872dda3fcbbcd3dc5d30cbac73aa5aecb8",
+              "size": "162375"
+            },
+            {
+              "host": "i686-mingw32",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-windows_386.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-windows_386.tar.gz",
+              "checksum": "SHA-256:a83bfc788db118a0bae19f96ceb118b7a8c3f4d8f74e475f3ebee51d6ec6f69a",
+              "size": "170824"
+            },
+            {
+              "host": "i686-pc-linux-gnu",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-linux_386.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-linux_386.tar.gz",
+              "checksum": "SHA-256:3a318850766d825c03167ff2934877dfb2a2b60e2dc8394a51b6025b8ece4648",
+              "size": "1120734"
+            },
+            {
+              "host": "x86_64-apple-darwin",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-darwin_amd64.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-darwin_amd64.tar.gz",
+              "checksum": "SHA-256:e8d51a8ec8d3709534b6a8cceb7187a1bad3904e80048a013c2ec926843ea774",
+              "size": "89341"
+            },
+            {
+              "host": "x86_64-mingw32",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-windows_amd64.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-windows_amd64.tar.gz",
+              "checksum": "SHA-256:d8f449c90520b015503b1116b4482e7cde3a22f1f329685298b29d00f506d2a0",
+              "size": "173130"
+            },
+            {
+              "host": "x86_64-pc-linux-gnu",
+              "url": "https://downloads.arduino.cc/tools/dfu-util/dfu-util-0.11-arduino6-linux_amd64.tar.gz",
+              "archiveFileName": "dfu-util-0.11-arduino6-linux_amd64.tar.gz",
+              "checksum": "SHA-256:4fcf15936c76ecad2d32cd451ebc932274a714076053736a58cf3cb6a335e268",
+              "size": "1169255"
+            }
+          ]
+        },
+        {
+          "name": "dfu-util",
           "version": "0.11.0-arduino5",
           "systems": [
             {
@@ -24155,7 +24224,7 @@
               "size": 2802102
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/tools/espflash_2.0.0_Linux_ARM64.tar.gz",
               "archiveFileName": "espflash_2.0.0_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:19532401fffd22e9b67de09c92a1eddd65aa2b47b369292aae844665198dd852",
@@ -24203,7 +24272,7 @@
               "size": 9659362
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/tools/esptool_4.6.2_Linux_ARM64.tar.gz",
               "archiveFileName": "esptool_4.6.2_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:33e1f2edb04def19e17f8ffa1cd37f9638ecccae8c05f95e54667e44496bd28d",
@@ -26357,7 +26426,7 @@
               "size": 1644719
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/scripting-tools/scripting-tools_v0.0.7_Linux_ARM64.tar.gz",
               "archiveFileName": "scripting-tools_v0.0.7_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:ba0ec1d1fabdd6cd443762c153ed0be9ea9ae31270c7638353f1f1f501e08294",
@@ -27062,6 +27131,75 @@
       "tools": [
         {
           "name": "ctags",
+          "version": "5.8-arduino12",
+          "systems": [
+            {
+              "host": "aarch64-linux-gnu",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-linux_arm64.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-linux_arm64.tar.gz",
+              "checksum": "SHA-256:599fa938806beee03cdb15df225fb378e796801236784afe8a6cc33bae92e8cc",
+              "size": "465460"
+            },
+            {
+              "host": "arm-linux-gnueabihf",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-linux_arm.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-linux_arm.tar.gz",
+              "checksum": "SHA-256:55cd665556d488747951af4f65d97a2870ad2452636388a2c5b628c0fe18b804",
+              "size": "376285"
+            },
+            {
+              "host": "arm64-apple-darwin",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-darwin_arm64.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-darwin_arm64.tar.gz",
+              "checksum": "SHA-256:bd6c405d7aff6e9af936563869558b701dfc140385551ad88ac21d8640248145",
+              "size": "99122"
+            },
+            {
+              "host": "arm64-mingw32",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-windows_arm64.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-windows_arm64.tar.gz",
+              "checksum": "SHA-256:e232efd97f49ed078bd05b7fd7a7edc249d8939d1f6da9600da6615584afa30a",
+              "size": "141371"
+            },
+            {
+              "host": "i686-mingw32",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-windows_386.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-windows_386.tar.gz",
+              "checksum": "SHA-256:5759a00d981e2eeaa60f963a9f327a1f53e9c9e02f0dd8acd508d433c4e4f126",
+              "size": "142491"
+            },
+            {
+              "host": "i686-pc-linux-gnu",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-linux_386.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-linux_386.tar.gz",
+              "checksum": "SHA-256:ebfecdd81b12ec730074e6a538a4f487d7c7de6644e5343eb194ff704fc85dd5",
+              "size": "554586"
+            },
+            {
+              "host": "x86_64-apple-darwin",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-darwin_amd64.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-darwin_amd64.tar.gz",
+              "checksum": "SHA-256:154b95523cf165d9f1e77df9b58d7b156a4f7ab22c9aecb999cdc00e570d4fb8",
+              "size": "107623"
+            },
+            {
+              "host": "x86_64-mingw32",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-windows_amd64.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-windows_amd64.tar.gz",
+              "checksum": "SHA-256:c0ea4b3d5ed57ef91762ee0b80dc2e77add2e6161db9a219c35386660e4c2934",
+              "size": "150760"
+            },
+            {
+              "host": "x86_64-pc-linux-gnu",
+              "url": "https://downloads.arduino.cc/tools/ctags/ctags-5.8-arduino12-linux_amd64.tar.gz",
+              "archiveFileName": "ctags-5.8-arduino12-linux_amd64.tar.gz",
+              "checksum": "SHA-256:550f018ba5ee70664913f1b24b059d0bf87e189bf9ddaf4f937235a3a2208a6e",
+              "size": "568761"
+            }
+          ]
+        },
+        {
+          "name": "ctags",
           "version": "5.8-arduino11",
           "systems": [
             {
@@ -27127,7 +27265,7 @@
               "size": 1816821
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/dfu-discovery/dfu-discovery_v0.1.2_Linux_ARM64.tar.gz",
               "archiveFileName": "dfu-discovery_v0.1.2_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:4bda54b9031d5b1fb1af70d1c38bf1b1f8cfd0eb0cd81f6c3a43253c31dea92d",
@@ -27189,7 +27327,7 @@
               "size": 3088630
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/mdns-discovery/mdns-discovery_v1.1.0_Linux_ARM64.tar.gz",
               "archiveFileName": "mdns-discovery_v1.1.0_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:19597d8d15aac922813b34064deb870c0e5efc08d7430d15c8501768890f7725",
@@ -27258,7 +27396,7 @@
               "size": 3103889
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/mdns-discovery/mdns-discovery_v1.0.12_Linux_ARM64.tar.gz",
               "archiveFileName": "mdns-discovery_v1.0.12_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:63d5a7a0969d33e681d7d7e0fc16c3ba359525b101c2aa2d7375f72f28ddd8e1",
@@ -27327,7 +27465,7 @@
               "size": 2676041
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/mdns-discovery/mdns-discovery_v1.0.10_Linux_ARM64.tar.gz",
               "archiveFileName": "mdns-discovery_v1.0.10_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:e5abbd7fec32f48be88f99a390886669c6efb91175c870dc69efd5917f3c6cc6",
@@ -27389,7 +27527,7 @@
               "size": 2370520
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/mdns-discovery/mdns-discovery_v1.0.9_Linux_ARM64.tar.gz",
               "archiveFileName": "mdns-discovery_v1.0.9_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:0435fd5013c3d2958b790d3b9989f1c685c04316dcdd997298a4c489f7a2a049",
@@ -27451,7 +27589,7 @@
               "size": 2350031
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/mdns-discovery/mdns-discovery_v1.0.8_Linux_ARM64.tar.gz",
               "archiveFileName": "mdns-discovery_v1.0.8_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:31d3e205b9a978daa9de2706d988bbec80f4a0992980a594531d62a9b712afc8",
@@ -27513,7 +27651,7 @@
               "size": 2086245
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.5.2_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-discovery_v1.5.2_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:489c81d0162e28e9c6602ecbce092e5a4669e7410d95067ed6dd1944e6a3cd34",
@@ -27582,7 +27720,7 @@
               "size": 2085081
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.5.1_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-discovery_v1.5.1_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:7c150191902467554578632b9d57df0c8a5bd58a39a9620e257932905d99d6ba",
@@ -27651,7 +27789,7 @@
               "size": 2084404
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.5.0_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-discovery_v1.5.0_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:2a19dcf718b5f9b1612cc33c8fec19822e1229bc4cba12dd4f03003d368c56e4",
@@ -27720,7 +27858,7 @@
               "size": 1963468
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.4.3_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-discovery_v1.4.3_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:a539df70b109f4e85fb065cfd1424c4417f01e364337ec61bd29edda1a042de6",
@@ -27789,7 +27927,7 @@
               "size": 1649104
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.4.1_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-discovery_v1.4.1_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:c2de8f6f482d744eeac1c48c02b351f97dacfbf92c8144cacc28b21dc1547ac3",
@@ -27851,7 +27989,7 @@
               "size": 1649820
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/discovery/serial-discovery/serial-discovery_v1.4.0_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-discovery_v1.4.0_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:7d694e122e1aa0d1365b5ab3aea809bd265b23de40dd304fe88026d5955eedeb",
@@ -27913,7 +28051,7 @@
               "size": 2276641
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/monitor/serial-monitor/serial-monitor_v0.15.0_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-monitor_v0.15.0_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:bb16cf208befb19cef8710f753272f9e1ddbc1bd851d57be371f6d4b77af6c5e",
@@ -27975,7 +28113,7 @@
               "size": 1993967
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/monitor/serial-monitor/serial-monitor_v0.14.1_Linux_ARM64.tar.gz",
               "archiveFileName": "serial-monitor_v0.14.1_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:e8c2627e7b99c18fb5b77e735b76ac9d4529b04f3ecaf8fcd706963117b88d4a",
@@ -42659,7 +42797,7 @@
               "size": 1802446
             },
             {
-              "host": "arm64-linux-gnueabihf",
+              "host": "arm64-linux-gnu",
               "url": "https://downloads.arduino.cc/tools/arduino101load_2.3.0_Linux_ARM64.tar.gz",
               "archiveFileName": "arduino101load_2.3.0_Linux_ARM64.tar.gz",
               "checksum": "SHA-256:26f85c5b1e7802fe470f3a18b1c901aaff2d06099fc8dd3f144305f62da6bbaa",

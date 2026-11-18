@@ -457,8 +457,22 @@ def check_monitor(render_dir: Path | None) -> int:
         for name in ("btn_compile", "btn_upload", "btn_project", "btn_download"):
             require_reachable("detached", getattr(window._primary_toolbar, name), window._detached_window, name)
         capture(window._detached_window, "detached")
+        # Detached, the monitors stay with the main window: Hide Monitors is absent and inert,
+        # and no in-window card duplicates the toolbar's Attach Editor.
+        controls = window._controls_bar
+        if controls.btn_toggle_monitors.isVisible() or controls.btn_toggle_monitors.isEnabled():
+            problems.append(("detached", "Hide Monitors is shown or clickable while the editor is detached"))
+        window.toggle_monitors_pane()
+        pump(.1)
+        if not window._bottom_tabs.isVisible() or window._editor_area.isVisible():
+            problems.append(("detached", "the monitors did not stay alone in the main window"))
+        if any(type(widget).__name__ == "EditorDetachedPlaceholder" for widget in window.findChildren(QWidget)):
+            problems.append(("detached", "an in-window Attach Editor card is present"))
         window.attach_editor()
         pump(.3)
+        if not controls.btn_toggle_monitors.isEnabled() or (
+                not controls.is_compact() and not controls.btn_toggle_monitors.isVisible()):
+            problems.append(("attached", "Hide Monitors did not return after attaching the editor"))
 
     # ── Dialogs and auxiliary screens ────────────────────────────────────────
     from main.qt.board_dialog import BoardSearchDialog

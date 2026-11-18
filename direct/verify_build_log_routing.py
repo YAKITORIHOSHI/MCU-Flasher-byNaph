@@ -208,11 +208,12 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Linking .pio/build/native/firmware.elf",
         )
         text = "\n".join(item["text"] for item in records)
-        self.assertEqual(text.count("Compiling Main.cpp.o..."), 2)
+        self.assertEqual(text.count("Compiling src/Main.cpp"), 2)
         self.assertIn("Bootloader.bin", text)
-        self.assertIn("Compiling Linking.cpp.o...", text)
-        self.assertIn("Linking...", text)
-        self.assertNotIn("main.cpp.o", text)
+        self.assertIn("Compiling src/Linking.cpp", text)
+        self.assertNotIn(".pio", text)
+        self.assertIn("Linking   firmware.elf", text)
+        self.assertNotIn("main.cpp", text)
 
     def test_routine_promotion_and_standard_outcome_do_not_duplicate_summary(self):
         records = self.route(
@@ -248,17 +249,11 @@ class BuildLogRoutingChecks(unittest.TestCase):
         ]
         backend = ParserBackend(lines)
         self.assertEqual(LINUX_ROUTE(backend), lines)
-        self.assertEqual(len(backend.boxes), 1)
-        title, fields = backend.boxes[0]
-        self.assertEqual(title, "Board Information")
-        details = dict(fields)
-        self.assertEqual(details["Target"], "espressif32:esp32dev")
-        self.assertEqual(details["Hardware"], "ESP32 240MHz, 320KB RAM, 4MB Flash")
-        self.assertIn("framework-arduinoespressif32", details["Packages"])
+        # Catalog metadata is consumed quietly: no Board Information box on any OS.
+        self.assertEqual(backend.boxes, [])
         records = [payload["text"] for event, payload in backend.events if event == "console:log"]
-        board_index = next(i for i, value in enumerate(records) if value.startswith("Board Information"))
-        progress_index = next(i for i, value in enumerate(records) if "Compiling example.ino.cpp.o" in value)
-        self.assertLess(board_index, progress_index)
+        self.assertFalse(any("HARDWARE:" in value or "PACKAGES:" in value for value in records))
+        self.assertTrue(any("Compiling src/example.ino.cpp" in value for value in records))
         # The same stdout retains the original Windows presentation.
         windows_backend = ParserBackend(lines)
         ROUTE(windows_backend)
@@ -281,7 +276,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         self.assertIn("PLATFORM: custom diagnostic value", shown)
         self.assertIn("3 | HARDWARE: actual source excerpt", shown)
         self.assertIn("^~~~~~~~", shown)
-        self.assertEqual(len(backend.boxes), 1)
+        self.assertEqual(backend.boxes, [])
 
     def test_progress_looking_sentences_and_unnumbered_source_remain_exact(self):
         lines = (
@@ -298,6 +293,46 @@ class BuildLogRoutingChecks(unittest.TestCase):
         records = self.route(*lines)
         self.assertEqual([item["text"] for item in records], list(lines))
         self.assertTrue(all(item["tag"] == "dim" for item in records))
+
+    def test_known_total_compiles_on_one_loading_line(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory(dir=ROOT / "temp") as folder:
+            workspace = Path(folder)
+            (workspace / ".mcu-build-files.json").write_text(json.dumps({"files": 3}), encoding="utf-8")
+            backend = ParserBackend([
+                "Compiling .pio/build/mcu_env/src/Main.cpp.o",
+                "Archiving .pio/build/mcu_env/libFrameworkArduino.a",
+                "Compiling .pio/build/mcu_env/FrameworkArduino/HardwareSerial.cpp.o",
+                "Compiling .pio/build/mcu_env/FrameworkArduino/Print.cpp.o",
+            ])
+            backend._board_workspace_dir = lambda board: workspace
+            backend._board_build_dir = lambda board: workspace / "build"  # Empty: a full build.
+            ROUTE.__globals__.update(build_board="Fixture", json=json)
+            ROUTE(backend)
+        rows = [payload for event, payload in backend.events if event == "console:log"]
+        self.assertTrue(rows and all(row.get("progress_key") for row in rows))
+        self.assertEqual(len({row["progress_key"] for row in rows}), 1)
+        self.assertTrue(rows[0]["text"].startswith("  Compiling 1/3 files [ "))
+        self.assertIn("· src/Main.cpp", rows[0]["text"])
+        self.assertIn("· libFrameworkArduino.a", rows[1]["text"])
+        self.assertTrue(rows[-1]["text"].startswith("  Compiling 3/3 files [ "))
+        self.assertIn("· FrameworkArduino/Print.cpp", rows[-1]["text"])
+
+    def test_merged_elf_sections_with_a_period_are_an_orange_step(self):
+        records = self.route("Merged 2 ELF sections.")
+        self.assertEqual([(r["text"], r["tag"]) for r in records], [("  Merged    2 ELF sections", "orange")])
+
+    def test_indexing_is_a_colored_build_step(self):
+        records = self.route("Indexing .pio/build/mcu_env/libFrameworkArduino.a")
+        self.assertEqual([(r["text"], r["tag"]) for r in records], [("  Indexing  libFrameworkArduino.a", "system")])
+
+    def test_dependency_graph_becomes_one_library_table(self):
+        records = self.route("Dependency Graph", "|-- ArduinoJson @ 7.2.1", "|-- Wire @ 2.0.0",
+                             "|   |-- SPI @ 2.0.0", "Building in release mode...")
+        tables = [record["text"] for record in records if record["text"].startswith("Libraries")]
+        self.assertEqual(tables, ["Libraries\nArduinoJson: 7.2.1\nWire: 2.0.0\n  ↳ SPI: 2.0.0"])
+        self.assertFalse(any(record["text"].lstrip().startswith("|--") for record in records))
 
     def test_routine_platformio_chatter_is_hidden_without_hiding_files(self):
         chatter = (
@@ -317,9 +352,12 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Successfully created esp32 image.",
         )
         records = self.route(*chatter, "Compiling .pio/build/native/src/Main.cpp.o")
-        self.assertEqual(records, [{
-            "text": "  Compiling Main.cpp.o...", "tag": "info", "newline": True,
-        }])
+        # "No dependencies" becomes the Library table; each build step keeps its own line.
+        self.assertEqual([record["text"] for record in records],
+                         ["Libraries\nLibraries: None (core only)", "  Merged    1 ELF section",
+                          "  Compiling src/Main.cpp"])
+        self.assertEqual(records[1]["tag"], "orange")
+        self.assertEqual(records[-1]["tag"], "info")
 
     def test_dependency_graph_is_hidden_and_following_build_status_is_kept(self):
         records = self.route(
@@ -371,7 +409,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         self.assertIn("Merged 1 ELF section", text)
         self.assertIn("LDF Modes: Finder ~ chain, Compatibility ~ soft", text)
         self.assertIn("RAM: [==       ] 20.0% (used 20 bytes from 100 bytes)", text)
-        self.assertEqual(records[-1]["text"], "  Compiling Main.cpp.o...")
+        self.assertEqual(records[-1]["text"], "  Compiling src/Main.cpp")
 
     def test_phase_dividers_and_each_compiling_file_are_retained(self):
         records = self.route(
@@ -386,9 +424,10 @@ class BuildLogRoutingChecks(unittest.TestCase):
         texts = [record["text"] for record in records]
         self.assertEqual(sum("─" * 10 in text for text in texts), 2)
         self.assertIn("  Building in release mode...", texts)
-        self.assertEqual(texts.count("  Compiling Main.cpp.o..."), 2)
-        self.assertIn("  Building partition table (partitions.bin)...", texts)
-        self.assertEqual(texts[-1], "  Linking...")
+        self.assertIn("  Compiling src/Main.cpp", texts)
+        self.assertIn("  Compiling lib123/MyLibrary/Main.cpp", texts)
+        self.assertIn("  Building partition table (partitions.bin)", texts)
+        self.assertEqual(texts[-1], "  Linking   firmware.elf")
 
     def test_local_symlink_library_manager_messages_are_preserved_as_dependency_setup(self):
         linked_path = "Library Manager: Linking symlink://C:/Users/example/Arduino/libraries/NimBLE-Arduino"
@@ -430,8 +469,8 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Generating partitions failed to create table partitions.bin",
         )
         self.assertEqual([record["text"] for record in records], [
-            "  Building partition table (custom.bin)...",
-            "  Building bootloader image (Bootloader.bin)...",
+            "  Building partition table (custom.bin)",
+            "  Building bootloader image (Bootloader.bin)",
             "Generating partitions failed to create table partitions.bin",
         ])
 
@@ -444,11 +483,12 @@ class BuildLogRoutingChecks(unittest.TestCase):
             "Checking size /home/user/Project with spaces/.pio/build/native/firmware.elf",
         )
         text = "\n".join(item["text"] for item in records)
-        self.assertIn("Compiling Main.cpp.o...", text)
-        self.assertIn("Compiling Other file.cpp.o...", text)
-        self.assertIn("Archiving...", text)
-        self.assertIn("Linking...", text)
-        self.assertIn("Checking firmware size...", text)
+        self.assertIn("Compiling src/Main.cpp", text)
+        self.assertIn("Compiling src/Other file.cpp", text)
+        self.assertIn("Archiving libArduino.a", text)
+        self.assertIn("Linking   firmware.elf", text)
+        self.assertIn("Checking firmware size", text)
+        self.assertNotIn(".pio", text)
 
     def test_promotion_words_inside_diagnostics_are_not_suppressed(self):
         source = '   7 | puts("Check our library registry; Looking for FastAccelStepper library");'
@@ -469,7 +509,7 @@ class BuildLogRoutingChecks(unittest.TestCase):
         )
         self.assertEqual(records[-1]["text"], "after-build: generated symbols successfully")
         self.assertEqual(records[-1]["tag"], "dim")
-        self.assertEqual(records[-2]["text"], "  Compiling Main.cpp.o...")
+        self.assertEqual(records[-2]["text"], "  Compiling src/Main.cpp")
         self.assertEqual(records[-2]["tag"], "info")
 
     def test_linker_executable_prefix_is_separate_from_custom_build_status(self):

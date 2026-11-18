@@ -5,8 +5,7 @@ main.qt.detached_editor — Explicit editor detachment and reattachment.
 
 Provides:
 - DetachedEditorWindow: Standalone floating QMainWindow hosting MonacoEditorPanel.
-- EditorDetachedPlaceholder: In-place placeholder shown in the main window vertical splitter
-  while the editor is popped out, allowing one-click reattachment.
+  The main window keeps its monitors; the toolbar's Attach Editor brings it back.
 """
 from __future__ import annotations
 
@@ -105,38 +104,3 @@ class DetachedEditorWindow(QMainWindow):
         """Closing the detached window automatically re-attaches the editor to the main window."""
         self.closing.emit()
         event.accept()
-
-
-class EditorDetachedPlaceholder(QWidget):
-    """
-    Placeholder displayed in the main window splitter when the editor is detached.
-    Uses the active workspace theme and offers a direct Attach Editor action.
-    """
-
-    attach_requested = Signal()
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setObjectName("editor-detached-placeholder")
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(12)
-
-        lbl_title = QLabel("Editor detached", self)
-        lbl_title.setProperty("role", "title")
-        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        lbl_desc = QLabel("Close the editor window or attach it here to return.", self)
-        lbl_desc.setObjectName("detached-editor-description")
-        lbl_desc.setWordWrap(True)
-        lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        btn_attach = QPushButton("Attach Editor", self)
-        # A Liquid Glass capsule like the workspace's other glass actions (theme.py).
-        btn_attach.setObjectName("btn-attach-editor")
-        btn_attach.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_attach.clicked.connect(self.attach_requested.emit)
-
-        layout.addWidget(lbl_title)
-        layout.addWidget(lbl_desc)
-        layout.addWidget(btn_attach, alignment=Qt.AlignmentFlag.AlignCenter)

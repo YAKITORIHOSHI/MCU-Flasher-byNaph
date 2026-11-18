@@ -169,8 +169,9 @@ def liquid_button_sheet(theme_mode: str = "default", role: str = "glass", *, rad
     border-radius: {radius}px;
 }}
 {selector}:disabled {{
-    background: {tokens["button_disabled"]}; color: {tokens["disabled_ink"]};
-    border: 1px solid {_translucent(bright, 26)}; border-radius: {radius}px;
+    background: {tokens["button_disabled_liquid"]}; color: {tokens["disabled_ink"]};
+    border: 1px solid {_translucent(bright, 26)}; border-top-color: {tokens["button_disabled_spec"]};
+    border-radius: {radius}px;
     padding: {padding}; font-size: {font_size}px; font-weight: 600;
 }}
 """
@@ -201,6 +202,9 @@ def glass_tokens(theme_mode: str = "default") -> dict[str, str]:
                       button_hover=_liquid("rgba(255, 255, 255, 255)", "rgba(255, 255, 255, 196)",
                                            "rgba(255, 255, 255, 226)"),
                       button_spec="rgba(255, 255, 255, 255)", button_floor="rgba(31, 35, 40, 46)",
+                      button_disabled_liquid=_liquid("rgba(255, 255, 255, 150)", "rgba(255, 255, 255, 76)",
+                                                     "rgba(255, 255, 255, 112)"),
+                      button_disabled_spec="rgba(255, 255, 255, 200)",
                       button_pressed="rgba(255, 255, 255, 96)", button_disabled="rgba(255, 255, 255, 72)",
                       button_rim=_translucent(bright, 58), disabled_ink="#5f6b76",
                       accent_top=_translucent(cyan, 66), accent_bottom=_translucent(cyan, 30),
@@ -215,6 +219,9 @@ def glass_tokens(theme_mode: str = "default") -> dict[str, str]:
                       button_hover=_liquid("rgba(255, 255, 255, 38)", "rgba(255, 255, 255, 14)",
                                            "rgba(255, 255, 255, 24)"),
                       button_spec="rgba(255, 255, 255, 128)", button_floor="rgba(255, 255, 255, 30)",
+                      button_disabled_liquid=_liquid("rgba(255, 255, 255, 14)", "rgba(255, 255, 255, 4)",
+                                                     "rgba(255, 255, 255, 9)"),
+                      button_disabled_spec="rgba(255, 255, 255, 58)",
                       button_pressed="rgba(0, 0, 0, 64)", button_disabled="rgba(255, 255, 255, 8)",
                       button_rim="rgba(255, 255, 255, 62)",
                       disabled_ink="#a3b6c9" if theme_mode == "default" else "#a8c2c8",
@@ -303,10 +310,10 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     button_pressed, button_disabled = glass_values["button_pressed"], glass_values["button_disabled"]
     button_rim = glass_values["button_rim"]
     button_spec, button_floor = glass_values["button_spec"], glass_values["button_floor"]
+    disabled_liquid, disabled_spec = glass_values["button_disabled_liquid"], glass_values["button_disabled_spec"]
     accent_top, accent_bottom = glass_values["accent_top"], glass_values["accent_bottom"]
     accent_hover_top, accent_hover_bottom = glass_values["accent_hover_top"], glass_values["accent_hover_bottom"]
     glass_button_ids = ("btn-clean", "btn-reload", "btn-project", "btn-download", "btn-detach-editor",
-                        "btn-attach-editor",
                         "btn-toggle-editor", "btn-toggle-monitors", "btn-settings", "btn-ai-assistant",
                         "btn-copy-console", "btn-clear-console", "btn-serial-send", "btn-terminal-new",
                         "btn-terminal-restart", "btn-terminal-clear", "btn-terminal-open")
@@ -1306,6 +1313,18 @@ QGroupBox, QDialog QGroupBox {{ background: {glass}; border: 1px solid {rim}; bo
 QGroupBox, QDialog QGroupBox, QGroupBox::title {{ color: {accent_on_reading}; }}
 QGroupBox::title {{ background: transparent; }}
 
+/* Size belongs to the button, not its state: a disabled action keeps the font and
+   padding it was measured with, so its label is never clipped. */
+QPushButton#btn-detach-editor, QPushButton#btn-toggle-editor, QPushButton#btn-toggle-monitors,
+QPushButton#btn-settings, QPushButton#btn-ai-assistant {{
+    padding: 2px 6px; font-size: 10.5px; font-weight: 600;
+}}
+QPushButton#btn-copy-console, QPushButton#btn-clear-console, QPushButton#btn-serial-send,
+QPushButton#btn-terminal-new, QPushButton#btn-terminal-restart, QPushButton#btn-terminal-clear,
+QPushButton#btn-terminal-open {{
+    padding: 3px 8px; font-weight: 600;
+}}
+
 /* Primary actions: Liquid Glass accent capsules. */
 QPushButton[role="primary"]:enabled, QDialogButtonBox QPushButton:first-child:enabled {{
     background: {liquid(accent_top, accent_bottom, accent_top)}; color: {text_bright};
@@ -1314,12 +1333,6 @@ QPushButton[role="primary"]:enabled, QDialogButtonBox QPushButton:first-child:en
 QPushButton[role="primary"]:enabled:hover, QDialogButtonBox QPushButton:first-child:enabled:hover {{
     background: {liquid(accent_hover_top, accent_hover_bottom, accent_hover_top)}; color: {text_bright};
     border: 1px solid {cyan}; border-top-color: {button_spec};
-}}
-QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:enabled,
-QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:enabled:hover,
-QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:enabled:pressed,
-QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:disabled {{
-    min-height: 34px; max-height: 34px; padding: 0 26px; border-radius: 17px; font-size: 12px;
 }}
 
 /* Actions are glass too: a lit fill and a rim, never a solid block. */
@@ -1335,8 +1348,8 @@ QWidget#editor-detached-placeholder QPushButton#btn-attach-editor:disabled {{
     background: {button_pressed}; color: {text_bright}; border: 1px solid {cyan};
 }}
 {buttons((*glass_button_ids, *accent_button_ids, "btn-stop"), ":disabled", plain=True)} {{
-    background: {button_disabled}; color: {disabled_ink};
-    border: 1px solid {translucent(text_bright, 26)}; border-radius: 11px;
+    background: {disabled_liquid}; color: {disabled_ink};
+    border: 1px solid {translucent(text_bright, 26)}; border-top-color: {disabled_spec}; border-radius: 11px;
 }}
 {buttons(accent_button_ids, ":enabled")} {{
     background: {liquid(accent_top, accent_bottom, accent_top)}; color: {text_bright};

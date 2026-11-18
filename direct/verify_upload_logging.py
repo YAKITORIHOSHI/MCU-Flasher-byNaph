@@ -77,7 +77,7 @@ class UploadPresentationChecks(unittest.TestCase):
         text = api.text()
         self.assertIn("115200 baud (board default)", text)
         self.assertNotIn("460800", text)
-        # The board is named once, in the Upload Target box.
+        # The board is named once, in the Target Board table.
         self.assertEqual(text.count("Connected to the bootloader"), 1)
         self.assertEqual(text.count("Arduino UNO"), 1)
         for noisy in ("DEBUG:", "No dependencies", "AVAILABLE:", "reading input file", "avrdude done"):
@@ -85,11 +85,11 @@ class UploadPresentationChecks(unittest.TestCase):
         target = dict(api.boxes[0][1])
         self.assertEqual(target["Port"], "COM99")
         summary = dict(api.boxes[-1][1])
-        self.assertNotIn("Upload Port", summary, "The summary repeated the Upload Target box")
+        self.assertNotIn("Upload Port", summary, "The summary repeated the Target Board table")
         self.assertNotIn("Board", summary)
         self.assertEqual(summary["Result"], "Written and verified")
         self.assertEqual(summary["Written"], "5168 bytes")
-        bars = [row for row in api.logs() if row.get("progress_key", "").endswith(":upload-Writing")]
+        bars = [row for row in api.logs() if row.get("progress_key", "").endswith(":upload-progress")]
         self.assertTrue(any("50.0%" in row["text"] for row in bars))
         self.assertTrue(any("100.0%" in row["text"] for row in bars))
         self.assertEqual(len({row["progress_key"] for row in bars}), 1)
@@ -154,7 +154,7 @@ class UploadPresentationChecks(unittest.TestCase):
         self.assertIn("Board recipe default", api.text())
         self.assertNotIn("115200", api.text())
         log.finish(False, 3)
-        self.assertNotIn("Upload Summary", api.text())
+        self.assertNotIn("Upload Time", api.text())
         self.assertNotIn("Upload successful", api.text())
         self.assertNotIn("verified", api.text())
 
@@ -188,7 +188,7 @@ class UploadPresentationChecks(unittest.TestCase):
         self.assertIn("slow USB", api.text())
         self.assertIn("device disconnected", api.text())
         self.assertIsNone(api._active_process)
-        self.assertNotIn("Upload Summary", api.text())
+        self.assertNotIn("Upload Time", api.text())
 
     def test_controls_follow_board_rate_and_preserve_esp_preference(self):
         from PySide6.QtWidgets import QApplication, QComboBox
@@ -255,9 +255,9 @@ class WindowsAVRWorkerChecks(UploadWorkerChecks):
         self.assertEqual(len(self.processes), 1)
         self.assert_upload_caller_completed(success=True)
         boxes = {call.args[0]: dict(call.args[1]) for call in api._print_info_box.call_args_list}
-        self.assertEqual(boxes["Upload Target"]["Upload Speed"], "115200 baud (board default)")
-        self.assertEqual(boxes["Upload Target"]["Port"], "COM99")
-        self.assertIn("Restart", boxes["Upload Summary"])
+        self.assertEqual(boxes["Target Board"]["Upload Speed"], "115200 baud (board default)")
+        self.assertEqual(boxes["Target Board"]["Port"], "COM99")
+        self.assertIn("Restart", boxes["Upload Time"])
         api._locate_soft_reset_fast_binaries.assert_not_called()
         self.assertFalse(any("460800" in row["text"] for row in self.console_messages()))
 
