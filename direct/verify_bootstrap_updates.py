@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Isolated update-environment checks; no setup imports, installs or network."""
 import ast
+import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
@@ -379,57 +382,247 @@ class UpdateChecks(unittest.TestCase):
         self.assertEqual(namespace["run_update_checks"](), "up_to_date")
         self.assertNotIn("opencode", summary.call_args.args[0])
         source = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
-        for removed in ("def check_opencode_update", "def _upgrade_opencode", '"uninstall"', "opencode-ai@"):
+        for removed in ("def check_opencode_update", "def _upgrade_opencode"):
             self.assertNotIn(removed, source)
 
 
+sys.path.insert(0, str(ROOT / "src/modules"))
+import opencode_npm  # noqa: E402
+
+# opencode-ai's bin/opencode.exe before its postinstall ran: a shell script under 1 KB.
+PLACEHOLDER = b'echo "Error: opencode-ai\'s postinstall script was not run." >&2\nexit 1\n'
+EXECUTABLE = b"MZ" + bytes(4096)
+
+
+def npm_shims(directory, package="opencode-ai"):
+    """Write the three shims npm makes for a package whose bin is bin/opencode.exe."""
+    windows = "node_modules\\" + package.replace("/", "\\") + "\\bin\\opencode.exe"
+    posix = windows.replace("\\", "/")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "opencode.cmd").write_text(
+        "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\n"
+        f'CALL :find_dp0\r\n"%dp0%\\{windows}"   %*\r\n', encoding="utf-8")
+    (directory / "opencode").write_text(
+        '#!/bin/sh\nbasedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")\n\n'
+        f'exec "$basedir/{posix}"   "$@"\n', encoding="utf-8")
+    (directory / "opencode.ps1").write_text(
+        "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n"
+        f'if ($MyInvocation.ExpectingInput) {{\n  $input | & "$basedir/{posix}"   $args\n}}\n'
+        "exit $LASTEXITCODE\n", encoding="utf-8")
+    target = directory.joinpath("node_modules", *package.split("/"), "bin", "opencode.exe")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def bootstrap_functions(names, **values):
+    source = ROOT / "src/modules/bootstrap.py"
+    tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+    namespace = dict(Path=Path, os=os, **values)
+    exec(compile(ast.Module(body=[node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[]),
+        str(source), "exec"), namespace)
+    return namespace
+
+
+class OpenCodeDamageChecks(unittest.TestCase):
+    """A damaged npm OpenCode is recognised by its files alone; nothing is run."""
+
+    def setUp(self):
+        (ROOT / "temp/audit").mkdir(parents=True, exist_ok=True)
+        fixture = tempfile.TemporaryDirectory(prefix="opencode-damage-", dir=ROOT / "temp/audit")
+        self.addCleanup(fixture.cleanup)
+        self.npm = Path(fixture.name) / "npm"
+
+    def test_every_shim_format_names_its_package_executable(self):
+        target = npm_shims(self.npm)
+        for name in opencode_npm.SHIM_NAMES:
+            self.assertEqual(opencode_npm.shim_target(self.npm / name), target, name)
+
+    def test_placeholder_or_missing_executable_is_damage(self):
+        target = npm_shims(self.npm)
+        self.assertEqual(opencode_npm.find_damaged([self.npm]), (self.npm, self.npm / "opencode.cmd"))
+        target.write_bytes(PLACEHOLDER)
+        self.assertEqual(opencode_npm.find_damaged([self.npm]), (self.npm, self.npm / "opencode.cmd"))
+        self.assertFalse(opencode_npm.shim_usable(self.npm / "opencode.cmd"))
+
+    def test_real_executable_is_kept(self):
+        npm_shims(self.npm).write_bytes(EXECUTABLE)
+        self.assertIsNone(opencode_npm.find_damaged([self.npm]))
+        self.assertTrue(all(opencode_npm.shim_usable(self.npm / name) for name in opencode_npm.SHIM_NAMES))
+
+    def test_rerun_postinstall_counts_before_any_repair(self):
+        target = npm_shims(self.npm)
+        target.write_bytes(PLACEHOLDER)
+        healed = []
+
+        def heal(directory):
+            healed.append(directory)
+            target.write_bytes(EXECUTABLE)
+            return True
+
+        self.assertIsNone(opencode_npm.find_damaged([self.npm], heal=heal))
+        self.assertEqual(healed, [target.parent])
+
+    def test_half_removed_package_without_shims_is_damage(self):
+        package = self.npm / "node_modules/opencode-ai"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(opencode_npm.find_damaged([self.npm]), (self.npm, package))
+
+    def test_wrong_package_is_judged_by_its_own_executable(self):
+        npm_shims(self.npm, "@opencode/cli").write_bytes(PLACEHOLDER)
+        self.assertEqual(opencode_npm.shim_target(self.npm / "opencode.cmd"),
+                         self.npm / "node_modules/@opencode/cli/bin/opencode.exe")
+        self.assertIsNotNone(opencode_npm.find_damaged([self.npm]))
+
+    def test_other_launchers_are_not_npm_shims(self):
+        self.npm.mkdir(parents=True)
+        launcher = self.npm / "opencode.cmd"
+        launcher.write_text('@echo off\r\n"C:\\Tools\\opencode\\opencode.exe" %*\r\n', encoding="utf-8")
+        self.assertIsNone(opencode_npm.shim_target(launcher))
+        self.assertTrue(opencode_npm.shim_usable(launcher))
+        self.assertIsNone(opencode_npm.find_damaged([self.npm, self.npm / "absent"]))
+
+    def test_leftover_shims_are_removed_but_folders_and_other_tools_stay(self):
+        npm_shims(self.npm)
+        (self.npm / "opencode2.cmd").write_text("@echo off\r\n", encoding="utf-8")
+        (self.npm / "npm.cmd").write_text("@echo off\r\n", encoding="utf-8")
+        (self.npm / "opencode-data").mkdir()
+        removed = opencode_npm.remove_shims([self.npm, self.npm])
+        self.assertEqual(sorted(path.name for path in removed),
+                         ["opencode", "opencode.cmd", "opencode.ps1", "opencode2.cmd"])
+        self.assertTrue((self.npm / "npm.cmd").is_file())
+        self.assertTrue((self.npm / "opencode-data").is_dir())
+        self.assertTrue((self.npm / "node_modules/opencode-ai/bin").is_dir())
+
+    def test_bootstrap_skips_a_broken_shim_for_a_working_executable(self):
+        npm_shims(self.npm).write_bytes(PLACEHOLDER)
+        working = self.npm.parent / "tools/opencode.exe"
+        working.parent.mkdir(parents=True)
+        working.write_bytes(EXECUTABLE)
+        found = {"opencode.cmd": str(self.npm / "opencode.cmd"), "opencode.exe": str(working)}
+        namespace = bootstrap_functions(
+            {"check_opencode_cli", "_opencode_shim_usable"},
+            sys=SimpleNamespace(platform="linux"), find_running_opencode_exe=lambda: None,
+            shutil=SimpleNamespace(which=found.get), _is_valid_pe_binary=opencode_npm.is_valid_pe_binary,
+            _heal_opencode_postinstall=lambda directory: False)
+        self.assertEqual(namespace["check_opencode_cli"](), str(working))
+        del found["opencode.exe"]
+        self.assertIsNone(namespace["check_opencode_cli"]())
+
+    def test_failed_postinstall_rerun_is_not_repeated(self):
+        package = self.npm / "node_modules/opencode-ai"
+        (package / "bin").mkdir(parents=True)
+        (package / "postinstall.mjs").write_text("", encoding="utf-8")
+        run = Mock(return_value=SimpleNamespace(returncode=1))
+        namespace = bootstrap_functions(
+            {"_heal_opencode_postinstall"}, _FAILED_OPENCODE_HEALS=set(),
+            shutil=SimpleNamespace(which=lambda name: "node"), _hidden_subprocess_flags=lambda: 0,
+            subprocess=SimpleNamespace(run=run, DEVNULL=-3, PIPE=-1, STDOUT=-2))
+        self.assertFalse(namespace["_heal_opencode_postinstall"](package / "bin"))
+        self.assertFalse(namespace["_heal_opencode_postinstall"](package / "bin"))
+        run.assert_called_once()
+
+    def test_npm_runs_with_scripts_allowed_and_a_hung_npm_is_stopped(self):
+        with patch.dict(os.environ, {"npm_config_ignore_scripts": "true"}):
+            result = opencode_npm.run_npm(
+                [sys.executable, "-c", "import os; print(os.environ.get('npm_config_ignore_scripts'))"], timeout=60)
+        self.assertEqual((result.returncode, result.stdout.strip(), result.timed_out), (0, "None", False))
+        result = opencode_npm.run_npm([sys.executable, "-c", "import time; time.sleep(60)"], timeout=0.5)
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.returncode, 1)
+
+
+class OpenCodeConfigChecks(unittest.TestCase):
+    """The assistant turns OpenCode's autoupdate off without replacing settings it cannot read."""
+
+    def test_unreadable_settings_are_left_untouched(self):
+        (ROOT / "temp/audit").mkdir(parents=True, exist_ok=True)
+        fixture = tempfile.TemporaryDirectory(prefix="opencode-config-", dir=ROOT / "temp/audit")
+        self.addCleanup(fixture.cleanup)
+        home = Path(fixture.name)
+        jsonc = home / ".config/opencode/config.json"
+        jsonc.parent.mkdir(parents=True)
+        text = '{\n  // providers configured by hand\n  "model": "fixture/model",\n}\n'
+        jsonc.write_text(text, encoding="utf-8")
+        plain = home / ".opencode/config.json"
+        plain.parent.mkdir(parents=True)
+        plain.write_text('\ufeff{"theme": "fixture"}', encoding="utf-8")
+        source = ROOT / "src/modules/dedicated_AI.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        namespace = dict(Path=Path, json=json)
+        exec(compile(ast.Module(body=[node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_ensure_opencode_config"],
+            type_ignores=[]), str(source), "exec"), namespace)
+        with patch.object(Path, "home", return_value=home):
+            namespace["_ensure_opencode_config"]()
+        self.assertEqual(jsonc.read_text(encoding="utf-8"), text)
+        self.assertEqual(json.loads(plain.read_text(encoding="utf-8")), {"theme": "fixture", "autoupdate": False})
+
+
 class OpenCodeInstallChecks(unittest.TestCase):
-    """Windows Bootstrap installs OpenCode once and never reinstalls it; nothing is executed."""
+    """Windows Bootstrap installs OpenCode once, repairs only a damaged one and never touches a running one."""
+
+    NPM = "C:/nodejs/npm.cmd"
 
     def setUp(self):
         (ROOT / "temp/audit").mkdir(parents=True, exist_ok=True)
         fixture = tempfile.TemporaryDirectory(prefix="opencode-install-", dir=ROOT / "temp/audit")
         self.addCleanup(fixture.cleanup)
+        self.root = Path(fixture.name)
+        self.npm_dir = self.root / "npm"
         self.commands = []
+        self.timeouts = []
         self.installed = False
+        self.returncode = 0
+        self.timed_out = False
         self.messages = []
-        source = ROOT / "src/modules/bootstrap.py"
-        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
-        names = {"_existing_opencode_installation", "ensure_opencode_cli", "is_any_opencode_process_running"}
-        test = self
-
-        class Process:
-            returncode = 0
-
-            def __init__(self, command, **_options):
-                test.commands.append(list(command))
-                test.installed = "install" in command
-
-            def communicate(self, timeout=None):
-                return "", None
-
         import subprocess as real_subprocess
-        self.namespace = dict(
-            sys=sys, Path=Path, os=__import__("os"), SCRIPT_DIR=Path(fixture.name), _gui=None,
-            section=Mock(), status=Mock(), warn=Mock(),
+        self.namespace = bootstrap_functions(
+            {"_existing_opencode_installation", "ensure_opencode_cli", "is_any_opencode_process_running",
+             "_damaged_opencode_installation", "_opencode_install_command", "_repair_damaged_opencode",
+             "_opencode_version"},
+            sys=SimpleNamespace(platform="win32"), SCRIPT_DIR=self.root, _gui=None,
+            section=Mock(), status=Mock(),
+            warn=lambda message: self.messages.append(("warn", message)),
             ok=lambda message: self.messages.append(("ok", message)),
             fail=lambda message: self.messages.append(("fail", message)),
             find_running_opencode_exe=Mock(return_value=None), _opencode_image_running=Mock(return_value=False),
             check_opencode_cli=lambda: "C:/npm/opencode.cmd" if self.installed else None,
-            _find_usable_npm_cmd=Mock(return_value="C:/nodejs/npm.cmd"), _install_nodejs_lts=Mock(),
+            _find_usable_npm_cmd=Mock(return_value=self.NPM), _install_nodejs_lts=Mock(),
             _refresh_node_npm_path=Mock(), _hidden_subprocess_flags=lambda: 0,
+            _windows_node_dirs=lambda: [self.npm_dir], _FAILED_OPENCODE_HEALS=set(),
+            _OPENCODE_INSTALL_TIMEOUT=1200,
             _is_valid_pe_binary=lambda path: False, _heal_opencode_postinstall=lambda path: False,
             _summarize_process_output=lambda result: "",
             shutil=SimpleNamespace(which=lambda name: None),
-            subprocess=SimpleNamespace(Popen=Process, run=Mock(side_effect=AssertionError("version probe")),
+            subprocess=SimpleNamespace(run=Mock(side_effect=AssertionError("version probe")),
                                        CompletedProcess=real_subprocess.CompletedProcess,
                                        TimeoutExpired=real_subprocess.TimeoutExpired, PIPE=-1, STDOUT=-2,
                                        DEVNULL=-3, list2cmdline=real_subprocess.list2cmdline))
-        exec(compile(ast.Module(body=[node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[]),
-            str(source), "exec"), self.namespace)
         # psutil may be absent in the runtime that runs Bootstrap.
         self.namespace["is_any_opencode_process_running"] = Mock(return_value=False)
+        self.run_npm = self.fake_run_npm
+        runner = patch.object(opencode_npm, "run_npm", lambda command, timeout: self.run_npm(command, timeout))
+        runner.start()
+        self.addCleanup(runner.stop)
+        environment = patch.dict(os.environ, {"APPDATA": str(self.root)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def fake_run_npm(self, command, timeout):
+        self.commands.append(list(command))
+        self.timeouts.append(timeout)
+        if command[1] == "install" and not self.returncode:
+            self.installed = True
+        result = subprocess.CompletedProcess(list(command), self.returncode, "")
+        result.timed_out = self.timed_out
+        return result
+
+    def damage(self):
+        target = npm_shims(self.npm_dir)
+        target.write_bytes(PLACEHOLDER)
+        return target
 
     def test_installed_opencode_is_kept_even_when_it_would_not_answer(self):
         self.installed = True
@@ -459,9 +652,66 @@ class OpenCodeInstallChecks(unittest.TestCase):
     def test_missing_opencode_is_installed_once_without_uninstall(self):
         self.assertTrue(self.namespace["ensure_opencode_cli"]())
         self.assertEqual(len(self.commands), 1)
-        self.assertEqual(self.commands[0][:3], ["C:/nodejs/npm.cmd", "install", "-g"])
+        self.assertEqual(self.commands[0][:3], [self.NPM, "install", "-g"])
         self.assertEqual(self.commands[0][-1], "opencode-ai")
+        self.assertIn("--ignore-scripts=false", self.commands[0])
+        self.assertGreaterEqual(self.timeouts[0], 600)
 
+    def test_stopped_install_is_not_followed_by_a_second_npm(self):
+        self.returncode, self.timed_out = 1, True
+        self.assertFalse(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.messages[-1][0], "fail")
+
+    def test_refused_install_is_retried_once_in_the_user_prefix(self):
+        self.returncode = 1
+        self.assertFalse(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(len(self.commands), 2)
+        self.assertIn(f"--prefix={self.root / 'npm'}", self.commands[1])
+
+    def test_damaged_opencode_is_repaired_with_the_documented_steps(self):
+        shims_during_cache_verify = []
+
+        def run(command, timeout):
+            if command[1:3] == ["cache", "verify"]:
+                shims_during_cache_verify.extend(path.name for path in self.npm_dir.glob("opencode*"))
+            return self.fake_run_npm(command, timeout)
+
+        self.run_npm = run
+        self.damage()
+        version = self.namespace["subprocess"].run
+        version.side_effect = None
+        version.return_value = subprocess.CompletedProcess([], 0, "1.19.6\n")
+        self.assertTrue(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(self.commands[:3], [[self.NPM, "uninstall", "-g", "@opencode/cli"],
+                                             [self.NPM, "uninstall", "-g", "opencode-ai"],
+                                             [self.NPM, "cache", "verify"]])
+        install = self.commands[3]
+        self.assertEqual((install[:3], install[-1]), ([self.NPM, "install", "-g"], "opencode-ai@latest"))
+        self.assertIn("--ignore-scripts=false", install)
+        self.assertFalse({"--ignore-scripts", "--ignore-scripts=true"} & set(install))
+        self.assertEqual(len(self.commands), 4)
+        self.assertEqual(shims_during_cache_verify, [])
+        self.assertEqual(version.call_args.args[0][-1], "--version")
+        self.assertEqual(self.messages[-1][0], "ok")
+        self.assertIn("1.19.6", self.messages[-1][1])
+
+    def test_damaged_but_running_opencode_is_left_alone(self):
+        target = self.damage()
+        self.namespace["is_any_opencode_process_running"].return_value = True
+        self.assertTrue(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(self.commands, [])
+        self.assertTrue((self.npm_dir / "opencode.cmd").is_file())
+        self.assertEqual(target.read_bytes(), PLACEHOLDER)
+
+    def test_failed_repair_install_is_reported(self):
+        self.damage()
+        self.run_npm = lambda command, timeout: (
+            setattr(self, "returncode", 1 if command[1] == "install" else 0),
+            self.fake_run_npm(command, timeout))[1]
+        self.assertFalse(self.namespace["ensure_opencode_cli"]())
+        self.assertEqual(len(self.commands), 4)
+        self.assertEqual(self.messages[-1][0], "fail")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

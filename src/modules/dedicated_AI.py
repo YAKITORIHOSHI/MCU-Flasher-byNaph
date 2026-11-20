@@ -79,11 +79,12 @@ def _ensure_opencode_config() -> None:
             cfg_data = {}
             if cfg_file.is_file():
                 try:
-                    cfg_data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                    cfg_data = json.loads(cfg_file.read_text(encoding="utf-8-sig"))
                 except Exception:
-                    cfg_data = {}
+                    # JSONC comments or a file mid-write: never replace the user's settings.
+                    continue
             if not isinstance(cfg_data, dict):
-                cfg_data = {}
+                continue
             if cfg_data.get("autoupdate") is not False:
                 cfg_data["autoupdate"] = False
                 base.mkdir(parents=True, exist_ok=True)
@@ -214,6 +215,15 @@ def _is_valid_pe_binary(path: Path | str) -> bool:
         return False
 
 
+def _opencode_shim_usable(shim: Path | str) -> bool:
+    """Skip an npm ``opencode`` shim whose executable is missing or a placeholder."""
+    try:
+        from opencode_npm import shim_usable
+    except Exception:
+        return True
+    return shim_usable(shim)
+
+
 def find_opencode_cli() -> str | None:
     """Find opencode CLI executable on system PATH, active processes, or standard npm locations."""
     # Check active running processes first
@@ -246,7 +256,7 @@ def find_opencode_cli() -> str | None:
             if found.lower().endswith(".exe"):
                 if _is_valid_pe_binary(found):
                     return found
-            elif Path(found).is_file():
+            elif Path(found).is_file() and _opencode_shim_usable(found):
                 return found
 
     if sys.platform == "win32":
@@ -288,7 +298,7 @@ def find_opencode_cli() -> str | None:
             if candidate.suffix.lower() == ".exe":
                 if _is_valid_pe_binary(candidate):
                     return str(candidate)
-            elif candidate.stat().st_size > 0:
+            elif candidate.stat().st_size > 0 and _opencode_shim_usable(candidate):
                 return str(candidate)
 
     return None

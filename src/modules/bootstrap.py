@@ -8468,8 +8468,16 @@ def _is_valid_pe_binary(path: Path | str) -> bool:
         return False
 
 
+# Postinstall reruns that failed this run; each can spend a minute downloading.
+_FAILED_OPENCODE_HEALS: set[str] = set()
+
+
 def _heal_opencode_postinstall(candidate_dir: Path) -> bool:
     """Run node postinstall.mjs if opencode-ai binary is a bash placeholder script."""
+    key = os.path.normcase(os.path.normpath(str(candidate_dir)))
+    if key in _FAILED_OPENCODE_HEALS:
+        return False
+    healed = False
     try:
         postinstall = candidate_dir / "postinstall.mjs"
         if not postinstall.is_file():
@@ -8488,9 +8496,22 @@ def _heal_opencode_postinstall(candidate_dir: Path) -> bool:
             timeout=60,
             creationflags=_hidden_subprocess_flags(),
         )
-        return res.returncode == 0
+        healed = res.returncode == 0
+        return healed
     except Exception:
         return False
+    finally:
+        if not healed:
+            _FAILED_OPENCODE_HEALS.add(key)
+
+
+def _opencode_shim_usable(shim: Path | str) -> bool:
+    """An npm ``opencode`` shim counts only while the executable it launches is real."""
+    try:
+        from opencode_npm import shim_usable
+    except Exception:
+        return True
+    return shim_usable(shim, heal=_heal_opencode_postinstall)
 
 
 def check_opencode_cli() -> Optional[str]:
@@ -8506,7 +8527,7 @@ def check_opencode_cli() -> Optional[str]:
             if found.lower().endswith(".exe"):
                 if _is_valid_pe_binary(found):
                     return found
-            elif Path(found).is_file():
+            elif Path(found).is_file() and _opencode_shim_usable(found):
                 return found
 
     if sys.platform == "win32":
@@ -8553,7 +8574,7 @@ def check_opencode_cli() -> Optional[str]:
                 if _heal_opencode_postinstall(candidate.parent):
                     if _is_valid_pe_binary(candidate):
                         return str(candidate)
-            elif candidate.stat().st_size > 0:
+            elif candidate.stat().st_size > 0 and _opencode_shim_usable(candidate):
                 return str(candidate)
 
     return None
@@ -8894,8 +8915,131 @@ def _existing_opencode_installation() -> str | None:
     return check_opencode_cli()
 
 
+def _damaged_opencode_installation():
+    """Name an npm OpenCode left without its real executable, or None.
+
+    Only files decide. A running OpenCode is never called damaged: its locked
+    executable is what made an uninstall half-remove the package before.
+    """
+    if sys.platform != "win32" or is_any_opencode_process_running():
+        return None
+    try:
+        from opencode_npm import find_damaged
+    except Exception:
+        return None
+    return find_damaged(_windows_node_dirs(), heal=_heal_opencode_postinstall)
+
+
+# opencode-ai downloads two Windows platform packages of about 200 MB each.
+_OPENCODE_INSTALL_TIMEOUT = 1200
+
+
+def _opencode_install_command(npm_cmd: str, package: str, *options: str) -> list[str]:
+    return [
+        npm_cmd, "install", "-g", *options,
+        "--no-audit", "--no-fund", "--no-update-notifier", "--loglevel=error",
+        "--fetch-retries=2", "--fetch-retry-mintimeout=2000", "--fetch-retry-maxtimeout=10000",
+        # The postinstall swaps the placeholder bin/opencode.exe for the real one,
+        # so a user's ignore-scripts setting must not skip it.
+        "--ignore-scripts=false", "--allow-scripts=opencode-ai",
+        package,
+    ]
+
+
+def _opencode_version(cli_path: str) -> str:
+    """Return a fresh install's ``opencode --version``, or "" when it does not answer."""
+    target = cli_path
+    if not cli_path.lower().endswith(".exe"):
+        try:
+            from opencode_npm import shim_target
+            target = str(shim_target(cli_path) or cli_path)
+        except Exception:
+            pass
+    try:
+        result = subprocess.run(
+            [target, "--version"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=sys.platform == "win32" and not target.lower().endswith(".exe"),
+            creationflags=_hidden_subprocess_flags(),
+            timeout=60,
+        )
+    except Exception:
+        return ""
+    lines = (result.stdout or "").strip().splitlines()
+    return lines[-1].strip() if result.returncode == 0 and lines else ""
+
+
+def _repair_damaged_opencode(npm_cmd: str, damage, save_failure) -> bool:
+    """Reinstall an npm OpenCode that was left without its executable.
+
+    These are the manual repair steps: uninstall the wrong ``@opencode/cli``
+    and ``opencode-ai``, delete leftover ``opencode*`` shims, verify the npm
+    cache, install ``opencode-ai@latest`` with its postinstall, and confirm
+    ``opencode --version``. Callers have checked that OpenCode is not running.
+    """
+    import opencode_npm
+
+    warn(f"OpenCode AI Assistant is damaged ({damage.path}); repairing it.")
+    for package in opencode_npm.PACKAGES:
+        status(f"Removing npm package {package}...")
+        command = [npm_cmd, "uninstall", "-g", package]
+        result = opencode_npm.run_npm(command, timeout=600)
+        if result.returncode != 0:
+            save_failure(f"npm uninstall {package}", command, result.stdout)
+        if result.timed_out:
+            fail(f"Removing {package} did not finish; OpenCode AI Assistant was not repaired.")
+            return False
+        if result.returncode != 0:
+            warn(f"npm could not remove {package} (exit {result.returncode}); continuing.")
+
+    appdata = os.environ.get("APPDATA", "")
+    shim_dirs = ([Path(appdata) / "npm"] if appdata else []) + [damage.prefix]
+    removed = opencode_npm.remove_shims(shim_dirs)
+    if removed:
+        status(f"Removed {len(removed)} leftover OpenCode shim(s).")
+
+    status("Verifying the npm cache...")
+    command = [npm_cmd, "cache", "verify"]
+    result = opencode_npm.run_npm(command, timeout=900)
+    if result.timed_out:
+        save_failure("npm cache verify", command, result.stdout)
+        fail("npm cache verify did not finish; OpenCode AI Assistant was not repaired.")
+        return False
+    if result.returncode != 0:
+        save_failure("npm cache verify", command, result.stdout)
+        warn(f"npm cache verify reported a problem (exit {result.returncode}); continuing.")
+
+    status(f"Installing {opencode_npm.INSTALL_SPEC} (this may take a few minutes)...")
+    command = _opencode_install_command(npm_cmd, opencode_npm.INSTALL_SPEC)
+    result = opencode_npm.run_npm(command, timeout=_OPENCODE_INSTALL_TIMEOUT)
+    _FAILED_OPENCODE_HEALS.clear()
+    _refresh_node_npm_path()
+    cli_path = check_opencode_cli()
+    if result.returncode != 0 or not cli_path:
+        save_failure("npm install (repair)", command, result.stdout)
+        detail = _summarize_process_output(result)
+        fail(f"OpenCode repair failed: {detail}" if detail
+             else f"OpenCode repair failed (npm exit {result.returncode}).")
+        return False
+
+    version = _opencode_version(cli_path)
+    if version:
+        ok(f"OpenCode AI Assistant repaired: opencode --version {version} ({cli_path})")
+    else:
+        ok(f"OpenCode AI Assistant repaired ({cli_path}); its first --version was slow.")
+    return True
+
+
 def ensure_opencode_cli() -> bool:
-    """Install OpenCode only when none is installed; never update or reinstall it."""
+    """Install OpenCode only when none is installed, or repair one left without its files.
+
+    A working or running OpenCode is never updated or reinstalled.
+    """
 
     def _cli_works(path: str | None) -> bool:
         if not path:
@@ -8938,7 +9082,8 @@ def ensure_opencode_cli() -> bool:
         ok(f"OpenCode AI Assistant is installed ({existing}); Bootstrap keeps it as it is.")
         return True
 
-    section("Installing OpenCode AI Assistant")
+    damage = _damaged_opencode_installation()
+    section("Repairing OpenCode AI Assistant" if damage else "Installing OpenCode AI Assistant")
     npm_cmd = _find_usable_npm_cmd()
 
     if not npm_cmd:
@@ -8969,57 +9114,26 @@ def ensure_opencode_cli() -> bool:
         except Exception:
             pass
 
-    status("Installing OpenCode AI Assistant via npm...")
     if _gui:
         _gui.start_busy()
 
-    def _npm_run_with_kill_guard(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
-        """Run an npm command with explicit timeout kill guard to prevent hangs."""
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=_hidden_subprocess_flags(),
-        )
-        try:
-            stdout, _ = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            warn(f"npm command timed out after {timeout}s; terminating...")
-            try:
-                proc.kill()
-                proc.wait(timeout=5)
-            except Exception:
-                pass
-            return subprocess.CompletedProcess(cmd, returncode=1, stdout="(timed out)")
-        return subprocess.CompletedProcess(cmd, returncode=proc.returncode, stdout=stdout or "")
-
     try:
+        import opencode_npm
+
         # Installing Node.js can take minutes; look once more before writing.
         existing = _existing_opencode_installation()
         if existing:
             ok(f"OpenCode AI Assistant is installed ({existing}); Bootstrap keeps it as it is.")
             return True
+        if damage is not None:
+            return _repair_damaged_opencode(npm_cmd, damage, _save_npm_failure)
 
-        install_cmd = [
-            npm_cmd,
-            "install",
-            "-g",
-            "--no-audit",
-            "--no-fund",
-            "--no-update-notifier",
-            "--loglevel=error",
-            "--fetch-retries=2",
-            "--fetch-retry-mintimeout=2000",
-            "--fetch-retry-maxtimeout=10000",
-            "--allow-scripts=opencode-ai",
-            "opencode-ai",
-        ]
-        status("Installing OpenCode AI Assistant (this may take a moment)...")
-        install_res = _npm_run_with_kill_guard(install_cmd, timeout=90)
+        # npm used to be stopped after 90 s, mid-download of the platform
+        # package or mid-postinstall, which left shims launching a placeholder.
+        install_cmd = _opencode_install_command(npm_cmd, "opencode-ai")
+        status("Installing OpenCode AI Assistant (this may take a few minutes)...")
+        install_res = opencode_npm.run_npm(install_cmd, timeout=_OPENCODE_INSTALL_TIMEOUT)
+        _FAILED_OPENCODE_HEALS.clear()
 
         _refresh_node_npm_path()
         cli_path = check_opencode_cli()
@@ -9041,27 +9155,18 @@ def ensure_opencode_cli() -> bool:
         # non-admin account).  When returncode==0 but _cli_works failed,
         # the binary exists but its --version probe timed out (e.g. a
         # Go binary phoning home on first run).  Retrying with --prefix
-        # won't help that case and would waste another 90 seconds.
-        if install_res.returncode != 0:
+        # won't help that case.  A stopped install is not retried either:
+        # a second npm over its leftovers is how packages were half-written.
+        if install_res.returncode != 0 and not install_res.timed_out:
             appdata = os.environ.get("APPDATA", "")
             if appdata and sys.platform == "win32":
                 user_npm_dir = Path(appdata) / "npm"
                 user_npm_dir.mkdir(parents=True, exist_ok=True)
                 status("Retrying OpenCode installation with user prefix...")
-                user_install_cmd = [
-                    npm_cmd,
-                    "install",
-                    "-g",
-                    f"--prefix={user_npm_dir}",
-                    "--no-audit",
-                    "--no-fund",
-                    "--no-update-notifier",
-                    "--loglevel=error",
-                    "--fetch-retries=2",
-                    "--allow-scripts=opencode-ai",
-                    "opencode-ai",
-                ]
-                user_install_res = _npm_run_with_kill_guard(user_install_cmd, timeout=90)
+                user_install_cmd = _opencode_install_command(
+                    npm_cmd, "opencode-ai", f"--prefix={user_npm_dir}")
+                user_install_res = opencode_npm.run_npm(user_install_cmd, timeout=_OPENCODE_INSTALL_TIMEOUT)
+                _FAILED_OPENCODE_HEALS.clear()
                 _refresh_node_npm_path()
                 cli_path = check_opencode_cli()
                 if user_install_res.returncode == 0 and _cli_works(cli_path):
@@ -11056,11 +11161,18 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 gui.root.after(0, lambda: gui.log_ok(
                     f"OpenCode AI Assistant is installed ({opencode_found}); Bootstrap keeps it as it is."))
             elif not _is_network_reachable(timeout=2.0):
-                _fail_and_exit(
-                    "OpenCode AI Assistant",
-                    "Internet connection is required to download and install OpenCode AI Assistant. Setup cannot proceed.",
-                )
-                return
+                opencode_damage = _damaged_opencode_installation()
+                if opencode_damage is None:
+                    _fail_and_exit(
+                        "OpenCode AI Assistant",
+                        "Internet connection is required to download and install OpenCode AI Assistant. Setup cannot proceed.",
+                    )
+                    return
+                # A damaged install launched the app before it was detected;
+                # offline, keep launching and repair on the next online start.
+                gui.root.after(0, lambda: gui.log_warn(
+                    f"OpenCode AI Assistant is damaged ({opencode_damage.path}); "
+                    "Bootstrap repairs it on the next start with an internet connection."))
             elif not ensure_opencode_cli():
                 _fail_and_exit(
                     "OpenCode AI Assistant",
