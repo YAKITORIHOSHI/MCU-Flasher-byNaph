@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -70,9 +70,10 @@ package_jobs and lite_launch in owned fixtures. Run consolidation off the comman
 thread with ordinary resource Stop authority; retain the startup sketch until
 the worker is idle, then dispatch it once.
 
-Developer Access groups its three filters below Search at laptop widths and
-reflows its title/actions. Short portals scroll the whole dashboard while keeping
-metric and ticket-reading minima; controls must never collapse into empty strips.
+Developer Access aligns the three equal-width filters with Search at laptop
+widths and measures a shared height from the styled controls. Give count tiles
+consistent insets inside the painted ribbon. Short portals scroll the whole
+dashboard while keeping metric and ticket-reading minima.
 Verify half-laptop geometry, short scrolled cards, resources, Lite Bootstrap
 routing, real compiler reuse and renderer captures in owned fixtures.
 
@@ -126,10 +127,11 @@ reopened.
 
 Project, board and Resources dialogs are modal: `modal_dialogs()` paints the
 backdrop and makes the top open window egui's modal layer (board picker above
-Resources). Use `action_row()` for dialog buttons; a centered `with_layout` given
-a scrolling window's remaining height spreads its buttons across it. Open sketch
-uses an inner auto-shrinking ScrollArea with `min_scrolled_height` equal to its
-cap, because the window's own vscroll keeps egui's 420-point default height.
+Resources). Use `picker_window` to fit the full frame and `action_row()` for
+buttons. Board results and recent sketches scroll independently of their
+confirmation controls. Parent the asynchronous system folder chooser to the
+Lite window. The worker resolves and validates folder or source-file requests
+before returning a canonical folder for an independent window.
 
 Build the Ubuntu launcher with `cargo zigbuild --target
 x86_64-unknown-linux-gnu.2.39` (the private `.tools/build-runtime`); a plain host

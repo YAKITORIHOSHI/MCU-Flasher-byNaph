@@ -336,11 +336,107 @@ runpy.run_path(script, run_name="__main__")
                 worker.dispatch({"cmd": "stop"})
                 check(not worker.resource_busy and worker.api.is_busy and stop.call_count == 1, "Stop after handoff reaches the backend's active-operation protection")
                 worker.api.is_busy = False
+
+            staged = worker.api.sketch_dir_path
+            def editor_save(name, contents):
+                # Model a separate editor saving atomically to the original.
+                # Preserve the write timestamp to exercise coarse timestamps.
+                program = """
+from pathlib import Path
+import os, sys
+path = Path(sys.argv[1])
+previous = path.stat() if path.exists() else None
+temporary = path.with_suffix('.save-tmp')
+temporary.write_bytes(sys.argv[2].encode('utf-8'))
+if previous:
+    os.utime(temporary, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+temporary.replace(path)
+"""
+                subprocess.run([sys.executable, "-B", "-c", program, str(source / name), contents],
+                               check=True, timeout=10)
+
+            idle = "void setup() {}\nvoid loop() { delay(2); }\n"
+            editor_save("Sketch.ino", idle)
+            editor_save("pins.h", "#define PIN 2\n")
+            deadline = time.monotonic() + 8
+            expected_files = {"path": str(source), "files": ["Sketch.ino", "pins.h"]}
+            while ("project:files", expected_files) not in output.events and time.monotonic() < deadline:
+                time.sleep(.025)
+            check(("project:files", expected_files) in output.events
+                  and (staged / "Sketch.ino").read_text() == idle and (staged / "pins.h").is_file(),
+                  "an idle Lite window refreshes its private source bytes and displayed file list after an atomic save")
+            staged_before = (staged / "Sketch.ino").stat()
+            before = len(output.events)
+            worker._refresh_idle_sources()
+            check((staged / "Sketch.ino").stat() == staged_before and len(output.events) == before,
+                  "an unchanged idle source poll leaves staging and the file list alone")
+
+            from main.core import compiled_cache
+            from main.web_bridge import MCUWebBackendAPI
+            board = worker.api.current_board
+            workspace = worker.api._board_workspace_dir(board)
+            build = worker.api._board_build_dir(board)
+            build.mkdir(parents=True, exist_ok=True)
+            (build / "firmware.hex").write_bytes(b"certified fixture firmware")
+            (workspace / "platformio.ini").write_text("[env:mcu_env]\nplatform=atmelavr\nboard=uno\nframework=arduino\n",
+                                                      encoding="utf-8")
+            compiled_cache.write_receipt(workspace, board_key=worker.api._board_cache_key(board),
+                                         board_name=board, source_hash=worker.api._hash_sources(board))
+            check(worker.api.check_can_skip_compile_for_upload(board), "the fixture certifies the current source before the next edit")
+
+            newest = idle.replace("delay(2)", "delay(3)")
+            during_upload = idle.replace("delay(2)", "delay(4)")
+            decisions = []
+            def prepare_with_save(_action):
+                editor_save("Sketch.ino", newest)
+                return True
+            def device_boundary(can_skip=False):
+                captured = (staged / "Sketch.ino").read_text()
+                editor_save("Sketch.ino", during_upload)
+                worker._refresh_idle_sources()
+                decisions.append((can_skip, captured, (staged / "Sketch.ino").read_text()))
+                worker.api._release_requested_operation()
+
+            with patch.object(worker, "prepare_board", return_value={}), \
+                    patch.object(MCUWebBackendAPI, "_prepare_target_tools", side_effect=prepare_with_save), \
+                    patch.object(MCUWebBackendAPI, "_resolve_requested_target", return_value=True), \
+                    patch.object(worker.api, "_native_upload_worker", side_effect=device_boundary), \
+                    patch.object(worker.api, "_upload_worker", side_effect=device_boundary):
+                worker.dispatch({"cmd": "upload"})
+                join()
+                worker.api._operation_worker.join(timeout=10)
+                check(decisions == [(False, newest, newest)] and not worker.busy(),
+                      "Upload sees a save during tool preparation, rejects the old receipt, and holds its inputs while active")
+            deadline = time.monotonic() + 8
+            while (staged / "Sketch.ino").read_text() != during_upload and time.monotonic() < deadline:
+                time.sleep(.025)
+            check((staged / "Sketch.ino").read_text() == during_upload,
+                  "a save during Upload refreshes the open sketch after the operation ends")
+
+            def prepare_with_empty_source(_action):
+                editor_save("Sketch.ino", "")
+                return True
+            before = len(output.events)
+            with patch.object(worker, "prepare_board", return_value={}), \
+                    patch.object(MCUWebBackendAPI, "_prepare_target_tools", side_effect=prepare_with_empty_source), \
+                    patch.object(MCUWebBackendAPI, "_resolve_requested_target", return_value=True), \
+                    patch.object(worker.api, "_native_upload_worker") as native, \
+                    patch.object(worker.api, "_upload_worker") as fallback:
+                worker.dispatch({"cmd": "upload"})
+                join()
+                worker.api._operation_worker.join(timeout=10)
+                check(not native.called and not fallback.called and not worker.busy()
+                      and any(event == "notification" and "non-empty root" in data["message"]
+                              for event, data in output.events[before:]),
+                      "an invalid latest save reports the source problem and never reaches the device boundary")
+
             worker.api.emit("console:log", {"text": "Compatible devices analysis updated: see the 'Compatible Devices' tab."})
             check(not any(event == "console:log" and "Compatible Devices" in data.get("text", "") for event, data in output.events), "Lite does not direct users to absent main-workspace tabs")
             worker.api.emit("console:log", {"text": "Compiler error mentioning Compatible Devices", "tag": "error"})
             check(output.events[-1][1]["text"] == "Compiler error mentioning Compatible Devices", "compiler diagnostics are retained even when they contain a main-tab name")
             worker.close()
+            worker._source_watch.join(timeout=3)
+            check(not worker._source_watch.is_alive(), "closing Lite retires its source poll")
             worker.protected.remove(source)  # Release this owned fixture for test cleanup only.
     print(f"\n{len(checks)} preparation checks passed. No network requests or physical device access.")
 

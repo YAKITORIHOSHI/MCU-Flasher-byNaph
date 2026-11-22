@@ -271,16 +271,39 @@ class PortalChecks(unittest.TestCase):
         self.dialog.resize(683, 730)
         pump()
         filters = [self.dialog.filter_cb, self.dialog.category_filter, self.dialog.sort_cb]
+        search = self.dialog.search_input
         tops = [control.mapTo(self.dialog, QPoint(0, 0)).y() for control in filters]
         self.assertLessEqual(max(tops) - min(tops), 1)
+        lefts = [control.mapTo(self.dialog, QPoint(0, 0)).x() for control in filters]
+        widths = [control.width() for control in filters]
+        self.assertEqual(lefts[0], search.mapTo(self.dialog, QPoint(0, 0)).x())
+        self.assertEqual(lefts[-1] + widths[-1], lefts[0] + search.width())
+        self.assertLessEqual(max(widths) - min(widths), 1)
+        self.assertEqual(lefts[1] - lefts[0] - widths[0], lefts[2] - lefts[1] - widths[1])
         for control in filters:
+            self.assertEqual(control.height(), search.height())
             self.assertGreaterEqual(control.height(), control.minimumSizeHint().height())
+        badges = (self.dialog.stat_total, self.dialog.stat_critical, self.dialog.stat_open,
+                  self.dialog.stat_resolved)
+        ribbon = self.dialog.stats_grid.parentWidget()
+        paper = ribbon.rect().adjusted(10, 10, -17, -17)
+        count_origins = []
+        for badge in badges:
+            self.assertTrue(paper.contains(badge.rect().translated(badge.mapTo(ribbon, QPoint()))))
+            count = badge.findChild(QLabel, "val-label")
+            count_origins.append(count.mapTo(ribbon, QPoint()).y())
+        self.assertEqual(len(set(count_origins)), 1)
         self.assertGreaterEqual(self.dialog.scroll.viewport().height(), 300)
         capture(self.dialog, "tickets-half-laptop")
+        self.dialog.resize(1040, 740)
+        pump()
+        self.assertEqual(
+            len({control.mapTo(self.dialog, QPoint()).y() for control in [search, *filters]}), 1)
+        capture(self.dialog, "tickets-wide-filters")
         self.dialog.resize(380, 420)
         pump()
         self.assertGreater(self.dialog.dashboard_scroll.verticalScrollBar().maximum(), 0)
-        for badge in (self.dialog.stat_total, self.dialog.stat_critical, self.dialog.stat_open, self.dialog.stat_resolved):
+        for badge in badges:
             self.assertGreaterEqual(badge.height(), 68)
         self.dialog.dashboard_scroll.ensureWidgetVisible(self.dialog.scroll)
         pump()

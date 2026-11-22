@@ -17,7 +17,8 @@ import psutil  # Load the native backend before host-policy fixtures change sys.
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 from isolation import child_setup, environment
-from worker import ORIGINAL, Worker, snapshot_engine, snapshot_sources, host_check, hold_lock, live_workers, try_lock
+from worker import (ORIGINAL, Worker, snapshot_engine, snapshot_sources, project_source_inventory,
+                    read_project_sources, host_check, hold_lock, live_workers, try_lock)
 
 
 class Recorder:
@@ -80,7 +81,7 @@ def main():
         nested.mkdir()
         (nested / "ignore.cpp").write_text("not part of the root sketch")
         digest = hashlib.sha256(sketch.read_bytes()).hexdigest()
-        original, staged, files = snapshot_sources(source, state)
+        original, staged, files, _ = snapshot_sources(source, state)
         check(original == source and staged != source, "source project is staged separately")
         check(files == ["FixtureSketch.ino", "pins.h"], "only supported root source files are captured")
         check(hashlib.sha256(sketch.read_bytes()).hexdigest() == digest, "original sketch bytes are preserved")
@@ -91,6 +92,16 @@ def main():
         (source / "pins.h").unlink()
         snapshot_sources(source, state)
         check(not (staged / "pins.h").exists(), "deleted sources do not linger in the staged sketch")
+        old_inventory = project_source_inventory(source)
+        extra = source / "added.cpp"
+        extra.write_text("int example = 1;\n", encoding="utf-8")
+        try:
+            read_project_sources(source, inventory=old_inventory)
+        except ValueError as exc:
+            check("changed during capture" in str(exc), "a source added mid-capture invalidates the whole snapshot")
+        else:
+            check(False, "a source added mid-capture invalidates the whole snapshot")
+        extra.unlink()
         if os.name != "nt":
             (source / "linked.cpp").symlink_to(sketch)
             try:

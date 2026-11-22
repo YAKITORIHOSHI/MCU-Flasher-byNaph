@@ -43,14 +43,17 @@ native executables.
 
 ## Workbench
 
-1. **Open sketch** selects a folder containing saved `.ino`, `.cpp` or `.c` files
-   at its root. You can also drop a folder or source file into the workspace.
-   Edit in your usual editor and save before building. **Recent sketches** and
+1. **Open sketch** appears when Lite starts without a sketch path. Use **Browse**
+   to pick a folder, or enter a folder or source-file path. Choose **Open sketch**
+   to confirm. A sketch folder contains a saved `.ino`, `.cpp` or `.c` file at its
+   root. You can also drop a folder or source file into the workspace.
+   Save in your usual editor. Lite refreshes the open sketch's root sources
+   and file list in the background while idle. **Recent sketches** and
    the Open sketch dialog retain your 10 most recently opened folders. Like the
    main app, choosing another sketch while one is open opens it in a new Lite
-   window; each window keeps its own sketch. A sketch already open in another
-   Lite window is marked and cannot be opened twice. Open sketch, Resources and
-   the board picker stay in front of their window until closed (Escape closes them).
+   window after Lite checks the folder. A sketch already open in another Lite
+   window is marked. Open sketch, Resources and the board picker stay in front
+   of their window until closed. Press Escape to close the top picker.
    Click a source filename, such as `MySketch.ino`, to open its original sketch
    directory in Ubuntu Files or Windows Explorer. File-manager launch errors
    appear in Lite; the link never opens the private build snapshot.
@@ -80,9 +83,11 @@ native executables.
    Compile is enabled only with a sketch and configured board/framework. Upload
    additionally requires a selected, currently connected serial port. The worker
    checks readiness again before preparing tools and before dispatching.
-   Root sources are captured again before Compile and Upload. Incremental builds,
-   source/output verification, complete upload images and restart checks remain
-   owned by the main backend. Clean affects Lite's build state and compiled-file
+   Lite reads saved source bytes again after tool preparation, before Compile
+   or Upload checks the build. Saves made during the build or flash are picked
+   up for the next action. The main backend handles incremental builds,
+   source/output verification, complete upload images and restart checks.
+   Clean affects Lite's build state and compiled-file
    cache, retaining packages, original sources, settings and recovery history.
    Each sketch retains separate exact-board/framework build workspaces. Upload
    automatically skips compilation when that board's saved source, configuration,
@@ -95,12 +100,14 @@ native executables.
    port does not open it; Connect uses the main app's passive serial connection.
    Baud changes request no reset. Upload retains the backend's monitor handoff.
 
-The board picker follows the main app: equal-height, left-aligned rows, a
+The board picker follows the main app with equal-height, left-aligned rows, a
 Recent boards group without duplicate entries, and a separate **Select Board**
-action. Click a row to inspect the candidate; confirm with Select Board, Enter,
-or a double-click. Up/Down navigates and Escape cancels. Long names truncate
-with the full target available on hover; the list and footer stay within the
-window at fractional display scales.
+action. A search highlights its first regular result. Click a different row or
+use Up/Down to move the highlight, then use Select Board, Enter, or double-click
+to confirm. Choose a row explicitly when the picker offers closest matches.
+Escape cancels. Long names truncate with the full target available on hover.
+The results scroll inside the dialog and the search, count and confirmation
+controls stay visible as you resize.
 
 The header's **Light mode / Dark mode** button names the active theme and changes the complete interface,
 including monitor colors and dialogs. Light is the default at every launch.
@@ -135,8 +142,9 @@ startup is retained until the helper can be started.
 The normal account/local-key authentication remains required. Lite keeps local
 portal data and saved credentials in its own namespace, while using the same
 built-in cloud provider and account rules. The main workspace is not launched.
-At laptop widths the ticket filters share a row. Very short portals scroll the
-dashboard while preserving readable metrics, actions and ticket contents.
+The ticket filters share a height and align with Search. The count tiles have
+consistent insets within the ribbon. At laptop widths the filters share a row
+below Search. Short portals scroll the dashboard and keep ticket contents readable.
 
 Both monitors have Follow, Copy and display-only Clear controls, selectable
 output, separate histories and a bounded 4,000-line view. Only visible log rows

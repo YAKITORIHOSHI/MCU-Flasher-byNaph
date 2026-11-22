@@ -446,8 +446,9 @@ def copy_button(target=None, parent=None) -> FloatingCopyButton:
 
 
 class PortalComboBox(QComboBox):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, width_hint_limit=220):
         super().__init__(parent)
+        self._width_hint_limit = width_hint_limit
         self.setProperty("mcuPopupStyle", "paper")
 
     def wheelEvent(self, event):
@@ -463,25 +464,26 @@ class PortalComboBox(QComboBox):
         # Qt's minimum-content policy alone clips statuses by a few pixels.
         option = QStyleOptionComboBox()
         self.initStyleOption(option)
+        option.rect.setWidth(self._width_hint_limit)
         edit_rect = self.style().subControlRect(
             QStyle.ComplexControl.CC_ComboBox, option,
             QStyle.SubControl.SC_ComboBoxEditField, self)
-        chrome = max(64, self.rect().width() - edit_rect.width())
+        chrome = max(64, option.rect.width() - edit_rect.width())
         width = max((self.fontMetrics().horizontalAdvance(self.itemText(index))
                      for index in range(self.count())), default=0) + chrome + 8
         # Unknown server-supplied classifications must not enlarge a form.
         # Native combo text can elide; the full current value stays in its tooltip.
-        size.setWidth(min(self.maximumWidth(), max(120, min(width, 220))))
+        size.setWidth(min(self.maximumWidth(), max(120, min(width, self._width_hint_limit))))
         return size
 
     def sizeHint(self):
         size = super().sizeHint().expandedTo(self.minimumSizeHint())
-        size.setWidth(min(size.width(), self.maximumWidth(), 220))
+        size.setWidth(min(size.width(), self.maximumWidth(), self._width_hint_limit))
         return size
 
 
-def combo(items, parent, current="") -> QComboBox:
-    result = PortalComboBox(parent)
+def combo(items, parent, current="", *, width_hint_limit=220) -> QComboBox:
+    result = PortalComboBox(parent, width_hint_limit=width_hint_limit)
     result.addItems(items)
     if current and current not in items:
         result.addItem(current)

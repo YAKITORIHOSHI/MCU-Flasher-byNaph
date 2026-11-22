@@ -103,6 +103,36 @@ def main():
                 worker.history()
                 check(str(missing) not in output.latest("history")["projects"], "missing sketch folders are pruned like the main app")
 
+                current = worker.source
+                worker.dispatch({"cmd": "project", "path": str(current / f"{current.name}.ino"),
+                                 "open_in_new_window": True})
+                check(output.latest("project")["path"] == str(current)
+                      and not any(event == "project:window" for event, _ in output.events),
+                      "opening a source file in this sketch resolves to the current window")
+                alternate = base / "Another Sketch"
+                alternate.mkdir()
+                original = alternate / "Another Sketch.ino"
+                original.write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+                staged = set((state / "projects").iterdir())
+                worker.dispatch({"cmd": "project", "path": str(original), "open_in_new_window": True})
+                check(output.latest("project:window")["path"] == str(alternate)
+                      and worker.source == current and set((state / "projects").iterdir()) == staged,
+                      "a different valid sketch hands its canonical folder to a new window without staging it here")
+                empty = base / "Empty folder"
+                empty.mkdir()
+                with patch.object(config, "get_occupied_folders", return_value={str(alternate): "peer"}):
+                    for refused in (alternate, empty):
+                        try:
+                            worker.dispatch({"cmd": "project", "path": str(refused),
+                                             "open_in_new_window": True})
+                        except ValueError:
+                            pass
+                        else:
+                            raise AssertionError(f"The worker accepted {refused}")
+                check(sum(event == "project:window" for event, _ in output.events) == 1
+                      and worker.source == current,
+                      "occupied and invalid sketches never launch a new window")
+
                 search = worker.board_search
                 result = search.find(worker.boards, "uno")
                 check(result["items"][0]["name"] == uno, "exact board IDs rank first")

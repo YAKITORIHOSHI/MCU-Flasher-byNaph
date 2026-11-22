@@ -1,5 +1,5 @@
 //! Installed resources and an in-process, read-only sample viewer.
-use super::{Palette, Tone, action_row, board_row, button};
+use super::{Palette, Tone, action_row, button, picker_row};
 use eframe::egui::{self, RichText};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -258,7 +258,7 @@ impl ResourceBrowser {
                         let item = rows[index];
                         let detail = format!("{} · {}", item.mcu, item.frameworks.join(", "));
                         let response = ui
-                            .add_enabled_ui(idle, |ui| board_row(ui, &item.name, &detail, false))
+                            .add_enabled_ui(idle, |ui| picker_row(ui, &item.name, &detail, false))
                             .inner;
                         if response.on_hover_text(&item.name).clicked() {
                             commands.push(json!({"cmd": "board", "name": item.name}));
@@ -286,7 +286,7 @@ impl ResourceBrowser {
                     for index in range {
                         let item = rows[index];
                         let detail = format!("{} · {}", item.version, item.origin);
-                        if board_row(ui, &item.name, &detail, false)
+                        if picker_row(ui, &item.name, &detail, false)
                             .on_hover_text(format!("{}\n{}", item.name, item.description))
                             .clicked()
                         {

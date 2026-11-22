@@ -8,8 +8,9 @@ import os
 from pathlib import Path
 import platform
 import queue
-import shutil
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -23,6 +24,9 @@ from resources import Inventory, main_download_directory
 LITE = Path(__file__).resolve().parents[1]
 ORIGINAL = LITE.parent
 SOURCE_EXTENSIONS = {".ino", ".h", ".hpp", ".cpp", ".c"}
+BUILD_SOURCE_EXTENSIONS = {".ino", ".cpp", ".c"}
+MAX_SOURCE_BYTES = 8 * 1024 * 1024
+SOURCE_REFRESH_SECONDS = 2.0
 MAX_FRAME = 256 * 1024
 
 
@@ -138,48 +142,90 @@ def snapshot_engine(original, state):
     return engine
 
 
-def snapshot_sources(source, state):
-    """A bounded root-only snapshot; original source and caches stay read-only."""
+def project_folder(source):
     source = Path(source).expanduser().resolve(strict=True)
     if source.is_file():
         source = source.parent
     if not source.is_dir():
         raise ValueError("Choose an existing sketch folder")
-    contents = {}
+    return source
+
+
+def project_source_inventory(source):
+    """A shallow metadata scan. File bytes still decide build and upload reuse."""
+    root = source.lstat()
+    junction = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", -1)
+    if not stat.S_ISDIR(root.st_mode) or getattr(root, "st_reparse_tag", 0) == junction:
+        raise ValueError("The open sketch path is no longer a regular folder")
+    files = {}
     size = 0
-    for entry in source.iterdir():
-        if entry.suffix.lower() not in SOURCE_EXTENSIONS:
-            continue
-        if entry.is_symlink() or getattr(entry, "is_junction", lambda: False)():
-            raise ValueError(f"Linked sources are not supported: {entry.name}")
-        if not entry.is_file():
-            continue
-        if entry.stat().st_size > 8 * 1024 * 1024:
-            raise ValueError("A source file exceeds Lite's 8 MiB snapshot budget")
-        contents[entry.name] = entry.read_bytes()
-        size += len(contents[entry.name])
-        if len(contents) > 128 or size > 8 * 1024 * 1024:
-            raise ValueError("Root sources exceed Lite's 128-file / 8 MiB snapshot budget")
-    if not any(Path(name).suffix.lower() in {".ino", ".cpp", ".c"} and data.strip()
-               for name, data in contents.items()):
-        raise ValueError("Choose a folder containing a non-empty root .ino, .cpp or .c file")
-    # Refuse a changing source rather than publishing a knowingly mixed snapshot.
+    with os.scandir(source) as entries:
+        for entry in entries:
+            if Path(entry.name).suffix.lower() not in SOURCE_EXTENSIONS:
+                continue
+            info = os.stat(entry.path, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) == junction:
+                raise ValueError(f"Linked sources are not supported: {entry.name}")
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            files[entry.name] = (info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+                                 info.st_dev, info.st_ino)
+            size += info.st_size
+            if len(files) > 128 or size > MAX_SOURCE_BYTES:
+                raise ValueError("Root sources exceed Lite's 128-file / 8 MiB snapshot budget")
+    return (root.st_dev, root.st_ino), files
+
+
+def read_project_sources(source, *, inventory=None, require_sketch=True):
+    """Capture verifiable root bytes and reject changed membership or contents."""
+    if inventory is None:
+        inventory = project_source_inventory(source)
+    files = inventory[1]
+    contents = {}
+    changed = "Sketch files changed during capture. Try again after the editor finishes saving."
+    for name, (size, *_) in files.items():
+        with (source / name).open("rb") as stream:
+            data = stream.read(size + 1)
+        if len(data) != size:
+            raise ValueError(changed)
+        contents[name] = data
     for name, data in contents.items():
-        if (source / name).read_bytes() != data:
-            raise ValueError("Source changed during capture. Try the action again")
+        with (source / name).open("rb") as stream:
+            if stream.read(len(data) + 1) != data:
+                raise ValueError(changed)
+    if project_source_inventory(source) != inventory:
+        raise ValueError(changed)
+    if require_sketch and not any(Path(name).suffix.lower() in BUILD_SOURCE_EXTENSIONS and data.strip()
+                                  for name, data in contents.items()):
+        raise ValueError("Choose a folder containing a non-empty root .ino, .cpp or .c file")
+    return inventory, contents
+
+
+def stage_project_sources(source, state, contents):
+    """Update the private source copies while keeping unchanged files untouched."""
     key = hashlib.sha256(os.path.normcase(str(source)).encode()).hexdigest()[:20]
     destination = state / "projects" / key / source.name
     destination.mkdir(parents=True, exist_ok=True)
+    changed = False
     for entry in destination.iterdir():
         if entry.is_file() and entry.suffix.lower() in SOURCE_EXTENSIONS and entry.name not in contents:
             entry.unlink()
+            changed = True
     for name, data in contents.items():
         target = destination / name
         if not target.is_file() or target.read_bytes() != data:
             temporary = target.with_suffix(target.suffix + ".lite-tmp")
             temporary.write_bytes(data)
             temporary.replace(target)
-    return source, destination, sorted(contents)
+            changed = True
+    return destination, changed
+
+
+def snapshot_sources(source, state):
+    """Capture sources into Lite's private build workspace."""
+    inventory, contents = read_project_sources(source)
+    destination, _ = stage_project_sources(source, state, contents)
+    return source, destination, sorted(contents), inventory
 
 
 class Output:
@@ -233,6 +279,9 @@ class Worker:
         self._reader_thread = None
         self._reader_cancel = threading.Event()
         self.source = None
+        self._source_inventory = None
+        self._source_watch = None
+        self._stop_source_watch = threading.Event()
         self.resource_busy = False
         self.process = None
         self.catalog_thread = None
@@ -303,6 +352,14 @@ class Worker:
 
             def _get_qt_signals(self):
                 return None
+
+            def _resolve_requested_target(self, action, *, hand_over=False):
+                # The guarded build/upload worker calls this after both tool
+                # preparation stages. Check saved bytes before deciding whether
+                # the selected framework or an existing build still applies.
+                if not hand_over and not owner._capture_operation_sources(lambda: self._stop_requested):
+                    return False
+                return super()._resolve_requested_target(action, hand_over=hand_over)
 
             def _library_search_directories(self, platformio_core):
                 return list(dict.fromkeys(path for path, origin in owner.inventory.library_roots()
@@ -493,22 +550,31 @@ class Worker:
         from main.core.config import get_occupied_folders
         self.output.send("sketches", {"open_elsewhere": sorted(get_occupied_folders())})
 
-    def select_project(self, path):
-        source = Path(path).expanduser().resolve(strict=True)
+    def select_project(self, path, *, open_in_new_window=False):
+        source = project_folder(path)
         if source.is_relative_to(self.state):
             raise ValueError("Choose an original sketch folder, outside Lite's private state")
-        from main.core.config import set_active_sketch_dir
-        folder = source.parent if source.is_file() else source
-        if not set_active_sketch_dir(str(folder)):
-            raise ValueError(f"{folder.name} is already open in another Lite window")
+        from main.core.config import get_occupied_folders, set_active_sketch_dir
+        from main.core.constants import is_application_codebase_dir
+        if is_application_codebase_dir(source):
+            raise ValueError("The MCU Flasher application folder cannot be opened as a sketch")
+        if open_in_new_window and self.source is not None and source != self.source:
+            if any(Path(folder) == source for folder in get_occupied_folders()):
+                raise ValueError(f"{source.name} is already open in another Lite window")
+            read_project_sources(source)
+            self.output.send("project:window", {"path": str(source)})
+            return
+        if not set_active_sketch_dir(str(source)):
+            raise ValueError(f"{source.name} is already open in another Lite window")
         try:
-            source, staged, files = snapshot_sources(source, self.state)
+            source, staged, files, inventory = snapshot_sources(source, self.state)
         except Exception:
             set_active_sketch_dir(str(self.source) if self.source else None)
             raise
         if source not in self.protected:
             self.protected.append(source)
         self.source = source
+        self._source_inventory = inventory
         self.api.sketch_dir_path = staged
         self.api.active_file_path = str(staged / files[0])
         self.api.modified_files.clear()
@@ -518,6 +584,61 @@ class Worker:
         self.output.send("project", {"path": str(source), "name": source.name, "files": files})
         self.history(expected_project=str(source))
         self.log(f"Opened {source.name}. {len(files)} root source files captured; originals stay read-only.")
+        if self._source_watch is None:
+            watch = threading.Thread(target=self._watch_sources, name="LiteSketchWatch", daemon=True)
+            watch.start()
+            self._source_watch = watch
+
+    def _watch_sources(self):
+        # One reader per window. Removable shares can be slow, so read them
+        # outside the command lock and check ownership again before staging.
+        while not self._stop_source_watch.wait(SOURCE_REFRESH_SECONDS):
+            try:
+                self._refresh_idle_sources()
+            except (OSError, ValueError):
+                # A save can temporarily replace or lock a file. Leave it for
+                # the next poll; an explicit action reports any capture error.
+                continue
+
+    def _refresh_idle_sources(self):
+        with self._action_lock:
+            if self.closing or self.source is None or self.busy():
+                return
+            source, previous = self.source, self._source_inventory
+        inventory = project_source_inventory(source)
+        if inventory == previous:
+            return
+        inventory, contents = read_project_sources(source, inventory=inventory, require_sketch=False)
+        with self._action_lock:
+            # An action or project switch may have published newer inputs
+            # during the read. It owns the copies, even if it has since finished.
+            if (self.closing or self.busy() or self.source != source
+                    or self._source_inventory is not previous):
+                return
+            self._publish_sources(source, inventory, contents)
+
+    def _capture_operation_sources(self, cancelled):
+        if self.closing or cancelled():
+            return False
+        source = self.source
+        inventory, contents = read_project_sources(source)
+        with self._action_lock:
+            if self.closing or cancelled() or self.source != source:
+                return False
+            self._publish_sources(source, inventory, contents)
+            return True
+
+    def _publish_sources(self, source, inventory, contents):
+        """Under the action lock, update only the owning window's build inputs."""
+        destination, changed = stage_project_sources(source, self.state, contents)
+        previous = self._source_inventory
+        self._source_inventory = inventory
+        if changed or previous is None or previous[1].keys() != contents.keys():
+            files = sorted(contents)
+            if not self.api.active_file_path or Path(self.api.active_file_path).name not in contents:
+                self.api.active_file_path = str(destination / files[0]) if files else None
+            self.output.send("project:files", {"path": str(source), "files": files})
+            self.log(f"Refreshed {source.name} from disk ({len(files)} source files).")
 
     def history(self, *, expected_project=None, expected_board=None):
         from main.core.config import load_recent_projects, load_recent_boards
@@ -731,6 +852,8 @@ class Worker:
         def work():
             handed_off = False
             try:
+                if after is not None and not self._capture_operation_sources(self.cancel.is_set):
+                    raise InterruptedError("Preparation cancelled before the action started")
                 if action == "library_search":
                     query = str(request.get("query", ""))[:200]
                     result = self.session / "library-search.json"
@@ -772,7 +895,6 @@ class Worker:
                         if self.api.current_board != board:
                             raise RuntimeError("The selected board changed; try the action again")
                         self.require_action_ready(after)
-                        snapshot_sources(self.source, self.state)
                         self.output.send(*completed)
                         if after == "upload":
                             self.api.skip_compile = True
@@ -927,7 +1049,8 @@ class Worker:
         if self.busy():
             raise RuntimeError("Wait for the current operation to finish")
         if cmd == "project":
-            self.select_project(str(request.get("path", "")))
+            self.select_project(str(request.get("path", "")),
+                                open_in_new_window=request.get("open_in_new_window") is True)
         elif cmd == "board":
             name = str(request.get("name", ""))
             if name not in self.boards:
@@ -969,7 +1092,6 @@ class Worker:
                 raise ValueError("Open a sketch folder first")
             if cmd != "clean":
                 self.require_action_ready(cmd)
-                snapshot_sources(self.source, self.state)
                 self.resources({"cmd": "board_install"}, after=cmd)
             else:
                 self.api.clean_cache()
@@ -981,12 +1103,14 @@ class Worker:
         return True
 
     def close(self):
-        self.closing = True
-        self._reader_cancel.set()
+        with self._action_lock:
+            self.closing = True
+            self._stop_source_watch.set()
+            self._reader_cancel.set()
+            self.cancel.set()
         # The workspace asks users to close the portal first. A lost workspace
         # leaves its portal alive rather than losing an unsaved draft or write.
         self.api._stop_port_monitor.set()
-        self.cancel.set()
         if self.resource_busy and self.catalog_thread:
             self.catalog_thread.join(timeout=25)
         if self.api.is_busy:

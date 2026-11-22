@@ -57,9 +57,12 @@ see the [README](README.md).
   including half-screen tiling.
 - **MCU Flasher Lite.** A separate lightweight workbench for Ubuntu and Windows
   that shares the prepared tools, boards and libraries with the main app.
-  Choosing a board configures its platform and default framework automatically.
+  Open sketches refresh after external saves. Upload checks the latest saved
+  source bytes after tool preparation before reusing a build.
+  Sketch and board pickers keep their confirmation actions visible on small
+  windows. Choosing a board configures its platform and framework automatically.
 - **Developer Access.** Private issue tickets shared across your signed-in
-  devices.
+  devices, with aligned search and filter fields and evenly spaced count tiles.
 
 ## What the download contains
 

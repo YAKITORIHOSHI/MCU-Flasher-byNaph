@@ -1,0 +1,59 @@
+{
+  "base_revision": "ca68c01645a1d1a17f389da9eb90ed11f4743cad",
+  "host": "Ubuntu 26.04.1 LTS x86_64",
+  "checks": {
+    "rust_tests": 30,
+    "widget_scale_percent": [
+      100,
+      125,
+      150,
+      175,
+      200
+    ],
+    "cargo_check_and_strict_clippy": "passed on Linux, with strict Clippy also passing for Windows GNU",
+    "lite_worker": 102,
+    "lite_history_search_and_readiness": 28,
+    "lite_preparation": 53,
+    "lite_resources": 15,
+    "lite_shared_store": 15,
+    "lite_developer_access": 25,
+    "main_owner_tickets": 42,
+    "main_portal_layout_scale_percent": [
+      100,
+      125,
+      150,
+      175,
+      200
+    ],
+    "main_runtime_bootstrap_controls_and_shutdown_verifiers": 10,
+    "ubuntu_renderer_captures": 18
+  },
+  "capture_reports": {
+    "lite": "LITE-MODE/temp/picker-final/report.json",
+    "developer_access": "temp/audit/lite-picker-after"
+  },
+  "launchers": {
+    "UBUNTU": {
+      "sha256": "b92b4698bdcfce4e99a827a6806e02d1febf253b7b3c6ece8afd8f1b1da8d6e4",
+      "target": "x86_64-unknown-linux-gnu.2.39",
+      "renderer": "Glow on an owned Xvfb display"
+    },
+    "WINDOWS.exe": {
+      "sha256": "fa24607478a88e3f5b50a02d4cb1c996deeec2ce08ac1d58306172b69cd88fd1",
+      "target": "x86_64-pc-windows-gnu",
+      "subsystem": "Windows GUI",
+      "verification": "cross-built on Ubuntu"
+    }
+  },
+  "source_sha256": {
+    "LITE-MODE/src/ui.rs": "9dd6e94a6493a935803e53d5dfb5c5985a73da892391af249e70bfa503fcce5f",
+    "LITE-MODE/src/resources.rs": "ce1511bfabf44331669c63db70b6203da7bf282c1e6cc1e4b83cb418498fbb62",
+    "LITE-MODE/python/worker.py": "ed828075f74a6986bd4b69c492929244fbb1c0900d72928758b9e28f67d98b7b",
+    "main/qt/owner_ticket_dialog.py": "943578e6cee5bacd5a59e683afdefe52fbd639ec6342604f8cc40fe2462bc030",
+    "main/qt/owner_ticket_style.py": "2d881f435a66b2232f0ff01dcf6f44745e8a305f1c2f806ec33a4b851d18978b"
+  },
+  "pending": [
+    "Native Windows chooser and mixed-DPI desktop verification",
+    "Physical USB verification"
+  ]
+}

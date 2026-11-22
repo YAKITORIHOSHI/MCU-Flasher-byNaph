@@ -1047,6 +1047,12 @@ class OwnerTicketDialog(_TaskPortal):
 
     def apply_theme(self, mode):
         super().apply_theme(mode)
+        controls = (self.search_input, self.filter_cb, self.category_filter, self.sort_cb)
+        for control in controls:
+            control.ensurePolished()
+        height = max(control.sizeHint().height() for control in controls)
+        for control in controls:
+            control.setFixedHeight(height)
         if hasattr(self, "live_wallpaper"):
             self.live_wallpaper.set_theme_mode(mode)
         if hasattr(self, "auth_scroll"):
@@ -1473,10 +1479,10 @@ class OwnerTicketDialog(_TaskPortal):
         self.dashboard_title = ResponsiveRow([(brand, 1), (self.title_actions, 0)], dashboard_body, compact_width=600)
         outer.addWidget(self.dashboard_title)
 
-        # 2. Stats metrics ribbon (stationary outside scroll area - A5 / B7)
+        # Inset the tiles from the painted paper edge, including its offset shadow.
         ribbon = NeoCard(page)
         stats_layout = QVBoxLayout(ribbon)
-        stats_layout.setContentsMargins(12, 8, 12, 8)
+        stats_layout.setContentsMargins(12, 12, 19, 19)
         self.stat_total = self._make_stat_badge("Total tickets", "0", "active", ribbon)
         self.stat_critical = self._make_stat_badge("Critical", "0", "fail", ribbon)
         self.stat_open = self._make_stat_badge("Active", "0", "warn", ribbon)
@@ -1485,7 +1491,7 @@ class OwnerTicketDialog(_TaskPortal):
         stats_layout.addWidget(self.stats_grid)
         outer.addWidget(ribbon)
 
-        # 3. Search input and filter dropdowns (stationary outside scroll area - A5 / B7)
+        # Give every filter the full width of its grid cell and share Search's edges.
         self.search_input = QLineEdit(page)
         self._search_edit = self.search_input
         self.search_input.setPlaceholderText("Search tickets")
@@ -1494,15 +1500,12 @@ class OwnerTicketDialog(_TaskPortal):
         self.search_input.textChanged.connect(self._on_search_changed)
         self.filter_cb = combo(["All Status"] + STATUSES, page)
         self.filter_cb.setAccessibleName("Filter tickets by status")
-        self.filter_cb.setMaximumWidth(155)
         self.filter_cb.currentTextChanged.connect(self._on_filter_changed)
-        self.category_filter = combo(["All categories"] + CATEGORIES, page)
+        self.category_filter = combo(["All categories"] + CATEGORIES, page, width_hint_limit=190)
         self.category_filter.setAccessibleName("Filter tickets by category")
-        self.category_filter.setMaximumWidth(190)
         self.category_filter.currentTextChanged.connect(self._on_category_filter_changed)
         self.sort_cb = combo(["Newest first", "Oldest first", "Recently updated"], page)
         self.sort_cb.setAccessibleName("Sort tickets")
-        self.sort_cb.setMaximumWidth(180)
         self.sort_cb.currentTextChanged.connect(lambda _text: self._render_tickets_list())
         # Search gets its own row on laptops; the three filters still share a
         # row. Stacking all four controls spent most of a short screen on chrome.
@@ -1510,10 +1513,8 @@ class OwnerTicketDialog(_TaskPortal):
         self.filter_row = ResponsiveGrid(
             [self.filter_cb, self.category_filter, self.sort_cb], page,
             columns=3, cell_width=140)
-        for control in (self.filter_cb, self.category_filter, self.sort_cb):
-            control.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.search_row = ResponsiveRow(
-            [(self.search_input, 1), (self.filter_row, 0)], page, compact_width=920)
+            [(self.search_input, 1), (self.filter_row, 2)], page, compact_width=920)
         outer.addWidget(self.search_row)
 
         # 4. Account metadata (stationary outside scroll area)
@@ -1563,6 +1564,7 @@ class OwnerTicketDialog(_TaskPortal):
         box = QVBoxLayout(widget)
         box.setContentsMargins(12, 10, 12, 10)
         box.setSpacing(4)
+        box.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         widget.setMinimumHeight(68)
         widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         val = label(value, widget, "value")

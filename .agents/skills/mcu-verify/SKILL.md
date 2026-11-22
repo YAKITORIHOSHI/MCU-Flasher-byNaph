@@ -1,6 +1,6 @@
 ---
 name: mcu-verify
-description: "Verify settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
@@ -79,8 +79,9 @@ or actual parent PIDs. Keep missing-resume and unrelated-owner refusal cases.
   Ubuntu repair without launching setup or either real workspace. Normal Lite
   selects the prepared environment before the Windows base interpreter. Cover
   the headless preflight and reuse of an owned runtime with an older launcher.
-- owner_tickets asserts three filters on one row at 683x730 and complete metric/
-  ticket minima after scrolling at 380x420. Check actual captures as well as bounds.
+- owner_tickets checks the filters' shared height, equal widths and gaps at
+  683x730, the wide single row, painted ribbon insets and metric/ticket minima
+  after scrolling at 380x420. Check actual captures as well as bounds.
 - Lite previews include installed resources and light/dark/short sample code.
   Native viewer find offsets preserve Unicode and stale chunks cannot replace a
   current file. Real compiler qualification records session-local preparation
@@ -93,9 +94,11 @@ or actual parent PIDs. Keep missing-resume and unrelated-owner refusal cases.
   with a live fixture process), busy peer locks, sketch ownership, package-lock
   Stop and the single portal. Clear `_pid_create_times_cache` before asserting a
   release: the backend caches process inventory for 2 seconds.
-- Rust tests cover modal layers, Escape, Open sketch height bounds and window
-  launch arguments. Never let a test reach `desktop::open_window`: in the test
-  harness `current_exe` is the test binary.
+- Rust tests cover modal layers, Escape, simulated system folder results and
+  visible picker actions while resizing the same window. History checks cover
+  canonical source-file paths, occupied folders and validation before window
+  dispatch. Never let a test reach `desktop::open_window`, where `current_exe`
+  would point to the test binary.
 - Run main port verifiers (projects, monitor_connection, ubuntu_ports,
   connection_loss, actions, upload_workers) after changing `main/core/config.py`.
 

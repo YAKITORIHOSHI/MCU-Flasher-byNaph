@@ -9,16 +9,18 @@ uses the same build tools, boards and libraries. To open and use it, see the
 
 ## What it does
 
-- **Sketches.** Opens a sketch folder, or a dropped folder or source file, and
-  reads it without modifying it. Each sketch opens in its own Lite window, and
-  recent sketches and boards are remembered.
+- **Sketches.** Offers a system folder chooser and recent sketches on startup.
+  Lite validates a folder or source path before opening the sketch. Each sketch
+  has its own workspace window. Lite refreshes the open sketch as you save
+  changes in your editor.
 - **Boards.** Searches the official PlatformIO board catalog by name, ID, vendor,
   platform, MCU or framework, ranks exact matches first and suggests close
   matches for typos. Selecting a board sets its platform and default framework
   using the main app's catalog, without a separate framework dropdown.
 - **Compile, Upload and Clean.** Runs the main app's build and upload actions.
-  Missing tools are prepared automatically before the first build, and Upload
-  skips compiling when the saved build for that board still matches the sketch.
+  Missing tools are prepared automatically before the first build. After tool
+  preparation, Lite reads the latest saved source bytes. Upload reuses firmware
+  when the saved build for that board still verifies against those bytes.
 - **Monitors.** Separate Build and Serial monitors with Follow, Copy and Clear.
   Connecting never resets the board; the Connection panel holds the port, baud
   rate and send controls.
@@ -34,9 +36,10 @@ uses the same build tools, boards and libraries. To open and use it, see the
   can be stopped safely, and explains when it cannot.
 - **Interface.** Light and Dark themes, layouts that fit small, scaled and
   portrait screens, and a narrow view that switches between Monitor and
-  Sketch & Connection.
+  Sketch & Connection. Board results and recent sketches scroll while their
+  confirmation buttons stay visible.
 - **Developer Access.** Opens the main app's private ticket portal with the same
-  account sign-in.
+  account sign-in, aligned filter fields and evenly inset ticket counts.
 
 ## What it contains
 

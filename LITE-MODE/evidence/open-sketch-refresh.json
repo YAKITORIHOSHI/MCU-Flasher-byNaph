@@ -1,0 +1,35 @@
+{
+  "base_revision": "ca68c01645a1d1a17f389da9eb90ed11f4743cad",
+  "host": "Ubuntu 26.04.1 LTS x86_64",
+  "checks": {
+    "rust_tests": 30,
+    "lite_worker_checks": 103,
+    "lite_history_search_and_readiness_checks": 28,
+    "lite_preparation_checks": 60,
+    "main_runtime_and_build_verifiers": 7,
+    "ubuntu_renderer_captures": 18,
+    "compiler_phases": [
+      "initial Uno build",
+      "unchanged Uno build",
+      "Uno with edited source",
+      "separate Nano build"
+    ],
+    "upload_cache_decisions_with_device_boundary_mocked": 9
+  },
+  "compiler_report": "LITE-MODE/temp/source-refresh-proof.kwWlHF/LITE-MODE/temp/compile-proof/result.json",
+  "renderer_report": "LITE-MODE/temp/source-refresh-layout/report.json",
+  "verified_sha256": {
+    "LITE-MODE/python/worker.py": "df1471724cdabc25ddf65e248e3b53bfa14af5e450220be52c0bacc3aaa7adfc",
+    "LITE-MODE/src/ui.rs": "f1e90ac55822337a142574d63a1b2e64d7ab7540ad4ff7ca1e9118416bd12185",
+    "LITE-MODE/UBUNTU": "9c2723fe2811711f4a0100a91e77fde6b0cd2461f16a901898cab4707e1e368a",
+    "LITE-MODE/WINDOWS.exe": "23cde661eef0b7dd0e86e552b5074c564aa9f67df0da8df56fe145363e547c01"
+  },
+  "launcher_targets": {
+    "UBUNTU": "x86_64-unknown-linux-gnu.2.39",
+    "WINDOWS.exe": "x86_64-pc-windows-gnu GUI cross-build"
+  },
+  "pending": [
+    "Native Windows desktop verification",
+    "Physical USB verification"
+  ]
+}

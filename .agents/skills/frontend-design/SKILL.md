@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: "Maintain automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain fitted Lite pickers, aligned ticket filters and count tiles, automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -27,8 +27,10 @@ small sizes. Allocate real reading height when code opens, and scroll short
 screens. Registry search belongs under Find more libraries. Shared package
 origins use plain labels, and each package's `Package files:` progress replaces
 one monitor row without suppressing compiler diagnostics or reader scrollback.
-Developer Access puts Search above a shared three-filter row at laptop widths;
-reflow title/actions before squeezing their labels. A short portal scrolls its
+Developer Access gives Search and the three filters the same styled height.
+The filter boxes fill equal cells between Search's edges at laptop widths.
+Inset the count tiles from the ribbon's painted border and offset shadow.
+Reflow title/actions before squeezing their labels. A short portal scrolls its
 whole dashboard with complete metric/control minima and a usable ticket viewport.
 Inspect actual half-laptop and short captures; geometry containment alone cannot
 prove that compressed text remains visible.
@@ -37,9 +39,11 @@ prove that compressed text remains visible.
 
 Open sketch, Resources and the board picker are modal over a light black
 backdrop (stronger in Dark); the workspace behind takes no input and Escape
-closes the top dialog. Dialog button rows use `action_row()` so they are exactly
-as tall as their controls. Open sketch fits its content and scrolls only on
-short screens. Ports and recent sketches held by other windows stay listed,
+closes the top dialog. Use `picker_window` to fit the full frame inside the
+workspace, including the title bar and shadow. Dialog button rows use
+`action_row()` so they are exactly as tall as their controls. Give the board
+results and recent sketches their own scroll areas and keep the search, path
+and confirmation controls visible. Ports and recent sketches held by other windows stay listed,
 disabled, with "(in use)" or "(open in another window)" and a tooltip.
 
 ## Lite screen fit and independent Developer Access

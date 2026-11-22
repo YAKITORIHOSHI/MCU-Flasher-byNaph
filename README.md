@@ -115,8 +115,9 @@ delay from 500 to 10,000 ms. **Offline Mode** prepares every default board's
 tools in advance and then uses local packages only.
 
 **MCU Flasher Lite** is a lightweight workbench for Ubuntu and Windows. Open
-`LITE-MODE/UBUNTU` or `LITE-MODE/WINDOWS.exe`; it uses the tools the main app
-prepared. See [Lite's guide](LITE-MODE/README.md).
+`LITE-MODE/UBUNTU` or `LITE-MODE/WINDOWS.exe`. Use **Open sketch** to choose a
+folder, then choose its exact board in **Connection**. Lite uses the
+tools the main app prepared. See [Lite's guide](LITE-MODE/README.md).
 
 ## Updates
 

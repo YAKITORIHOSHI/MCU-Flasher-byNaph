@@ -35,8 +35,15 @@ Reuse the main backend from a private source snapshot. Changes to the original
 backend should be adopted on the next worker start; do not fork its build logic.
 Private settings, source snapshots and build state live in Lite's own
 per-user state directory. Clean must operate only there. Packages use the shared
-main native core. Original source folders
-are read-only; resnapshot their root sources before Compile and Upload.
+main native core. Original source folders are read-only. Use one idle worker
+poll for the open sketch's root sources. Compare metadata for idle checks and
+publish only changed copies and an in-place file list update. Recheck sketch
+ownership and operation state after the read. Capture actual bytes before tool
+preparation and again in final backend target resolution, after preparation
+and before firmware reuse. Verify file membership and bytes across each capture.
+Freeze the private copies through the build or write and resume idle refresh
+after the operation. Verify external saves and certified reuse with hardware-free
+fixtures.
 
 Compile/Upload automatically prepare the exact selected board's build and upload
 dependencies, including optional uploaders. Capture the main native tool store
@@ -83,13 +90,18 @@ its own registry, and claims only try the other's lock so neither deadlocks.
 The first selector keeps a port: a USB drop keeps the claim and Lite reselects
 its returning port without connecting; only another port, No port or closing
 releases it. Both hosts use the same claim code.
-Choosing another sketch while one is open launches an independent window with
-`--project`. Project, board and Resources dialogs are modal: the top open dialog
-is egui's modal layer over a dimmed backdrop, the board picker stays above
+Open sketch is the initial dialog on a launch without `--project`. Parent Browse
+to its Lite window and retain the path on cancel. The worker resolves and
+validates folders or source-file paths. A different valid sketch launches an
+independent window with its canonical folder as `--project`. Project, board and
+Resources dialogs are modal: the top open dialog is egui's modal layer over a
+dimmed backdrop, the board picker stays above
 Resources and Escape closes the top one. Dialog action rows use `action_row()`;
 a centered layout given a scrolling window's remaining height would spread its
-buttons across it. Open sketch fits its content instead of egui's 420-point
-default.
+buttons across it. Use `picker_window` for the full frame and title-bar budget.
+Scroll board results and recent sketches below fixed path/search and action
+controls. Reset the sent query on every edit; a regular search can highlight its
+first candidate without applying a target until confirmation.
 
 Light is the launch default; the SVG Light/Dark button changes visuals without
 reinitializing fonts, logs or selections. Keep Status and USB Port in separate

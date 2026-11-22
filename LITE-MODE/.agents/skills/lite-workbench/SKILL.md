@@ -1,6 +1,6 @@
 ---
 name: lite-workbench
-description: Develop isolated Rust MCU Flasher Lite active-theme labels, one-role colors, five-click Developer Access reuse, compact status, history/search and automatic board-specific tool/build reuse without editing the original application.
+description: Maintain idle refresh of open Lite sketches, verified source bytes after tool setup, fitted pickers, owned folder browsing, validated sketch windows, active-theme labels, Developer Access, history/search and board-specific tool/build reuse.
 ---
 
 # Lite workbench
@@ -44,6 +44,10 @@ Keep recent original sketch paths (10) and exact board names (5) in Lite's
 private settings using the main history helpers and a private settings lock.
 Search multiple fields through a revision-keyed index; rank exact IDs/names
 first, bound results and label closest matches. Reject stale query responses.
+Reset the sent query when the user edits the search. Keep the board search,
+count and actions outside its scrollable results. Open sketch fits its content
+and keeps the path and actions above the recent list. Parent the system chooser
+to Lite and validate source paths in the worker before starting another window.
 
 Dispatch builds only after catalog completion and exact command acknowledgement.
 Automatically resolve the selected platform's upload-target requirements even for
@@ -53,9 +57,14 @@ and its metadata stay read only. Publish only complete copies, stage outside
 installed package directories, and download only unresolved requirements. Hold
 target/action ownership through preparation and hand off once; Stop and failures
 must prevent an upload, never cause retries of a device operation.
-Source capture precedes Compile/Upload; Clean calls the existing backend only
-against private state. The worker retains flash-write guards and passive serial
-connection policy. Do not weaken target/source/output certification.
+Poll only the open sketch's root sources while idle. Read outside the command
+lock and recheck ownership before staging. Publish an in-place file list update
+without replacing the sketch selection. Before Compile or Upload, capture saved
+bytes before preparation and again through final backend target resolution.
+Check membership and bytes even when timestamps are unchanged. Defer idle
+staging while the backend owns the build or write. Clean calls the existing
+backend against private state and device writes retain the main backend's
+guards and source/output certification.
 Compile needs a sketch and valid board/framework; Upload also requires a selected
 connected port. Gate the Rust controls and recheck in Python before preparation
 and handoff. Enable certified Skip Compile for every Upload automatically,
@@ -63,8 +72,9 @@ including after Clean clears its flag. Reuse only the main backend's verified
 exact-board/framework workspace; source changes or invalid firmware force a build.
 
 Run the scoped verifier with a private interpreter and without display variables,
-including tools/verify_preparation.py for missing-uploader, reuse and cancellation
-regressions, and tools/verify_history_search.py for history/search/readiness.
+including tools/verify_preparation.py for external saves during idle, preparation
+and Upload, missing-uploader, reuse and cancellation, and
+tools/verify_history_search.py for history/search/readiness.
 Run cargo test for streaming monitor geometry and readiness/query regressions.
 Use the real offline uploader recipe with serial opens refused;
 mock the final upload callback rather than touching a connected board.

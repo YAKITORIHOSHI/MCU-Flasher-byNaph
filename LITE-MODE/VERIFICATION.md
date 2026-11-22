@@ -1,10 +1,47 @@
-# Lite verification — updated 2026-11-14
+# Lite verification
+
+## Open sketch source refresh
+
+- The 60 preparation checks cover an atomic external save while idle, an
+  unchanged poll, and a same-length save with its original timestamp during
+  tool preparation. Upload rejects the older build receipt. A save during
+  an active upload refreshes after the operation ends. An empty latest source
+  refuses dispatch. The 103 worker checks include a file added during capture.
+- Real PlatformIO builds pass for Uno and Nano using prepared packages copied
+  into an isolated fixture. The unchanged build retains its objects and a
+  source edit recompiles the sketch. Nine upload reuse decisions pass with
+  the device boundary mocked.
+- Thirty Rust tests, strict Clippy for both launcher targets, seven main
+  runtime and build verifiers, and 18 Ubuntu renderer captures pass. The
+  Ubuntu launcher retains the glibc 2.39 floor. Windows validation covers a
+  GUI cross-build and linting. Source and launcher hashes are in the
+  [open sketch refresh record](evidence/open-sketch-refresh.json).
+
+## Sketch and board pickers and ticket dashboard
+
+- Thirty Rust tests pass, including resize of the same open picker at
+  100–200% scaling, visible confirmation controls, reopening on the current
+  board, repeated board search and folder chooser results.
+- The worker passes 102 checks in isolation. History, search, preparation,
+  resources, shared storage and Developer Access fixtures pass as well.
+  Project routing checks cover source files, validation before opening a new
+  window and refusal of invalid or occupied folders.
+- The main portal passes 42 tests. The dashboard layout passes at 100–200%
+  Qt scales, including the wide filter row, aligned laptop fields, count
+  tiles inset from the ribbon and the short dashboard's scroll area.
+- The rebuilt Ubuntu x64 launcher passes 18 Glow previews on an owned Xvfb
+  display and retains the glibc 2.39 floor. The Windows x64 GUI launcher passes
+  cross-build and Clippy. Native Windows desktop and physical USB verification
+  remain pending. Source and launcher hashes are recorded in
+  [picker-layout verification](evidence/picker-layout-verification.json).
+
+## November 15 — shared Bootstrap and renderer follow-up
 
 The November 15 handoff follow-up is recorded in
 `evidence/handoff-2026-11-15.json`: local glass lifecycle, Bootstrap console/parser
-and repaired serial/platform fixtures pass. Lite source/launcher bytes are
-unchanged from the four passing native Windows/Ubuntu jobs at `6739cb0`; changed
-follow-up Python files retain their separate native qualification limits.
+and repaired serial/platform fixtures pass. At that checkpoint the Lite sources
+and launchers matched the four passing native Windows/Ubuntu jobs at `6739cb0`.
+The follow-up Python files had their own native qualification.
 
 ## November 14 — one physical package store and cleanup
 
