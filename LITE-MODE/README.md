@@ -306,6 +306,8 @@ qualification remain pending. See [VERIFICATION.md](VERIFICATION.md).
 ## Bootstrap and releases
 
 Lite is included in the public ZIP and Ubuntu per-user Bootstrap installation.
+The shared ZIP supplies the Windows CP210x and CH34x USB drivers and the
+WebView2 installer used by Bootstrap.
 Git checkouts copy tracked application files; public ZIPs carry a generated
 `.mcu-flasher-sources.json`. New committed application folders/files enter both
 without another folder-list edit. Private state, runtimes, caches and development

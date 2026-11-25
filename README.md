@@ -44,14 +44,14 @@ has not yet been verified on physical hardware.
 2. Extract it to a folder you can write to, and keep the folder together.
 3. Continue with [First launch](#first-launch).
 
-The download already includes the private Windows Python runtime, so it is the
-quickest way to start on Windows.
+The ZIP includes the private Windows Python runtime, the CP210x and CH34x USB
+drivers and the WebView2 installer. On Windows, Bootstrap can get Arduino CLI
+through winget.
 
 ## Clone with Git
 
-The Windows Python runtime and USB driver installers are stored with
-[Git LFS](https://git-lfs.com). Install Git LFS before cloning, or Windows
-setup will find only placeholder files.
+Install Git LFS before cloning on Windows so the checkout has the component
+installers that Bootstrap can use. [Git LFS](https://git-lfs.com)
 
 ```bash
 git lfs install

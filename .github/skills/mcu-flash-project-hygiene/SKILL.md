@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, dated source-revision records, package publication and public release integrity."
+description: "Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, dated source-revision records, package publication and public release integrity and Windows installer selection."
 ---
 
 # MCU Flasher Project Hygiene
@@ -75,6 +75,11 @@ a packaged Windows release.
   cannot remove live caches.
 
 ## File distribution conventions
+
+Build public ZIPs from a committed revision with `direct/build_release.py`.
+The ZIP includes the complete private Windows runtime. The committed
+`.gitattributes` selects CP210x, CH34x and WebView2 under `installers/`.
+Verify the packaged installers against their Git LFS receipts.
 
 Files generated at runtime or holding user-specific state belong in dedicated
 subdirectories, not the project root:

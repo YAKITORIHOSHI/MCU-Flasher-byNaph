@@ -27,6 +27,12 @@
 MCU_Flasher binary
 MCU_Flasher-arm64 binary
 
+# Public archives bundle the USB drivers and WebView2.
+/installers/* export-ignore
+/installers/CH34x -export-ignore
+/installers/CP210x -export-ignore
+/installers/MicrosoftEdgeWebview2Setup.exe -export-ignore
+
 # Git LFS binary installers
 installers/*.exe filter=lfs diff=lfs merge=lfs -text
 installers/**/*.exe filter=lfs diff=lfs merge=lfs -text

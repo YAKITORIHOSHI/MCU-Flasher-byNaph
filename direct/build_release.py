@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package committed sources, hydrated installers and the private Windows Python.
+"""Package committed sources, selected Windows installers and private Windows Python.
 
 Uses only the standard library. Never cleans or modifies the working runtime,
 settings, sketches or caches. Run with Python 3.10+ from either supported host.
@@ -232,6 +232,7 @@ def build(output, report_dir):
 
     with tempfile.TemporaryDirectory(prefix='release-', dir=report_dir) as staging:
         temporary = Path(staging) / 'release.zip'
+        # The commit's export attributes select the same installers as GitHub source downloads.
         process = subprocess.Popen(['git', 'archive', '--format=tar', commit], cwd=ROOT,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:

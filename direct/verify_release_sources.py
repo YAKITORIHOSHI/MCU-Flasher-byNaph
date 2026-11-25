@@ -7,9 +7,11 @@ import errno
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -116,6 +118,19 @@ class ReleaseSourceChecks(unittest.TestCase):
         self.assertIn('desktop/crates/core/tests/project_service.rs', omitted)
         self.assertIn('audit/migration/source-inventory.json', omitted)
         print(f'Committed source selection: {len(included)} included, {len(omitted)} developer files omitted.')
+
+    def test_committed_archive_retains_usb_drivers_and_webview2_only(self):
+        payload = subprocess.check_output(
+            ['git', 'archive', '--format=tar', 'HEAD', 'installers'], cwd=ROOT,
+            env={**os.environ, 'GIT_LFS_SKIP_SMUDGE': '1'}, timeout=30)
+        with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+            names = {member.name for member in archive if member.isfile()}
+
+        self.assertIn('installers/CH34x/CH341SER.exe', names)
+        self.assertIn('installers/CP210x/CP210xVCPInstaller_x64.exe', names)
+        self.assertIn('installers/MicrosoftEdgeWebview2Setup.exe', names)
+        self.assertEqual({name for name in names if not name.startswith(
+            ('installers/CH34x/', 'installers/CP210x/'))}, {'installers/MicrosoftEdgeWebview2Setup.exe'})
 
 
 class ReleaseArchiveChecks(unittest.TestCase):

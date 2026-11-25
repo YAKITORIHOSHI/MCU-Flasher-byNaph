@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain hidden AI edit history and its reverts, per-user Windows components with remembered permission prompts, SMB-safe source saves and release packaging, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
+description: "Maintain hidden AI edit history and its reverts, per-user Windows components with remembered permission prompts, SMB-safe source saves and release packaging, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity and Windows installer selection."
 ---
 
 # MCU Flasher Project Hygiene
@@ -361,7 +361,9 @@ preparation; do not classify it with disposable `env` / `.venv-linux` or omit it
 just because Git ignores it. Windows must not depend on system/PATH Python.
 Use `direct/build_release.py` after committing release sources. It combines
 committed defaults, verified materialized LFS installers and the local private
-Windows runtime, then verifies every archived file. Missing runtime files must
+Windows runtime, then verifies every archived file. The committed `.gitattributes`
+selects the CP210x and CH34x driver folders and the WebView2 installer for public
+archives. Hydrate and verify the selected LFS files for the release ZIP. Missing runtime files must
 stop packaging. GitHub source archives alone are not a packaged Windows release.
 Place project files directly at the ZIP root, with `main/`, `src/` and
 `LAUNCHER/` beside the root entry files; never add a checkout-name wrapper.

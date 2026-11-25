@@ -58,7 +58,8 @@ uses the same build tools, boards and libraries. To open and use it, see the
 ## Requirements
 
 - MCU Flasher's first-launch setup (Bootstrap), which Lite runs automatically
-  the first time it is opened.
+  the first time it is opened. On Windows, the shared release ZIP supplies
+  the CP210x and CH34x USB drivers and the WebView2 installer.
 - Rust only to rebuild the executables, not to use them.
 
 ## Known limitations

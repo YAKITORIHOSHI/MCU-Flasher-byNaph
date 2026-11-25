@@ -1,6 +1,6 @@
 ---
 name: mcu-verify
-description: "Verify serial unplug and replug, one row per board, the assistant list, AI edit reverts, Windows component sources and prompts, Lite's remembered window, picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify serial unplug and replug, one row per board, the assistant list, AI edit reverts, Windows component sources, release installer selection and prompts, Lite's remembered window, picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
@@ -22,6 +22,9 @@ widening tolerances or dropping a scale.
 Release archive fixtures use Git index modes on SMB hosts. Unsupported chmod on
 the owned scratch ZIP must retain verified 0755/0644 ZIP entry modes; real access
 errors must prevent publication. Keep complete archive/runtime/hash validation.
+Verify that the committed archive retains the CP210x and CH34x driver folders
+and WebView2 under `installers/`. Check the packaged installer bytes against
+their Git LFS receipts.
 
 Ghost Sketch publication handles SMB/GVfs refusing rename over an existing empty
 folder: only EEXIST/ENOTEMPTY permits the POSIX fallback, after rechecking the

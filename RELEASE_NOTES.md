@@ -1,7 +1,7 @@
 # MCU Flasher by Naph v11 — Release Notes
 
 **Version:** v11 (Stable) · **Download:**
-[`MCU_Flasher-v11.zip`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/latest)
+[`MCU_Flasher-v11.zip`](https://github.com/YAKITORIHOSHI/MCU-Flasher-byNaph/releases/latest/download/MCU_Flasher-v11.zip)
 
 **Platforms:** Windows 10/11 (AMD64) · Ubuntu 24.04+ (amd64, ARM64) ·
 Linux Mint 22.x/23.x (amd64) · Fedora 44+ (x86_64, aarch64) · macOS 14+ (Intel, Apple Silicon)
@@ -80,7 +80,7 @@ see the [README](README.md).
 | `LAUNCHER/` | One launcher per system: `WINDOWS.exe`, `UBUNTU`, `UBUNTU_ARM64`, `LINUX_MINT`, `FEDORA`, `FEDORA_ARM64` and `MacOS.command` |
 | `mcu_flash_gui.py`, `main/`, `src/` | The application, its offline editor, fonts, icons and themes |
 | `src/_python/` | The private Windows Python runtime and its packages, so Windows needs no system Python |
-| `installers/` | Windows installers: CP210x and CH34x USB drivers, and Microsoft WebView2, Arduino CLI, MSYS2 and Python for PCs without winget |
+| `installers/` | Windows CP210x and CH34x USB drivers and the Microsoft WebView2 installer |
 | `LITE-MODE/` | MCU Flasher Lite for Ubuntu and Windows |
 | `soft_reset/` | Recovery sketches for ESP32, ESP8266, AVR, STM32, RP2040, SAMD, nRF52, Renesas and Teensy boards |
 | `index_json/` | Board package catalogs |
