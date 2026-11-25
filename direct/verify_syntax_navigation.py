@@ -134,8 +134,8 @@ class SyntaxNavigationChecks(unittest.TestCase):
         jobs = self.queued_workers()
         self.panel._run_manual_check()
         self.finish_job(jobs, 0)
-        warnings = [diag for diag in self.panel._all_diagnostics if diag["severity"] == "warning"]
-        self.assertEqual([diag["line"] for diag in warnings], [4])
+        problems = [diag for diag in self.panel._all_diagnostics if "semicolon" in diag["message"]]
+        self.assertEqual([(diag["line"], diag["severity"]) for diag in problems], [(4, "error")])
         self.assertEqual(self.source.read_bytes(), original)
         self.panel._on_row_double_clicked(self.panel._table.item(0, 3))
         self.assertEqual(self.locations[0]["line"], 4)

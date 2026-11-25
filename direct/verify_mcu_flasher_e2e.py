@@ -411,7 +411,9 @@ class TestTier1_R4_HardwareState_AgentSkills(BaseE2ETestCase):
         data = json.loads(cache_file.read_text("utf-8"))
         hw = data.get("hardware", {})
         self.assertTrue(hw.get("board_selected"))
-        self.assertEqual(hw.get("board_name"), "Arduino Uno")
+        # One row per board: a downloaded Arduino core names it "Arduino UNO".
+        self.assertEqual(hw.get("board_name"), bridge.current_board)
+        self.assertEqual(hw.get("board_name", "").casefold(), "arduino uno")
 
     def test_r4_port_selection_syncs_to_project_state(self):
         """Selecting a COM port updates mcu_connected and port in project_state.json."""

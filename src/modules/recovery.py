@@ -24,3 +24,8 @@ class RecoveryBudget:
             index = len(self._failures)
             self._failures.append(now)
             return self.delays[index] if index < len(self.delays) else None
+
+    def reset(self) -> None:
+        """Start over after a new physical event, such as a replugged board."""
+        with self._lock:
+            self._failures.clear()

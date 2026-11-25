@@ -12,6 +12,8 @@
   const SETTLE_MS = 350;             // Output stopped, so a complete frame has landed.
   const BUSY_PAINT_MS = 1500;        // An animated interface never goes quiet.
   const PLAIN_TEXT_QUIET_MS = 8000;  // Plain text then silence: a question or error to read.
+  const INLINE_SETTLE_MS = 700;      // An inline assistant draws into the normal screen, then waits.
+  const INLINE_BUSY_MS = 2500;       // Or keeps animating there.
 
   // Full-screen interfaces switch to the alternate screen or capture the mouse.
   // ConPTY consoles forward the mouse request but keep the alternate screen to
@@ -38,10 +40,11 @@
     clearTimeout: id => clearTimeout(id),
   };
 
-  function create(term, onReady, clock = realClock) {
+  function create(term, onReady, clock = realClock, options = {}) {
     let finished = false;
     let timer = null;
     let firstPaint = null;
+    let firstText = null;
     let lastOutput = clock.now();
 
     function arm(delay) {
@@ -74,7 +77,24 @@
         return;
       }
       firstPaint = null;
-      if (cells === 0) return;
+      if (cells === 0) {
+        firstText = null;
+        return;
+      }
+      if (options.inline) {
+        // A stray prompt character decides nothing until more is on screen.
+        if (cells < MINIMUM_CELLS) {
+          firstText = null;
+          return;
+        }
+        if (firstText === null) firstText = now;
+        if (quiet >= INLINE_SETTLE_MS || now - firstText >= INLINE_BUSY_MS) {
+          finish("inline");
+        } else {
+          arm(Math.max(16, INLINE_SETTLE_MS - quiet));
+        }
+        return;
+      }
       if (quiet >= PLAIN_TEXT_QUIET_MS) {
         finish("text");
       } else {
@@ -95,6 +115,7 @@
         timer = null;
         finished = false;
         firstPaint = null;
+        firstText = null;
         lastOutput = clock.now();
       },
     };

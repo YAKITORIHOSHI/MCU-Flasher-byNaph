@@ -6,6 +6,9 @@ the main prepared Python environment, especially Windows env/ over src/_python.
 Discover the main native manifests and configured downloaded libraries read-only
 before redirecting the environment. Exact bundled/native definitions survive
 unresolved refresh rows; never restore an invalid default board selection.
+List each build target once: `one_row_per_target` merges the bundled list with
+downloaded copies, rows carry platform/MCU/ID, and saved names resolve through
+`canonical()`, which never guesses from a name alone.
 Resources Boards lists downloaded definitions, while Libraries inventories both
 products' installed/downloaded libraries and framework samples. Keep bounded
 sample reads, ZIP viewing without extraction, opaque file IDs, cancellable latest
@@ -62,8 +65,11 @@ before removing their source. Preserve settings, projects, recovery history and
 unknown files. Each package's file progress updates one row. Lite preflight needs
 headless/portal dependencies, not WebEngine or LLVM; reuse an owned installed
 runtime safely even when its older launcher cannot parse --lite. Consolidation
-runs off the protocol thread with resource Stop; retain a startup sketch through
+runs off the protocol thread; retain a startup sketch and the last board through
 busy catalog/cleanup work and dispatch it only once the worker is idle.
+That cleanup and a catalog refresh are Lite's own start (`starting_up()`): Stop is
+off with a reason, and closing the window is allowed and cancels it safely. Stop
+stays available for preparation the user started.
 
 Reuse the main history helpers against Lite's settings and private settings lock:
 10 original sketch paths and 5 exact board names, bumped first without duplicates.
@@ -90,7 +96,8 @@ its own registry, and claims only try the other's lock so neither deadlocks.
 The first selector keeps a port: a USB drop keeps the claim and Lite reselects
 its returning port without connecting; only another port, No port or closing
 releases it. Both hosts use the same claim code.
-Open sketch is the initial dialog on a launch without `--project`. Parent Browse
+Open sketch is the initial dialog on a launch without `--project` and offers the
+last sketch no other window has open, opening nothing by itself. Parent Browse
 to its Lite window and retain the path on cancel. The worker resolves and
 validates folders or source-file paths. A different valid sketch launches an
 independent window with its canonical folder as `--project`. Project, board and
@@ -99,12 +106,20 @@ dimmed backdrop, the board picker stays above
 Resources and Escape closes the top one. Dialog action rows use `action_row()`;
 a centered layout given a scrolling window's remaining height would spread its
 buttons across it. Use `picker_window` for the full frame and title-bar budget.
+Open sketch and Resources share `DIALOG_SIZE`. Resources shows the list on the left
+and the sample code beside it from 760x430 points, else one scrolling column; keep
+column widths whole points so no scrollbar appears with nothing to scroll.
 Scroll board results and recent sketches below fixed path/search and action
 controls. Reset the sent query on every edit; a regular search can highlight its
 first candidate without applying a target until confirmation.
 
-Light is the launch default; the SVG Light/Dark button changes visuals without
-reinitializing fonts, logs or selections. Keep Status and USB Port in separate
+`src/preferences.rs` keeps how the window was left in the state folder's
+`window.json`: theme, size, maximized, monitor tab, Follow, line ending, speeds and
+board. Apply it before the first frame, write it atomically once it has settled,
+repair every value, and never read or write it in previews or tests. The worker
+reads only the two speeds and reselects the board through the `restore` flag; a
+port is never restored. Light is the first default; the SVG Light/Dark button
+changes visuals without reinitializing fonts, logs or selections. Keep Status and USB Port in separate
 fixed-height containers.
 The mode label/icon describe the active theme; its tooltip names the switch.
 One color role each: yellow = primary action or selected tab, coral = Stop,
@@ -146,7 +161,8 @@ handoff. Assign Windows children suspended to the shared owned Job helper;
 reserve POSIX leader identity until group retirement. Never use unverified PID
 taskkill or retire another process. Check silent/dripping/exited-parent cases.
 Avoid promotional banners, footer slogans and unused
-monitor reservations. Serial send controls stay in Connection.
+monitor reservations. Serial send controls and the upload speed stay in Connection;
+the monitor baud belongs to the Serial monitor's status row.
 Source filename links open the original source directory via the native file
 manager off the GUI thread, with errors reported in Lite. Preview must never
 launch it. Honor operation-owned progress keys without replacing diagnostics;
@@ -154,8 +170,8 @@ removing decorative marks must retain boxed-table padding.
 
 Use `cargo check --locked`, `cargo clippy --locked --all-targets -- -D warnings`
 and `cargo test --locked`, plus `python -B tools/verify.py`,
-`tools/verify_preparation.py` and `tools/verify_history_search.py` for behavior
-changes. The Rust checks render streaming monitors without a native window.
+`tools/verify_preparation.py`, `tools/verify_shared_store.py` and
+`tools/verify_history_search.py` for behavior changes. The Rust checks render streaming monitors without a native window.
 The verifiers use owned
 temporary fixtures; never compile, clean, download into, or probe live projects
 or attach real serial devices during verification. Save evidence in `evidence/`

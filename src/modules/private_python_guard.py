@@ -86,36 +86,43 @@ def _heal_private_runtime_if_needed(target_dir: Path) -> bool:
                 installer = candidates[0]
                 break
 
-    if not installer or not installer.is_file():
-        return False
-
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         log_dir = _PROJECT_ROOT / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+        log = log_dir / "python_heal_guard.log"
         # Windows repair never writes to Ubuntu's .venv-linux.
-        install_cmd = [
-            str(installer),
-            "/quiet",
-            "InstallAllUsers=0",
-            f"TargetDir={target_dir}",
-            "AssociateFiles=0",
-            "Shortcuts=0",
-            "Include_launcher=0",
-            "InstallLauncherAllUsers=0",
-            "PrependPath=0",
-            "/log",
-            str(log_dir / "python_heal_guard.log"),
-        ]
-        res = subprocess.run(
-            install_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            timeout=180,
-        )
-        if res.returncode != 0:
-            return False
+        if installer and installer.is_file():
+            install_cmd = [
+                str(installer),
+                "/quiet",
+                "InstallAllUsers=0",
+                f"TargetDir={target_dir}",
+                "AssociateFiles=0",
+                "Shortcuts=0",
+                "Include_launcher=0",
+                "InstallLauncherAllUsers=0",
+                "PrependPath=0",
+                "/log",
+                str(log),
+            ]
+            res = subprocess.run(
+                install_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                timeout=180,
+            )
+            if res.returncode != 0:
+                return False
+        else:
+            # No bundled installer: winget downloads and verifies the same Python.
+            modules = str(Path(__file__).resolve().parent)
+            if modules not in sys.path:
+                sys.path.insert(0, modules)
+            from windows_components import install_private_python
+            if not install_private_python(target_dir, log=log)[0]:
+                return False
         verified = subprocess.run(
             [str(target_dir / "python.exe"), "-I", "-B", "-c",
              "import sys, encodings; assert sys.version_info >= (3, 8)"],

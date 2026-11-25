@@ -846,7 +846,10 @@ def main():
         except Exception:
             pass
 
+    from src.modules import app_identity
+    app_identity.claim_process()
     app = QApplication(sys.argv)
+    app_identity.claim_application(app)
     # No dashed focus lines: tabs change by mouse and the text keeps keyboard focus.
     app.setStyleSheet("* { outline: none; }")
     theme_mode = os.environ.get("MCU_FLASHER_VIEWER_THEME")

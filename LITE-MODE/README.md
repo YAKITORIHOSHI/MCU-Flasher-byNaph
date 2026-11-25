@@ -43,9 +43,9 @@ native executables.
 
 ## Workbench
 
-1. **Open sketch** appears when Lite starts without a sketch path. Use **Browse**
-   to pick a folder, or enter a folder or source-file path. Choose **Open sketch**
-   to confirm. A sketch folder contains a saved `.ino`, `.cpp` or `.c` file at its
+1. **Open sketch** appears when Lite starts without a sketch path. It offers your
+   last sketch, so Enter reopens it. Use **Browse** to pick a folder, or enter a
+   folder or source-file path. Choose **Open sketch** to confirm. A sketch folder contains a saved `.ino`, `.cpp` or `.c` file at its
    root. You can also drop a folder or source file into the workspace.
    Save in your usual editor. Lite refreshes the open sketch's root sources
    and file list in the background while idle. **Recent sketches** and
@@ -60,11 +60,13 @@ native executables.
 2. **Board** searches the bundled official PlatformIO catalog by board name,
    ID, vendor, platform, MCU or framework. Multiple words match across these
    fields; exact names/IDs rank first, and misspellings offer labeled closest
-   matches. **Recent boards** retains the last 5 selections. Select the exact
+   matches. Each build target is one row, showing its `platform / MCU / ID`, however
+   many downloaded copies describe it. **Recent boards** retains the last 5 selections. Select the exact
    board; Lite uses the main app's catalog default for its platform and framework,
    with no separate selector. Earlier Lite framework choices are ignored.
-   No board or port is automatically chosen. Both histories persist in Lite's
-   private settings.
+   Lite reopens with the board it was left with; another sketch's window starts
+   without one, and no port is ever chosen automatically. Both histories persist
+   in Lite's private settings.
 3. **Compile and Upload prepare their tools automatically.** Main and Lite use
    one native package store, so prepared tools are used directly. Only missing
    requirements are downloaded once. The check
@@ -74,10 +76,11 @@ native executables.
    including the main app's prepared store. Select a row to use that board.
    **Resources > Libraries** lists installed and downloaded libraries from both
    apps, Arduino's library folder and prepared frameworks. Select a library for
-   all sample sketches, C/C++ files and headers. ZIP samples open without extraction.
-   The native read-only paper viewer supports syntax colors, source selection,
+   all sample sketches, C/C++ files and headers, with the chosen file's code beside
+   the list (below it in narrow or short windows). ZIP samples open without extraction.
+   The native read-only viewer supports syntax colors, source selection,
    Copy code, Ctrl+F, case matching, Previous/Next and F3/Shift+F3. Escape leaves
-   the find field before closing Resources. **Find more libraries** searches the
+   the find field before closing Resources. **Resources > Find more** searches the
    PlatformIO registry and installs the displayed version into the shared store.
 4. **Compile**, **Upload** and **Clean** call the existing backend actions.
    Compile is enabled only with a sketch and configured board/framework. Upload
@@ -94,9 +97,9 @@ native executables.
    dependencies and firmware bytes still verify. Switching back to a previously
    compiled board can reuse its own build. Changed or missing outputs and Clean
    require compilation again. There is no Skip Compile checkbox.
-5. **Build monitor** shows action output. **Serial monitor** shows device output;
-   **Connection** contains port selection, baud, Connect/Disconnect, sending and
-   CR/LF controls. Selecting a
+5. **Build monitor** shows action output. **Serial monitor** shows device output
+   and holds the monitor's baud rate. **Connection** contains port selection, upload
+   speed, Connect/Disconnect, sending and CR/LF controls. Selecting a
    port does not open it; Connect uses the main app's passive serial connection.
    Baud changes request no reset. Upload retains the backend's monitor handoff.
 
@@ -110,8 +113,9 @@ The results scroll inside the dialog and the search, count and confirmation
 controls stay visible as you resize.
 
 The header's **Light mode / Dark mode** button names the active theme and changes the complete interface,
-including monitor colors and dialogs. Light is the default at every launch.
-Theme changes retain selections, logs and scroll positions. Status and USB port
+including monitor colors and dialogs. Lite reopens as it was left: theme, window size
+or maximized state, monitor tab, Follow, line ending, speeds and board. Light is used
+until you choose Dark. Theme changes retain selections, logs and scroll positions. Status and USB port
 details have separate bordered containers. The compact header and controls leave
 the remaining height to the monitor; there are no promotional banners or footer.
 Colors have one meaning each: yellow marks primary actions (Compile, Upload,
@@ -150,10 +154,12 @@ Both monitors have Follow, Copy and display-only Clear controls, selectable
 output, separate histories and a bounded 4,000-line view. Only visible log rows
 are drawn. Fixed row heights, a fixed viewport and reserved scrollbars keep output
 steady as long or partial lines arrive and when switching monitors. **Stop stays
-visible** while idle or busy. It enables only for cancellable preparation,
-search, compilation or upload connection, and its tooltip explains idle,
+visible** while idle or busy. It enables only for preparation you started, search,
+compilation or upload connection, and its tooltip explains idle, starting,
 stopping, cleanup and protected firmware-write/restart states. Closing Lite
 is held while a command, compilation, download or firmware operation is active.
+Lite's own start (reading the board list, tidying older tools) never offers Stop:
+it ends by itself, and closing the window then ends it safely.
 There is deliberately no editor, assistant, cloud session or Reset action.
 Uploader and download progress updates replace their own activity row. Completed
 warnings/errors remain in history, and decorative-mark removal preserves table
@@ -181,7 +187,8 @@ Default writable state is separate from both the main app and original sketches:
 | Ubuntu | `${XDG_DATA_HOME:-~/.local/share}/mcu-flasher-lite` |
 | Windows | `%LOCALAPPDATA%\mcu-flasher-lite` |
 
-That directory owns the backend snapshot, settings, staged sketches and caches.
+That directory owns the backend snapshot, settings, staged sketches, caches and
+`window.json`, the small file that remembers how the window was left.
 Board packages and installed libraries use the shared store below. Original root sources are read only; protected original
 cache/journal trees are not copied. The optional `MCU_LITE_STATE` override must be
 absolute. `MCU_LITE_PYTHON` can name a compatible interpreter, and `MCU_LITE_ROOT`
@@ -212,8 +219,9 @@ its complete inventory and file bytes match the retained copy. Across drives,
 migration verifies a staged copy before retiring the old one. Cleanup preserves
 settings, staged projects, recovery history and unknown folders. It defers safely
 when another window is using the packages. Each package's `Package files:` status
-updates one line in the Build monitor. Cleanup runs off the command thread and
-Stop cancels it. A sketch supplied at launch waits for startup work to finish.
+updates one line in the Build monitor. Cleanup runs off the command thread as part
+of starting, and closing Lite ends it safely. A sketch supplied at launch, or the
+board Lite was left with, waits for this work to finish.
 
 Windows keeps any short-path junctions under its dedicated
 `<drive>:\.mcu-flasher-lite\<state-hash>` namespace (or within Lite state when
@@ -274,7 +282,7 @@ reading settings, enumerating ports or touching hardware. The capture options
 `--preview-resources` support isolated virtual-display layout checks.
 `--preview-recents` adds explicitly synthetic history paths for previewing the
 `--preview-projects` and `--preview-boards` dialogs.
-`--preview-dark` captures the alternate palette without changing the launch default.
+`--preview-dark` captures the alternate palette without changing the remembered theme.
 `--preview-sketch` displays synthetic filenames for checking the folder-link UI.
 `--preview-controls` selects the compact controls view and `--preview-error`
 shows a synthetic long diagnostic. `--preview-resource-boards` opens board tools.

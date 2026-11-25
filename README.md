@@ -61,8 +61,8 @@ cd MCU-Flasher-byNaph
 
 Run your system's launcher from the clone, for example `LAUNCHER\WINDOWS.exe`
 on Windows or `./LAUNCHER/UBUNTU` on Ubuntu. On Windows, the first launch
-installs the private Python runtime into `src\_python\` from the bundled
-installer. A clone is never updated automatically; run `git pull` to get the
+installs the private Python runtime into `src\_python\` with winget or the
+bundled installer. A clone is never updated automatically; run `git pull` to get the
 latest version.
 
 ## First launch
@@ -70,7 +70,7 @@ latest version.
 1. Open the `LAUNCHER` folder and run the entry for your system (table above).
 2. **Bootstrap** prepares a private Python runtime, the required packages, the
    board list and the default boards' tools (Arduino Uno, NodeMCU, ESP32 Dev
-   Module), plus the CP210x and CH34x USB drivers on Windows, in its own setup window. Linux may ask for your password to install system packages.
+   Module), plus the CP210x and CH34x USB drivers on Windows, in its own setup window. Linux may ask for your password to install system packages; Windows asks for permission once, for the USB drivers.
    **Technical details** shows the installer output.
 3. Choose or create a project, then select a board and serial port in the
    **Controls** bar. On Linux and macOS, the first **Compile** for any other
@@ -96,6 +96,8 @@ latest version.
 | Go to definition | Ctrl+Click or F12 |
 | Add, rename or delete files | The **+** chip and the context menu on source tabs |
 | Watch serial output | The **Serial Monitor** tab; the baud rate follows `Serial.begin()` |
+| Use an AI assistant | **AI Assistant**, then choose one from the list; **Download** gets one that is not there yet |
+| Take an AI edit back | **AI Changes** → **Revert edit** or **Revert session** |
 | Boards, libraries and examples | **Resources** |
 | Recover a stuck board | **Settings** → **Soft Reset** or **Hard Reset** for the selected board |
 | Show hidden toolbars | **View → Show All Toolbars** |

@@ -1,5 +1,5 @@
 //! Installed resources and an in-process, read-only sample viewer.
-use super::{Palette, Tone, action_row, button, picker_row};
+use super::{Palette, Tone, action_row, bold, button, picker_row};
 use eframe::egui::{self, RichText};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -20,6 +20,8 @@ struct InstalledBoard {
     name: String,
     platform: String,
     mcu: String,
+    #[serde(default)]
+    id: String,
     frameworks: Vec<String>,
     #[serde(skip)]
     search: String,
@@ -29,6 +31,28 @@ struct InstalledBoard {
 struct Sample {
     id: String,
     name: String,
+}
+
+/// How a list fits its place: stacked above its code, or a column of this height.
+#[derive(Clone, Copy)]
+pub(super) enum Fit {
+    Stacked,
+    Column(f32),
+}
+
+impl Fit {
+    /// A stacked list ends with its rows; a column keeps its whole height.
+    fn shrinks(self) -> bool {
+        matches!(self, Self::Stacked)
+    }
+
+    /// Rows may use this much; `used` is what the column already spent.
+    fn list_height(self, used: f32) -> f32 {
+        match self {
+            Self::Stacked => 300.0,
+            Self::Column(height) => (height - used).max(48.0),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -105,6 +129,7 @@ impl ResourceBrowser {
             name: "Arduino Uno [atmelavr:uno]".into(),
             platform: "atmelavr".into(),
             mcu: "ATmega328P".into(),
+            id: "uno".into(),
             frameworks: vec!["arduino".into()],
             search: "arduino uno atmelavr uno atmega328p".into(),
         }];
@@ -158,8 +183,9 @@ impl ResourceBrowser {
                         .unwrap_or_default()
                         .into_iter()
                         .map(|mut item| {
-                            item.search = format!("{} {} {}", item.name, item.platform, item.mcu)
-                                .to_lowercase();
+                            item.search =
+                                format!("{} {} {} {}", item.name, item.platform, item.mcu, item.id)
+                                    .to_lowercase();
                             item
                         }),
                 );
@@ -203,11 +229,12 @@ impl ResourceBrowser {
         }
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui, boards: bool, idle: bool) -> Vec<Value> {
+    pub fn show(&mut self, ui: &mut egui::Ui, boards: bool, idle: bool, fit: Fit) -> Vec<Value> {
         let palette = Palette::from_context(ui.ctx());
+        let top = ui.cursor().top();
         let mut commands = vec![];
         if !boards && !self.library.is_empty() {
-            self.sample_view(ui, &mut commands);
+            self.sample_view(ui, &mut commands, fit);
             return commands;
         }
         action_row(ui, ui.available_width() < 330.0, 34.0, |ui| {
@@ -230,14 +257,13 @@ impl ResourceBrowser {
             ui.colored_label(palette.log_color(super::LogTone::Error), &self.error);
         }
         let filter = ui.add(
-            egui::TextEdit::singleline(&mut self.query)
+            field(&mut self.query)
                 .hint_text(if boards {
                     "Filter board, platform or MCU (Ctrl+F)"
                 } else {
                     "Filter installed libraries (Ctrl+F)"
                 })
-                .desired_width(f32::INFINITY)
-                .char_limit(200),
+                .desired_width(f32::INFINITY),
         );
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
             filter.request_focus();
@@ -252,11 +278,18 @@ impl ResourceBrowser {
             ui.label(format!("{} downloaded board definitions", rows.len()));
             egui::ScrollArea::vertical()
                 .id_salt("installed-boards")
-                .max_height(300.0)
+                .auto_shrink([false, fit.shrinks()])
+                .max_height(fit.list_height(ui.cursor().top() - top))
                 .show_rows(ui, 48.0, rows.len(), |ui, range| {
                     for index in range {
                         let item = rows[index];
-                        let detail = format!("{} · {}", item.mcu, item.frameworks.join(", "));
+                        let detail = format!(
+                            "{} / {} / {} · {}",
+                            item.platform,
+                            item.mcu,
+                            item.id,
+                            item.frameworks.join(", ")
+                        );
                         let response = ui
                             .add_enabled_ui(idle, |ui| picker_row(ui, &item.name, &detail, false))
                             .inner;
@@ -281,7 +314,8 @@ impl ResourceBrowser {
             let mut selected = None;
             egui::ScrollArea::vertical()
                 .id_salt("installed-libraries")
-                .max_height(300.0)
+                .auto_shrink([false, fit.shrinks()])
+                .max_height(fit.list_height(ui.cursor().top() - top))
                 .show_rows(ui, 48.0, rows.len(), |ui, range| {
                     for index in range {
                         let item = rows[index];
@@ -305,15 +339,14 @@ impl ResourceBrowser {
                 commands.push(request);
             }
             if self.libraries.is_empty() && !self.loading {
-                ui.label(
-                    "No installed libraries found. Use Find more libraries below to install one.",
-                );
+                ui.label("No installed libraries found. Use Find more to install one.");
             }
         }
         commands
     }
 
-    fn sample_view(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Value>) {
+    fn sample_view(&mut self, ui: &mut egui::Ui, commands: &mut Vec<Value>, fit: Fit) {
+        let top = ui.cursor().top();
         if button(
             ui,
             "All libraries",
@@ -327,12 +360,12 @@ impl ResourceBrowser {
             self.source_id.clear();
             return;
         }
-        ui.label(RichText::new(&self.library_name).strong());
+        ui.add(egui::Label::new(RichText::new(&self.library_name).font(bold(14.0))).truncate())
+            .on_hover_text(&self.library_name);
         ui.add(
-            egui::TextEdit::singleline(&mut self.sample_query)
+            field(&mut self.sample_query)
                 .hint_text("Filter all sample files")
-                .desired_width(f32::INFINITY)
-                .char_limit(200),
+                .desired_width(f32::INFINITY),
         );
         let query = self.sample_query.to_lowercase();
         let rows: Vec<_> = self
@@ -342,25 +375,19 @@ impl ResourceBrowser {
             .collect();
         ui.label(format!("{} sample files", rows.len()));
         let mut selected = None;
+        let height = match fit {
+            Fit::Stacked if !self.source_id.is_empty() => 112.0,
+            _ => fit.list_height(ui.cursor().top() - top),
+        };
         egui::ScrollArea::vertical()
             .id_salt("sample-files")
-            .max_height(if self.source_id.is_empty() {
-                300.0
-            } else {
-                112.0
-            })
-            .show_rows(ui, 28.0, rows.len(), |ui, range| {
+            .auto_shrink([false, fit.shrinks()])
+            .min_scrolled_height(height)
+            .max_height(height)
+            .show_rows(ui, FILE_ROW_HEIGHT, rows.len(), |ui, range| {
                 for index in range {
                     let item = rows[index];
-                    if ui
-                        .add(
-                            egui::Button::selectable(item.id == self.source_id, &item.name)
-                                .wrap_mode(egui::TextWrapMode::Truncate)
-                                .min_size(egui::vec2(ui.available_width(), 24.0)),
-                        )
-                        .on_hover_text(&item.name)
-                        .clicked()
-                    {
+                    if file_row(ui, &item.name, item.id == self.source_id).clicked() {
                         selected = Some(item.id.clone());
                     }
                 }
@@ -384,8 +411,9 @@ impl ResourceBrowser {
         if self.samples.is_empty() && !self.loading {
             ui.label("This library has no sample files.");
         }
-        if !self.source_id.is_empty() && !self.loading {
-            self.code_view(ui);
+        if matches!(fit, Fit::Stacked) && !self.source_id.is_empty() && !self.loading {
+            ui.separator();
+            self.code_view(ui, Fit::Stacked);
         }
         if self.loading {
             ui.label("Reading sample files…");
@@ -393,6 +421,25 @@ impl ResourceBrowser {
         if !self.error.is_empty() {
             ui.label(&self.error);
         }
+    }
+
+    /// The right column: the chosen sample, or what to choose.
+    pub fn code_pane(&mut self, ui: &mut egui::Ui) {
+        if self.source_id.is_empty() || self.loading {
+            let palette = Palette::from_context(ui.ctx());
+            let text = if !self.source_id.is_empty() {
+                "Reading sample files…"
+            } else if self.library.is_empty() {
+                "Choose a library, then one of its sample files, to read the code here."
+            } else {
+                "Choose a sample file to read its code here."
+            };
+            ui.add_space(8.0);
+            ui.label(RichText::new(text).color(palette.muted));
+            return;
+        }
+        let height = ui.available_height();
+        self.code_view(ui, Fit::Column(height));
     }
 
     fn search(&mut self) {
@@ -434,9 +481,33 @@ impl ResourceBrowser {
         self.reveal = true;
     }
 
-    fn code_view(&mut self, ui: &mut egui::Ui) {
-        ui.separator();
-        ui.label(RichText::new(&self.source_name).strong());
+    fn code_view(&mut self, ui: &mut egui::Ui, fit: Fit) {
+        let palette = Palette::from_context(ui.ctx());
+        let top = ui.cursor().top();
+        ui.horizontal(|ui| {
+            let count = if self.find.is_empty() {
+                String::new()
+            } else if self.matches.is_empty() {
+                "No matches".into()
+            } else {
+                format!("{} / {} matches", self.current + 1, self.matches.len())
+            };
+            let reserved = if count.is_empty() { 0.0 } else { 124.0 };
+            let width = (ui.available_width() - reserved).max(40.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(width, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(width);
+                    let name = RichText::new(&self.source_name).font(bold(14.0));
+                    ui.add(egui::Label::new(name).truncate())
+                        .on_hover_text(&self.source_name);
+                },
+            );
+            if !count.is_empty() {
+                ui.label(RichText::new(count).color(palette.muted));
+            }
+        });
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
             self.focus_find = true;
         }
@@ -447,12 +518,14 @@ impl ResourceBrowser {
         if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F3)) {
             step = 1;
         }
-        ui.vertical(|ui| {
+        let wide = ui.available_width() >= 560.0;
+        let tools = if wide { TOOLS_WIDTH } else { 0.0 };
+        action_row(ui, !wide, 32.0, |ui| {
+            let width = (ui.available_width() - tools).max(80.0);
             let response = ui.add(
-                egui::TextEdit::singleline(&mut self.find)
+                field(&mut self.find)
                     .hint_text("Find in code (Ctrl+F)")
-                    .desired_width(f32::INFINITY)
-                    .char_limit(200),
+                    .desired_width(width),
             );
             self.find_id = Some(response.id);
             if self.focus_find {
@@ -472,16 +545,23 @@ impl ResourceBrowser {
                 };
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.checkbox(&mut self.case_sensitive, "Aa").changed() {
+                if ui
+                    .checkbox(&mut self.case_sensitive, "Aa")
+                    .on_hover_text("Match case")
+                    .changed()
+                {
                     self.search();
                 }
-                if ui.small_button("Previous").clicked() {
+                let tool = |ui: &mut egui::Ui, label: &str, width: f32| {
+                    button(ui, label, "", Tone::Secondary, egui::vec2(width, 32.0)).clicked()
+                };
+                if tool(ui, "Previous", 88.0) {
                     step = -1;
                 }
-                if ui.small_button("Next").clicked() {
+                if tool(ui, "Next", 62.0) {
                     step = 1;
                 }
-                if ui.small_button("Copy code").clicked() {
+                if tool(ui, "Copy code", 100.0) {
                     ui.ctx().copy_text(self.source.clone());
                 }
             });
@@ -491,14 +571,6 @@ impl ResourceBrowser {
                 (self.current as isize + step).rem_euclid(self.matches.len() as isize) as usize;
             self.reveal = true;
         }
-        if !self.find.is_empty() {
-            ui.label(if self.matches.is_empty() {
-                "No matches".into()
-            } else {
-                format!("{} / {} matches", self.current + 1, self.matches.len())
-            });
-        }
-        let palette = Palette::from_context(ui.ctx());
         if self
             .layout
             .as_ref()
@@ -507,6 +579,15 @@ impl ResourceBrowser {
             self.layout = Some((palette.dark, cpp_layout(&self.source, palette)));
         }
         let layout = &self.layout.as_ref().unwrap().1;
+        // The frame's margins and rim and the horizontal scrollbar stay inside.
+        let chrome = 20.0 + ui.spacing().scroll.allocated_width();
+        let reading = match fit {
+            // A short window scrolls to the code, which then nearly fills it.
+            Fit::Stacked => (ui.ctx().content_rect().height() - 130.0).clamp(96.0, 340.0),
+            Fit::Column(height) => (height - (ui.cursor().top() - top) - chrome)
+                .max(80.0)
+                .floor(),
+        };
         let mut layouter = |ui: &egui::Ui, _text: &dyn egui::TextBuffer, _width: f32| {
             ui.fonts_mut(|fonts| fonts.layout_job(layout.clone()))
         };
@@ -517,11 +598,14 @@ impl ResourceBrowser {
             .show(ui, |ui| {
                 egui::ScrollArea::both()
                     .id_salt((&self.source_id, "source-code"))
-                    .max_height(340.0)
+                    .auto_shrink([false, fit.shrinks()])
+                    .min_scrolled_height(reading)
+                    .max_height(reading)
                     .show(ui, |ui| {
                         let mut text = self.source.as_str();
                         let mut output = egui::TextEdit::multiline(&mut text)
                             .code_editor()
+                            .frame(false)
                             .layouter(&mut layouter)
                             .desired_rows(12)
                             .desired_width(ui.available_width().max(280.0))
@@ -550,6 +634,61 @@ impl ResourceBrowser {
                     });
             });
     }
+}
+
+const FILE_ROW_HEIGHT: f32 = 32.0;
+/// Aa, Previous, Next and Copy code beside the find field.
+const TOOLS_WIDTH: f32 = 342.0;
+
+fn field(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text)
+        .margin(egui::vec2(6.0, 6.0))
+        .char_limit(200)
+}
+
+/// One sample file; its exact height keeps long lists aligned while scrolling.
+fn file_row(ui: &mut egui::Ui, name: &str, selected: bool) -> egui::Response {
+    let palette = Palette::from_context(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), FILE_ROW_HEIGHT),
+        egui::Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        if selected || response.hovered() {
+            let fill = if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                palette.highlight
+            };
+            ui.painter().rect(
+                rect,
+                0,
+                fill,
+                egui::Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, palette.border),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let galley = egui::WidgetText::from(RichText::new(name).color(palette.ink)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (rect.width() - 20.0).max(1.0),
+            egui::TextStyle::Body,
+        );
+        let top = rect.center().y - galley.size().y * 0.5;
+        ui.painter()
+            .galley(egui::pos2(rect.left() + 10.0, top), galley, palette.ink);
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            selected,
+            name,
+        )
+    });
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(name)
 }
 
 fn cpp_layout(source: &str, palette: Palette) -> egui::text::LayoutJob {
@@ -656,6 +795,7 @@ mod tests {
     #[test]
     fn native_viewer_find_keys_select_matches_without_editing_the_source() {
         let ctx = egui::Context::default();
+        super::super::configure(&ctx);
         let mut browser = ResourceBrowser::default();
         browser.preview(true);
         let original = browser.source.clone();
@@ -670,7 +810,8 @@ mod tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| browser.code_view(ui));
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| browser.code_view(ui, Fit::Stacked));
                 },
             );
         }

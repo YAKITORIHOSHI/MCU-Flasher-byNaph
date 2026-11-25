@@ -1,9 +1,19 @@
 ---
 name: mcu-flash-project-hygiene
-description: "Maintain SMB-safe source saves and release packaging, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
+description: "Maintain hidden AI edit history and its reverts, per-user Windows components with remembered permission prompts, SMB-safe source saves and release packaging, automatic Lite board targets, one shared main/Lite package store, verified duplicate consolidation and read-only resource discovery. Maintain MCU Flasher metadata, protected caches/journals, atomic source saves, sync-lock handling, persistent per-user Ubuntu installation, Ghost Sketch ownership, account ticket deletion, dated source-revision records, package publication, isolated Lite process lifecycles, complete Bootstrap source inventories and public release integrity."
 ---
 
 # MCU Flasher Project Hygiene
+
+The AI edit history stays inside the sketch's build cache and hidden on every host;
+`hide_ai_history` restores Windows' hidden attribute after copies without opening a
+saved file. A revert reads that history and writes only sketch sources, through the
+ordinary review journal and atomic saves. Agents the app downloads live in its own
+per-user data folder and are never put into a sketch or a release.
+
+Windows permission prompts are remembered per component and installer bytes
+(`PromptLedger`, per user). Component archives are checked against their publisher's
+checksum, unpacked inside their own staging folder and replaced file by file.
 
 Release packaging may run from an SMB/GVfs checkout. Only an unsupported host
 chmod on its owned scratch ZIP is optional; ZIP entry permissions, every byte

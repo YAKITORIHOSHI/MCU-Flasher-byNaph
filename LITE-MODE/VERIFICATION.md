@@ -1,5 +1,25 @@
 # Lite verification
 
+## Remembered window, two-column Resources and start-up Stop
+
+- Forty-one Rust tests pass. They cover the state file's round trip and damaged or
+  impossible values, dark mode before the first frame, the size kept while
+  maximized, the last board and sketch dispatched once after the worker's first
+  idle state, Resources' columns at 100-200% and its stacked form, the shared dialog
+  size, and the baud in the Serial monitor with the upload speed in Connection.
+- The 113 worker checks cover one row per build target, saved names that follow
+  their board without guessing, restored speeds and boards, and Lite's own start
+  without Stop. The 20 shared-store checks require a stale Stop to change nothing
+  and closing during that start to cancel it safely. Preparation (60), history and
+  search (28), resources (15) and Developer Access (25) pass as well.
+- The rebuilt Ubuntu launcher passes 28 renderer captures and an end-to-end run on
+  an owned Xvfb with throwaway state: it reopens dark from its first frame with its
+  size, monitor tab, speeds and board. It keeps the glibc 2.39 floor. Real Uno and
+  Nano builds and nine upload reuse decisions pass in an owned fixture.
+- The Windows launcher passes a GUI cross-build and Clippy. Native Windows and
+  physical USB verification remain pending. Hashes are in the
+  [window state and resources record](evidence/window-state-and-resources.json).
+
 ## Open sketch source refresh
 
 - The 60 preparation checks cover an atomic external save while idle, an

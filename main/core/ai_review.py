@@ -33,10 +33,12 @@ from PySide6.QtCore import QObject, Signal, QTimer, QFileSystemWatcher, Qt
 
 from main.core.file_utils import (
     ensure_file_writable,
+    hide_hidden_attribute,
     get_ai_review_state_file,
     AIEditBackupStore,
     retry_transient_file_operation,
 )
+from main.core import ai_revert
 
 # A restored review whose file no longer holds the AI content it recorded was
 # changed while MCU Flasher was not watching this project (the app was closed
@@ -449,6 +451,7 @@ class AIReviewManager:
                 os.fsync(stream.fileno())
             ensure_file_writable(target)
             retry_transient_file_operation(lambda: os.replace(temp_path, target))
+            hide_hidden_attribute(target)
         except Exception:
             try:
                 os.close(fd)
@@ -1075,6 +1078,7 @@ class AIReviewManager:
             entry = source[-1]
             path = entry.get("path", "")
             target = Path(path)
+            existed = target.exists()
             target_exists = bool(entry.get("undoExists" if undoing else "appliedExists", True))
             target_content = str(entry.get("undoContent" if undoing else "appliedContent", ""))
 
@@ -1104,6 +1108,7 @@ class AIReviewManager:
                 "fileName": entry.get("fileName") or Path(path).name,
                 "appliedContent": target_content,
                 "exists": target_exists,
+                "workspaceShapeChanged": existed != target_exists,
                 "history": self._ai_history_summary_locked(),
             }
 
@@ -1112,6 +1117,197 @@ class AIReviewManager:
 
     def redo_ai_edit_decision(self, force: bool = False) -> dict:
         return self._apply_ai_history_decision("redo", force=bool(force))
+
+    # ── Reverting one edit ───────────────────────────────────────────────
+
+    _REVERT_SUFFIXES = frozenset((".ino", ".cpp", ".c", ".h", ".hpp", ".txt"))
+
+    def _history_root(self) -> Optional[Path]:
+        store = self._ai_backup_store
+        return Path(store.root) if store else None
+
+    def list_ai_sessions(self) -> list[dict]:
+        """Saved sessions of this sketch, newest first. Reads headers; use a worker."""
+        root, store = self._history_root(), self._ai_backup_store
+        project = self.project_dir
+        if root is None or project is None:
+            return []
+        sessions = ai_revert.list_sessions(root, skip=Path(store.session_dir))
+        for session in sessions:
+            for item in session["edits"]:
+                target = ai_revert.project_path(item, project)
+                item["path"] = str(target) if target else item["path"]
+                item["available"] = self._revert_target_allowed(target)
+        return sessions
+
+    def _revert_target_allowed(self, target: Optional[Path]) -> bool:
+        return (target is not None and target.suffix.lower() in self._REVERT_SUFFIXES
+                and not any(part.startswith(".") for part in target.relative_to(self.project_dir).parts)
+                and self._path_is_in_project(target))
+
+    def get_ai_edit(self, edit_id: str) -> dict:
+        """One edit with both complete texts: a history card, or a saved session's record."""
+        root = self._history_root()
+        if edit_id.startswith("archive:"):
+            if root is None:
+                raise ValueError("This sketch has no saved AI sessions.")
+            return ai_revert.read_edit(root, edit_id)
+        record = next((dict(item) for item in self._published_changes if item.get("id") == edit_id), None)
+        if record is None:
+            raise ValueError("This AI edit is no longer in the history.")
+        if not record.get("previewTruncated"):
+            return record
+        # Cards of large files keep a preview; the session record keeps the whole text.
+        review_id, store = str(record.get("reviewId", "")), self._ai_backup_store
+        if store:
+            with store._lock:
+                number = store._review_to_edit.get(review_id)
+                saved = dict(store._records.get(number) or {})
+            if saved:
+                return dict(record, beforeContent=saved["beforeContent"], content=saved["afterContent"])
+        for session in ai_revert.list_sessions(root) if root else ():
+            for item in session["edits"]:
+                if review_id and item["reviewId"] == review_id:
+                    saved = ai_revert.read_edit(root, item["id"])
+                    return dict(record, beforeContent=saved["beforeContent"], content=saved["content"])
+        raise ValueError("Only a preview of this edit was kept, so it cannot be reverted.")
+
+    def plan_ai_revert(self, edit_ids, restore: bool = False) -> dict:
+        """What reverting these edits (newest first) would leave; writes nothing.
+
+        ``restore`` puts each file back as it was before its oldest edit here. Without
+        it only the edits' own lines are undone and later changes stay.
+        """
+        project = self.project_dir
+        if project is None:
+            return {"success": False, "error": "No sketch is open."}
+        files, problems = {}, []
+        for edit_id in edit_ids:
+            try:
+                record = self.get_ai_edit(str(edit_id))
+            except (OSError, ValueError) as exc:
+                problems.append(str(exc))
+                continue
+            target = ai_revert.project_path(record, project)
+            if not self._revert_target_allowed(target):
+                problems.append(f"{Path(str(record.get('path', ''))).name or 'A file'} is not a source of this sketch.")
+                continue
+            key = self._path_key(target)
+            if key in self._published_snapshots:
+                return {"success": False, "pending": str(target),
+                        "error": f"Accept or reject the pending review of {target.name} first."}
+            item = files.get(key)
+            if item is None:
+                try:
+                    current, exists = self._read_text_exact(target), True
+                except FileNotFoundError:
+                    current, exists = "", False
+                except OSError as exc:
+                    return {"success": False, "error": f"Could not read {target.name}: {exc}"}
+                item = files[key] = {"path": str(target), "fileName": target.name, "exists": exists, "current": current,
+                                     "resultExists": exists, "result": current, "undone": 0, "blocked": 0, "ids": []}
+            item["ids"].append(str(edit_id))
+            before, after = str(record.get("beforeContent", "")), str(record.get("content", ""))
+            before_exists = bool(record.get("beforeExists", True))
+            after_exists = bool(record.get("afterExists", True))
+            if restore:
+                item.update(resultExists=before_exists, result=before if before_exists else "", undone=item["undone"] + 1)
+            elif not before_exists or not after_exists:
+                # The edit created or deleted the file: undo that only while nothing else changed it.
+                if item["resultExists"] == after_exists and (not after_exists or item["result"] == after):
+                    item.update(resultExists=before_exists, result=before if before_exists else "", undone=item["undone"] + 1)
+                else:
+                    item["blocked"] += 1
+            elif not item["resultExists"]:
+                item["blocked"] += 1
+            else:
+                text, undone, blocked = ai_revert.undo_change(item["result"], before, after)
+                item["result"], item["undone"] = text, item["undone"] + undone
+                item["blocked"] += blocked
+        if not files:
+            return {"success": False, "error": problems[0] if problems else "There is no AI edit to revert."}
+        planned = list(files.values())
+        for item in planned:
+            item["changed"] = (item["exists"], item["current"]) != (item["resultExists"], item["result"])
+        return {"success": True, "restore": bool(restore), "files": planned, "problems": problems,
+                "blocked": sum(item["blocked"] for item in planned),
+                "changed": sum(item["changed"] for item in planned)}
+
+    def apply_ai_revert(self, plan: dict) -> dict:
+        """Write one reviewed plan; AI Undo takes it back. Nothing is written after a newer change."""
+        changes = [item for item in plan.get("files", ()) if item.get("changed")]
+        if not changes:
+            return {"success": False, "error": "These files already are as they were before the edit."}
+        with self._pending_ai_lock:
+            for item in changes:
+                target = Path(item["path"])
+                if not self._path_is_in_project(target) or self._path_key(target) in self._pending_ai_edits:
+                    return {"success": False, "error": f"Accept or reject the pending review of {target.name} first."}
+                try:
+                    current, exists = self._read_text_exact(target), True
+                except FileNotFoundError:
+                    current, exists = "", False
+                except OSError as exc:
+                    return {"success": False, "error": f"Could not read {target.name}: {exc}"}
+                if (current, exists) != (item["current"], item["exists"]):
+                    return {"success": False, "conflict": True,
+                            "error": f"{target.name} changed since this preview. Open the revert again."}
+            written = []
+            try:
+                for item in changes:
+                    written.append(item)
+                    self._publish_revert(Path(item["path"]), item["resultExists"], item["result"])
+            except Exception as exc:
+                for item in reversed(written):
+                    try:
+                        self._publish_revert(Path(item["path"]), item["exists"], item["current"])
+                    except Exception:
+                        pass
+                return {"success": False, "error": f"Could not revert {Path(written[-1]['path']).name}: {exc}"}
+            stamp = datetime.now().astimezone()
+            for item in changes:
+                key = self._path_key(item["path"])
+                review_id = f"revert:{key}:{time.time_ns()}"
+                entry = {
+                    "decisionId": f"{self._next_ai_review_revision_locked()}:{key}", "reviewId": review_id,
+                    "project": str(self.project_dir or ""), "path": item["path"], "fileName": item["fileName"],
+                    "action": "reverted", "prompt": "", "promptSource": "external", "promptSourceVersion": 0,
+                    "promptSources": [], "appliedExists": item["resultExists"], "appliedContent": item["result"],
+                    "undoExists": item["exists"], "undoContent": item["current"],
+                }
+                if self._ai_backup_store:
+                    try:
+                        entry["backupFile"] = self._ai_backup_store.record_edit(
+                            {"reviewId": review_id, "project": entry["project"], "path": item["path"],
+                             "beforeExists": item["exists"], "afterExists": item["resultExists"],
+                             "beforeContent": item["current"], "content": item["result"]},
+                            status="reverted", decision_entry=entry)
+                    except Exception:
+                        pass
+                self._ai_decision_history.append(entry)
+                note = (f"Reverted {stamp:%b %d, %Y %H:%M}; "
+                        + ("the file is as it was before this edit." if plan.get("restore") else
+                           "lines edited again since were kept." if item["blocked"] else "later changes were kept."))
+                for card in self._ai_changes:
+                    if card.get("id") in item["ids"] and card.get("status") != "pending":
+                        card["status"], card["statusNote"] = "reverted", note
+            del self._ai_decision_history[:-self._ai_decision_history_limit]
+            self._ai_decision_redo.clear()
+            try:
+                self._commit_pending_ai_edits_locked()
+            except Exception:
+                pass
+        self._history_changed()
+        return {"success": True, "files": [{"path": item["path"], "fileName": item["fileName"],
+                                            "exists": item["resultExists"], "content": item["result"],
+                                            "shapeChanged": item["exists"] != item["resultExists"]} for item in changes]}
+
+    def _publish_revert(self, target: Path, exists: bool, content: str) -> None:
+        if exists:
+            self._write_text_atomic(target, content)
+        elif target.exists():
+            ensure_file_writable(target)
+            target.unlink(missing_ok=True)
 
     def shutdown(self) -> None:
         state_path = self._ai_review_state_path

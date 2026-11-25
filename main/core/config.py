@@ -47,6 +47,7 @@ _INSTANCE_PREFERENCE_DEFAULTS = {
     "serial_autoscroll": True,
     "serial_ansi_clear": True,
     "serial_line_wrap": True,
+    "serial_collapse_noise": True,
     "skip_compile": True,
 }
 

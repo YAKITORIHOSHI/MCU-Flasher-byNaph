@@ -396,7 +396,10 @@ def create_window(*, theme_mode=None):
             self.status_label.setText("Cancelling...")
             self.cancel_btn.setEnabled(False)
 
+    from src.modules import app_identity
+    app_identity.claim_process()
     app = QApplication.instance() or QApplication(sys.argv)
+    app_identity.claim_application(app)
     register_fonts()
     install_no_focus_lines(app)
     mode = theme_mode or get_theme_mode()

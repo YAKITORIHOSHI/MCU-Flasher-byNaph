@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain unplug-safe serial ports, one row per board, the AI Assistant's agent list, reverts of AI edits, prompt-free Windows setup with winget, expandable notification and device cards, the structural syntax checker, Lite's remembered window, fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -37,6 +37,66 @@ before setup. Early child exit runs real slot cleanup; recovery creates an absen
 slot exclusively and never overwrites an unrelated owner. Verify the real child
 path in bootstrap-handoff.yml on Windows 3.11/3.14, with app_update fixtures locally.
 
+## November 26: unplugging, boards, assistants, reverts and quiet Windows setup
+
+**Serial ports.** `main/core/port_inventory.py` compares cheap hotplug evidence and the
+full scan runs only when it changes, off the GUI thread. One connection is closed
+once, through `monitor_connection.retire_connection`, after its own reader has left
+the driver (`track_reader`): the operating system reuses handle numbers at once, so
+closing under a reader, or twice, can shut an unrelated handle and take the app down.
+A board returning under another name is reselected only when `usb_identity` matches
+exactly one new port. Never touch Qt widgets or a serial object from a port worker.
+`SerialTextDecoder(collapse=...)` summarizes runs of unreadable bytes; readable text,
+isolated control bytes and the complete copy history stay. Verify
+`verify_port_replug.py`, `verify_ubuntu_ports.py` and `verify_serial_reader.py`.
+
+**Boards.** `main/core/board_labels.py` shows one row per build target (platform and
+board ID). MCU Flasher's download names the row, then Arduino IDE's, then PlatformIO's;
+Arduino CLI opt-ins stay separate and same-name boards keep their ID. Nothing on disk
+is deleted. Saved names resolve through `canonical()`/`resolve_label`, which returns
+nothing rather than guess. Both products use it. Verify `verify_board_labels.py`.
+
+**AI Assistant.** Opening it shows `agent_chooser.py`'s list: Gemini, Codex, Claude,
+Hermes and OpenCode (Built-in). `main/core/ai_agents.py` finds agents by files only and
+never runs one to check; `src/modules/agent_setup.py` downloads one only when chosen,
+for this account, from its maker, as complete files, and ends the whole tree on Cancel.
+`start_agent(id)` starts it, the button beside Restart returns to the list, hide/reveal
+keeps the session and reopening lists the last choice first. Bootstrap still prepares
+only OpenCode and the never-update rule is unchanged. Tests patch
+`last_agent`/`remember_agent`. Verify `verify_ai_agents.py`, `verify_ubuntu_ai_panel.py`
+and `verify_assistant_startup.py`.
+
+**Reverting AI edits.** `main/core/ai_revert.py` reads the saved sessions and plans;
+`AIReviewManager.plan_ai_revert`/`apply_ai_revert` write through the ordinary journal.
+AI Changes offers Revert edit and Revert session, also for earlier sessions, with a
+preview (`ai_revert_dialog.py`) that names what cannot be undone because it changed
+since. The history stays in the sketch, hidden on every host (`hide_ai_history`), and
+fixtures never touch a real one. Verify `verify_ai_revert.py`.
+
+**Windows setup.** `src/modules/windows_components.py` uses winget for what it packages
+(WebView2, Arduino CLI, Node.js LTS, private Python) and the bundled installers
+otherwise; the USB drivers are not in winget. Arduino CLI and Node.js unpack for the
+user from checked archives, so neither asks for permission. `PromptLedger` asks once
+per component and installer; setup or repair asks again on purpose. A normal start
+elevates nothing: the warm-launch snapshot compares the Python that will run the app.
+Verify `verify_windows_components.py`, `verify_bootstrap_updates.py`.
+
+**Lite.** `LITE-MODE/AGENTS.md` owns its rules: the window reopens as it was left
+(`src/preferences.rs`), the worker's first state gates every request, Resources puts
+sample code beside its list, Open sketch is as large, the monitor baud sits in the
+Serial monitor and the upload speed in Connection.
+
+**Cards and windows.** Notifications and Compatible Devices are `card_browser.py`
+documents: one selectable text, painted glass sheets, details on the arrow or Enter,
+the newest notification first. Helpers call `app_identity.claim_process` before their
+first window and `claim_application` after, so one icon stands for the app. The
+Windows terminal uses the shared header (New PowerShell, New CMD, Clear, End session).
+
+**Syntax.** `src/syntax_statements.py` follows scopes and judges only line ends where
+two operands meet; `src/syntax_checker.py` reads each conditional branch. Keep zero
+false warnings over valid library code; a typed file's results replace only its own
+rows in the list. Verify `verify_syntax_checker.py` and `verify_syntax_navigation.py`.
+
 ## November 14: shared prepared resources and short portals
 
 Lite's first native entry dispatches the shared Bootstrap with `--lite`, which
@@ -67,8 +127,9 @@ cross-device copies before retiring their source. Preserve settings, projects,
 recovery history and unknown content. `Package files:` updates use one progress
 key per package, preserving ordinary compiler diagnostics. Verify shared_store,
 package_jobs and lite_launch in owned fixtures. Run consolidation off the command
-thread with ordinary resource Stop authority; retain the startup sketch until
-the worker is idle, then dispatch it once.
+thread as part of Lite's start: no Stop, and closing the window ends it safely.
+Retain the startup sketch and the last board until the worker is idle, then
+dispatch each once.
 
 Developer Access aligns the three equal-width filters with Search at laptop
 widths and measures a shared height from the styled controls. Give count tiles
@@ -100,9 +161,9 @@ its own settings lock and only tries the peer's, retrying with backoff inside a
 claims before slower backend cleanup.
 
 Port claims are first-come on Ubuntu and Windows. `_clear_disconnected_port`
-keeps the claim and records `_returning_port`; when the device returns the port
-monitor calls `_restore_returned_port` (main reselects and reconnects; Lite's
-backend override only reselects). Releasing a claim on disconnect let a USB drop
+keeps the claim and records `_returning_port`; when the device returns,
+`_restore_if_returned` calls `_restore_returned_port` (main reselects and
+reconnects; Lite's backend override only reselects). Releasing a claim on disconnect let a USB drop
 hand the port to the other app until the board was replugged. The monitor loop
 republishes `annotate_port_owners` lists when other windows' claims change, the
 toolbar disables ports marked occupied, refusals use `port_owner_window` and
@@ -143,8 +204,8 @@ the private `.tools/sysroot` MinGW toolchain.
 Lite applies native egui scaling once and fits on monitor/scale changes. Keep
 Stop visible in idle and busy states; worker stop_state supplies enablement and
 reason-specific tooltips, with immediate operation-phase updates and backend
-revalidation. Never enable it for a portal, catalog refresh, cleanup or protected
-firmware write/restart. Pack entire action scopes before custom painting; wrapped
+revalidation. Never enable it for a portal, catalog refresh, Lite's own start,
+cleanup or protected firmware write/restart. Pack entire action scopes before custom painting; wrapped
 scopes cannot move already-painted children. Reserve solid scrollbar gutters and
 card-shadow clearance, keep the monitor rim inside both scrollbar budgets, and
 use narrow Monitor/Sketch & Connection views. Short monitor layouts and bounded
@@ -422,8 +483,9 @@ whose shell ended by itself; failed starts and renderer loss keep their tab.
 `src/editor/terminal_links.js` adds link providers, OSC 8 handling, copy/paste
 keys, middle-click primary paste and context-menu state; Linux uses a GlassMenu,
 Windows right-click copies a selection or pastes the clipboard through the
-engine. Bootstrap's arduino-cli update installs the MSI and verifies the
-executable's own version; `arduino-cli upgrade` (cores/libraries) never runs.
+engine. Bootstrap's arduino-cli update publishes the official release for this user
+and verifies the executable's own version; `arduino-cli upgrade` (cores/libraries)
+never runs.
 
 ## November 11 follow-up: navigation, glass, motion and updates
 
@@ -1751,8 +1813,8 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
 - Ubuntu alone constrains Click to `>=8.1.8,<8.2` while PlatformIO uses parsing APIs deprecated in Click 8.2. Keep requirements and `check_platformio_click_compatibility` aligned; validate metadata before native imports and route incompatible existing environments into Bootstrap repair. Verify real missing-platform CLI dispatch with deprecations treated as errors. Do not suppress warnings or change Windows dependency ranges.
 - Cloud working-folder guards reject directory junctions on Windows Python 3.11 using the lstat mount-point reparse tag when `Path.is_junction` is unavailable. Preserve the modern method, Ubuntu behavior and ordinary/cloud-placeholder folders. Keep the real native Windows replacement regression and isolated old-Python cases; never follow redirected replacement roots.
 - Ubuntu folder/source pickers use parented Qt dialogs. POSIX PTY input drains a bounded nonblocking byte queue, retaining partial writes, UTF-8, capability replies and paste. Report an input rejected by the 4 MiB bound; never replay queued input after close. Verify Linux pickers and a real local PTY with `direct/verify_ubuntu_runtime.py`, without hardware or authenticated assistant commands.
-- The assistant's terminal stays behind `main/qt/assistant_loader.py` until `src/editor/assistant_readiness.js` sees its interface on xterm's parsed screen. Never gate on raw PTY bytes: OpenCode's kitty graphics probe and sequences split across reads look like text and never become cells. A full-screen interface shows through the alternate screen or mouse capture, because ConPTY forwards only the mouse request. It counts once 8 or more cells are painted and output has settled for 350 ms, or after 1.5 seconds if it is animated. Plain text waits for 8 seconds of silence so a question stays reachable, and **Show startup output** appears after 15 seconds. Both hosts share the script. Linux and macOS report through `OpenCodeSession.report_interface_ready`, which ignores old generations. Windows covers its own page, sends `interface_ready` over its socket, and re-covers on the private OSC 7337 that announces `/exit`; `cmd.exe` must not echo its supervisor line (`do @(`). The loader is deliberately still: no spinner, only a once-a-second elapsed label while it is visible. Verify with `direct/verify_assistant_startup.py`, whose Windows parts are mocked and are not native evidence.
-- Ubuntu's AI pane is `main/qt/posix_ai_panel.py`, a dedicated OpenCode TUI with one protected native PTY. Keep `posix_terminal_panel.py` as the separate project terminal that starts empty until New Bash. Hide/reveal retain the same assistant session and independent container closes are ignored; owning workspace shutdown tears it down. An explicit `/exit` starts a fresh PTY without replaying input. Bound unexpected exit recovery to two restarts per minute, then show Retry OpenCode. Discover native OpenCode off the GUI thread through `main/platforms/ubuntu_opencode.py`, using account PATH and standard user directories without shell startup or downloads. Preserve the Windows assistant path. Verify discovery/lifecycle with `direct/verify_ubuntu_opencode.py` and `direct/verify_ubuntu_ai_panel.py`; run its `--native-renderer` probe under xcb/Xvfb with real Qt/PTY and a fake CLI, never authentication, AI requests, hardware or live caches.
+- The assistant's terminal stays behind `main/qt/assistant_loader.py` until `src/editor/assistant_readiness.js` sees its interface on xterm's parsed screen. Never gate on raw PTY bytes: OpenCode's kitty graphics probe and sequences split across reads look like text and never become cells. A full-screen interface shows through the alternate screen or mouse capture, because ConPTY forwards only the mouse request. It counts once 8 or more cells are painted and output has settled for 350 ms, or after 1.5 seconds if it is animated. Plain text waits for 8 seconds of silence so a question stays reachable, and **Show startup output** appears after 15 seconds. Both hosts share the script. Linux and macOS report through `OpenCodeSession.report_interface_ready`, which ignores old generations. Windows covers its own page, sends `interface_ready` over its socket, and re-covers on the private OSC 7337 that announces `/exit`; `cmd.exe` must not echo its supervisor line (`do @(`). The loader is deliberately still: no spinner and no elapsed-time counter. Verify with `direct/verify_assistant_startup.py`, whose Windows parts are mocked and are not native evidence.
+- Ubuntu's AI pane is `main/qt/posix_ai_panel.py`: the agent list, then the chosen agent's interface in one protected native PTY. Keep `posix_terminal_panel.py` as the separate project terminal that starts empty until New Bash. Hide/reveal retain the same assistant session and independent container closes are ignored; owning workspace shutdown tears it down. An explicit `/exit` starts a fresh PTY without replaying input. Bound unexpected exit recovery to two restarts per minute, then show Retry OpenCode. Discover native OpenCode off the GUI thread through `main/platforms/ubuntu_opencode.py`, using account PATH and standard user directories without shell startup or downloads. Preserve the Windows assistant path. Verify discovery/lifecycle with `direct/verify_ubuntu_opencode.py` and `direct/verify_ubuntu_ai_panel.py`; run its `--native-renderer` probe under xcb/Xvfb with real Qt/PTY and a fake CLI, never authentication, AI requests, hardware or live caches.
 - Bootstrap installs OpenCode only when none exists and never updates, reinstalls or redownloads a working or running one (no OpenCode in `run_update_checks`). Detect by files and running processes, never a `--version` probe: OpenCode open in a terminal made the probe fail, so Windows reinstalled over a locked exe and Ubuntu replaced its binary. Windows `_existing_opencode_installation` adds a psutil-free Toolhelp scan; Ubuntu keeps a certificate-hash-matching owned binary or any discovered CLI. An npm shim counts only while the `bin/opencode.exe` it launches is a real PE, not opencode-ai's sub-1 KB postinstall placeholder (`src/modules/opencode_npm.py`). Only a damaged npm install with no OpenCode running is repaired (`_repair_damaged_opencode`): `npm uninstall -g @opencode/cli` and `opencode-ai`, delete `%APPDATA%\npm\opencode*` files, `npm cache verify`, `npm install -g opencode-ai@latest` with scripts on, then `opencode --version`. npm runs up to 20 minutes for the ~200 MB platform packages and a stopped npm has its whole tree ended, never followed by a second npm. Offline, a damaged install launches with a warning. `_ensure_opencode_config` never rewrites a `config.json` it cannot parse. Verify with `verify_bootstrap_updates.py` and `verify_ubuntu_opencode_setup.py`.
 - Ubuntu Bootstrap verifies or prepares native Arduino CLI and baseline OpenCode releases through `direct/ubuntu/arduino_cli.py` and `opencode_setup.py`. Pin official archive hashes, safely extract only the native executable, serialize installation, certify and atomically promote owned `.ubuntu-tools/` files; preserve external installs, account/auth state and prior working tools on failures. Bootstrap includes esptool in the private runtime plus ripgrep and both clipboard backends. Keep pip destination/configuration isolation Ubuntu-only, retaining download proxy/certificate settings. Verify isolated release fixtures and system prerequisites without live provisioning.
 - ARM64 Qt wheels require Ubuntu media/compression libraries beyond the amd64
@@ -1978,18 +2040,18 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - Preserve line count summaries, review controls, model/undo state and highlight dismissal.
 
 3. **Dedicated AI Assistant Controller (Windows: `src/modules/dedicated_AI.py` & `main/qt/ai_panel.py`; Ubuntu: `main/qt/posix_ai_panel.py`)**
-   - Manages an **OpenCode AI** terminal session rendered directly inside a right-side collapsible panel.
-   - Can be toggled visible/hidden dynamically via the `🤖 AI Assistant` toolbar button or `✖ Hide` header button.
+   - Shows the agent list, then runs the chosen agent's terminal session inside a right-side collapsible panel.
+   - Can be toggled visible/hidden dynamically via the AI Assistant toolbar button or the header's Hide button.
    - `AIController` manages session lifecycle and a file-watcher for AI-applied edits.
    - When AI edits a file, `AIController` reconciles editor state, static green/red review highlights and a notification entry under existing revision/Accept/Reject authority.
-   - Ubuntu keeps a single protected OpenCode TUI, retains it through hide/reveal and starts only empty PTYs during bounded recovery. `main/platforms/ubuntu_opencode.py` owns native installed-CLI discovery and the restart limit; general Bash sessions remain in the Terminal tab.
+   - Ubuntu keeps a single protected assistant PTY, retains it through hide/reveal and starts only empty PTYs during bounded recovery. `main/platforms/ubuntu_opencode.py` owns native OpenCode discovery and the restart limit; general Bash sessions remain in the Terminal tab.
 
 4. **Project Terminal (`src/modules/project_terminal.py` & `main/qt/terminal_panel.py`)**
    - Full-featured integrated terminal using `pywinpty` + `xterm.js` (ConPTY backend).
    - Supports **PowerShell (`pwsh`)** and **Command Prompt (`cmd`)** sessions with dynamic multi-terminal tabs.
-   - Terminal opens with zero tabs. Windows show/reveal/refresh/project changes must not start an engine or shell; only explicit PowerShell/CMD choices create sessions. Use a compact single `+` with an InstantPopup chooser and no split arrow. Hide the empty tab bar and cap short-strip minimum width to its intrinsic hint so Qt's scroll-button reservation cannot leave a gap after a short tab; retain normal scrolling for many sessions. Reset inherited tab margins/selected borders to fit the header. Ubuntu starts empty until New Bash; keep the explicitly opened OpenCode assistant behavior separate. Preserve sessions through passive hide/reveal, gate delayed native resize/focus against current visibility/readiness/session state, and keep idle theme/font choices without pending IPC. Resize through the workspace splitter, without a terminal Full/Restore toggle. Verify lifecycle with `direct/verify_terminal_startup.py` and `direct/verify_posix_terminal_state.py`, and actual painted tab-to-button geometry across themes/scales with `direct/verify_responsive.py`, mocking all child startup and controls.
+   - Terminal opens with zero tabs. Windows show/reveal/refresh/project changes must not start an engine or shell; only explicit PowerShell/CMD choices create sessions. While empty the header shows its title with **New PowerShell** and **New CMD**; beside open tabs a compact single `+` with an InstantPopup chooser and no split arrow replaces them. The empty message keeps its whole width (no alignment flag) and shortens on short panes. Hide the empty tab bar and cap short-strip minimum width to its intrinsic hint so Qt's scroll-button reservation cannot leave a gap after a short tab; retain normal scrolling for many sessions. Reset inherited tab margins/selected borders to fit the header. Ubuntu starts empty until New Bash; keep the explicitly opened OpenCode assistant behavior separate. Preserve sessions through passive hide/reveal, gate delayed native resize/focus against current visibility/readiness/session state, and keep idle theme/font choices without pending IPC. Resize through the workspace splitter, without a terminal Full/Restore toggle. Verify lifecycle with `direct/verify_terminal_startup.py` and `direct/verify_posix_terminal_state.py`, and actual painted tab-to-button geometry across themes/scales with `direct/verify_responsive.py`, mocking all child startup and controls.
    - Switching and spawning shells maintains individual session state, scrollback, and prompt rendering.
-   - Clear removes display/history only; never type `Clear-Host` or `cls` into an active CLI. Kill terminates the selected PTY.
+   - Clear removes display/history only; never type `Clear-Host` or `cls` into an active CLI. End session terminates the selected PTY.
    - Runs as a child process to avoid UI thread contention.
    - Terminal server shutdown must call server_close after shutdown to release its HTTP listener. Verify the real worker stops and the socket is closed with direct/verify_terminal.py, including Python warnings enabled; finalizer warnings can occur even when a process exits successfully.
    - Pass xterm capability replies, Unicode, alternate screens and bracketed paste intact. Acknowledge output after parsing; bound outstanding output and history. Preserve the user's CLI PATH and remove Python host environment overrides from shell environments.
@@ -2016,12 +2078,12 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - `src/modules/launcher.py`: Python entry point for initializing configuration and launching the main GUI.
    - `src/launcher.cpp`: Native C++ executable wrapper that initializes environment variables and launches silently on Windows without popping a console window.
    - `src/launcher.cs`: C# launcher source (compiles to `MCU_Flasher.exe`).
-   - `direct/windows/run.vbs`: Windows bootstrap launcher that normally uses the current user token, hides the console, and requests targeted UAC only for machine-level setup that requires it. The old VBS path forwards here; preserve ASCII/CRLF for Windows Script Host.
+   - `direct/windows/run.vbs`: Windows bootstrap launcher that normally uses the current user token, hides the console, and requests targeted UAC only for the USB drivers, once per installer. The old VBS path forwards here; preserve ASCII/CRLF for Windows Script Host.
    - `direct/ubuntu/setup.py` and `run.sh`: Native venv setup/launch with no system pip writes; `run.sh --repair` explicitly repairs dependencies. Preserve LF shell line endings, project paths with spaces, and `--new-window` forwarding.
 
 7. **Realtime C/C++ Syntax Linter (`src/syntax_checker.py`)**
    - Bounded literal/comment/preprocessor scanner and structural heuristics for root `.ino/.cpp/.c/.h/.hpp`, without executing a compiler.
-   - Checks delimiters and probable missing terminators with accurate ranges; target preprocessing, undeclared symbols/types and library resolution belong to Compile.
+   - Follows scopes and conditional branches (`src/syntax_statements.py`) and reports delimiters, unfinished statements and stray labels with accurate ranges; target preprocessing, undeclared symbols/types and library resolution belong to Compile.
 
 8. **Database & Notification Store (`src/dbs/` & `.mcu_flasher_build_cache/`)**
    - **Per-Sketch Notification Store**: Notifications are persisted per-project inside `<sketch_dir>/.mcu_flasher_build_cache/dbs_notif.json`.
@@ -2153,7 +2215,7 @@ MCU Flasher by Naph/
 │   ├── .handsoff/                   # Portable Python runtime installers (python-*-amd64.exe)
 │   ├── CP210x/                      # Silicon Labs CP210x USB drivers
 │   ├── CH34x/                       # WCH CH340 / CH341 USB serial drivers
-│   ├── arduino-cli.msi              # Bundled Arduino CLI installer
+│   ├── arduino-cli.msi              # Arduino CLI installer for PCs without winget
 │   ├── MicrosoftEdgeWebview2Setup.exe # Bundled WebView2 installer
 │   └── msys2-*.exe                  # Bundled MSYS2 build tools
 │
@@ -2342,7 +2404,7 @@ MCU Flasher by Naph/
 - [ ] **Reset on Baud Change**: Verify toggling the setting in Settings Dialog reboots the MCU on baud change when enabled, and preserves state when disabled.
 - [ ] **Window ownership**: Resize across compact/wide layouts and verify there are no visible top-level widgets except the main window and explicitly requested dialogs/editor. Verify board banner absence.
 - [ ] **Monaco editor**: Verify offline models, dirty tab indicators, drag ordering, keyboard tab navigation and selected/focus contrast in dark/light/Solarized. Verify detach/close/reattach and dirty-buffer renderer recovery.
-- [ ] **Project Terminal**: Verify terminal spawns, multi-terminal tabs work, shell switching (`pwsh` ↔ `cmd`) operates cleanly, and clear/kill functions operate as expected.
+- [ ] **Project Terminal**: Verify terminal spawns, multi-terminal tabs work, shell switching (`pwsh` ↔ `cmd`) operates cleanly, and Clear and End session operate as expected.
 - [ ] **AI Assistant & Edit Highlights**: Verify OpenCode AI panel connects, added/replacement text is static green, removed originals have static red markers/previews, and the dismiss banner clears highlights.
 - [ ] **Remote/UNC Paths**: Verify compilation and upload succeed from a UNC share (`\\server\share\sketch`).
 - [ ] **Syntax Compilation**: Run `python -m py_compile main/mcu_flash_gui.py` — must pass with zero errors.

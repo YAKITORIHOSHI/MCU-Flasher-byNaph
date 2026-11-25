@@ -375,6 +375,39 @@ class PerformanceChecks(unittest.TestCase):
             signals.syntax_errors.disconnect(received.append)
             bridge.deleteLater()
 
+    def test_checking_one_file_keeps_the_other_files_results(self):
+        from types import SimpleNamespace
+        from src import syntax_checker
+        from main.qt.editor_panel import EditorBridgeAPI
+        from main.qt.signals import signals
+        path = str((ROOT / "fixture" / "active.ino").resolve())
+        backend = SimpleNamespace(active_file_path=path, modified_files={})
+        backend.mark_modified = lambda name, dirty: None
+        bridge = EditorBridgeAPI(backend)
+        received = []
+        signals.syntax_errors.connect(received.append)
+        row = lambda name, line, message: {"file": name, "line": line, "message": message, "severity": "error"}
+        try:
+            # A project check listed two files; typing then corrects only the active one.
+            signals.syntax_errors.emit([row("active.ino", 4, "old"), row("helper.cpp", 9, "stays"), row("wifi.h", 2, "stays too")])
+            with patch.object(syntax_checker, "analyze_cpp_syntax", side_effect=[[row("active.ino", 7, "new")], []]):
+                bridge.realtime_check_syntax(path, "one")
+                wait_until(lambda: not bridge._syntax_running)
+                self.assertEqual([(entry["file"], entry["message"]) for entry in received[-1]],
+                                 [("active.ino", "new"), ("helper.cpp", "stays"), ("wifi.h", "stays too")])
+                bridge.realtime_check_syntax(path, "two")
+                wait_until(lambda: not bridge._syntax_running)
+                self.assertEqual([entry["file"] for entry in received[-1]], ["helper.cpp", "wifi.h"])
+            # Clearing (another project) leaves nothing to carry over.
+            signals.syntax_errors.emit([])
+            with patch.object(syntax_checker, "analyze_cpp_syntax", return_value=[row("active.ino", 1, "only")]):
+                bridge.realtime_check_syntax(path, "three")
+                wait_until(lambda: not bridge._syntax_running)
+            self.assertEqual([entry["message"] for entry in received[-1]], ["only"])
+        finally:
+            signals.syntax_errors.disconnect(received.append)
+            bridge.deleteLater()
+
     def test_build_queue_retains_diagnostics_and_event_order(self):
         from main.qt.log_buffer import DiagnosticLogBuffer, LogBuffer
         queue = DiagnosticLogBuffer(400, 4, lambda item: item["text"])
@@ -779,11 +812,15 @@ class PerformanceChecks(unittest.TestCase):
         try:
             wait_until(lambda: not panel._refresh_running)
             view = panel._browser
-            view.document().setMaximumBlockCount(120)
             for number in range(45):
                 panel._append_notification_card({"title": f"Notice {number:03d}", "message": "Fixture message"})
             APP.processEvents()
             bar = view.verticalScrollBar()
+            # Newest first: a reader at the top keeps seeing what just happened.
+            self.assertEqual(bar.value(), 0)
+            self.assertTrue(view.toPlainText().startswith("Notice 044"))
+            rebuilds = []
+            view.set_cards = lambda *args, _original=view.set_cards, **kwargs: (rebuilds.append(1), _original(*args, **kwargs))
             view.setTextCursor(view.document().find("Notice 040"))
             view.setFocus()
             bar.setValue(bar.maximum() // 2)
@@ -795,6 +832,7 @@ class PerformanceChecks(unittest.TestCase):
             self.assertLessEqual(abs(view.cursorRect(anchor).top() - y), 1)
             self.assertEqual(view.textCursor().selectedText(), "Notice 040")
             self.assertTrue(view.hasFocus())
+            self.assertEqual(rebuilds, [], "A new card is added above the others, never by rebuilding them")
             bar.setValue(bar.maximum())
             bar.setSliderDown(True)
             anchor = view.cursorForPosition(QPoint(1, 1))
@@ -1176,7 +1214,7 @@ class PerformanceChecks(unittest.TestCase):
 
     def test_warm_launch_health_and_failed_child_fallback(self):
         # Load only the pure health helpers: never execute bootstrap/setup.
-        names = {"_startup_app_fingerprint", "_startup_compatibility_fingerprint", "_startup_installation_identity", "_startup_required_paths", "_read_startup_health_snapshot", "_write_startup_health_snapshot", "_explicit_setup_requested", "_try_fast_normal_launch"}
+        names = {"_startup_app_fingerprint", "_startup_compatibility_fingerprint", "_startup_installation_identity", "_startup_python_identity", "_startup_required_paths", "_read_startup_health_snapshot", "_write_startup_health_snapshot", "_explicit_setup_requested", "_try_fast_normal_launch"}
         tree = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
         helpers = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[])
         scratch = ROOT / "temp/scratch"
@@ -1209,6 +1247,7 @@ class PerformanceChecks(unittest.TestCase):
             for name in ("zephyr_compat.py", "zephyr_board_aliases.cmake"):
                 (adapter.parent / name).write_text("# isolated Zephyr compatibility fixture", encoding="utf-8")
             scope = {"Path": Path, "sys": sys, "os": os, "time": time, "json": json, "subprocess": subprocess,
+                     "_ORIGINAL_PYTHON_EXECUTABLE": str(fixture / "src/_python/pythonw.exe"),
                      "SCRIPT_DIR": fixture, "GUI_SCRIPT": gui, "STARTUP_HEALTH_FILE": fixture / "health.json",
                      "STARTUP_HEALTH_SCHEMA": 4, "_STARTUP_REQUIRED_PACKAGE_DIRS": ("serial",),
                      "_STARTUP_REQUIRED_PACKAGE_FILES": REQUIRED_FILES,
@@ -1238,6 +1277,17 @@ class PerformanceChecks(unittest.TestCase):
                 child.wait.side_effect = subprocess.TimeoutExpired("fixture", 1)
                 scope["_spawn_main_gui"] = Mock(return_value=(child, None))
                 self.assertTrue(scope["_try_fast_normal_launch"]())
+                # Setup points children at env/, then the next start is src/_python
+                # again, windowed or not: the same launch must stay warm.
+                switched = fixture / "env/Scripts/python.exe"
+                switched.parent.mkdir(parents=True)
+                switched.write_bytes(b"fixture")
+                with patch.object(sys, "executable", str(switched)):
+                    self.assertTrue(scope["_write_startup_health_snapshot"]())
+                self.assertIsNotNone(scope["_read_startup_health_snapshot"]())
+                for other, warm in (("src/_python/python.exe", True), ("other/python.exe", False)):
+                    with patch.dict(scope, {"_ORIGINAL_PYTHON_EXECUTABLE": str(fixture / other)}):
+                        self.assertEqual(scope["_read_startup_health_snapshot"]() is not None, warm, other)
                 for arguments in (["--repair"], ["--plan", "custom-plan.json"]):
                     with patch.object(sys, "argv", ["bootstrap.py", *arguments]):
                         self.assertFalse(scope["_try_fast_normal_launch"]())

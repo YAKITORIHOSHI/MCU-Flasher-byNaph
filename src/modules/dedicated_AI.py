@@ -1,7 +1,7 @@
 """
-MCU Flash GUI — Dedicated OpenCode AI Assistant Controller (pywebview + xterm.js + pywinpty Engine)
+MCU Flash GUI — Dedicated AI Assistant Controller (pywebview + xterm.js + pywinpty Engine)
 
-Renders OpenCode AI inside a native desktop Python window using pywebview (Microsoft Edge WebView2)
+Renders the chosen assistant (OpenCode unless --agent names another) inside a native desktop Python window using pywebview (Microsoft Edge WebView2)
 and xterm.js connected to a ConPTY (pywinpty) backend. Identical to Monaco Editor architecture.
 """
 
@@ -178,6 +178,8 @@ def check_internet_connection(timeout: float = 2.0) -> bool:
 
 # Ensure workspace 'env' site-packages is on sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 AI_STARTUP_PATCH_VERSION = "v22-readiness-no-fallback"
 ENV_DIR = SCRIPT_DIR / "env"
 ENV_SITE_PACKAGES = ENV_DIR / "Lib" / "site-packages"
@@ -376,7 +378,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>OpenCode AI Assistant</title>
+    <title>AI Assistant</title>
     <style>
         html, body {
             margin: 0; padding: 0; width: 100% !important; height: 100% !important;
@@ -391,7 +393,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             margin: 0; padding: 0;
             box-sizing: border-box;
         }
-        /* Covers OpenCode's startup, including what cmd.exe prints, until its interface paints. */
+        /* Covers the assistant's startup, including what cmd.exe prints, until its interface paints. */
         #startup-cover {
             position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 10; box-sizing: border-box;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -448,14 +450,14 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
     <div id="startup-cover" role="status">
-        <div id="startup-title">Starting OpenCode</div>
+        <div id="startup-title">Starting __AGENT_NAME__</div>
         <div id="startup-status">Loading your workspace…</div>
-        <div id="startup-hint" hidden>OpenCode is taking longer than usual. Its first run in a project can take a minute.</div>
+        <div id="startup-hint" hidden>__AGENT_NAME__ is taking longer than usual. Its first run in a project can take a minute.</div>
         <button id="startup-reveal" type="button" hidden>Show startup output</button>
     </div>
     <div id="terminal-container"></div>
     <div id="fallback-container">
-        <div id="fallback-output">MCU Flash GUI — OpenCode AI Terminal\n---------------------------------------\nConnecting to PTY Session...\n</div>
+        <div id="fallback-output">MCU Flash GUI — __AGENT_NAME__ AI Terminal\n---------------------------------------\nConnecting to PTY Session...\n</div>
         <div id="fallback-input-row">
             <span id="fallback-prompt">&gt;</span>
             <input type="text" id="fallback-input" placeholder="Type command here and press Enter..." />
@@ -552,7 +554,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         if (term && window.AssistantReadiness) {
-            readiness = AssistantReadiness.create(term, liftStartupCover);
+            readiness = AssistantReadiness.create(term, liftStartupCover, undefined, {inline: '__AGENT_INLINE__' === 'true'});
             coverStartup(startupStatus.textContent);
             startupReveal.addEventListener('click', () => liftStartupCover('user'));
             // The host announces /exit here: the next session needs the same cover,
@@ -560,7 +562,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
             term.parser.registerOscHandler(7337, () => {
                 term.reset();
                 readiness.reset();
-                coverStartup('Starting a fresh OpenCode session…');
+                coverStartup('Starting a fresh __AGENT_NAME__ session…');
                 return true;
             });
         } else {
@@ -658,10 +660,12 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
 """
 
 
-def get_ai_html() -> str:
+def get_ai_html(agent_name: str = "OpenCode", inline: bool = False) -> str:
     t = _resolve_ai_theme()
     return (
         HTML_CONTENT_TEMPLATE
+        .replace("__AGENT_NAME__", agent_name)
+        .replace("__AGENT_INLINE__", "true" if inline else "false")
         .replace("__THEME_BG__", t["bg"])
         .replace("__THEME_FG__", t["fg"])
         .replace("__THEME_CURSOR__", t["cursor"])
@@ -674,9 +678,12 @@ _RESTART_SEQUENCE = "\x1b]7337;restart\x07"
 
 
 class TerminalServer:
-    def __init__(self, port=8765, target_dir=None, command=None):
+    def __init__(self, port=8765, target_dir=None, command=None, agent=None):
         self.port = port
         self.target_dir = target_dir or os.getcwd()
+        # The chosen assistant (main.core.ai_agents.Agent); None is the built-in OpenCode.
+        self.agent = agent
+        self.agent_name = agent.name if agent is not None else "OpenCode"
         self.command = command or find_opencode_cli() or "opencode"
         self.pty = None
         self.loop = None
@@ -688,23 +695,31 @@ class TerminalServer:
             _ensure_opencode_config()
 
     def _supervised_opencode_command(self, target_dir):
-        """Run OpenCode under a persistent CMD supervisor.
+        """Run the assistant under a persistent CMD supervisor.
 
-        OpenCode's ``/exit`` exits the child CLI, not the container.  The
-        infinite CMD loop immediately launches a fresh session in the same
-        PTY after that command or any unexpected child termination.
+        Its ``/exit`` exits the child CLI, not the container.  The infinite
+        CMD loop immediately launches a fresh session in the same PTY after
+        that command or any unexpected child termination.
         """
         cmd_to_run = self.command or find_opencode_cli() or "opencode"
         if " " in cmd_to_run or os.path.exists(cmd_to_run):
             invocation = f'"{cmd_to_run}"'
         else:
             invocation = cmd_to_run
+        if self.agent is None or self.agent.takes_project:
+            invocation = f'{invocation} "{target_dir}"'
+        node = ""
+        if self.agent is not None:
+            # The app's own Node.js, only for an agent the app downloaded itself.
+            from main.core.ai_agents import agent_prefix, node_directory
+            folder = node_directory() if agent_prefix(self.agent.id).is_dir() else None
+            node = f'{folder};' if folder else ""
         return (
             f'cd /d "{target_dir}" && '
             f'set OPENCODE_DISABLE_AUTOUPDATE=1 && '
-            f'set PATH=%APPDATA%\\npm;%PATH% && cls && '
+            f'set "PATH={node}%APPDATA%\\npm;%PATH%" && cls && '
             # The @ stops cmd.exe echoing this supervisor line before each session.
-            f'for /L %i in (0,0,1) do @( {invocation} "{target_dir}" & '
+            f'for /L %i in (0,0,1) do @( {invocation} & '
             f'timeout /t 1 /nobreak >nul )\r\n'
         )
 
@@ -732,6 +747,8 @@ class TerminalServer:
         from src.modules.ai_prompt_context import PromptInputTracker
         prompt_tracker = PromptInputTracker(target_dir, source="assistant")
 
+        exit_commands = {"/exit"} if self.agent is None or self.agent.id == "opencode" else {"/exit", "/quit"}
+
         def input_requests_exit(raw_data):
             """Detect a complete user-entered /exit line without swallowing it."""
             requested = False
@@ -746,7 +763,7 @@ class TerminalServer:
                     input_escape[0] = True
                     continue
                 if char in ("\r", "\n"):
-                    if input_line[0].strip().casefold() == "/exit":
+                    if input_line[0].strip().casefold() in exit_commands:
                         requested = True
                     input_line[0] = ""
                     continue
@@ -762,7 +779,7 @@ class TerminalServer:
 
         def notify_container_restart():
             notice = _RESTART_SEQUENCE if page_reports_ready[0] else (
-                "\r\n[MCU Flasher] /exit detected. Restarting OpenCode "
+                f"\r\n[MCU Flasher] /exit detected. Restarting {self.agent_name} "
                 "inside the protected AI container…\r\n"
             )
             if self.loop and self.loop.is_running():
@@ -908,13 +925,15 @@ class TerminalServer:
             self.stop()
 
     def run_http_server(self):
+        page = get_ai_html(self.agent_name, bool(self.agent is not None and self.agent.inline))
+
         class Handler(SimpleHTTPRequestHandler):
             def do_GET(self):
                 if self.path == '/' or self.path == '/index.html':
                     self.send_response(200)
                     self.send_header('Content-type', 'text/html')
                     self.end_headers()
-                    self.wfile.write(get_ai_html().encode('utf-8'))
+                    self.wfile.write(page.encode('utf-8'))
                 elif self.path in ('/xterm/xterm.css', '/xterm/xterm.js', '/xterm/xterm-addon-fit.js',
                                    '/assistant_readiness.js'):
                     folder = 'src/editor' if self.path == '/assistant_readiness.js' else 'src/assets/xterm'
@@ -1096,8 +1115,10 @@ def _pre_hide_console_for_conpty():
         pass
 
 
-def run_standalone_ai(target_directory=None):
+def run_standalone_ai(target_directory=None, agent_id="opencode"):
     """Entry point when executed as an independent AI terminal process."""
+    from main.core.ai_agents import agent as agent_spec, find_agent
+    spec = agent_spec(agent_id)
     # When spawned by the main GUI via --launch-ai, the GUI handles pre-flight
     # connection checks and user confirmation. Child process must not display
     # an unparented blocking MessageBox or abort embedding.
@@ -1105,7 +1126,7 @@ def run_standalone_ai(target_directory=None):
     if not is_gui_child and not check_internet_connection():
         msg = (
             "Could not verify an active internet connection.\n\n"
-            "OpenCode AI Assistant typically requires an active internet connection to communicate with cloud AI services.\n\n"
+            f"{spec.name} typically requires an active internet connection to communicate with cloud AI services.\n\n"
             "Would you like to continue launching anyway?"
         )
         if sys.platform == "win32":
@@ -1131,8 +1152,10 @@ def run_standalone_ai(target_directory=None):
     except Exception:
         pass
     port = find_free_pair(8765)
-    opencode_exe = find_opencode_cli() or "opencode"
-    server = TerminalServer(port=port, target_dir=target_dir, command=opencode_exe)
+    if spec.id == "opencode":
+        server = TerminalServer(port=port, target_dir=target_dir, command=find_opencode_cli() or "opencode")
+    else:
+        server = TerminalServer(port=port, target_dir=target_dir, command=find_agent(spec.id) or spec.executables[0], agent=spec)
 
     def run_server_loop():
         try:
@@ -1145,7 +1168,7 @@ def run_standalone_ai(target_directory=None):
 
     url = f"http://127.0.0.1:{port}"
     window_title = f"MCU Flash GUI - OpenCode AI Assistant [{os.getpid()}]"
-    print(f"[INFO] Launching OpenCode AI Terminal at {url}...")
+    print(f"[INFO] Launching {spec.name} AI Terminal at {url}...")
 
     apply_window_icon(window_title)
 
@@ -1252,6 +1275,11 @@ def is_opencode_running(hProcess=None):
 
 
 if __name__ == "__main__":
-    # The workspace launches "--launch-ai <folder>"; a bare run opens the current folder.
+    # The workspace launches "--launch-ai <folder> --agent <id>"; a bare run opens the current folder.
     arguments = sys.argv[2:] if sys.argv[1:2] == ["--launch-ai"] else sys.argv[1:]
-    run_standalone_ai(arguments[0] if arguments else os.getcwd())
+    chosen = "opencode"
+    if "--agent" in arguments:
+        position = arguments.index("--agent")
+        chosen = arguments[position + 1] if position + 1 < len(arguments) else chosen
+        del arguments[position:position + 2]
+    run_standalone_ai(arguments[0] if arguments else os.getcwd(), chosen)

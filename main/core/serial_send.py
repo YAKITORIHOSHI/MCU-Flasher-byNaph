@@ -122,10 +122,8 @@ class SerialSendQueue:
                 })
         # Driver close targets only the captured connection outside the state
         # lock. A stale send failure never closes a replacement connection.
-        try:
-            conn.close()
-        except Exception:
-            pass
+        from main.core.monitor_connection import retire_connection
+        retire_connection(conn)
         if disconnect:
             self._log(f"Send error: {error}. Delivery may be incomplete; queued commands were discarded. Nothing was retried.",
                       generation=generation, tag="error")

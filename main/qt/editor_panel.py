@@ -22,6 +22,7 @@ JS side so editor → Python calls work.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
@@ -170,6 +171,9 @@ class EditorBridgeAPI(QObject):
         self._navigation_previews = set()
         self.destroyed.connect(self._navigator.close)
         self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
+        self._project_diagnostics: list = []
+        from main.qt.signals import signals as sig_bus
+        sig_bus.syntax_errors.connect(self._remember_diagnostics)
         self._cloud_manifest_finished.connect(self._finish_cloud_manifest, Qt.ConnectionType.QueuedConnection)
         self._editor_storage_finished.connect(self._finish_editor_storage, Qt.ConnectionType.QueuedConnection)
         self._navigation_finished.connect(self._finish_navigation, Qt.ConnectionType.QueuedConnection)
@@ -547,6 +551,22 @@ class EditorBridgeAPI(QObject):
         except Exception as exc:
             self._finish_syntax({"generation": generation, "path": path, "error": str(exc)})
 
+    @Slot(list)
+    def _remember_diagnostics(self, diagnostics: list) -> None:
+        """The list now shown, so checking one file keeps the other files' results."""
+        self._project_diagnostics = [entry for entry in diagnostics or [] if isinstance(entry, dict)]
+
+    def _with_other_files(self, path: str, diagnostics: list) -> list:
+        """One file's fresh results among the sketch's other files' latest ones."""
+        def name(value):
+            return os.path.normcase(str(value or "").replace("\\", "/").rsplit("/", 1)[-1])
+        checked = name(path)
+        others = [entry for entry in self._project_diagnostics if name(entry.get("file")) != checked]
+        if not others:
+            return diagnostics
+        return sorted(others + list(diagnostics), key=lambda entry: (
+            str(entry.get("file") or ""), entry["line"] if isinstance(entry.get("line"), int) else 0))
+
     @Slot(dict)
     def _finish_syntax(self, result):
         self._syntax_running = False
@@ -556,7 +576,7 @@ class EditorBridgeAPI(QObject):
                 from uuid import uuid4
                 signals.notification.emit({"id": "notif_" + uuid4().hex, "title": "Syntax check failed", "message": result["error"], "type": "warning"})
             else:
-                signals.syntax_errors.emit(result["diagnostics"])
+                signals.syntax_errors.emit(self._with_other_files(result["path"], result["diagnostics"]))
         self._start_syntax()
 
     @Slot(str)
@@ -1413,6 +1433,8 @@ class MonacoEditorPanel(QWidget):
             sig_bus.ai_review_requested.connect(self.trigger_ai_review)
         if hasattr(sig_bus, "ai_review_resolved"):
             sig_bus.ai_review_resolved.connect(self._on_ai_review_resolved)
+        if hasattr(sig_bus, "ai_edits_reverted"):
+            sig_bus.ai_edits_reverted.connect(self._on_ai_edits_reverted)
 
     @Slot(bool)
     def set_auto_pairs(self, enabled: bool) -> None:
@@ -1424,6 +1446,15 @@ class MonacoEditorPanel(QWidget):
         self._view.page().runJavaScript(
             "if (typeof window.unlockEditorNow === 'function') { window.unlockEditorNow(); }"
         )
+
+    @Slot(list)
+    def _on_ai_edits_reverted(self, files: list) -> None:
+        """Show the reverted text in its own tabs; the file on disk is already written."""
+        paths = [str(item["path"]) for item in files if item.get("exists")]
+        changed = any(item.get("shapeChanged") for item in files)
+        names = ", ".join(str(item.get("fileName", "")) for item in files[:3])
+        self._view.page().runJavaScript(
+            f"window.reloadRevertedFiles?.({json.dumps(paths)}, {json.dumps(changed)}, {json.dumps(names)})")
 
     @Slot(list)
     def set_markers(self, diagnostics: list) -> None:

@@ -121,7 +121,8 @@ def main():
                 try:
                     exact = "Arduino Uno [atmelavr:uno]"
                     worker.api.emit("boards:updated", {"boards": {exact: {"pio_resolved": False, "platform": "atmelavr", "board": ""}}})
-                    check(not target_problem(worker.boards[exact]), "unresolved refresh rows cannot erase exact catalog definitions")
+                    row = worker.boards.canonical(exact)
+                    check(row and not target_problem(worker.boards[row]), "unresolved refresh rows cannot erase exact catalog definitions")
                     worker.dispatch({"cmd": "resources", "token": 1})
                     deadline = time.monotonic() + 5
                     while worker._reader_thread is not None and time.monotonic() < deadline:

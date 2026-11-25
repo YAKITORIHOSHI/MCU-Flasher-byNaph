@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Any
 
+from main.core.board_labels import board_target, merge_board_rows, resolve_label
 from main.core.constants import SCRIPT_DIR
 from main.core.toolchain import _get_safe_platformio_core_dir
 
@@ -476,6 +477,8 @@ def _load_board_catalog_cache() -> dict | None:
                 if isinstance(pair, (list, tuple)) and len(pair) >= 2
             }
             info["arduino_defines"] = set(info.get("arduino_defines", []))
+        # Catalogs saved before copies were merged still list every copy.
+        boards = merge_board_rows(boards)
 
         if (_manifest_stat_identity(path.stat()) != _manifest_stat_identity(st)
                 or _prepared_catalog_fingerprint() != prepared):
@@ -1229,6 +1232,7 @@ def _native_board_entry(pio_board: dict) -> dict:
         "memory_type": str(pio_board.get("memory_type") or "") or None,
         "flash_mode": str(pio_board.get("flash_mode") or "") or None,
         "source_core": "platformio-installed",
+        "label": str(pio_board.get("name") or board_id).strip(),
     }
     flash = re.match(r"(\d+(?:\.\d+)?)\s*MB", str(pio_board.get("flash_size") or ""), re.IGNORECASE)
     if flash:
@@ -1243,10 +1247,17 @@ class _BoardBatchDelivery:
         self.callback = callback
         self.pending = {}
         self.first = True
+        self.targets = set()
 
     def add(self, name, info):
         if self.callback is None:
             return
+        # A preview page lists each build target once; the final catalog decides
+        # which copy names it.
+        target = board_target(name, info)
+        if target in self.targets:
+            return
+        self.targets.add(target)
         self.pending[name] = info
         if len(self.pending) >= (16 if self.first else 128):
             self.flush()
@@ -1460,6 +1471,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
             "memory_type": str((match or {}).get("memory_type") or record.get("memory_type") or "") or None,
             "flash_mode": str((match or {}).get("flash_mode") or record.get("flash_mode") or "") or None,
             "source_core": str(record.get("source_core") or ""),
+            "label": str(record.get("name") or arduino_id),
         }
         flash_raw = str((match or {}).get("flash_size") or record.get("flash_size") or "")
         m = re.match(r"(\d+(?:\.\d+)?)\s*MB", flash_raw, re.IGNORECASE)
@@ -1517,6 +1529,7 @@ def load_dynamic_boards(default_boards: dict, *, prefer_cache: bool = False, reg
         delivery.add(disp_name, entry)
 
     delivery.flush()
+    boards = merge_board_rows(boards)
     _save_board_catalog_cache(boards)
     return boards
 
@@ -1542,6 +1555,18 @@ class BoardCatalog(dict):
         """Return one coherent revision for background search indexing."""
         with self._lock:
             return self._revision, dict(super().items())
+
+    def canonical(self, label):
+        """The row a saved label refers to now, or "" when it is unknown or unclear."""
+        with self._lock:
+            if super().__contains__(label):
+                return label
+            return resolve_label(label, dict(super().items()))
+
+    def label_for(self, target):
+        """The current label of one exact build target, or ""."""
+        with self._lock:
+            return next((name for name, info in super().items() if board_target(name, info) == target), "")
 
     def set_definition(self, name, info):
         """Publish a resolved row without losing concurrent catalog additions."""
@@ -1870,6 +1895,9 @@ __all__ = [
     "_ESPTOOL_WROTE_RE",
     "_board_catalog_cache_path",
     "_board_name_tokens",
+    "board_target",
+    "merge_board_rows",
+    "resolve_label",
     "_enrich_chip_features",
     "_fallback_board_id_for_platform",
     "_fallback_platform_from_mcu",

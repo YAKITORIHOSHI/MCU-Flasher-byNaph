@@ -119,8 +119,8 @@ End If
 
 ' ---------------------------------------------
 '  FIND WINDOWS PRIVATE RUNTIME - src\_python\python.exe ONLY
-'  No fallbacks. No system Python. No winget install.
-'  Restore missing Windows Python from the bundled installer; Linux uses .venv-linux.
+'  No fallbacks. No system Python: a missing runtime is restored only into that
+'  folder, from the bundled installer or winget. Linux uses .venv-linux.
 ' ---------------------------------------------
 Dim hostPython, systemPython
 hostPython   = ""
@@ -573,7 +573,7 @@ Sub QuarantineFolder(folderPath)
 End Sub
 
 
-' -- Auto-heal private Python runtime from bundled offline installer --
+' -- Auto-heal private Python runtime from the bundled installer, or winget without one --
 Function AutoHealPrivatePython(rootDir)
     AutoHealPrivatePython = False
     Dim handsoffCandidates, hDir, candidate, installerExe, f, subF, targetDir, logDir, logFile, runCmd, exitCode
@@ -596,7 +596,11 @@ Function AutoHealPrivatePython(rootDir)
         End If
     Next
 
-    If installerExe = "" Then Exit Function
+    ' Without a bundled installer winget supplies the same Python; with neither,
+    ' a damaged runtime stays where it is.
+    Dim wingetExe
+    wingetExe = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\Microsoft\WindowsApps\winget.exe"
+    If installerExe = "" And Not fso.FileExists(wingetExe) Then Exit Function
 
     targetDir = rootDir & "src\_python"
     logDir = rootDir & "logs"
@@ -615,7 +619,15 @@ Function AutoHealPrivatePython(rootDir)
         On Error GoTo 0
     End If
 
-    runCmd = """" & installerExe & """ /quiet TargetDir=""" & targetDir & """ InstallAllUsers=0 PrependPath=0 Include_test=0 Include_doc=0 Include_launcher=0 /log """ & logFile & """"
+    If installerExe <> "" Then
+        runCmd = """" & installerExe & """ /quiet TargetDir=""" & targetDir & """ InstallAllUsers=0 PrependPath=0 Include_test=0 Include_doc=0 Include_launcher=0 /log """ & logFile & """"
+    Else
+        ' winget downloads, verifies and installs it only into this folder, for this account.
+        runCmd = """" & wingetExe & """ install --exact --id Python.Python.3.14 --source winget --scope user --silent" & _
+                 " --accept-source-agreements --accept-package-agreements --disable-interactivity" & _
+                 " --override ""/quiet TargetDir=\""" & targetDir & "\"" InstallAllUsers=0 PrependPath=0" & _
+                 " Include_test=0 Include_doc=0 Include_launcher=0 /log \""" & logFile & "\"""""
+    End If
     On Error Resume Next
     runCmd = Replace(runCmd, "%", "%MCU_FLASHER_LITERAL_PERCENT%")
     exitCode = shell.Run(runCmd, 0, True)

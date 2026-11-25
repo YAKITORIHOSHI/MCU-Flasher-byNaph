@@ -94,6 +94,16 @@ def main():
             ("samples", "900x900", ["--preview-samples"]),
             ("samples-dark", "700x800", ["--preview-samples", "--preview-dark"]),
             ("samples-short", "496x300", ["--preview-samples"]),
+            ("samples-columns", "1140x800", ["--preview-samples"]),
+            ("samples-columns-dark", "1334x672", ["--preview-samples", "--preview-dark"]),
+            ("samples-columns-small", "760x430", ["--preview-samples"]),
+            ("resources-columns", "1140x800", ["--preview-resources"]),
+            ("resource-boards-wide", "1140x800", ["--preview-resource-boards"]),
+            ("wide-project", "1140x800", ["--preview-projects", "--preview-recents"]),
+            ("serial", "1140x800", ["--preview-serial", "--preview-target"]),
+            ("serial-dark", "900x600", ["--preview-serial", "--preview-dark"]),
+            ("serial-narrow", "420x560", ["--preview-serial"]),
+            ("serial-short", "496x300", ["--preview-serial"]),
         ]
         captures = []
         for name, size, flags in cases:

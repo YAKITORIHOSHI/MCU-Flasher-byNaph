@@ -6,6 +6,8 @@ import ast
 import importlib
 import re
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,8 +29,9 @@ def info(device="/dev/ttyUSB0", description="n/a", hwid="n/a", **metadata):
 
 
 class StopAfterOnePoll:
-    def __init__(self):
+    def __init__(self, polls=3):
         self.stopped = False
+        self.polls = polls
         self.waits = []
 
     def is_set(self):
@@ -37,7 +40,7 @@ class StopAfterOnePoll:
     def wait(self, timeout):
         self.waits.append(timeout)
         # Initial wait, confirmation wait, then final adaptive wait.
-        if len(self.waits) >= 3:
+        if len(self.waits) >= self.polls:
             self.stopped = True
         return self.stopped
 
@@ -49,9 +52,9 @@ class UbuntuPortChecks(unittest.TestCase):
         tree = ast.parse((ROOT / "main/web_bridge.py").read_text(encoding="utf-8"))
         backend = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                        and node.name == "MCUWebBackendAPI")
-        names = {"_scan_ports", "refresh_ports", "_port_monitor_loop", "_init_hardware",
+        names = {"_scan_ports", "request_port_scan", "_port_monitor_loop", "_init_hardware",
                  "_serial_handoff_pending", "_clear_disconnected_port", "_restore_returned_port",
-                 "_annotated_ports"}
+                 "_restore_if_returned", "_port_replugged", "_begin_port_settling", "_annotated_ports"}
         functions = [node for node in backend.body if isinstance(node, ast.FunctionDef)
                      and node.name in names]
         if {node.name for node in functions} != names:
@@ -63,7 +66,7 @@ class UbuntuPortChecks(unittest.TestCase):
     def fixture(self, ports, host="linux"):
         comports = Mock(return_value=ports)
         claim = Mock(return_value=True)
-        scope = {"sys": SimpleNamespace(platform=host), "re": re,
+        scope = {"sys": SimpleNamespace(platform=host), "re": re, "time": time, "threading": threading,
                  "serial": SimpleNamespace(tools=SimpleNamespace(list_ports=SimpleNamespace(
                      comports=comports))), "claim_serial_port": claim,
                  "get_occupied_ports": Mock(return_value=set()),
@@ -148,13 +151,89 @@ class UbuntuPortChecks(unittest.TestCase):
         self.assertTrue(all(entry["description"].strip().lower() != "n/a" for entry in ports))
         comports.assert_called_once_with()
 
-    def test_refresh_publishes_only_filtered_entries_and_updates_cache(self):
-        api, _, _, _ = self.fixture([info("/dev/ttyS0"), info(description="USB adapter")])
-        ports = api.refresh_ports()
-        self.assertEqual([entry["device"] for entry in ports], ["/dev/ttyUSB0"])
-        self.assertEqual(api._last_known_ports, ports)
-        self.assertIsNot(api._last_known_ports, ports)
-        api.emit.assert_called_once_with("ports:updated", ports)
+    def test_requested_scan_runs_on_the_monitor_and_publishes_filtered_entries(self):
+        api, comports, _, _ = self.fixture([info("/dev/ttyS0"), info(description="USB adapter")])
+        api._last_known_ports = [{"device": "/dev/ttyUSB0", "description": "USB adapter", "hwid": ""}]
+        api._init_hardware = Mock()
+        api._stop_port_monitor = StopAfterOnePoll(polls=2)
+        api.is_busy = False
+        api.request_port_scan()
+        comports.assert_not_called()  # Never on the caller's (GUI) thread.
+        api._port_monitor_loop()
+        self.assertFalse(api._port_scan_requested)
+        published = [call.args[1] for call in api.emit.call_args_list if call.args[0] == "ports:updated"]
+        self.assertEqual([[entry["device"] for entry in ports] for ports in published], [["/dev/ttyUSB0"]])
+
+    def test_unchanged_devices_are_not_rescanned_until_the_signature_changes(self):
+        api, comports, _, _ = self.fixture([info(description="USB adapter")])
+        api._last_known_ports = [{"device": "/dev/ttyUSB0", "description": "USB adapter", "hwid": ""}]
+        api._init_hardware = Mock()
+        api.is_busy = False
+        signatures = [(("ttyUSB0", 1),)] * 4
+        api._stop_port_monitor = StopAfterOnePoll(polls=5)
+        with patch("main.core.port_inventory.signature", side_effect=signatures):
+            api._port_monitor_loop()
+        self.assertEqual(comports.call_count, 1, "An unchanged signature must not rescan USB metadata")
+
+    def test_replug_between_polls_reopens_the_dead_connection(self):
+        api, _, _, _ = self.fixture([info(description="USB adapter")])
+        api._last_known_ports = [{"device": "/dev/ttyUSB0", "description": "USB adapter", "hwid": ""}]
+        api.current_port = "/dev/ttyUSB0"
+        api._init_hardware = Mock()
+        api.is_busy = False
+        api._port_replugged = Mock()
+        api._stop_port_monitor = StopAfterOnePoll(polls=3)
+        with patch("main.core.port_inventory.signature", side_effect=[(("ttyUSB0", 1),), (("ttyUSB0", 2),)]):
+            api._port_monitor_loop()
+        api._port_replugged.assert_called_once_with("/dev/ttyUSB0")
+
+    def test_port_returning_while_busy_is_restored_when_the_operation_ends(self):
+        api, _, _, _ = self.fixture([info(description="USB adapter")])
+        api._last_known_ports = [{"device": "/dev/ttyUSB0", "description": "USB adapter", "hwid": ""}]
+        api._returning_port = "/dev/ttyUSB0"
+        api.select_port = Mock(return_value=True)
+        api.is_busy = True
+        api._restore_if_returned(api._last_known_ports, ())
+        api.select_port.assert_not_called()
+        api.is_busy = False
+        api._restore_if_returned(api._last_known_ports, ())
+        api.select_port.assert_called_once_with("/dev/ttyUSB0")
+
+    def test_same_board_under_another_name_needs_unambiguous_usb_identity(self):
+        from main.core import port_inventory as inventory
+        entry = lambda device, hwid: {"device": device, "description": "USB", "hwid": hwid}
+        identity = inventory.usb_identity(entry("/dev/ttyACM0", "USB VID:PID=303A:1001 SER=AA:BB LOCATION=1-1"))
+        self.assertEqual(identity, ("303A:1001", "AA:BB"))
+        back = entry("/dev/ttyACM1", "USB VID:PID=303A:1001 SER=AA:BB LOCATION=1-4")
+        other = entry("/dev/ttyACM2", "USB VID:PID=303A:1001 SER=CC:DD LOCATION=1-2")
+        self.assertEqual(inventory.same_device(identity, [back, other], {"/dev/ttyACM1", "/dev/ttyACM2"}), "/dev/ttyACM1")
+        self.assertEqual(inventory.same_device(identity, [other], {"/dev/ttyACM2"}), "")
+        clone = inventory.usb_identity(entry("COM5", "USB VID:PID=1A86:7523 LOCATION=1-1"))
+        twins = [entry("COM7", "USB VID:PID=1A86:7523 LOCATION=1-2"), entry("COM8", "USB VID:PID=1A86:7523 LOCATION=1-3")]
+        self.assertEqual(inventory.same_device(clone, twins, {"COM7", "COM8"}), "", "Two identical adapters stay ambiguous")
+        self.assertEqual(inventory.same_device(clone, twins[:1], {"COM7"}), "COM7")
+        self.assertEqual(inventory.same_device(None, twins, {"COM7"}), "")
+
+    def test_windows_signature_reads_only_the_serial_map(self):
+        from main.core import port_inventory as inventory
+        rows = [("\\Device\\USBSER000", "COM5", 1), ("\\Device\\Serial0", "COM1", 1)]
+
+        class Key:
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+
+        def value(_key, index):
+            if index >= len(rows):
+                raise OSError("No more data")
+            return rows[index]
+        registry = SimpleNamespace(HKEY_LOCAL_MACHINE=object(), OpenKey=Mock(return_value=Key()), EnumValue=value)
+        with patch.dict(sys.modules, {"winreg": registry}):
+            self.assertEqual(inventory.signature("win32"),
+                             (("\\Device\\Serial0", "COM1"), ("\\Device\\USBSER000", "COM5")))
+            registry.OpenKey.side_effect = FileNotFoundError()
+            self.assertEqual(inventory.signature("win32"), ())
+            registry.OpenKey.side_effect = PermissionError()
+            self.assertIsNone(inventory.signature("win32"), "Unreadable evidence must fall back to full scans")
 
     def test_initial_hardware_list_is_filtered_without_selection(self):
         api, _, claim, _ = self.fixture([info("/dev/ttyS0"), info(description="USB adapter")])

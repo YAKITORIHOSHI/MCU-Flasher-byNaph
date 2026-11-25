@@ -274,10 +274,37 @@ class WiringChecks(unittest.TestCase):
             self.assertIn("window_shown", methods.get("showEvent", ()), owner)
             self.assertIn("window_hidden", methods.get("hideEvent", ()), owner)
 
-    def test_the_browser_keeps_its_own_group_and_offers_no_relaunch(self):
-        source = (ROOT / "main/qt/package_browser.py").read_text(encoding="utf-8")
-        self.assertIn("window_shown(self, app_id=BROWSER_USER_MODEL_ID, relaunch=False)", source)
-        self.assertIn("SetCurrentProcessExplicitAppUserModelID(BROWSER_USER_MODEL_ID)", source)
+    def test_helper_processes_share_the_workspace_identity_on_every_host(self):
+        """Resources used to declare its own identity on Windows and none elsewhere,
+        which showed it as a second, generic icon beside the application's."""
+        from src.modules import app_identity
+        self.assertEqual(app_identity.APP_USER_MODEL_ID, taskbar.APP_USER_MODEL_ID)
+        for path in ("main/qt/package_browser.py", "src/qscintilla_viewer.py", "src/modules/downloader.py"):
+            source = (ROOT / path).read_text(encoding="utf-8")
+            self.assertLess(source.index("app_identity.claim_process()"), source.index("app_identity.claim_application(app)"))
+            self.assertNotIn("SetCurrentProcessExplicitAppUserModelID", source, path)
+        workspace = (ROOT / "main/mcu_flash_gui.py").read_text(encoding="utf-8")
+        self.assertIn(f'app.setApplicationName("{app_identity.APPLICATION_NAME}")', workspace)
+        self.assertIn(f'app.setDesktopFileName("{app_identity.DESKTOP_FILE}")', workspace)
+        menu = (ROOT / "direct/ubuntu/install_desktop.py").read_text(encoding="utf-8")
+        self.assertIn(f"StartupWMClass={app_identity.APPLICATION_NAME}", menu)
+
+    def test_helper_declares_the_native_identity_before_its_window(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from src.modules import app_identity
+        for platform, expected in (("linux", [app_identity.DESKTOP_FILE]), ("win32", []), ("darwin", [])):
+            app = SimpleNamespace(setApplicationName=Mock(), setDesktopFileName=Mock())
+            with patch("sys.platform", platform), patch.object(app_identity, "_share_dock_icon") as dock:
+                app_identity.claim_application(app)
+            app.setApplicationName.assert_called_once_with(app_identity.APPLICATION_NAME)
+            self.assertEqual([call.args[0] for call in app.setDesktopFileName.call_args_list], expected)
+            self.assertEqual(dock.called, platform == "darwin")
+        with patch("sys.platform", "darwin"), patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", None)
+            app_identity.claim_process()
+            self.assertEqual(os.environ["QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM"], "1")
 
     def test_process_and_window_ids_cannot_split_the_group(self):
         pattern = re.compile(r'SetCurrentProcessExplicitAppUserModelID\("([^"]+)"\)')

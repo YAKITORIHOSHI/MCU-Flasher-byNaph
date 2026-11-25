@@ -284,6 +284,27 @@ class OpenCodePageChecks(PageFixture):
         self.decide([TAKEOVER, "\x1b[1;1H>"])
         self.assertEqual(self.advance(5000), [])
 
+    def test_inline_assistants_are_ready_once_their_prompt_settles(self):
+        self.decide([])
+        self.js("scene.watch = AssistantReadiness.create(scene.term, reason => scene.reasons.push(reason), scene.clock, {inline: true}); true")
+        self.write_scene("> ")
+        self.assertEqual(self.advance(5000), [], "A stray prompt character is not an interface")
+        self.write_scene("Welcome to the fixture assistant\r\n\r\n> Try a prompt")
+        self.assertEqual(self.advance(600), [])
+        self.assertEqual(self.advance(200), ["inline"])
+
+    def test_animated_inline_assistant_does_not_wait_for_silence(self):
+        self.decide([])
+        self.js("scene.watch = AssistantReadiness.create(scene.term, reason => scene.reasons.push(reason), scene.clock, {inline: true}); true")
+        reasons = []
+        for tick in range(30):
+            self.write_scene(f"\rWorking on the fixture {tick}")
+            reasons = self.advance(150)
+            if reasons:
+                break
+        self.assertEqual(reasons, ["inline"])
+        self.assertGreater(tick, 10)
+
     def test_conpty_shape_captures_the_mouse_without_an_alternate_screen(self):
         self.decide(["\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[2J\x1b[H"])
         self.assertEqual(self.advance(2000), [])
@@ -444,6 +465,16 @@ class WindowsServerChecks(unittest.TestCase):
         self.assertIn("do @(", command, "cmd.exe would echo the loop body as text before every session")
         self.assertIn("cls", command)
 
+    def test_other_assistants_run_without_the_project_argument_and_may_quit(self):
+        from main.core.ai_agents import agent
+        server = self.scope["TerminalServer"](target_dir=str(self.root), command="C:/fixture path/claude.exe", agent=agent("claude"))
+        with patch("main.core.ai_agents.node_directory", return_value=None):
+            command = server._supervised_opencode_command(str(self.root))
+        self.assertIn("claude.exe", command)
+        self.assertIn('claude.exe" & timeout', command, "Only OpenCode takes the project as an argument")
+        self.assertEqual(self.server._supervised_opencode_command(str(self.root)).count(str(self.root)), 2)
+        self.assertEqual(server.agent_name, "Claude")
+
     def test_the_page_decides_and_byte_timing_stays_out_of_the_way(self):
         socket, _started = self.run_socket(dict(type="client_ready", readiness=True),
                                            dict(type="interface_ready", reason="interface"))
@@ -515,6 +546,13 @@ class WindowsPanelChecks(unittest.TestCase):
         self.root = Path(directory.name)
         (self.root / ".mcu_flasher_build_cache").mkdir()
         self.marker = self.root / ".mcu_flasher_build_cache/.ai_ready_signal"
+        for target, value in (("last_agent", "opencode"), ("remember_agent", None)):
+            stub = patch.object(ai_panel, target, return_value=value)
+            setattr(self, target, stub.start())
+            self.addCleanup(stub.stop)
+        found = patch("main.core.ai_agents.installed_agents", return_value={"opencode": "C:/fixture/opencode.cmd"})
+        found.start()
+        self.addCleanup(found.stop)
         self.panel = ai_panel.AIPanel(SimpleNamespace(sketch_dir_path=str(self.root)))
         self.addCleanup(self.panel.deleteLater)
         self.panel._proc = SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda timeout=None: 0)
@@ -530,7 +568,7 @@ class WindowsPanelChecks(unittest.TestCase):
         panel._poll_for_ai_readiness()
         self.assertIs(panel._stack.currentWidget(), panel._embed_container,
                       "After the long wait the page's own cover takes over")
-        self.assertEqual(panel._status_badge.text(), "Starting…", "The page's cover is not the interface")
+        self.assertNotEqual(panel._status_badge.text(), "Active", "The page's cover is not the interface")
         self.assertTrue(panel._ready_poll_timer.isActive(), "It must keep listening for the real signal")
         self.assertEqual(panel._ready_poll_timer.interval(), 1000)
         self.marker.write_text("{}", encoding="utf-8")
@@ -580,6 +618,53 @@ class WindowsPanelChecks(unittest.TestCase):
             self.assertIn(palette["BG_DARKEST"], self.panel._embed_container.styleSheet())
             self.assertIn(glass_tokens(mode)["reading"], self.panel._loader_card.styleSheet())
             self.assertIn(glass_inks(mode)["normal"], self.panel._status_badge.styleSheet())
+
+    def test_opening_offers_the_list_and_a_choice_names_the_assistant_it_starts(self):
+        panel = self.panel
+        panel._ready_poll_timer.stop()
+        panel._proc = None
+        panel.resize(460, 500)
+        panel.show()
+        self.addCleanup(panel.hide)
+        with patch.object(self.module.subprocess, "Popen") as spawn:
+            panel.ensure_started()
+            wait_for(lambda: panel._chooser._checked_files, "The list never looked for installed assistants")
+            spawn.assert_not_called()
+            self.assertIs(panel._stack.currentWidget(), panel._chooser)
+            self.assertFalse(panel._btn_restart.isVisibleTo(panel) or panel._btn_switch.isVisibleTo(panel))
+            panel._chooser.set_installed({"codex": "C:/fixture/codex.exe"})
+            panel._chooser.select("codex")
+            with patch.object(panel, "_check_internet", return_value=True), \
+                 patch.object(panel, "_sync_project_hardware_state"), \
+                 patch("src.modules.private_python_guard.get_private_python_exe", return_value="C:/fixture/pythonw.exe"):
+                panel._chooser.primary.click()
+            command = spawn.call_args.args[0]
+        panel._embed_poll_timer.stop()
+        self.assertEqual(command[0], "C:/fixture/pythonw.exe")
+        self.assertEqual(command[2:], ["--launch-ai", str(self.root.resolve()), "--agent", "codex"])
+        self.remember_agent.assert_called_once_with("codex")
+        self.assertIn("CODEX", panel._title_lbl.text())
+        self.assertTrue(panel._btn_switch.isVisibleTo(panel))
+        self.assertIn("Codex", panel._loader_card.title.text())
+        with patch.object(panel, "_stop_ai", side_effect=lambda: setattr(panel, "_is_active", False)) as stop:
+            panel._btn_switch.click()
+        stop.assert_called_once()
+        self.assertIs(panel._stack.currentWidget(), panel._chooser)
+
+    def test_offline_refusal_returns_to_the_list_without_an_administrator_question(self):
+        panel = self.panel
+        panel._ready_poll_timer.stop()
+        panel.show()
+        self.addCleanup(panel.hide)
+        buttons = self.module.QMessageBox.StandardButton
+        with patch.object(panel, "_check_internet", return_value=False), patch.object(self.module.subprocess, "Popen") as spawn, \
+             patch.object(self.module.QMessageBox, "question", return_value=buttons.No) as question:
+            panel.start_agent("gemini")
+        spawn.assert_not_called()
+        self.assertIn("Gemini", question.call_args.args[2])
+        self.assertIs(panel._stack.currentWidget(), panel._chooser)
+        text = (ROOT / "main/qt/ai_panel.py").read_text(encoding="utf-8")
+        self.assertNotIn("as Administrator", text, "The assistant has never been started elevated")
 
     def test_hidden_project_switch_does_not_launch_a_windows_assistant(self):
         panel = self.panel
@@ -776,6 +861,7 @@ while True:
         self.executable.chmod(0o700)
         with patch.object(self.ai, "find_opencode_cli", return_value=str(self.executable)), \
              patch.object(self.ai, "prepare_context", return_value=True), \
+             patch.object(self.ai, "remember_agent"), \
              patch("main.core.config.get_monitor_font_size", return_value=13), \
              patch("src.modules.ai_prompt_context.PromptInputTracker._publish"), \
              patch("src.modules.ai_prompt_context.assistant_process_active", return_value=False), \
@@ -783,7 +869,7 @@ while True:
             panel = self.ai.PosixAIPanel(SimpleNamespace(sketch_dir_path=str(self.project)))
             panel.resize(760, 520)
             panel.show()
-            panel.ensure_started()
+            panel.start_agent("opencode")
             timeline = []
             try:
                 deadline = time.monotonic() + 25

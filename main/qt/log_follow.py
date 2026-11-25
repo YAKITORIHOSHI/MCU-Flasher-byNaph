@@ -1,7 +1,6 @@
 """Follow live output without interrupting the reader's scroll or selection."""
 from contextlib import contextmanager
 from functools import wraps
-import sys
 
 from PySide6.QtCore import QObject, QEvent, QPoint, Qt, QTimer
 from PySide6.QtGui import QTextCursor
@@ -36,11 +35,10 @@ class LogFollow(QObject):
         self._plain = isinstance(view, QPlainTextEdit)
         self._pending_scroll = None
         self._resize_state = None
-        if sys.platform != "win32":
-            self._retired_scroll_states = {}
-            self._retire_scroll_timer = QTimer(self)
-            self._retire_scroll_timer.setSingleShot(True)
-            self._retire_scroll_timer.timeout.connect(self._retired_scroll_states.clear)
+        self._retired_scroll_states = {}
+        self._retire_scroll_timer = QTimer(self)
+        self._retire_scroll_timer.setSingleShot(True)
+        self._retire_scroll_timer.timeout.connect(self._retired_scroll_states.clear)
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._settle_scroll)
@@ -58,24 +56,17 @@ class LogFollow(QObject):
         bar.installEventFilter(self)
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
-        # A drag can finish outside the scrollbar or viewport. Observe release
-        # at the application boundary so a lost grab cannot leave Auto anchored.
-        app = QApplication.instance()
-        if sys.platform != "win32":
-            # Application filters force Shiboken to wrap every Qt-internal
-            # QObject, including objects still under construction. Native
-            # Linux WebEngine can reenter that wrapper conversion and crash.
-            # Observe only already-constructed widgets during a mouse hold.
-            self._release_widgets = {}
-            self._release_scan_timer = QTimer(self)
-            self._release_scan_timer.setSingleShot(True)
-            self._release_scan_timer.timeout.connect(self._watch_release_widgets)
-        elif app is not None:
-            app.installEventFilter(self)
+        # A drag can finish outside the scrollbar or viewport, and a lost grab must
+        # not leave Auto anchored. Never install this on QApplication: an application
+        # filter runs Python for every event of every object on the GUI thread and
+        # forces Shiboken to wrap Qt-internal objects still under construction, which
+        # can crash on any host. Observe constructed widgets during a mouse hold only.
+        self._release_widgets = {}
+        self._release_scan_timer = QTimer(self)
+        self._release_scan_timer.setSingleShot(True)
+        self._release_scan_timer.timeout.connect(self._watch_release_widgets)
 
     def _watch_release_widgets(self):
-        if not sys.platform != "win32":
-            return
         if not self.scrollbar_held or not isValid(self.view):
             return
         app = QApplication.instance()
@@ -123,9 +114,8 @@ class LogFollow(QObject):
         self._cancel_settle()
         self._resume_timer.stop()
         self.scrollbar_held = True
-        if sys.platform != "win32":
-            # Do not traverse native widget trees inside an input event filter.
-            self._release_scan_timer.start(0)
+        # Do not traverse native widget trees inside an input event filter.
+        self._release_scan_timer.start(0)
 
     def _selection_changed(self):
         if not self._depth:
@@ -141,8 +131,6 @@ class LogFollow(QObject):
         self._resize_state = None
 
     def _retire_scroll_states(self, *states):
-        if not sys.platform != "win32":
-            return
         # Qt can emit scrollbar signals while finishEdit() still iterates its
         # QTextCursorPrivate list. Dropping a captured cursor in that signal
         # frees an entry the native iterator will use next. Retire references
@@ -180,8 +168,7 @@ class LogFollow(QObject):
 
     def _release(self):
         self.scrollbar_held = False
-        if sys.platform != "win32":
-            self._unwatch_release_widgets()
+        self._unwatch_release_widgets()
         # The scrollbar applies its final drag/track position after its event
         # filter and can also emit sliderReleased during that handler.
         self._resume_timer.start(0)
@@ -225,7 +212,7 @@ class LogFollow(QObject):
         if not isValid(self.view):
             return False
         kind = event.type()
-        if (sys.platform != "win32" and self.scrollbar_held
+        if (self.scrollbar_held
                 and kind in (QEvent.Type.ChildRemoved, QEvent.Type.ChildPolished,
                              QEvent.Type.ParentChange)):
             self._release_scan_timer.start(0)
@@ -274,7 +261,7 @@ class LogFollow(QObject):
         """Keep retained cursors alive until a native document clear finishes."""
         # Qt emits scrollbar changes while finishEdit still walks its cursor
         # list. Dropping a pending anchor from that synchronous signal frees a
-        # QTextCursorPrivate underneath the Linux Qt implementation.
+        # QTextCursorPrivate underneath that native iteration.
         self._depth += 1
         try:
             clear()

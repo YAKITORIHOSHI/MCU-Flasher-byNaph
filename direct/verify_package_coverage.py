@@ -194,7 +194,10 @@ class CoverageChecks(unittest.TestCase):
         record = list(panel._records)[-1]
         self.assertEqual(record["job_id"], persisted["job_id"])
         self.assertEqual(record["coverage_report"], persisted["coverage_report"])
-        self.assertIn("mcu-coverage:fixture-job", panel._format_record_html(record))
+        self.assertEqual(panel._card_for(record).links, [("View all board results", "mcu-coverage:fixture-job")])
+        panel._toggle_all()
+        self.assertIn("View all board results", panel._browser.toPlainText())
+        self.assertIn("mcu-coverage:fixture-job", panel._browser.toHtml())
 
     def test_notification_anchors_open_only_safe_job_identity(self):
         with patch.object(NotifPanel, "_request_refresh"):

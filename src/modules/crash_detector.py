@@ -193,6 +193,27 @@ def mark_session_clean_exit(pid: Optional[int] = None) -> None:
         pass
 
 
+def prune_empty_diagnostics(limit: int = 400) -> int:
+    """Remove empty native logs left by finished sessions; evidence is never touched."""
+    removed = 0
+    try:
+        entries = sorted(_CRASH_DIR.glob("native-*.log"))[:limit]
+    except OSError:
+        return 0
+    for path in entries:
+        try:
+            pid = int(path.stem.partition("-")[2])
+            info = path.stat()
+            # A live or just-started session still owns its empty log.
+            if info.st_size or time.time() - info.st_mtime < 86400 or is_process_alive(pid):
+                continue
+            path.unlink()
+            removed += 1
+        except (OSError, ValueError):
+            continue
+    return removed
+
+
 def record_crash_event(
     crash_type: str,
     details: str,
@@ -235,9 +256,13 @@ def install_crash_tracking(workspace_dir: Optional[Path] = None) -> None:
         import faulthandler
         _CRASH_DIR.mkdir(parents=True, exist_ok=True)
         _DIAGNOSTIC_STREAM = (_CRASH_DIR / f"native-{os.getpid()}.log").open("a", encoding="utf-8")
-        faulthandler.enable(file=_DIAGNOSTIC_STREAM, all_threads=True)
+        # Windows reports first-chance exceptions here too, including ones a driver or
+        # COM handles itself while a USB device comes or goes. Walking every other
+        # running thread at that moment can turn a harmless one into a real crash.
+        faulthandler.enable(file=_DIAGNOSTIC_STREAM, all_threads=sys.platform != "win32")
     except (OSError, RuntimeError):
         pass
+    threading.Thread(target=prune_empty_diagnostics, name="MCU_CrashLogPrune", daemon=True).start()
     previous = threading.excepthook
 
     def worker_exception(args):

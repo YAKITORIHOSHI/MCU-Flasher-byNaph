@@ -1,4 +1,4 @@
-"""Dedicated, workspace-owned OpenCode view for native Ubuntu desktops."""
+"""Dedicated, workspace-owned AI assistant view for Linux and macOS desktops."""
 from __future__ import annotations
 
 import json
@@ -13,8 +13,12 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStackedLayout, QSizePolicy
 
+from main.core.ai_agents import DEFAULT_AGENT, agent as agent_spec, agent_argv, agent_environment, find_agent, last_agent, remember_agent
 from main.core.theme import Theme, get_palette
-from main.qt.assistant_loader import AssistantLoader, restart_controls, set_restart_visible, style_restart_controls
+from main.qt.agent_chooser import AgentChooser
+from main.qt.agent_picker import AgentPicker
+from main.qt.assistant_loader import (AssistantLoader, restart_controls, set_restart_visible, style_restart_controls,
+                                      switch_control)
 from main.core.log_colors import glass_inks, glass_terminal_colors
 from main.qt.glass import PageBackdrop, page_surface
 from main.qt.icons import icon
@@ -43,9 +47,11 @@ class OpenCodeSession(QObject):
     workspace_loading = Signal(int)
     interface_ready = Signal(int, str)
 
-    def __init__(self, cwd, executable, parent=None):
+    def __init__(self, cwd, executable, parent=None, agent_id=DEFAULT_AGENT):
         super().__init__(parent)
         self.cwd, self.executable = cwd, executable
+        self.agent = agent_spec(agent_id)
+        self._exit_commands = {"/exit"} if self.agent.id == DEFAULT_AGENT else {"/exit", "/quit"}
         self._child = None
         self._generation = 0
         self._client_ready = False
@@ -83,7 +89,10 @@ class OpenCodeSession(QObject):
         self._exit_observer = PromptInputTracker(self.cwd, source="assistant")
         self._diagnostic_tail = ""
         self._output_seen = False
-        child = PtySession(self.cwd, opencode_argv(self.executable, self.cwd), self)
+        argv = (opencode_argv(self.executable, self.cwd) if self.agent.id == DEFAULT_AGENT
+                else agent_argv(self.agent.id, self.executable, self.cwd))
+        child = PtySession(self.cwd, argv, self)
+        child.extra_environment = agent_environment(self.agent.id)
         child.assistant_active = True
         child.prompt_source = "assistant"
         self._child = child
@@ -103,7 +112,8 @@ class OpenCodeSession(QObject):
             self._child = None
             child.close()
             child.deleteLater()
-            self.status.emit("error", self._start_error or "OpenCode could not start. Check its installation and retry.")
+            self.status.emit("error", self._start_error
+                             or f"{self.agent.name} could not start. Check its installation and retry.")
         return started
 
     def _forward_output(self, child, generation, data):
@@ -127,10 +137,10 @@ class OpenCodeSession(QObject):
         intentional = self._intentional_exit and time.monotonic() - self._exit_requested_at <= 10.0
         self._intentional_exit = False
         if self._policy.allow_restart(intentional=intentional):
-            self.status.emit("loading", "Starting a fresh OpenCode session…")
+            self.status.emit("loading", f"Starting a fresh {self.agent.name} session…")
             self._restart_timer.start()
         else:
-            text = "OpenCode stopped repeatedly. The assistant stays attached; retry after checking its configuration."
+            text = f"{self.agent.name} stopped repeatedly. The assistant stays attached; retry after checking its configuration."
             if self._diagnostic_tail.strip():
                 text += "\n\n" + self._diagnostic_tail.strip()
             self.status.emit("error", text)
@@ -146,7 +156,7 @@ class OpenCodeSession(QObject):
             committed = char in "\r\n" and not observer.escape and not observer.paste
             if committed:
                 if (not self._line_pasted and not observer.uncertain
-                        and observer.line.strip().casefold() == "/exit"):
+                        and observer.line.strip().casefold() in self._exit_commands):
                     self._intentional_exit = True
                     self._exit_requested_at = time.monotonic()
                 self._line_pasted = False
@@ -191,7 +201,7 @@ class OpenCodeSession(QObject):
 
 
 class PosixAIPanel(QWidget):
-    """Single protected OpenCode interface, separate from project terminals."""
+    """Single protected assistant interface, separate from project terminals."""
     _discovered = Signal(int, str, str)
 
     def __init__(self, backend=None, parent=None):
@@ -205,6 +215,7 @@ class PosixAIPanel(QWidget):
         self._project_dir = ""
         self._launch_generation = 0
         self._session = self._view = self._channel = None
+        self._agent = agent_spec(DEFAULT_AGENT)
         self._state = "idle"
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
@@ -231,7 +242,7 @@ class PosixAIPanel(QWidget):
         row = QHBoxLayout(self._header)
         row.setContentsMargins(10, 4, 10, 4)
         row.setSpacing(6)
-        self._title = QLabel("OpenCode AI Assistant", self._header)
+        self._title = QLabel("AI Assistant", self._header)
         self._title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         row.addWidget(self._title, 1)
         self._status_badge = QLabel("Ready", self._header)
@@ -242,6 +253,8 @@ class PosixAIPanel(QWidget):
         row.addWidget(self._restart_divider, 0, Qt.AlignmentFlag.AlignVCenter)
         row.addSpacing(4)
         row.addWidget(self._btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._btn_switch = switch_control(self._header, self._switch_agent)
+        row.addWidget(self._btn_switch, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self._header)
         self._body = QWidget(self)
         self._stack = QStackedLayout(self._body)
@@ -250,37 +263,76 @@ class PosixAIPanel(QWidget):
         self._loader = AssistantLoader(self._body)
         self._load_title, self._load_sub = self._loader.title, self._loader.status
         self._retry_button = self._loader.retry_button
-        self._loader.show_idle("Open the assistant to start OpenCode in this project.")
+        self._loader.show_idle("Open the assistant to start it in this project.")
         self._loader.retry_requested.connect(self._retry)
         self._loader.reveal_requested.connect(self._show_interface)
         self._stack.addWidget(self._loader)
+        self._chooser = AgentChooser(self._body)
+        self._chooser.setEnabled(False)
+        self._picker = AgentPicker(self._chooser, self)
+        self._picker.chosen.connect(self.start_agent)
+        self._stack.addWidget(self._chooser)
+        self._stack.setCurrentWidget(self._loader)
         layout.addWidget(self._body, 1)
 
     def _cwd(self):
         return str(self._project_dir or getattr(self._backend, "sketch_dir_path", "") or ROOT)
 
     def ensure_started(self):
+        """Revealing the assistant offers the list; only a choice starts anything."""
+        if self._requested or self._closing:
+            return
+        if self._state != "choose":
+            self._chooser.select(last_agent())
+            self._set_state("choose", "")
+        if not self._picker.downloading:
+            self._picker.refresh()
+
+    @Slot(str)
+    def start_agent(self, agent_id):
+        """Start the chosen assistant in the current project."""
+        if self._requested or self._closing:
+            return
+        self._agent = agent_spec(agent_id)
+        self._loader.set_agent(self._agent.name)
+        remember_agent(self._agent.id)
+        self._launch()
+
+    def _switch_agent(self):
+        """End this session and offer the list again."""
+        if self._closing:
+            return
+        self._discard_view()
+        self._requested = False
+        self._state = "idle"
+        self.ensure_started()
+
+    def _launch(self):
         if self._requested or self._closing:
             return
         self._requested = True
         self._launch_generation += 1
-        generation, project = self._launch_generation, self._cwd()
+        generation, project, spec = self._launch_generation, self._cwd(), self._agent
         self._project_dir = project  # Pin pending discovery before the backend can change projects.
-        self._set_state("loading", "Finding OpenCode for this project…")
+        self._set_state("loading", f"Finding {spec.name} for this project…")
 
         def discover():
             try:
                 cwd = str(Path(project).resolve())
-                executable = find_opencode_cli() if Path(cwd).is_dir() else None
-                message = "" if executable else "OpenCode is unavailable. Close the workspace and run Ubuntu Bootstrap repair: bash direct/ubuntu/run.sh --repair."
+                executable = None
+                if Path(cwd).is_dir():
+                    executable = find_opencode_cli() if spec.id == DEFAULT_AGENT else find_agent(spec.id)
+                message = "" if executable else (
+                    "OpenCode is unavailable. Close the workspace and run Ubuntu Bootstrap repair: bash direct/ubuntu/run.sh --repair."
+                    if spec.id == DEFAULT_AGENT else f"{spec.name} is not here any more. Choose another assistant or download it again.")
                 if executable and any(not (ROOT / name).is_file() for name in ASSISTANT_ASSETS):
                     executable = None
-                    message = "The OpenCode view assets are missing. Restore the application's local assistant assets, then retry."
+                    message = "The assistant view assets are missing. Restore the application's local assistant assets, then retry."
                 if executable and not prepare_context(self._backend, cwd,
                         cancelled=lambda: self._closing or generation != self._launch_generation):
                     return
             except Exception as exc:
-                cwd, executable, message = project, None, f"OpenCode discovery failed: {exc}"
+                cwd, executable, message = project, None, f"{spec.name} discovery failed: {exc}"
             try:
                 self._discovered.emit(generation, executable or "", json.dumps([cwd, message]))
             except RuntimeError:
@@ -302,7 +354,7 @@ class PosixAIPanel(QWidget):
         self._backdrop = PageBackdrop(
             view, lambda values: view.page().runJavaScript(f"window.setGlassBackdrop?.({json.dumps(values)})"))
         view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        session = OpenCodeSession(cwd, executable, view)
+        session = OpenCodeSession(cwd, executable, view, self._agent.id)
         channel = QWebChannel(view.page())
         channel.registerObject("assistantBridge", session)
         view.page().setWebChannel(channel)
@@ -315,7 +367,10 @@ class PosixAIPanel(QWidget):
             view.renderProcessTerminated.connect(lambda *_: self._renderer_terminated(view))
         self._stack.addWidget(view)
         self._stack.setCurrentWidget(self._loader)
-        view.setUrl(QUrl.fromLocalFile(str(ROOT / "src/editor/opencode.html")))
+        url = QUrl.fromLocalFile(str(ROOT / "src/editor/opencode.html"))
+        if self._agent.inline:
+            url.setQuery("inline=1")
+        view.setUrl(url)
 
     def _loaded(self, view, ok):
         if self._closing or view is not self._view:
@@ -325,7 +380,7 @@ class PosixAIPanel(QWidget):
         else:
             if self._session:
                 self._session.close()
-            self._set_state("error", "The OpenCode view could not load. Restore the application's local assistant assets and retry.")
+            self._set_state("error", "The assistant view could not load. Restore the application's local assistant assets and retry.")
 
     def _session_status(self, session, state, text):
         if session is not self._session or self._closing:
@@ -344,7 +399,7 @@ class PosixAIPanel(QWidget):
         """Lift the cover: the interface painted, or the user asked to see the output."""
         if self._closing or not self._view:
             return
-        self._set_state("active", "OpenCode is ready.")
+        self._set_state("active", f"{self._agent.name} is ready.")
         self._resize_embedded_ai()
         self._focus_view()
 
@@ -355,7 +410,7 @@ class PosixAIPanel(QWidget):
         # Keep the protected container; require an explicit fresh-session retry.
         if self._session:
             self._session.close()
-        self._set_state("error", "The OpenCode view stopped. Retry to start a fresh session; submitted commands will not be replayed.")
+        self._set_state("error", f"The {self._agent.name} view stopped. Retry to start a fresh session; submitted commands will not be replayed.")
 
     def has_input_focus(self):
         from PySide6.QtWidgets import QApplication
@@ -368,12 +423,15 @@ class PosixAIPanel(QWidget):
         if state == "loading":
             self._loader.show_progress(text, phase)
         elif state == "error":
-            self._loader.show_error("OpenCode unavailable", text)
+            self._loader.show_error(f"{self._agent.name} unavailable", text)
         elif state == "active":
             self._loader.finish()
-        else:
+        elif state != "choose":
             self._loader.show_idle(text)
-        self._stack.setCurrentWidget(self._view if state == "active" and self._view else self._loader)
+        # Covered pages stay in the stack; only the one on top may take keys.
+        self._chooser.setEnabled(state == "choose")
+        self._stack.setCurrentWidget(self._chooser if state == "choose" else
+                                     self._view if state == "active" and self._view else self._loader)
         self._apply_surfaces()
 
     def _retry(self):
@@ -383,15 +441,15 @@ class PosixAIPanel(QWidget):
             return
         self._discard_view()
         self._requested = False
-        self.ensure_started()
+        self._launch()
 
     def _restart_session(self):
-        """Start a fresh OpenCode session in the current project; nothing typed earlier is replayed."""
+        """Start a fresh session of this assistant in the current project; nothing typed earlier is replayed."""
         if not self._is_active:
             return
         self._discard_view()
         self._requested = False
-        self.ensure_started()
+        self._launch()
 
     def _hide_panel(self):
         owner = self.window()
@@ -423,14 +481,15 @@ class PosixAIPanel(QWidget):
         self._resize_embedded_ai()
 
     def _refresh_header(self, width):
-        title = "OpenCode AI Assistant"
-        status = {"idle": "Ready", "loading": "Loading…", "active": "Active", "error": "Unavailable"}[self._state]
+        choosing = self._state in ("idle", "choose") and not self._requested
+        title = "AI Assistant" if choosing else f"{self._agent.name} AI Assistant"
+        status = {"idle": "Ready", "choose": "Ready", "loading": "Loading…", "active": "Active", "error": "Unavailable"}[self._state]
         row = self._header.layout()
         margins = row.contentsMargins()
         reserved = margins.left() + margins.right() + row.spacing()
         status_width = self._status_badge.fontMetrics().horizontalAdvance(status)
         if width < max(340, reserved + status_width + self._title.fontMetrics().horizontalAdvance(title) + 2):
-            title = "OpenCode AI"
+            title = "AI" if choosing else f"{self._agent.name} AI"
         if width < reserved + status_width + self._title.fontMetrics().horizontalAdvance(title) + 2:
             status_text = {"loading": "Wait…", "error": "Retry"}.get(self._state, status)
         else:
@@ -440,7 +499,7 @@ class PosixAIPanel(QWidget):
         self._title.setText(title)
         self._status_badge.setText(status_text)
         self._status_badge.setToolTip(status)
-        set_restart_visible(self._restart_divider, self._btn_restart, self._is_active, width)
+        set_restart_visible(self._restart_divider, self._btn_restart, self._is_active, width, self._btn_switch)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -461,11 +520,12 @@ class PosixAIPanel(QWidget):
         self._title.setStyleSheet(f"color: {inks['system']}; font-size: 11px; font-weight: 700;")
         ink = inks['success' if self._state == "active" else 'error' if self._state == "error" else 'normal']
         self._status_badge.setStyleSheet(f"color: {ink}; font-size: 10px; font-weight: 600;")
-        style_restart_controls(self._restart_divider, self._btn_restart, self._theme)
+        style_restart_controls(self._restart_divider, self._btn_restart, self._theme, self._btn_switch)
 
     def apply_theme(self, mode):
         self._theme = mode
         self._loader.apply_theme(mode)
+        self._chooser.apply_theme(mode)
         self._apply_surfaces()
         self._configure_view()
 
@@ -493,14 +553,17 @@ class PosixAIPanel(QWidget):
         self._project_dir = str(path)
         self._requested = False
         # A hidden assistant must not start a new CLI merely because a local
-        # or cloud project opened. Reveal will start the new project lazily.
+        # or cloud project opened. Reveal offers the list for the new project.
         if was_active and not self.isHidden():
-            self.ensure_started()
+            self._launch()
+        elif was_active:
+            self._state = "idle"
         self._refresh_header(self.width())
 
     def _stop_ai(self):
         self._closing = True
         self._requested = False
+        self._picker.close()
         self._discard_view()
         self._refresh_header(self.width())
 

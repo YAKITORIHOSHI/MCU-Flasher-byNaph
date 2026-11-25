@@ -1,6 +1,6 @@
 ---
 name: lite-workbench
-description: Maintain idle refresh of open Lite sketches, verified source bytes after tool setup, fitted pickers, owned folder browsing, validated sketch windows, active-theme labels, Developer Access, history/search and board-specific tool/build reuse.
+description: Maintain remembered window state, one row per board, two-column Resources, start-up Stop rules, idle refresh of open Lite sketches, verified source bytes after tool setup, fitted pickers, owned folder browsing, validated sketch windows, active-theme labels, Developer Access, history/search and board-specific tool/build reuse.
 ---
 
 # Lite workbench
@@ -23,8 +23,8 @@ log rows, independent monitor histories, compact row separation and reachable
 Resources. No decorative emoji or icon fonts. Keep preview mode hardware-free.
 Fix row heights and monitor viewport bounds, reserve both scrollbars and retain
 content widths through streaming; Follow must preserve manual scrollback.
-Light is the launch default; switch the complete palette without reloading fonts
-or losing logs/selections. Status and USB Port own separate fixed-height frames.
+Lite reopens as it was left (`src/preferences.rs`, `window.json`); switch the complete
+palette without reloading fonts or losing logs/selections. Status and USB Port own separate fixed-height frames.
 Theme labels and SVGs describe the active mode; tooltips describe the switch.
 Give each color one role: yellow primary/selected, coral stop/error, surface
 for everything else. Cards, fields and menus share one surface and outline;
@@ -35,7 +35,8 @@ Lite-only cache/vault namespaces. Keep one portal per worker and never terminate
 a portal that vetoes closing. Fixtures inject services, vault and network mocks;
 tools/verify_developer.py constructs and renders the actual shared login UI.
 Give monitor output the remaining height; avoid slogans and unused footer space.
-Keep serial send in Connection. Source-name links open only the original source
+Keep serial send and the upload speed in Connection and the monitor baud in the
+Serial monitor. Resources puts sample code beside its list when there is room. Source-name links open only the original source
 folder through a background native file-manager call; never launch it in preview.
 Replace producer-owned progress rows, preserve diagnostics and operation history,
 and keep table padding intact while removing generated decorative marks.
@@ -45,11 +46,13 @@ private settings using the main history helpers and a private settings lock.
 Search multiple fields through a revision-keyed index; rank exact IDs/names
 first, bound results and label closest matches. Reject stale query responses.
 Reset the sent query when the user edits the search. Keep the board search,
-count and actions outside its scrollable results. Open sketch fits its content
-and keeps the path and actions above the recent list. Parent the system chooser
+count and actions outside its scrollable results. Open sketch is as large as
+Resources and keeps the path and actions above the recent list. Parent the system chooser
 to Lite and validate source paths in the worker before starting another window.
 
 Dispatch builds only after catalog completion and exact command acknowledgement.
+Lite's own start never offers Stop and lets the window close; list each build
+target once and never guess a saved board from its name alone.
 Automatically resolve the selected platform's upload-target requirements even for
 initial compilation, including optional uploader packages. Reuse compatible main
 packages with independent native copies and byte verification; the source store

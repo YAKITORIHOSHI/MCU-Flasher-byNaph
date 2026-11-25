@@ -1,9 +1,17 @@
 ---
 name: mcu-verify
-description: "Verify picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify serial unplug and replug, one row per board, the assistant list, AI edit reverts, Windows component sources and prompts, Lite's remembered window, picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
+
+New in the sweep: `verify_port_replug` (hotplug, handle ownership and noise),
+`verify_board_labels`, `verify_windows_components` (mocked hosts; native Windows
+prompts stay unverified until seen there), `verify_ai_revert` (owned sketches only)
+and `verify_ai_agents` (files and fake installers; never a real download or sign-in).
+Anything calling `start_agent` patches `last_agent`/`remember_agent`, which save to
+the user's settings. Lite's `verify_shared_store` requires Stop to stay off while
+Lite starts, a stale Stop to change nothing and closing to cancel safely.
 
 Fractional editor-sheet checks use fit_host to wait for both Qt and Chromium
 viewport axes before publishing the backdrop dimensions. A width-only wait can
@@ -70,8 +78,9 @@ or actual parent PIDs. Keep missing-resume and unrelated-owner refusal cases.
   settings/projects/recovery and one progress key per package. Main package_jobs
   also checks different product event roots and legacy markers. Never clean a
   live project cache as part of these fixtures. Block cleanup in a fixture while
-  exercising status/Stop and require no success after cancellation. Rust startup
-  tests retain the requested sketch through busy work and dispatch it once idle.
+  exercising status, a stale Stop and closing; require no success afterwards. Rust
+  startup tests retain the requested sketch and last board until the worker's first
+  idle state and dispatch each once.
 - Lite tools/verify_resources.py covers read-only main manifests/configured
   libraries, all sample source extensions, ZIP samples, opaque IDs, cancellation,
   exact target preservation and bounded publications. Keep main bytes unchanged.

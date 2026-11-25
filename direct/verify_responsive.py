@@ -519,7 +519,6 @@ class QtResponsiveChecks(ControlChecks):
         self.assertIsInstance(button, QToolButton)
         self.assertEqual(button.popupMode(), QToolButton.ToolButtonPopupMode.InstantPopup)
         self.assertIs(button.menu(), panel._add_menu)
-        pwsh_action = next(action for action in panel._add_menu.actions() if 'pwsh' in action.text().lower())
         cmd_action = next(action for action in panel._add_menu.actions() if 'cmd' in action.text().lower())
 
         def new_payload():
@@ -538,10 +537,12 @@ class QtResponsiveChecks(ControlChecks):
                     pump()
                     self.assertLessEqual(host.width(), width)
                     self.assertTrue(panel._tab_bar.isHidden())
-                    self.assertEqual(button.mapTo(panel._header, QPoint()).x(),
-                                     panel._header_layout.contentsMargins().left(),
-                                     'An empty terminal must put + at the header left edge')
-                    self.contained(button, panel._header)
+                    self.assertTrue(button.isHidden(), 'An empty terminal offers its shells by name')
+                    for action in (panel._btn_open_pwsh, panel._btn_open_cmd):
+                        self.contained(action, panel._header)
+                    if not panel._empty_title.isHidden():
+                        self.contained(panel._empty_title, panel._header)
+                        self.assertEqual(panel._empty_title.x(), panel._header_layout.contentsMargins().left())
                     self.assertIsNone(panel.findChild(QAbstractButton, 'btn-terminal-fullscreen'))
                     for control in panel._header.findChildren(QAbstractButton):
                         if control.isVisible():
@@ -550,6 +551,14 @@ class QtResponsiveChecks(ControlChecks):
                             self.assertNotIn('Restore', control.text())
                     if width in (1920, 480):
                         capture(host, f'terminal-{mode}-{width}-empty')
+
+                    sent.reset_mock()
+                    QTest.mouseClick(panel._btn_open_pwsh, Qt.MouseButton.LeftButton)
+                    pump()
+                    self.assertEqual(new_payload()['kind'], 'pwsh')
+                    self.assertEqual(panel._tab_bar.count(), 1)
+                    self.assertTrue(panel._tab_bar.isVisible())
+                    self.contained(button, panel._header)
 
                     sent.reset_mock()
                     menu_was_visible = []
@@ -562,13 +571,7 @@ class QtResponsiveChecks(ControlChecks):
                     self.assertEqual(menu_was_visible, [True])
                     self.assertFalse(any(call.args[0] == 'new' for call in sent.call_args_list),
                                      'Opening or dismissing + must not start a shell')
-                    self.assertEqual(panel._tab_bar.count(), 0)
-
-                    pwsh_action.trigger()
-                    pump()
-                    self.assertEqual(new_payload()['kind'], 'pwsh')
                     self.assertEqual(panel._tab_bar.count(), 1)
-                    self.assertTrue(panel._tab_bar.isVisible())
                     # QSS can reserve a wide tab-bar size while painting a much
                     # shorter tab. Measure the painted tab, not the outer bar.
                     tab_rect = panel._tab_bar.tabRect(0)
@@ -609,9 +612,8 @@ class QtResponsiveChecks(ControlChecks):
                         panel._on_tab_close_requested(0)
                     pump()
                     self.assertTrue(panel._tab_bar.isHidden())
-                    self.assertEqual(button.mapTo(panel._header, QPoint()).x(),
-                                     panel._header_layout.contentsMargins().left(),
-                                     '+ must return to the left edge after the last session closes')
+                    self.assertTrue(button.isHidden(), '+ leaves with the last session')
+                    self.assertFalse(panel._btn_open_pwsh.isHidden())
                     self.assertFalse(panel._btn_clear.isEnabled())
                     self.assertFalse(panel._btn_kill.isEnabled())
 

@@ -1,4 +1,4 @@
-"""Loading screen for the embedded OpenCode assistant.
+"""Loading screen for the embedded assistant.
 
 Says what is happening in plain words and keeps the terminal's startup output out
 of sight. Deliberately still: the trace advances when real work advances, and
@@ -78,6 +78,7 @@ class AssistantLoader(QFrame):
         super().__init__(parent)
         self.setObjectName("assistant-loader")
         self._can_reveal = can_reveal
+        self._name = "OpenCode"
         self._loading = False
         self._status_text = ""
         self._started_at = 0.0
@@ -122,7 +123,7 @@ class AssistantLoader(QFrame):
         self._mark = QLabel(column_host)
         self._mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         column.addWidget(self._mark)
-        self.title = QLabel("OpenCode AI Assistant", column_host)
+        self.title = QLabel("AI Assistant", column_host)
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title.setWordWrap(True)
         column.addWidget(self.title)
@@ -133,9 +134,7 @@ class AssistantLoader(QFrame):
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         column.addWidget(self.status)
-        self._hint = QLabel(
-            "OpenCode is taking longer than usual. Its first run in a project can take a minute.",
-            column_host)
+        self._hint = QLabel("", column_host)
         self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hint.setWordWrap(True)
         self._hint.hide()
@@ -144,10 +143,11 @@ class AssistantLoader(QFrame):
         self.reveal_button.clicked.connect(self.reveal_requested)
         self.reveal_button.hide()
         column.addWidget(self.reveal_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-        self.retry_button = QPushButton("Retry OpenCode", column_host)
+        self.retry_button = QPushButton("Retry", column_host)
         self.retry_button.clicked.connect(self.retry_requested)
         self.retry_button.hide()
         column.addWidget(self.retry_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.set_agent(self._name)
 
     def minimumSizeHint(self) -> QSize:
         # The cover must never hold a pane or window open; its content scrolls.
@@ -158,14 +158,21 @@ class AssistantLoader(QFrame):
 
     # ── States ───────────────────────────────────────────────────────────────
 
-    def show_idle(self, message: str) -> None:
-        self._show("OpenCode AI Assistant", message, loading=False, error=False)
+    def set_agent(self, name: str) -> None:
+        """Say which assistant is starting; nothing else about the screen changes."""
+        self._name = name
+        self._hint.setText(f"{name} is taking longer than usual. Its first run in a project can take a minute.")
+        self.retry_button.setText("Retry" if self.width() < 200 else f"Retry {name}")
+        self.retry_button.setToolTip(f"Retry {name}")
 
-    def show_progress(self, status: str, phase: int = 0, title: str = "Starting OpenCode") -> None:
+    def show_idle(self, message: str) -> None:
+        self._show(f"{self._name} AI Assistant", message, loading=False, error=False)
+
+    def show_progress(self, status: str, phase: int = 0, title: str = "") -> None:
         if not self._loading:
             self._started_at = time.monotonic()
         self._trace.set_phase(phase)
-        self._show(title, status, loading=True, error=False)
+        self._show(title or f"Starting {self._name}", status, loading=True, error=False)
 
     def show_error(self, title: str, message: str) -> None:
         self._show(title, message, loading=False, error=True)
@@ -210,9 +217,8 @@ class AssistantLoader(QFrame):
         width = event.size().width()
         self._trace.setFixedWidth(min(132, max(48, width - 32)))
         self.reveal_button.setText("Show output" if width < 200 else "Show startup output")
-        self.retry_button.setText("Retry" if width < 200 else "Retry OpenCode")
+        self.retry_button.setText("Retry" if width < 200 else f"Retry {self._name}")
         self.reveal_button.setToolTip("Show startup output")
-        self.retry_button.setToolTip("Retry OpenCode")
         # The mark and the trace yield before any words do.
         self._mark.setVisible(height >= 190)
         self._trace.setVisible(self._loading and height >= 110)
@@ -266,17 +272,39 @@ def restart_controls(parent: QWidget, on_restart) -> tuple[QFrame, QPushButton]:
     return divider, button
 
 
-def style_restart_controls(divider: QFrame, button: QPushButton, mode: str) -> None:
+def switch_control(parent: QWidget, on_switch) -> QPushButton:
+    """Back to the list of assistants; icon-only, beside Restart, hidden until one was started."""
+    from main.qt.icons import ActionButton
+    button = ActionButton("", parent, icon_name="devices")
+    button.setObjectName("btn-assistant-switch")
+    button.setFixedSize(28, 24)
+    button.setIconSize(QSize(14, 14))
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setToolTip("Choose another AI assistant; this session ends")
+    button.setAccessibleName("Choose another AI assistant")
+    button.setAutoDefault(False)
+    button.clicked.connect(lambda *_: on_switch())
+    button.hide()
+    return button
+
+
+def style_restart_controls(divider: QFrame, button: QPushButton, mode: str, switch: QPushButton | None = None) -> None:
     from main.qt.theme import liquid_button_sheet
     divider.setStyleSheet(f"QFrame#assistant-divider {{ background: {glass_tokens(mode)['rim']}; border: none; }}")
     button.setStyleSheet(liquid_button_sheet(mode, "glass", radius=12, selector="QPushButton#btn-assistant-restart",
                                              font_size=11, padding="2px 11px"))
+    if switch is not None:
+        switch.setStyleSheet(liquid_button_sheet(mode, "glass", radius=12, selector="QPushButton#btn-assistant-switch",
+                                                 font_size=11, padding="2px 4px"))
 
 
-def set_restart_visible(divider: QFrame, button: QPushButton, visible: bool, width: int) -> None:
+def set_restart_visible(divider: QFrame, button: QPushButton, visible: bool, width: int,
+                        switch: QPushButton | None = None) -> None:
     """Shown only once the assistant was started; icon-only when the header is narrow."""
-    compact = width < 300
+    compact = width < (330 if switch is not None else 300)
     button.setText("" if compact else "Restart")
     button.setFixedWidth(28 if compact else button.sizeHint().width())
     divider.setVisible(visible)
     button.setVisible(visible)
+    if switch is not None:
+        switch.setVisible(visible)

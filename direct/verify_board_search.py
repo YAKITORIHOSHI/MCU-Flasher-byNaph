@@ -370,12 +370,15 @@ class BoardPickerChecks(unittest.TestCase):
 
     def test_partial_discovery_coalesces_and_final_aliases_are_authoritative(self):
         dialog = self.picker()
-        partial = {"Native preview fixture": self.boards["Arduino UNO"]}
+        partial = {"Native preview fixture": dict(self.boards["Arduino UNO"], board="preview_board"),
+                   "Arduino Uno (preview copy)": dict(self.boards["Arduino UNO"])}
         for _ in range(20):
             dialog._catalog_updated({"batch": partial, "partial": True, "refresh_id": 7})
         generation = dialog._generation
         wait_for(lambda: "Native preview fixture" in dialog.all_boards and not dialog._search_pending)
         self.assertEqual(dialog._generation, generation + 1)
+        self.assertNotIn("Arduino Uno (preview copy)", dialog.all_boards,
+                         "A preview must not list a board the picker already shows")
         self.assertFalse(dialog.btn_select.isEnabled())
         dialog._catalog_updated({"boards": {"Stale fixture": {}}, "refresh_id": 6})
         self.assertNotIn("Stale fixture", dialog.all_boards)
@@ -390,7 +393,7 @@ class BoardPickerChecks(unittest.TestCase):
         from main.core import board_catalog
         published = board_catalog.BoardCatalog(self.boards)
         entered, release = threading.Event(), threading.Event()
-        replacement = {"Local incremental UNO": self.boards["Arduino UNO"]}
+        replacement = {"Local incremental UNO": dict(self.boards["Arduino UNO"], board="incremental_uno")}
         def discover(_seed, *, on_batch, invalidate_parsed=False):
             self.assertFalse(invalidate_parsed)
             on_batch(replacement)
@@ -416,7 +419,7 @@ class BoardPickerChecks(unittest.TestCase):
 
     def test_failed_partial_discovery_restores_only_published_rows(self):
         dialog = self.picker()
-        dialog._catalog_updated({"batch": {"Provisional fixture": self.boards["Arduino UNO"]},
+        dialog._catalog_updated({"batch": {"Provisional fixture": dict(self.boards["Arduino UNO"], board="provisional")},
                                  "partial": True, "refresh_id": 4})
         wait_for(lambda: "Provisional fixture" in dialog.all_boards and not dialog._search_pending)
         dialog._catalog_updated({"error": "fixture discovery failed", "refresh_id": 4})

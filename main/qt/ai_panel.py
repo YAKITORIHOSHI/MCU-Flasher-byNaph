@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-main.qt.ai_panel — OpenCode AI Assistant Panel for MCU Flasher by Naph.
+main.qt.ai_panel — AI Assistant Panel for MCU Flasher by Naph.
 
-Faithfully aligned with the original stable release:
-  • Automatically starts when opened, behind a loading screen until OpenCode has painted
+  • Opening it offers the list of assistants; only a choice starts one, behind a
+    loading screen until its interface has painted
   • Persistent background process: once started, toggling only hides or shows the panel
   • Automatic project realignment: session only resets when the active sketch project changes
-  • Real interactive OpenCode xterm.js + ConPTY terminal hosting via Win32 HWND embedding (SetParent)
+  • Real interactive xterm.js + ConPTY terminal hosting via Win32 HWND embedding (SetParent)
   • Always attached inside the side panel of the main application window
 """
 from __future__ import annotations
@@ -33,10 +33,13 @@ except ImportError:
     win32gui = None
     win32con = None
 
-from main.core.config import _load_raw_config, _save_raw_config
+from main.core.ai_agents import DEFAULT_AGENT, agent as agent_spec, last_agent, remember_agent
 from main.core.log_colors import glass_inks
 from main.core.theme import Theme, get_palette
-from main.qt.assistant_loader import AssistantLoader, restart_controls, set_restart_visible, style_restart_controls
+from main.qt.agent_chooser import AgentChooser
+from main.qt.agent_picker import AgentPicker
+from main.qt.assistant_loader import (AssistantLoader, restart_controls, set_restart_visible, style_restart_controls,
+                                      switch_control)
 from main.qt.theme import glass_tokens
 
 _this_file = Path(__file__).resolve()
@@ -66,7 +69,7 @@ class _AIEmbedContainer(QWidget):
 
 class AIPanel(QWidget):
     """
-    Side panel for OpenCode AI Assistant.
+    Side panel for the AI Assistant.
     Hosts the native pywebview + xterm + ConPTY window inside Qt via Win32 embedding.
     """
 
@@ -78,7 +81,8 @@ class AIPanel(QWidget):
         self._is_embedded = False
         self._is_ready = False
         self._ai_hwnd: Optional[int] = None
-        self._badge = ("time", "Starting…", "TEXT_DIM")
+        self._agent = agent_spec(DEFAULT_AGENT)
+        self._badge = ("info", "Ready", "TEXT_DIM")
 
         self._embed_poll_timer = QTimer(self)
         self._embed_poll_timer.setInterval(60)
@@ -107,11 +111,11 @@ class AIPanel(QWidget):
         hl.setContentsMargins(12, 4, 12, 4)
         hl.setSpacing(8)
 
-        lbl = QLabel("OPENCODE AI ASSISTANT", icon_name="ai")
+        lbl = QLabel("AI ASSISTANT", icon_name="ai")
         self._title_lbl = lbl
         hl.addWidget(lbl)
 
-        self._status_badge = QLabel("Starting…", icon_name="time")
+        self._status_badge = QLabel("Ready", icon_name="info")
         hl.addWidget(self._status_badge)
         # Restart sits beside the status, set apart by a divider.
         self._restart_divider, self._btn_restart = restart_controls(header, self._restart_session)
@@ -119,6 +123,8 @@ class AIPanel(QWidget):
         hl.addWidget(self._restart_divider, 0, Qt.AlignmentFlag.AlignVCenter)
         hl.addSpacing(4)
         hl.addWidget(self._btn_restart, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._btn_switch = switch_control(header, self._switch_agent)
+        hl.addWidget(self._btn_switch, 0, Qt.AlignmentFlag.AlignVCenter)
 
         hl.addStretch()
 
@@ -131,13 +137,19 @@ class AIPanel(QWidget):
         # The page owns "Show startup output": before it appears there is nothing to show.
         self._loader_card = AssistantLoader(can_reveal=False)
         self._load_title, self._load_sub = self._loader_card.title, self._loader_card.status
-        self._loader_card.show_progress("Preparing the terminal…", 0)
+        self._loader_card.show_idle("Open the assistant to start it in this project.")
         self._loader_card.retry_requested.connect(self._retry)
         self._stack.addWidget(self._loader_card)
 
         # 2. Native Embedding Container View
         self._embed_container = _AIEmbedContainer(self)
         self._stack.addWidget(self._embed_container)
+
+        # 3. The list of assistants, shown whenever none is running
+        self._chooser = AgentChooser(self)
+        self._picker = AgentPicker(self._chooser, self)
+        self._picker.chosen.connect(self.start_agent)
+        self._stack.addWidget(self._chooser)
 
         self._stack.setCurrentWidget(self._loader_card)
         main_layout.addWidget(self._stack, stretch=1)
@@ -149,7 +161,8 @@ class AIPanel(QWidget):
         self._title_lbl.setStyleSheet(f"color: {glass_inks(mode)['system']}; font-size: 11px; font-weight: 700;")
         self._embed_container.setStyleSheet(f"background: {palette['BG_DARKEST']};")
         self._loader_card.apply_theme(mode)
-        style_restart_controls(self._restart_divider, self._btn_restart, mode)
+        self._chooser.apply_theme(mode)
+        style_restart_controls(self._restart_divider, self._btn_restart, mode, self._btn_switch)
         self._set_badge(*self._badge)
 
     def _set_badge(self, icon_name: str, text: str, ink: str) -> None:
@@ -164,15 +177,21 @@ class AIPanel(QWidget):
 
     def _update_restart(self) -> None:
         if hasattr(self, "_btn_restart"):
-            set_restart_visible(self._restart_divider, self._btn_restart, bool(self._is_active), self.width())
+            set_restart_visible(self._restart_divider, self._btn_restart, bool(self._is_active), self.width(),
+                                self._btn_switch)
 
     def _restart_session(self) -> None:
-        """Start a fresh OpenCode session in the current project; nothing typed earlier is replayed."""
+        """Start a fresh session in the current project; nothing typed earlier is replayed."""
         if not self._is_active or self.isHidden():
             return
         self.reset_for_project(self._get_sketch_dir())
         self._set_badge("reload", "Restarting…", "TEXT_DIM")
-        self._loader_card.show_progress("Restarting OpenCode…", 0, title="Opening OpenCode")
+        self._loader_card.show_progress(f"Restarting {self._agent.name}…", 0, title=f"Opening {self._agent.name}")
+
+    def _switch_agent(self) -> None:
+        """End this session and offer the list again."""
+        self._stop_ai()
+        self.ensure_started()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -183,20 +202,19 @@ class AIPanel(QWidget):
         self._status_badge.setVisible(width >= 180)
         self._update_restart()
         if hasattr(self, "_title_lbl") and self._title_lbl:
-            if width >= 340:
-                self._title_lbl.set_icon("ai")
-                self._title_lbl.setText("OPENCODE AI ASSISTANT")
-            elif width >= 270:
-                self._title_lbl.set_icon("ai")
-                self._title_lbl.setText("AI Assistant")
+            name = self._agent.name.upper() if self._is_active else ""
+            self._title_lbl.set_icon("ai")
+            if width >= 400:
+                self._title_lbl.setText(f"{name} AI ASSISTANT".strip())
+            elif width >= 290:
+                self._title_lbl.setText(f"{self._agent.name} AI" if name else "AI Assistant")
             else:
-                self._title_lbl.set_icon("ai")
                 self._title_lbl.setText("AI")
 
     def _retry(self) -> None:
         """Start a fresh session after a failure; nothing typed earlier is replayed."""
         self._stop_ai()
-        self.ensure_started()
+        self._start_ai()
 
     def _on_close_clicked(self) -> None:
         """Handle the panel button to hide the AI Assistant side panel."""
@@ -211,37 +229,6 @@ class AIPanel(QWidget):
             if p.exists():
                 return str(p)
         return str(_project_root)
-
-    def _confirm_ai_assistant_launch(self) -> bool:
-        """Prompt user with beta & copyright disclaimer before first launch."""
-        cfg = _load_raw_config()
-        if cfg.get("shared", {}).get("opencode_disclaimer_accepted", False):
-            return True
-
-        disclaimer_title = "OpenCode AI Assistant (Beta Test)"
-        disclaimer_msg = (
-            "OpenCode AI Assistant\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Notice & Disclaimer:\n"
-            "• OpenCode AI integration in this project is currently in BETA TESTING.\n"
-            "• MCU Flash GUI does not claim any copyright, trademark, or ownership of OpenCode AI. "
-            "All rights, trademarks, and intellectual property belong to their respective creators.\n\n"
-            "System Permission:\n"
-            "• Clicking 'Yes' will launch OpenCode in an elevated terminal to assist you with "
-            "fixing, explaining, and debugging code.\n\n"
-            "Do you want to proceed and launch OpenCode AI as Administrator?"
-        )
-        ret = QMessageBox.question(
-            self, disclaimer_title, disclaimer_msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        if ret == QMessageBox.StandardButton.Yes:
-            if "shared" not in cfg or not isinstance(cfg["shared"], dict):
-                cfg["shared"] = {}
-            cfg["shared"]["opencode_disclaimer_accepted"] = True
-            _save_raw_config(cfg)
-            return True
-        return False
 
     def _check_internet(self) -> bool:
         """Verify active network socket connectivity."""
@@ -285,9 +272,30 @@ class AIPanel(QWidget):
 
     # ── Startup & Embedding ──────────────────────────────────────────────────
     def ensure_started(self) -> None:
-        """Start the AI process automatically when the panel is shown."""
-        if not self._is_active:
-            self._start_ai()
+        """Opening the panel offers the list of assistants; only a choice starts one."""
+        if self._is_active:
+            return
+        if self._stack.currentWidget() is not self._chooser:
+            self._chooser.select(last_agent())
+            self._stack.setCurrentWidget(self._chooser)
+            self._set_badge("info", "Ready", "TEXT_DIM")
+        self.set_responsive_width(self.width())
+        if not self._picker.downloading:
+            self._picker.refresh()
+
+    def start_agent(self, agent_id: str) -> None:
+        """Start the chosen assistant in the current project."""
+        if self._is_active:
+            return
+        self._agent = agent_spec(agent_id)
+        self._loader_card.set_agent(self._agent.name)
+        remember_agent(self._agent.id)
+        self._start_ai()
+
+    def _launch_command(self, target_dir: str) -> list[str]:
+        from src.modules.private_python_guard import get_private_python_exe
+        return [str(get_private_python_exe(prefer_pythonw=True)), str(_project_root / "src/modules/dedicated_AI.py"),
+                "--launch-ai", target_dir, "--agent", self._agent.id]
 
     def _start_ai(self) -> None:
         if not self._check_internet():
@@ -295,18 +303,14 @@ class AIPanel(QWidget):
                 self,
                 "Internet Connection Warning",
                 "Could not verify an active internet connection.\n\n"
-                "OpenCode AI Assistant typically requires internet access to communicate with cloud AI services.\n\n"
+                f"{self._agent.name} typically requires internet access to communicate with cloud AI services.\n\n"
                 "Would you like to try launching anyway (for local models, custom proxies, or offline use)?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
-                self._on_close_clicked()
+                self.ensure_started()       # Back to the list; another choice may work offline.
                 return
-
-        if not self._confirm_ai_assistant_launch():
-            self._on_close_clicked()
-            return
 
         script_path = _project_root / "src" / "modules" / "dedicated_AI.py"
         if not script_path.exists():
@@ -314,8 +318,6 @@ class AIPanel(QWidget):
             self._on_close_clicked()
             return
 
-        from src.modules.private_python_guard import get_private_python_exe
-        py_exe = get_private_python_exe(prefer_pythonw=True)
         target_dir = str(Path(self._get_sketch_dir()).resolve())
 
         self._sync_project_hardware_state()
@@ -336,22 +338,22 @@ class AIPanel(QWidget):
         self._set_badge("time", "Starting…", "TEXT_DIM")
         self._loader_card.show_progress("Preparing the terminal…", 0)
 
-        cmd = [str(py_exe), str(script_path), "--launch-ai", target_dir]
-
         try:
+            cmd = self._launch_command(target_dir)
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(_project_root),
                 creationflags=0x08000000 if sys.platform == "win32" else 0,
             )
             self._is_active = True
+            self.set_responsive_width(self.width())
             self._update_restart()
             self._poll_attempts = 0
             self._loader_card.show_progress("Starting a session…", 1)
             self._embed_poll_timer.start()
         except Exception as e:
             self._set_badge("disconnected", "Offline", "RED")
-            self._loader_card.show_error("OpenCode could not start", f"The assistant process failed to start: {e}")
+            self._loader_card.show_error(f"{self._agent.name} could not start", f"The assistant process failed to start: {e}")
             QMessageBox.critical(self, "AI Assistant Error", f"Failed to start AI Assistant:\n\n{e}")
 
     def _poll_for_ai_window(self) -> None:
@@ -368,7 +370,7 @@ class AIPanel(QWidget):
             if self._poll_attempts > 240:  # ~15 seconds timeout
                 self._embed_poll_timer.stop()
                 self._set_badge("warning", "Timeout", "RED")
-                self._loader_card.show_error("OpenCode did not open",
+                self._loader_card.show_error(f"{self._agent.name} did not open",
                                              "The assistant's window did not appear in time. Retry to start a fresh session.")
             return
 
@@ -381,7 +383,7 @@ class AIPanel(QWidget):
         # Embed the window into the container in the background, but keep it hidden
         self._embed_ai_hwnd(hwnd)
 
-        # Keep the loading screen until OpenCode's interface has actually painted.
+        # Keep the loading screen until the assistant's interface has actually painted.
         self._loader_card.show_progress("Loading your workspace…", 2)
         self._ready_poll_attempts = 0
         self._ready_poll_timer.setInterval(100)
@@ -414,7 +416,7 @@ class AIPanel(QWidget):
             self._is_embedded = True
 
             if not self._is_ready:
-                # Keep window hidden until OpenCode TUI is actually rendered and ready
+                # Keep the window hidden until the assistant is actually rendered and ready
                 win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
                 self._resize_embedded_ai(show=False)
                 self._stack.setCurrentWidget(self._loader_card)
@@ -428,7 +430,7 @@ class AIPanel(QWidget):
             print(f"[MCU Flasher] Error embedding AI window: {e}")
 
     def _poll_for_ai_readiness(self) -> None:
-        """Reveal the embedded view once OpenCode's interface has painted."""
+        """Reveal the embedded view once the assistant's interface has painted."""
         self._ready_poll_attempts += 1
 
         # If the background process died, stop and show error
@@ -437,7 +439,7 @@ class AIPanel(QWidget):
             self._is_ready = False
             self._stack.setCurrentWidget(self._loader_card)
             self._set_badge("stop", "Stopped", "RED")
-            self._loader_card.show_error("OpenCode stopped",
+            self._loader_card.show_error(f"{self._agent.name} stopped",
                                          "The assistant process ended unexpectedly. Retry to start a fresh session.")
             return
 
@@ -516,7 +518,7 @@ class AIPanel(QWidget):
     # ── Project Realignment ──────────────────────────────────────────────────
     def reset_for_project(self, new_project_dir: str) -> None:
         """
-        Restart OpenCode AI Assistant so the new sketch directory becomes its session root.
+        Restart the assistant so the new sketch directory becomes its session root.
         Only called when the user actually switches projects.
         """
         if not self._is_active:
@@ -560,7 +562,7 @@ class AIPanel(QWidget):
         self._stack.setCurrentWidget(self._loader_card)
         self._set_badge("reload", "Switching…", "TEXT_DIM")
         proj_name = Path(new_project_dir).name if new_project_dir else "Project"
-        self._loader_card.show_progress(f"Switching to {proj_name}…", 0, title="Opening OpenCode")
+        self._loader_card.show_progress(f"Switching to {proj_name}…", 0, title=f"Opening {self._agent.name}")
 
         # Sync hardware state for new project folder
         self._sync_project_hardware_state(custom_dir=new_project_dir)
@@ -578,11 +580,8 @@ class AIPanel(QWidget):
         if not script_path.exists():
             return
 
-        from src.modules.private_python_guard import get_private_python_exe
-        py_exe = get_private_python_exe(prefer_pythonw=True)
-
-        cmd = [str(py_exe), str(script_path), "--launch-ai", target_dir]
         try:
+            cmd = self._launch_command(target_dir)
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(_project_root),
@@ -629,5 +628,6 @@ class AIPanel(QWidget):
         self._update_restart()
 
     def closeEvent(self, event) -> None:
+        self._picker.close()
         self._stop_ai()
         super().closeEvent(event)

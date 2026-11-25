@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 from main.qt.icons import ActionButton as QPushButton
 
-from main.core.board_catalog import SUPPORTED_BOARDS
+from main.core.board_catalog import SUPPORTED_BOARDS, board_target, resolve_label
 from main.core.config import load_recent_boards, add_recent_board, get_theme_mode
 from main.core.theme import Theme
 from main.qt.glass import GlassDialog
@@ -1001,9 +1001,9 @@ class BoardSearchDialog(GlassDialog):
             snapshot = {name: snapshot.get(name, {}) for name in self._board_subset}
         self._boards_snapshot = snapshot
         self.all_boards = sorted(snapshot)
-        canonical = {name.lower(): name for name in self.all_boards}
-        self.recent_boards = list(dict.fromkeys(canonical[name.lower()] for name in self._saved_recents
-                                               if name.lower() in canonical))[:5]
+        # Recents keep working under names saved before copies were merged.
+        current = (resolve_label(name, snapshot) for name in self._saved_recents)
+        self.recent_boards = list(dict.fromkeys(name for name in current if name))[:5]
         revision = tuple((name, id(info)) for name, info in snapshot.items())
         self._index_key = (id(SUPPORTED_BOARDS), revision, self._board_subset, tuple(self.recent_boards))
 
@@ -1390,7 +1390,11 @@ class BoardSearchDialog(GlassDialog):
         if self._closed or not self._catalog_pending:
             return
         snapshot = dict(self._boards_snapshot)
-        snapshot.update(self._catalog_pending)
+        listed = {board_target(name, info or {}) for name, info in snapshot.items()}
+        for name, info in self._catalog_pending.items():
+            # A page lists a board the dialog may already show under its own name.
+            if name in snapshot or board_target(name, info) not in listed:
+                snapshot[name] = info
         self._catalog_pending.clear()
         self._set_catalog_snapshot(snapshot)
         self.lbl_hdr_sub.setText(f"{len(self.all_boards)} definitions · loading…")

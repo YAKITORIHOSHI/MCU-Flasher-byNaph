@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenCode AI Assistant</title>
+  <title>AI Assistant</title>
   <link rel="stylesheet" href="../assets/xterm/xterm.css">
   <style>
     :root {
@@ -44,11 +44,11 @@
   <script src="assistant_readiness.js"></script>
 </head>
 <body>
-  <div id="assistant" aria-label="Dedicated OpenCode AI Assistant"></div>
+  <div id="assistant" aria-label="Dedicated AI Assistant"></div>
   <script>
     (() => {
       if (!window.Terminal || !window.FitAddon || !window.QWebChannel || !window.AssistantReadiness) {
-        document.body.innerHTML = '<p id="error">OpenCode assets are missing. Restore the application assets and retry.</p>';
+        document.body.innerHTML = '<p id="error">Assistant assets are missing. Restore the application assets and retry.</p>';
         return;
       }
       const term = new Terminal({scrollback: 5000, fontFamily: 'Ubuntu Mono, DejaVu Sans Mono, monospace', fontSize: 14,
@@ -62,9 +62,10 @@
         term._core.viewport.scrollBarWidth = 0;
       }
       let bridge = null, generation = 0, lastSize = '', fitPending = false;
+      const inline = new URLSearchParams(location.search).get('inline') === '1';
       const readiness = AssistantReadiness.create(term, reason => {
         if (bridge) bridge.report_interface_ready(generation, reason);
-      });
+      }, undefined, {inline});
       window.focusOpenCode = () => term.focus();
       window.fitOpenCode = () => {
         const host = document.getElementById('assistant');

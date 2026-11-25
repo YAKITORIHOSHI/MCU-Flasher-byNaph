@@ -138,13 +138,34 @@ def main():
                 first = len(output.events)
                 with patch("shared_store.consolidate", side_effect=slow_cleanup), \
                         patch.object(worker.api, "refresh_board_catalog"):
-                    check(worker.consolidate_packages() and entered.wait(3) and worker.dispatch({"cmd": "status"})
-                          and worker.stop_state()["enabled"], "automatic cleanup leaves protocol commands responsive and advertises Stop")
+                    check(worker.consolidate_packages() and entered.wait(3) and worker.dispatch({"cmd": "status"}),
+                          "automatic cleanup leaves protocol commands responsive")
+                    state_sent = [data for event, data in output.events[first:] if event == "state"][-1]
+                    check(state_sent["starting"] and state_sent["busy"] and not state_sent["stop"]["enabled"]
+                          and "finishing its start" in state_sent["stop"]["reason"],
+                          "Lite's own start never offers Stop and says why")
                     worker.dispatch({"cmd": "stop"})
+                    check(not worker.cancel.is_set() and worker.catalog_thread.is_alive(),
+                          "a stale Stop request cannot interrupt Lite's start")
+                    try:
+                        worker.dispatch({"cmd": "compile"})
+                    except RuntimeError:
+                        check(True, "Compile waits for Lite's start to finish")
+                    else:
+                        check(False, "Compile waits for Lite's start to finish")
+                    check(worker.dispatch({"cmd": "shutdown"}) is False, "the window may close during Lite's start")
+                    worker.closing = True
+                    worker.cancel.set()  # What closing the window does.
                     worker.catalog_thread.join(timeout=5)
-                    check(not worker.catalog_thread.is_alive() and not worker.resource_busy
+                    check(not worker.catalog_thread.is_alive() and not worker.resource_busy and not worker.starting
                           and not any(data.get("tag") == "success" for event, data in output.events[first:] if event == "console:log"),
-                          "Stop cancels startup cleanup without publishing success or handing off a build")
+                          "closing cancels startup cleanup without publishing success or handing off a build")
+                    worker.closing = False
+                    worker.cancel.clear()
+                    worker.status()
+                    check(not worker.starting_up() and not output.events[-1][1]["starting"]
+                          and output.events[-1][1]["stop"]["reason"] == "No cancellable operation is running",
+                          "a finished start leaves the ordinary idle Stop reason")
             finally:
                 worker.close()
                 worker.protected[1:] = []

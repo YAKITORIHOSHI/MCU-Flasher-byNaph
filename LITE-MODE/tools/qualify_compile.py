@@ -87,7 +87,7 @@ def main():
         worker = Worker(state, output, main_core=main_core)
         try:
             worker.select_project(str(source))
-            worker.dispatch({"cmd": "board", "name": "Arduino Uno [atmelavr:uno]"})
+            worker.dispatch({"cmd": "board", "name": worker.boards.canonical("Arduino Uno [atmelavr:uno]")})
             if args.prepare:
                 worker.dispatch({"cmd": "board_install"})
                 wait(worker)

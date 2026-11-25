@@ -50,13 +50,14 @@ class BoardSearch:
                 frameworks = info.get("frameworks") or [info.get("framework") or "arduino"]
                 if isinstance(frameworks, str):
                     frameworks = [frameworks]
-                plain = normalize(info.get("pio_name") or name.split(" [", 1)[0])
+                plain = normalize(info.get("label") or name.split(" [", 1)[0])
                 identity = normalize(info.get("board") or "")
+                # One row answers to every name its board is known by.
                 doc = normalize(" ".join(str(info.get(key, "")) for key in
-                    ("board", "platform", "mcu", "pio_vendor", "framework", "frameworks")) + " " + name)
+                    ("board", "arduino_board_id", "platform", "mcu", "pio_name", "pio_vendor", "framework", "frameworks")) + " " + name)
                 self.rows.append((name, plain, identity, doc, {
                     "name": name, "platform": str(info.get("platform") or ""),
-                    "mcu": str(info.get("mcu") or ""),
+                    "id": str(info.get("board") or ""), "mcu": str(info.get("mcu") or ""),
                     "frameworks": sorted(str(value) for value in frameworks),
                 }))
             self.revision = revision

@@ -1,12 +1,21 @@
 ---
 name: frontend-design
-description: "Maintain fitted Lite pickers, aligned ticket filters and count tiles, automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain the assistant's chip-style agent list, expandable notification and device cards, glass AI review bars, two-column Lite Resources, fitted Lite pickers, aligned ticket filters and count tiles, automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
 # Frontend Design
 
-Lite's Connection card goes directly from Board/Recent boards to Serial port.
+The assistant list (`main/qt/agent_chooser.py`) is drawn as a chip with one lead per
+agent: names without "CLI", `(Built-in)` beside OpenCode and an italic green
+`(Downloaded)` beside the other agents found on the computer. It is still until a choice
+changes. Notification and device cards (`main/qt/card_browser.py`) keep one
+selectable document with painted glass sheets and an arrow per card. The AI review
+bar uses frosted capsules (`--ai-bar`, `--btn-*`) without blur on constrained PCs.
+
+Lite's Connection card goes directly from Board/Recent boards to Serial port, then
+Upload speed. The monitor baud is in the Serial monitor's status row. Resources and
+Open sketch share one size; sample code sits beside its list when there is room.
 Selecting a board configures the main catalog's default platform/framework; do
 not expose a second framework/platform dropdown or stale override selection.
 Keep the internal exact target for action readiness and preserve short layouts.
@@ -24,7 +33,7 @@ Keep indexed virtual rows with left-aligned name/version/origin, filtered sample
 file lists and its native read-only paper code viewer. Cache syntax layouts and
 Unicode find indexes; Ctrl+F, F3/Shift+F3, case matching and copy remain usable at
 small sizes. Allocate real reading height when code opens, and scroll short
-screens. Registry search belongs under Find more libraries. Shared package
+screens. Registry search belongs under Find more. Shared package
 origins use plain labels, and each package's `Package files:` progress replaces
 one monitor row without suppressing compiler diagnostics or reader scrollback.
 Developer Access gives Search and the three filters the same styled height.

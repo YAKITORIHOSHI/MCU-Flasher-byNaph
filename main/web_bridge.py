@@ -417,6 +417,9 @@ class MCUWebBackendAPI:
     unchanged — the routing is transparent to the callers.
     """
 
+    # Selecting a port connects the Serial Monitor. Lite connects only on request.
+    monitor_follows_port = True
+
     @property
     def is_busy(self) -> bool:
         return bool(getattr(self, "_hardware_busy", False)
@@ -516,6 +519,8 @@ class MCUWebBackendAPI:
         self.timestamp_enabled: bool = bool(config.get("timestamp_enabled", False))
         self.clear_console_on_action: bool = bool(config.get("clear_console_on_action", True))
         self.clear_serial_on_action: bool = bool(config.get("clear_serial_on_action", False))
+        # Summarize runs of unreadable bytes instead of printing every one as \\xNN.
+        self.serial_collapse_noise: bool = bool(config.get("serial_collapse_noise", True))
         self.reset_on_baud_change: bool = bool(get_reset_on_baud_change())
         try:
             raw_baud = int(config.get("baud_rate", 115200))
@@ -631,6 +636,34 @@ class MCUWebBackendAPI:
             "message": f"AI edit detected: {file_name}. Review changes in editor.",
             "type": "info",
         })
+
+    def revert_ai_edits(self, plan: dict) -> dict:
+        """Apply one previewed revert without proposing it as a new AI edit. Use a worker."""
+        manager, watcher = self.ai_review_manager, self.ai_watcher
+        if self.is_busy:
+            return {"success": False, "error": "Wait for the current operation to finish, then revert."}
+        paths = [Path(item["path"]) for item in plan.get("files", ()) if item.get("changed")]
+        dirty = {os.path.normcase(os.path.abspath(path)) for path, modified in self.modified_files.items() if modified}
+        unsaved = [path.name for path in paths if os.path.normcase(os.path.abspath(path)) in dirty]
+        if unsaved:
+            return {"success": False, "error": f"Save {', '.join(unsaved)} first: it has unsaved changes."}
+        try:
+            with watcher.user_file_operation(*paths):
+                result = manager.apply_ai_revert(plan)
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+        if result.get("success"):
+            for path in paths:
+                _sketch_ram_cache.invalidate(path)
+            bus = self._get_qt_signals()
+            if bus is not None and hasattr(bus, "ai_edits_reverted"):
+                bus.ai_edits_reverted.emit([{key: item[key] for key in ("path", "fileName", "exists", "shapeChanged")}
+                                            for item in result["files"]])
+            names = ", ".join(item["fileName"] for item in result["files"][:3])
+            extra = len(result["files"]) - 3
+            self.emit("notification", {"title": "AI edit reverted", "type": "success",
+                                       "message": f"Restored {names}{f' and {extra} more' if extra > 0 else ''}. Undo AI takes it back."})
+        return result
 
     def _block_if_pending_ai_edits(self, action_name: str) -> bool:
         """Check if unreviewed AI edits exist. If so, pause action and prompt review."""
@@ -989,25 +1022,34 @@ class MCUWebBackendAPI:
             self._stop_telemetry.wait(timeout=2.0)
 
     def _port_monitor_loop(self):
-        """Dedicated background thread: monitor serial COM ports in real-time for USB hotplug.
+        """Watch serial ports for USB hotplug on one background thread.
 
-        Uses ``_stop_port_monitor`` (threading.Event) for clean, immediate shutdown.
+        This thread alone compares the device inventory with the last one, clears a
+        port that went away and reselects it when its board returns. Nothing else
+        may rescan: a second scanner consumes the change this thread has to see.
 
-        Poll strategy
-        ─────────────
-        • Normal idle          : 1.5 s  (responsive to hotplug)
-        • During active op     : 3.0 s  (reduce churn during compile/flash)
-        • After a port change  : 0.3 s re-check to confirm state is stable
-          before sending notifications (avoids false-positive on transient glitches)
+        A cheap signature (device nodes, or Windows' serial map) is read every
+        0.5 s (1.5 s during an operation); the full USB metadata scan runs when it
+        changes, when one is requested, and every 5 s.
         """
+        from main.core import port_inventory
         try:
             self._init_hardware()
             self._stop_port_monitor.wait(timeout=1.5)
         except Exception:
             pass  # The next monitor iteration retries a transient scan failure.
+        last_signature, last_scan = None, 0.0
         while not self._stop_port_monitor.is_set():
             try:
-                ports = self._scan_ports()
+                signature = port_inventory.signature()
+                requested = bool(getattr(self, "_port_scan_requested", False))
+                self._port_scan_requested = False
+                if (signature is None or signature != last_signature or requested
+                        or time.monotonic() - last_scan >= 5.0):
+                    ports = self._scan_ports()
+                    last_scan = time.monotonic()
+                else:
+                    ports = list(self._last_known_ports)
                 current_devs = {p["device"] for p in ports}
                 last_devs = {p["device"] for p in self._last_known_ports}
 
@@ -1017,10 +1059,12 @@ class MCUWebBackendAPI:
                     if self._stop_port_monitor.is_set():
                         break
                     ports = self._scan_ports()
+                    signature = port_inventory.signature()
                     current_devs = {p["device"] for p in ports}
 
                     added_devs = current_devs - last_devs
                     removed_devs = last_devs - current_devs
+                    previous = {p["device"]: p for p in self._last_known_ports}
                     self._last_known_ports = list(ports)
 
                     if added_devs:
@@ -1030,6 +1074,7 @@ class MCUWebBackendAPI:
                             self.emit("notification", {
                                 "title": "Hardware Connected",
                                 "message": f"USB device connected: {dev}{desc}",
+                                "category": "usb",
                                 "type": "success",
                             })
                     if removed_devs:
@@ -1037,21 +1082,27 @@ class MCUWebBackendAPI:
                             self.emit("notification", {
                                 "title": "Hardware Disconnected",
                                 "message": f"USB device disconnected: {dev}",
+                                "category": "usb",
                                 "type": "warning",
                             })
                             if self.current_port == dev and not self._serial_handoff_pending(dev):
+                                self._returning_identity = port_inventory.usb_identity(previous.get(dev))
                                 self._clear_disconnected_port(dev)
-                    returning = getattr(self, "_returning_port", "")
-                    if returning in added_devs and not self.current_port and not getattr(self, "is_busy", False):
-                        self._restore_returned_port(returning)
+                    self._restore_if_returned(ports, added_devs)
                     # Publish after clearing disconnected selections, so the
                     # GUI cannot race cleanup with a stale combo selection.
                     self.emit("ports:updated", self._annotated_ports(ports))
                 else:
+                    if (last_signature is not None and signature is not None and self.current_port in current_devs
+                            and port_inventory.node_identity(signature, self.current_port)
+                            != port_inventory.node_identity(last_signature, self.current_port)):
+                        self._port_replugged(self.current_port)
+                    self._restore_if_returned(ports, ())
                     # Another window selecting or releasing a port changes which
                     # entries are in use without changing the device inventory.
-                    if get_occupied_ports() != getattr(self, "_port_owners", set()):
+                    if requested or get_occupied_ports() != getattr(self, "_port_owners", set()):
                         self.emit("ports:updated", self._annotated_ports(ports))
+                last_signature = signature
                 # A declared USB reset can defer clearing the selection. Once
                 # its guard finishes/expires, clear it even without another
                 # inventory change; stale selections must not enable Upload.
@@ -1062,8 +1113,47 @@ class MCUWebBackendAPI:
                 pass  # never crash the monitor; back-off handled by wait below
 
             # Adaptive poll interval: back off during active build/flash operations
-            poll_interval = 3.0 if getattr(self, "is_busy", False) else 1.5
+            poll_interval = 1.5 if getattr(self, "is_busy", False) else 0.5
             self._stop_port_monitor.wait(timeout=poll_interval)
+
+    def request_port_scan(self) -> None:
+        """Ask the port monitor for a fresh scan; safe and instant on the GUI thread."""
+        self._port_scan_requested = True
+
+    def _restore_if_returned(self, ports, added) -> None:
+        """Reselect this window's port once its board is back and nothing is running."""
+        from main.core import port_inventory
+        returning = getattr(self, "_returning_port", "")
+        if not returning or self.current_port or getattr(self, "is_busy", False):
+            return
+        if not any(p["device"] == returning for p in ports):
+            # The same board can come back under another name.
+            returning = port_inventory.same_device(getattr(self, "_returning_identity", None), ports, set(added))
+        if returning:
+            self._restore_returned_port(returning)
+
+    def _port_replugged(self, port: str) -> None:
+        """The selected board was replugged between two polls: its open handle is dead."""
+        self._begin_port_settling()
+        if (getattr(self, "is_busy", False) or self._serial_handoff_pending(port)
+                or not (self.serial_running or self.monitor_follows_port)):
+            return
+        self._serial_reconnect_token += 1
+        token = self._serial_reconnect_token
+
+        def reopen():
+            if token == self._serial_reconnect_token and self.current_port == port:
+                self._stop_serial_monitor()
+                self._start_serial_monitor()
+
+        threading.Thread(target=reopen, name="MCU_SwitchPort", daemon=True).start()
+
+    def _begin_port_settling(self) -> None:
+        """A board just appeared: give its driver and permissions time to be ready."""
+        self._port_settle_until = time.monotonic() + 8.0
+        budget = getattr(self, "_serial_recovery_budget", None)
+        if budget is not None:
+            budget.reset()
 
     def _clear_disconnected_port(self, port: str) -> None:
         if self.current_port != port:
@@ -2231,7 +2321,8 @@ class MCUWebBackendAPI:
             self.emit("compat_devices:updated", {
                 "lines": initial_lines,
                 "content": initial_lines,
-                "status": "Please compile to see the list of compatible devices",
+                "data": {"state": "empty"},
+                "status": "Compile to see compatible devices",
             })
             return
 
@@ -2239,8 +2330,11 @@ class MCUWebBackendAPI:
             current_hash = self._hash_sources()
         except Exception:
             current_hash = ""
+        # Names saved before a board's copies became one row.
+        cached["boards"] = {name for name in map(SUPPORTED_BOARDS.canonical, cached["boards"]) if name}
         stale = cached.get("hash", "") != current_hash
-        status = "Please recompile to update the list" if stale else f"{len(cached['boards'])}/{len(SUPPORTED_BOARDS)} · {cached.get('updated_at', '')}"
+        status = ("Compile again to update this list" if stale
+                  else self._compat_status(len(cached["boards"]), cached.get("updated_at", "")))
         state = {
             "boards": cached["boards"],
             "reasons": cached["reasons"],
@@ -2339,8 +2433,28 @@ class MCUWebBackendAPI:
         self.emit("compat_devices:updated", {
             "lines": lines,
             "content": lines,
+            "data": self._compat_data(state),
             "status": status,
         })
+
+    @staticmethod
+    def _compat_status(count: int, updated_at: str) -> str:
+        return f"{count} of {len(SUPPORTED_BOARDS)} boards" + (f"   {updated_at}" if updated_at else "")
+
+    def _compat_data(self, state: dict) -> dict:
+        """The analysis as records, for the Compatible Devices cards."""
+        boards = []
+        for name in sorted(state["boards"], key=str.lower):
+            info = SUPPORTED_BOARDS.get(name, {})
+            family = _board_family(name, info.get("platform"))
+            mcu = str(info.get("mcu") or "")
+            boards.append({"name": name, "family": family, "mcu": mcu,
+                           "search": " ".join((name, family, mcu, str(info.get("board") or ""),
+                                               str(info.get("pio_name") or ""))).lower()})
+        return {"state": "ready", "sketch": self.sketch_dir_path.name if self.sketch_dir_path else "",
+                "total": len(SUPPORTED_BOARDS), "stale": bool(state.get("stale")), "boards": boards,
+                "updated_at": state.get("updated_at") or "", "reasons": list(state["reasons"]),
+                "selected": getattr(self, "current_board", "")}
 
     def _get_compat_analysis(self) -> tuple[set, list]:
         try:
@@ -2368,7 +2482,8 @@ class MCUWebBackendAPI:
                 ("", "normal"),
                 ("  Analyzing sketch compatibility in background...", "dim"),
             ],
-            "status": "Analyzing compatible devices...",
+            "data": {"state": "analyzing"},
+            "status": "Checking compatible devices…",
         })
         threading.Thread(
             target=self._compat_worker_thread,
@@ -2406,7 +2521,8 @@ class MCUWebBackendAPI:
             self.emit("compat_devices:updated", {
                 "lines": err_lines,
                 "content": err_lines,
-                "status": "Analysis failed",
+                "data": {"state": "error", "message": str(result["error"])},
+                "status": "Compatibility check failed",
             })
             return
 
@@ -2419,7 +2535,7 @@ class MCUWebBackendAPI:
             "hash": result.get("hash", ""),
             "updated_at": now,
         }
-        status = f"{len(boards)}/{len(SUPPORTED_BOARDS)} · {now}"
+        status = self._compat_status(len(boards), now)
         self._compat_full_state = {
             "boards": boards,
             "reasons": reasons,
@@ -3229,13 +3345,6 @@ class MCUWebBackendAPI:
         ports.sort(key=_sort_key)
         return ports
 
-    def refresh_ports(self) -> list[dict[str, str]]:
-        """Re-scan ports and notify frontend."""
-        ports = self._scan_ports()
-        self._last_known_ports = list(ports)
-        self.emit("ports:updated", self._annotated_ports(ports))
-        return ports
-
     def _annotated_ports(self, ports):
         """Mark ports another MCU Flasher or Lite window holds. Every published
         list carries the marks, and the controls reuse the last one when the
@@ -3247,6 +3356,7 @@ class MCUWebBackendAPI:
     def _restore_returned_port(self, port: str) -> None:
         """Reselect this window's port when its device returns after a drop."""
         self._returning_port = ""
+        self._begin_port_settling()
         self.select_port(port)
 
     def _extract_port_device(self, text: str) -> str:
@@ -3476,6 +3586,7 @@ class MCUWebBackendAPI:
                 "type": "warning",
             })
             return False
+        board_name = SUPPORTED_BOARDS.canonical(board_name) or board_name
         self.current_board = board_name
         self.emit("board:selected", {"board_name": board_name})
         cfg = load_gui_config()
@@ -3599,6 +3710,7 @@ class MCUWebBackendAPI:
         ``operation_handoff`` lets an upload worker attach the monitor before
         it restarts the board it just wrote, so the boot output is captured.
         """
+        from main.core.monitor_connection import retire_connection, track_reader
         from main.core.serial_stream import SerialTextDecoder
 
         with self._serial_lock:
@@ -3622,13 +3734,14 @@ class MCUWebBackendAPI:
             self._serial_generation += 1
             generation = self._serial_generation
             self.serial_running = False
-            if self._serial_conn:
-                try:
-                    self._serial_conn.close()
-                except Exception:
-                    pass
-                self._serial_conn = None
+            previous, self._serial_conn = self._serial_conn, None
+        # Outside the state lock: the old reader leaves the driver before its port
+        # closes, and the port closes before this one opens.
+        retire_connection(previous)
 
+        with self._serial_lock:
+            if generation != self._serial_generation:
+                return  # A newer start or stop took over while the old port closed.
             if not self.current_port or (self.is_busy and self.active_operation != "compile"
                                          and not operation_handoff):
                 self.emit("serial:status", {
@@ -3694,12 +3807,9 @@ class MCUWebBackendAPI:
                     })
             except Exception as e:
                 self.serial_running = False
-                if self._serial_conn:
-                    try:
-                        self._serial_conn.close()
-                    except Exception:
-                        pass
-                    self._serial_conn = None
+                # No reader was started for this connection yet.
+                failed, self._serial_conn = self._serial_conn, None
+                retire_connection(failed)
                 self.emit("serial:status", {
                     "generation": generation,
                     "connected": False,
@@ -3719,7 +3829,7 @@ class MCUWebBackendAPI:
 
             conn = self._serial_conn
 
-        decoder = SerialTextDecoder()
+        decoder = SerialTextDecoder(collapse=getattr(self, "serial_collapse_noise", True))
         pieces = []
         piece_chars = 0
         next_flush = time.monotonic() + 0.03
@@ -3835,26 +3945,33 @@ class MCUWebBackendAPI:
             # diagnostics until that short setup lock has been released.
             reader_start.wait()
             error = None
-            while generation == self._serial_generation and conn and conn.is_open:
-                try:
-                    # Escaped byte text can be four times the raw size. Bound
-                    # every event before the signal bus's display-text limit.
-                    raw = conn.read(min(conn.in_waiting or 1, 2048))
-                    notice = None
-                    with log_lock:
-                        if generation != self._serial_generation or finalized:
-                            return
-                        if raw:
-                            retain(decoder.feed(raw))
-                            notice = warning_for_invalid()
-                        if not raw or piece_chars >= 8192 or time.monotonic() >= next_flush:
-                            # Prompts and newline-free output are delivered
-                            # promptly; per-byte bursts share a bounded event.
-                            publish()
-                    notify_warning(notice)
-                except Exception as exc:
-                    error = exc
-                    break
+            try:
+                while generation == self._serial_generation and conn and conn.is_open:
+                    try:
+                        # Escaped byte text can be four times the raw size. Bound
+                        # every event before the signal bus's display-text limit.
+                        raw = conn.read(min(conn.in_waiting or 1, 2048))
+                        notice = None
+                        with log_lock:
+                            if generation != self._serial_generation or finalized:
+                                return
+                            if raw:
+                                decoder.collapse = getattr(self, "serial_collapse_noise", True)
+                                retain(decoder.feed(raw))
+                                notice = warning_for_invalid()
+                            else:
+                                retain(decoder.idle())
+                            if not raw or piece_chars >= 8192 or time.monotonic() >= next_flush:
+                                # Prompts and newline-free output are delivered
+                                # promptly; per-byte bursts share a bounded event.
+                                publish()
+                        notify_warning(notice)
+                    except Exception as exc:
+                        error = exc
+                        break
+            finally:
+                # Never touches the driver again: whoever retires it may close now.
+                reader_left.set()
             with self._serial_lock:
                 if generation != self._serial_generation:
                     return  # An old reader never changes a newer connection.
@@ -3865,16 +3982,15 @@ class MCUWebBackendAPI:
                 self.serial_running = False
                 if self._serial_conn is conn:
                     self._serial_conn = None
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                self.emit("serial:status", {
-                    "generation": generation,
-                    "connected": False, "state": "disconnected", "port": port, "baud": baud,
-                })
-                if error:
-                    self._schedule_serial_recovery(generation, port, error)
+            retire_connection(conn)
+            with self._serial_lock:
+                if generation == self._serial_generation:
+                    self.emit("serial:status", {
+                        "generation": generation,
+                        "connected": False, "state": "disconnected", "port": port, "baud": baud,
+                    })
+                    if error:
+                        self._schedule_serial_recovery(generation, port, error)
             notify_warning(notice)
 
         with self._serial_lock:
@@ -3886,22 +4002,21 @@ class MCUWebBackendAPI:
             self._serial_log_finalize = finish
             self._serial_log_flush = publish
             self._serial_log_lock = log_lock
+            reader_left = track_reader(conn)
             try:
                 self._serial_thread = threading.Thread(
                     target=_reader, name="MCU_SerialReader", daemon=True
                 )
                 self._serial_thread.start()
             except Exception as exc:
+                reader_left.set()
                 finish()
                 self._serial_log_finalize = self._serial_thread = None
                 self._serial_log_flush = None
                 self.serial_running = False
                 if self._serial_conn is conn:
                     self._serial_conn = None
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+                retire_connection(conn)
                 self.emit("serial:status", {
                     "generation": generation, "connected": False,
                     "state": "disconnected", "port": port, "baud": baud,
@@ -3971,7 +4086,12 @@ class MCUWebBackendAPI:
         """Retry opening the selected port only; never reset or replay writes."""
         from src.modules.platform_runtime import serial_access_hint
         hint = serial_access_hint(port)
-        if "Access denied" in hint or "permission" in str(error).lower() or "access is denied" in str(error).lower():
+        denied = ("Access denied" in hint or "permission" in str(error).lower()
+                  or "access is denied" in str(error).lower())
+        if time.monotonic() < getattr(self, "_port_settle_until", 0.0):
+            # Just plugged in: udev still sets permissions, or the driver is starting.
+            delay = 0.6
+        elif denied:
             delay = None
         else:
             delay = self._serial_recovery_budget.next_delay()
@@ -4011,6 +4131,7 @@ class MCUWebBackendAPI:
 
     def _stop_serial_monitor(self):
         """Stop and close the serial monitor before upload/flash."""
+        from main.core.monitor_connection import retire_connection
         old_thread = None
         with self._serial_lock:
             sender = getattr(self, "_serial_send_queue", None)
@@ -4023,14 +4144,7 @@ class MCUWebBackendAPI:
                 self._serial_log_flush = None
             self._serial_generation += 1
             self.serial_running = False
-            if self._serial_conn:
-                try:
-                    # Passive open already established the idle line state and
-                    # disabled POSIX hang-up. Disconnect changes no control line.
-                    self._serial_conn.close()
-                except Exception:
-                    pass
-                self._serial_conn = None
+            conn, self._serial_conn = self._serial_conn, None
             old_thread = getattr(self, "_serial_thread", None)
             self._serial_thread = None
             self.emit("serial:status", {
@@ -4040,6 +4154,9 @@ class MCUWebBackendAPI:
                 "port": self.current_port,
                 "baud": self.current_baud,
             })
+        # Passive open already established the idle line state and disabled POSIX
+        # hang-up. Disconnect changes no control line.
+        retire_connection(conn)
         if old_thread and old_thread.is_alive() and old_thread != threading.current_thread():
             try:
                 old_thread.join(timeout=0.5)
@@ -5623,23 +5740,35 @@ class MCUWebBackendAPI:
             board_name = getattr(self, "current_board", "") or ""
         if not board_name:
             return {}
-        cache_key = board_name.strip().lower()
+        info = SUPPORTED_BOARDS.get(board_name)
+        if info is None:
+            # A name saved before this board's copies were merged or renamed.
+            board_name = SUPPORTED_BOARDS.canonical(str(board_name))
+            info = SUPPORTED_BOARDS.get(board_name) if board_name else None
+        if info is None:
+            return {}
+        info = dict(info)
+        framework = getattr(self, "_board_frameworks", {}).get(board_name)
+        if framework and framework in info.get("frameworks", []):
+            info["framework"] = framework
+        return info
 
-        if board_name in SUPPORTED_BOARDS:
-            info = dict(SUPPORTED_BOARDS[board_name])
-            framework = getattr(self, "_board_frameworks", {}).get(board_name)
-            if framework and framework in info.get("frameworks", []):
-                info["framework"] = framework
-            return info
-        for k, v in SUPPORTED_BOARDS.items():
-            if k.lower() == cache_key:
-                info = dict(v)
-                framework = getattr(self, "_board_frameworks", {}).get(k)
-                if framework and framework in info.get("frameworks", []):
-                    info["framework"] = framework
-                return info
-
-        return {}
+    def adopt_catalog_labels(self) -> bool:
+        """Follow a renamed row after a catalog refresh; True when the selection moved."""
+        frameworks = getattr(self, "_board_frameworks", {})
+        for name in [name for name in frameworks if name not in SUPPORTED_BOARDS]:
+            current = SUPPORTED_BOARDS.canonical(name)
+            if current:
+                frameworks.setdefault(current, frameworks[name])
+        selected = getattr(self, "current_board", "")
+        if not selected or selected in SUPPORTED_BOARDS:
+            return False
+        current = SUPPORTED_BOARDS.canonical(selected)
+        if not current or getattr(self, "is_busy", False):
+            return False
+        self.current_board = current
+        self.emit("board:selected", {"board_name": current})
+        return True
 
     def _check_target(self, action: str, *, sketch: bool = False,
                       log_event: str = "console:log") -> bool:

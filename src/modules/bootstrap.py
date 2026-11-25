@@ -1907,6 +1907,16 @@ def _arduino_cli_installed_version() -> str | None:
     return _arduino_cli_version_of(find_arduino_cli())
 
 
+def _user_arduino_cli() -> str | None:
+    """The copy Setup unpacked for this account, which may be newer than Program Files."""
+    if sys.platform != "win32":
+        return None
+    from src.modules.windows_components import arduino_cli_user_folder
+    folder = arduino_cli_user_folder()
+    path = folder / "arduino-cli.exe" if folder is not None else None
+    return str(path) if path is not None and path.is_file() else None
+
+
 def _verified_arduino_cli_upgrade(required: str) -> tuple[str | None, str | None]:
     """Find an installed arduino-cli at least ``required`` and remember its path.
 
@@ -1915,7 +1925,7 @@ def _verified_arduino_cli_upgrade(required: str) -> tuple[str | None, str | None
     reads the remembered one, so it must point at the upgraded executable.
     """
     candidates = []
-    for candidate in (_search_arduino_cli_install_dirs(), shutil.which("arduino-cli"), find_arduino_cli()):
+    for candidate in (_user_arduino_cli(), _search_arduino_cli_install_dirs(), shutil.which("arduino-cli"), find_arduino_cli()):
         if candidate and candidate not in candidates:
             candidates.append(candidate)
     best_path, best_version = None, None
@@ -2296,17 +2306,13 @@ def run_update_checks():
         # the CLI itself: it reported success while the version stayed put,
         # so the same update was offered on every launch. Install the exact
         # release, then believe only the version the executable reports.
-        msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
+        # The MSI needs an administrator, so an update through it asked on every
+        # start until it was allowed. The release ZIP updates this account's copy.
         if sys.platform != "win32":
             warn("arduino-cli updates are prepared by this system's own setup; no update was applied here.")
-        elif not _refresh_bundled_msi(r["latest"]):
+        elif not _install_arduino_cli_for_user(r["latest"]):
             warn(
-                f"Could not download the arduino-cli {r['latest']} installer. Download manually:\n"
-                f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
-            )
-        elif not _run_arduino_cli_msi(msi_path):
-            warn(
-                f"MSI install failed. Download manually:\n"
+                f"Could not update arduino-cli to {r['latest']}; {r['installed']} stays in use. Download manually:\n"
                 f"    {CYAN}https://arduino.github.io/arduino-cli/latest/installation/{RESET}"
             )
         else:
@@ -3776,6 +3782,12 @@ def ensure_webview2_runtime() -> bool:
         return True
 
     section("Installing Microsoft Edge WebView2 Runtime")
+    from src.modules import windows_components
+    installed, detail = windows_components.winget_install("webview2", timeout=300)
+    if installed and _wait_for_webview2_runtime(timeout=45):
+        ok("Microsoft Edge WebView2 Runtime installed with winget")
+        return True
+    status(f"winget did not provide WebView2 ({detail or 'it is not registered yet'}); using its installer...")
     installer = _prepare_webview2_installer()
 
     if installer is None or not _is_valid_exe(installer):
@@ -7562,6 +7574,23 @@ _MSIEXEC_ERROR_CODES = {
 _LAST_ARDUINO_CLI_ERROR = ""
 
 
+def _prompt_ledger():
+    """What this user was already asked to allow; explicit setup starts it afresh."""
+    from src.modules.windows_components import LEDGER_NAME, PromptLedger
+    return PromptLedger(_user_startup_state_dir() / LEDGER_NAME)
+
+
+def _component_installer(component: str) -> str:
+    """The installer a permission question would be about."""
+    from src.modules.windows_components import installer_fingerprint
+    if component == "cp210x":
+        return installer_fingerprint(_cp210x_installer())
+    if component == "ch34x":
+        installer = _ch34x_installer()
+        return installer_fingerprint(installer) if installer is not None else ""
+    return ""       # One question for Arduino CLI and Node.js, whatever their version.
+
+
 def get_last_arduino_cli_error() -> str:
     """Return the reason the most recent ensure_arduino_cli() call failed, if any."""
     return _LAST_ARDUINO_CLI_ERROR
@@ -7588,7 +7617,7 @@ def _new_msi_log_path() -> Path | None:
         return None
 
 
-def _run_msiexec(args: list[str]) -> tuple[int, str]:
+def _run_msiexec(args: list[str], component: str = "") -> tuple[int, str]:
     """
     Run msiexec with a verbose log file and return (exit_code, log_tail).
 
@@ -7606,7 +7635,7 @@ def _run_msiexec(args: list[str]) -> tuple[int, str]:
 
     def _launch(msi_args: list[str]) -> int:
         if sys.platform == "win32":
-            return _shell_execute_elevated_wait("msiexec", msi_args)
+            return _shell_execute_elevated_wait("msiexec", msi_args, component=component)
         result = subprocess.run(
             ["msiexec", *msi_args],
             capture_output=True,
@@ -7617,7 +7646,7 @@ def _run_msiexec(args: list[str]) -> tuple[int, str]:
     try:
         code = _launch(full_args)
     except PermissionError as e:
-        if str(e).startswith("UAC_DECLINED"):
+        if str(e).startswith("UAC_"):
             return -2, "The Administrator permission prompt (UAC) was declined."
         return -1, str(e)
     except Exception as e:
@@ -7632,7 +7661,7 @@ def _run_msiexec(args: list[str]) -> tuple[int, str]:
         try:
             code = _launch(list(args))
         except PermissionError as e:
-            if str(e).startswith("UAC_DECLINED"):
+            if str(e).startswith("UAC_"):
                 return -2, "The Administrator permission prompt (UAC) was declined."
             return -1, str(e)
         except Exception as e:
@@ -7670,7 +7699,8 @@ def _is_process_elevated() -> bool:
         return False
 
 
-def _shell_execute_elevated_wait(exe: str, args: list[str], timeout: float = 300.0) -> int:
+def _shell_execute_elevated_wait(exe: str, args: list[str], timeout: float = 300.0,
+                                 component: str = "") -> int:
     """
     Launch exe with args via ShellExecuteEx(verb='runas') so Windows shows
     the UAC consent prompt, then block until it exits and return its exit
@@ -7678,7 +7708,8 @@ def _shell_execute_elevated_wait(exe: str, args: list[str], timeout: float = 300
 
     Raises PermissionError (message prefixed "UAC_DECLINED:") if the user
     clicked "No" on the elevation prompt, or OSError for any other failure
-    to even launch the elevated process.
+    to even launch the elevated process. A named component asks only while its
+    question is open (``UAC_SETTLED:``), so no start repeats a declined prompt.
     """
     import ctypes
     from ctypes import wintypes
@@ -7706,6 +7737,15 @@ def _shell_execute_elevated_wait(exe: str, args: list[str], timeout: float = 300
                 return 1
         except Exception as exc:
             raise OSError(f"Could not launch elevated child {exe}: {exc}") from exc
+
+    ledger = _prompt_ledger() if component else None
+    installer = _component_installer(component) if component else ""
+    if ledger is not None:
+        settled = ledger.settled(component, installer)
+        if settled:
+            raise PermissionError(f"UAC_SETTLED: permission for {component} was already asked ({settled}); "
+                                  "run Setup with --repair to be asked again.")
+        ledger.record(component, "asked", installer)
 
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
     SW_HIDE = 0
@@ -7745,9 +7785,13 @@ def _shell_execute_elevated_wait(exe: str, args: list[str], timeout: float = 300
         err = ctypes.windll.kernel32.GetLastError()
         ERROR_CANCELLED = 1223
         if err == ERROR_CANCELLED:
+            if ledger is not None:
+                ledger.record(component, "declined", installer)
             raise PermissionError(
                 "UAC_DECLINED: the elevation (Administrator) prompt was declined."
             )
+        if ledger is not None:
+            ledger.record(component, "failed", installer)
         raise OSError(f"ShellExecuteEx failed to launch {exe} (Win32 error {err}).")
 
     WAIT_TIMEOUT = 0x00000102
@@ -7755,11 +7799,17 @@ def _shell_execute_elevated_wait(exe: str, args: list[str], timeout: float = 300
     if result == WAIT_TIMEOUT:
         ctypes.windll.kernel32.TerminateProcess(sei.hProcess, 1)
         ctypes.windll.kernel32.CloseHandle(sei.hProcess)
+        if ledger is not None:
+            ledger.record(component, "failed", installer)
         return 1
 
     exit_code = wintypes.DWORD()
     ctypes.windll.kernel32.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code))
     ctypes.windll.kernel32.CloseHandle(sei.hProcess)
+    if ledger is not None:
+        # An installer that answered is not run again by itself: the component
+        # check decides whether it worked, and repair is the way to repeat it.
+        ledger.record(component, "failed" if exit_code.value else "done", installer)
     return exit_code.value
 
 
@@ -7779,7 +7829,7 @@ def _run_arduino_cli_msi(msi_path: Path) -> bool:
     else:
         status("Running Arduino-CLI installer (requesting Administrator permission if needed)...")
 
-    code, detail = _run_msiexec(["/i", str(msi_path), "/quiet", "/norestart"])
+    code, detail = _run_msiexec(["/i", str(msi_path), "/quiet", "/norestart"], "arduino_cli")
 
     if code == 0:
         return True
@@ -7800,7 +7850,7 @@ def _run_arduino_cli_msi(msi_path: Path) -> bool:
              "files. Retrying as a repair install...")
         # /fa = reinstall all files regardless of checksum/version, fixing the
         # "registered but files gone" case without needing a manual uninstall first.
-        repair_code, repair_detail = _run_msiexec(["/fa", str(msi_path), "/quiet", "/norestart"])
+        repair_code, repair_detail = _run_msiexec(["/fa", str(msi_path), "/quiet", "/norestart"], "arduino_cli")
         if repair_code in (0, 3010):
             ok("Repair install succeeded.")
             return True
@@ -7826,15 +7876,48 @@ def _run_arduino_cli_msi(msi_path: Path) -> bool:
     return False
 
 
+def _install_arduino_cli_for_user(version: str = "") -> bool:
+    """Unpack the official CLI for this account, without any permission prompt."""
+    if sys.platform != "win32":
+        return False
+    from src.modules import windows_components
+    try:
+        version = version or _arduino_cli_latest_version() or ""
+        if not version:
+            warn("The current Arduino CLI version could not be read.")
+            return False
+        status(f"Installing Arduino CLI {version} for this account...")
+        path = windows_components.install_arduino_cli_for_user(
+            version, download=lambda url, target, digest: _download_file(url, target, expected_sha256=digest))
+    except Exception as exc:
+        warn(f"Arduino CLI could not be installed for this account: {exc}")
+        return False
+    if not _arduino_cli_version_of(str(path)):
+        warn(f"The Arduino CLI at {path} did not start.")
+        return False
+    _cache_arduino_cli_path(str(path))
+    return True
+
+
+def _install_arduino_cli_with_winget() -> bool:
+    """Let winget install the CLI while this process already has permission."""
+    from src.modules import windows_components
+    status("Installing Arduino CLI with winget...")
+    installed, detail = windows_components.winget_install("arduino_cli")
+    if not installed:
+        warn(f"winget did not install Arduino CLI ({detail}).")
+    return installed and find_arduino_cli() is not None
+
+
 def ensure_arduino_cli() -> bool:
     """
     Prepare only the Arduino CLI executable; exact selected cores use the worker.
 
     Priority:
       1. Already on PATH / known install dirs → nothing to do.
-      2. Bundled MSI in installers/arduino-cli.msi → run it.
-      3. No bundled MSI → download latest from GitHub, run it, then
-         keep the downloaded copy as the new bundled MSI.
+      2. winget, when Setup already has Administrator permission.
+      3. The official ZIP for this account only, checked against Arduino's checksums.
+      4. The MSI in installers/ (downloaded when absent), which needs permission.
     """
     global _LAST_ARDUINO_CLI_ERROR
     _LAST_ARDUINO_CLI_ERROR = ""
@@ -7846,6 +7929,13 @@ def ensure_arduino_cli() -> bool:
         return True
 
     section("Installing Arduino-CLI")
+    if (_is_process_elevated() and _install_arduino_cli_with_winget()) or _install_arduino_cli_for_user():
+        cli = find_arduino_cli()
+        if cli:
+            ok(f"Arduino-CLI installed successfully: {cli}")
+            _cache_arduino_cli_path(cli)
+            return True
+
     msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
 
     if not _is_valid_msi(msi_path):
@@ -7999,7 +8089,15 @@ def check_cp210x_driver() -> bool:
 
         return False
     except FileNotFoundError:
-        return False
+        # Windows creates the service key with the first connected device, so a
+        # staged or Windows Update driver can be present without one.
+        return _cp210x_driver_in_store()
+
+
+def _cp210x_installer() -> Path:
+    import platform
+    is_64bit = platform.machine().endswith("64") or sys.maxsize > 2**32
+    return _find_installer_dir("CP210x") / ("CP210xVCPInstaller_x64.exe" if is_64bit else "CP210xVCPInstaller_x86.exe")
 
 
 def ensure_cp210x() -> bool:
@@ -8009,11 +8107,7 @@ def ensure_cp210x() -> bool:
         return True
 
     section("Installing CP210x Driver")
-    driver_dir = _find_installer_dir("CP210x")
-
-    import platform
-    is_64bit = platform.machine().endswith("64") or sys.maxsize > 2**32
-    installer = driver_dir / ("CP210xVCPInstaller_x64.exe" if is_64bit else "CP210xVCPInstaller_x86.exe")
+    installer = _cp210x_installer()
 
     if not _is_valid_exe(installer):
         fail(f"CP210x driver installer is missing or invalid: {installer}")
@@ -8024,7 +8118,7 @@ def ensure_cp210x() -> bool:
         exit_code = None
         if sys.platform == "win32":
             # Run DPInst elevated and silently. Suppress dialogs using /q /se
-            exit_code = _shell_execute_elevated_wait(str(installer), ["/q", "/se"])
+            exit_code = _shell_execute_elevated_wait(str(installer), ["/q", "/se"], component="cp210x")
             # DPInst uses a bitfield return code:
             # - Bit 31 (0x80000000) is set on failure
             # - Other bits indicate successfully installed packages (e.g. exit code 1 or 2),
@@ -8195,15 +8289,20 @@ def check_ch34x_driver() -> bool:
     return False
 
 
-def _ch34x_installer_available() -> bool:
-    """Return True if a valid CH34x installer EXE is bundled with this deployment."""
+def _ch34x_installer() -> Path | None:
+    """The bundled CH34x installer, whatever its spelling, or None."""
     driver_dir = _find_installer_dir("CH34x")
     if not driver_dir.is_dir():
-        return False
-    for name in ("CH341SER.EXE", "ch341ser.exe"):
-        if _is_valid_exe(driver_dir / name):
-            return True
-    return any(_is_valid_exe(p) for p in driver_dir.glob("*.exe"))
+        return None
+    for path in (driver_dir / "CH341SER.EXE", driver_dir / "ch341ser.exe", *sorted(driver_dir.glob("*.exe"))):
+        if _is_valid_exe(path):
+            return path
+    return None
+
+
+def _ch34x_installer_available() -> bool:
+    """Return True if a valid CH34x installer EXE is bundled with this deployment."""
+    return _ch34x_installer() is not None
 
 
 def ensure_ch34x() -> bool:
@@ -8229,19 +8328,9 @@ def ensure_ch34x() -> bool:
     section("Installing CH34x (WCH) Driver")
 
     # The official WCH installer is a single EXE that covers all CH34x chips
-    installer = driver_dir / "CH341SER.EXE"
+    installer = _ch34x_installer()
 
-    if not _is_valid_exe(installer):
-        # Fall back to lowercase variant
-        installer = driver_dir / "ch341ser.exe"
-    if not _is_valid_exe(installer):
-        # Try any .exe in the directory
-        for exe_path in driver_dir.glob("*.exe"):
-            if _is_valid_exe(exe_path):
-                installer = exe_path
-                break
-
-    if not _is_valid_exe(installer):
+    if installer is None:
         warn(f"CH34x driver installer is missing or invalid in: {driver_dir}")
         status("Download CH341SER.EXE from http://www.wch-ic.com/downloads/CH341SER_EXE.html")
         status(f"and place it in: {driver_dir}")
@@ -8252,7 +8341,7 @@ def ensure_ch34x() -> bool:
         exit_code = None
         if sys.platform == "win32":
             # WCH installer supports /s for silent mode
-            exit_code = _shell_execute_elevated_wait(str(installer), ["/s"])
+            exit_code = _shell_execute_elevated_wait(str(installer), ["/s"], component="ch34x")
             # WCH installer typically returns 0 on success
             if exit_code not in (0, 3010, None):
                 fail(f"CH34x installer exited with code {exit_code}.")
@@ -8865,7 +8954,7 @@ def _install_nodejs_lts_direct() -> bool:
         status("Installing Node.js LTS via msiexec (may request Administrator)...")
         msi_args = ["/i", str(msi_path), "/qn", "/norestart"]
         try:
-            exit_code = _shell_execute_elevated_wait("msiexec", msi_args, timeout=180)
+            exit_code = _shell_execute_elevated_wait("msiexec", msi_args, timeout=180, component="node")
         except PermissionError:
             warn("Administrator permission was declined for Node.js MSI install.")
             return _find_usable_npm_cmd() is not None
@@ -8891,9 +8980,30 @@ def _install_nodejs_lts_direct() -> bool:
     return _find_usable_npm_cmd() is not None
 
 
+def _install_nodejs_for_user() -> bool:
+    """Unpack the official Node.js LTS for this account, without any permission prompt."""
+    if sys.platform != "win32":
+        return False
+    from src.modules import windows_components
+    try:
+        status("Installing Node.js LTS for this account...")
+        windows_components.install_node_for_user(
+            download=lambda url, target, digest: _download_file(url, target, expected_sha256=digest))
+    except Exception as exc:
+        warn(f"Node.js could not be installed for this account: {exc}")
+        return False
+    _refresh_node_npm_path()
+    if _find_usable_npm_cmd():
+        ok("Node.js LTS installed for this account.")
+        return True
+    return False
+
+
 def _install_nodejs_lts() -> bool:
-    """Attempt installing Node.js LTS via winget first, falling back to direct MSI download."""
-    if _install_nodejs_lts_with_winget():
+    """winget while Setup has permission, this account's own copy otherwise, then the MSI."""
+    if _is_process_elevated() and _install_nodejs_lts_with_winget():
+        return True
+    if not _is_process_elevated() and _install_nodejs_for_user():
         return True
     status("Trying direct Node.js installer fallback...")
     return _install_nodejs_lts_direct()
@@ -9199,10 +9309,10 @@ def ensure_opencode_cli() -> bool:
 def _heal_private_python_runtime() -> bool:
     """Auto-heal the private Python runtime at src/_python/.
 
-    If the runtime is missing or broken and a bundled Python installer is
-    available under ``installers/.handsoff/``, reinstall it silently to the
-    same location, then re-apply the Windows Hidden attribute so the folder
-    stays invisible to Windows Search and Explorer.
+    If the runtime is missing or broken, reinstall it silently to the same
+    location from the Python installer under ``installers/.handsoff/``, or from
+    winget when none is bundled, then re-apply the Windows Hidden attribute so
+    the folder stays invisible to Windows Search and Explorer.
 
     Returns True if the runtime is healthy (either already fine or
     successfully healed), False if healing was needed but failed.
@@ -9212,6 +9322,13 @@ def _heal_private_python_runtime() -> bool:
 
     private_python_dir = SCRIPT_DIR / "src" / "_python"
     private_python_exe = private_python_dir / "python.exe"
+    try:
+        # Setup runs from this very runtime; a probe that is slow on a busy or
+        # scanned disk must not be taken for a broken one and reinstalled.
+        if private_python_dir.resolve() in Path(_ORIGINAL_PYTHON_EXECUTABLE).parents:
+            return True
+    except OSError:
+        pass
 
     # ── Quick health check ─────────────────────────────────────────
     def _is_runtime_healthy() -> bool:
@@ -9244,22 +9361,20 @@ def _heal_private_python_runtime() -> bool:
             handsoff_dir = candidate_dir
             break
 
-    if not handsoff_dir:
-        warn("Private Python runtime is broken but no bundled installer directory found.")
-        return False
-
-    # Auto-detect any python-*-amd64.exe in the .handsoff directory
+    # Auto-detect any python-*-amd64.exe in the .handsoff directory; winget
+    # downloads and verifies the same Python when none is bundled.
+    from src.modules import windows_components
     installer_candidates = sorted(
         handsoff_dir.glob("python-*-amd64.exe"),
         key=lambda p: p.name,
         reverse=True,
-    )
-    if not installer_candidates:
-        warn("Private Python runtime is broken but no python-*-amd64.exe installer found.")
+    ) if handsoff_dir else []
+    installer_path = installer_candidates[0] if installer_candidates else None
+    if installer_path is None and not windows_components.winget_path():
+        warn("Private Python runtime is broken; there is no bundled installer and no winget.")
         return False
-
-    installer_path = installer_candidates[0]
-    status(f"Auto-healing private Python runtime from {installer_path.name}...")
+    source_name = installer_path.name if installer_path else "winget"
+    status(f"Auto-healing private Python runtime from {source_name}...")
 
     # ── Clean up old broken installation ─────────────────────────────
     if private_python_dir.exists():
@@ -9295,19 +9410,23 @@ def _heal_private_python_runtime() -> bool:
     ]
 
     try:
-        status("Installing private Python runtime (may request Administrator)...")
-        exit_code = _shell_execute_elevated_wait(
-            str(installer_path), install_args, timeout=180.0
-        )
-    except PermissionError:
-        warn("Administrator permission was declined for Python runtime repair.")
-        return False
+        # InstallAllUsers=0 writes only this folder and account: no permission prompt.
+        status("Installing private Python runtime for this account...")
+        if installer_path is None:
+            installed, detail = windows_components.install_private_python(private_python_dir, log=log_path)
+            exit_code = 0 if installed else 1
+        else:
+            detail = ""
+            exit_code = subprocess.run(
+                [str(installer_path), *install_args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW, timeout=300,
+            ).returncode
     except Exception as exc:
         fail(f"Could not launch Python installer: {exc}")
         return False
 
     if exit_code != 0:
-        fail(f"Python installer exited with code {exit_code}. Check log: {log_path}")
+        fail(f"Python installer exited with code {exit_code}. {detail or f'Check log: {log_path}'}")
         return False
 
     # ── Post-install: apply hidden attribute ────────────────────────
@@ -9325,7 +9444,7 @@ def _heal_private_python_runtime() -> bool:
 
     # ── Verify the repair ───────────────────────────────────────────
     if _is_runtime_healthy():
-        ok(f"Private Python runtime healed successfully from {installer_path.name}.")
+        ok(f"Private Python runtime healed successfully from {source_name}.")
         return True
     else:
         fail("Python installer completed but the runtime still fails health check.")
@@ -9637,6 +9756,19 @@ def _startup_installation_identity() -> str:
         return str(SCRIPT_DIR).casefold()
 
 
+def _startup_python_identity() -> str:
+    """Name the interpreter this launch started in, whatever Setup points children at.
+
+    Setup switches ``sys.executable`` to env/Scripts/python.exe, while the next launch
+    starts in src/_python again. Recording the switched path made every snapshot stale,
+    so every Windows start ran the whole Bootstrap and repeated its prompts.
+    """
+    path = Path(_ORIGINAL_PYTHON_EXECUTABLE)
+    if path.name.lower() == "pythonw.exe":
+        path = path.with_name("python.exe")
+    return str(path).casefold()
+
+
 def _startup_site_packages_dir() -> Path | None:
     """Resolve the current runtime or venv site-packages directory without importing it."""
     current = Path(sys.executable).resolve()
@@ -9708,7 +9840,7 @@ def _read_startup_health_snapshot() -> dict | None:
             return None
         if data.get("installation_root") != _startup_installation_identity():
             return None
-        if data.get("python_executable") != str(Path(sys.executable).resolve()).casefold():
+        if data.get("python_executable") != _startup_python_identity():
             return None
         if data.get("app_fingerprint") != _startup_app_fingerprint():
             return None
@@ -9745,7 +9877,7 @@ def _write_startup_health_snapshot() -> bool:
         payload = {
             "schema": STARTUP_HEALTH_SCHEMA,
             "installation_root": _startup_installation_identity(),
-            "python_executable": str(Path(sys.executable).resolve()).casefold(),
+            "python_executable": _startup_python_identity(),
             "app_fingerprint": _startup_app_fingerprint(),
             "compatibility_fingerprint": _startup_compatibility_fingerprint(),
             "python_version": ".".join(str(x) for x in sys.version_info[:3]),
@@ -10290,13 +10422,11 @@ def _repair_venv_in_place(venv_dir: Path, host_python: Path) -> bool:
 def _install_arduino_cli_machine_only() -> bool:
     """Install Arduino-CLI itself without prewarming per-user board cores.
 
-    This remains available for the one-shot helper compatibility path.  The
-    normal launcher now elevates the complete bootstrap chain, so board/core
-    preparation can use the same Administrator token without nesting helpers.
+    The elevated helper runs this once: winget first, the bundled MSI otherwise.
     """
     if sys.platform != "win32":
         return True
-    if find_arduino_cli():
+    if find_arduino_cli() or _install_arduino_cli_with_winget():
         return True
 
     msi_path = SCRIPT_DIR / "installers" / "arduino-cli.msi"
@@ -10332,9 +10462,8 @@ def _run_privileged_first_run_tasks() -> bool:
     _gui = _SilentPrivilegedGUI()
     critical_ok = True
 
-    # Install the complete Windows bundle once while this helper owns the
-    # elevated token. Board/core setup is handled by the main elevated
-    # bootstrap after this compatibility helper returns.
+    # Install the complete Windows set once while this helper owns the elevated
+    # token: winget where it packages the component, the bundled installer otherwise.
     installer_results = _ensure_bundled_windows_installers(
         machine_only_arduino=True
     )
@@ -10351,6 +10480,21 @@ def _run_privileged_first_run_tasks() -> bool:
         pass
 
     return critical_ok
+
+
+def _missing_machine_components() -> list[str]:
+    """Components worth one Administrator approval because no account-only copy serves.
+
+    Arduino CLI, WebView2 and Node.js install for this account without permission,
+    so only the USB drivers decide whether Windows is asked at all.
+    """
+    missing = []
+    if not check_cp210x_driver() and _is_valid_exe(_cp210x_installer()):
+        missing.append("cp210x")
+    # Skip CH34x when its installer is not bundled with this deployment.
+    if not check_ch34x_driver() and _ch34x_installer_available():
+        missing.append("ch34x")
+    return missing
 
 
 def _request_first_run_privileged_setup(gui: Optional[BootstrapGUI] = None) -> bool:
@@ -10370,18 +10514,19 @@ def _request_first_run_privileged_setup(gui: Optional[BootstrapGUI] = None) -> b
         status("Setup is already running as Administrator; no extra elevation helper is needed.")
         return True
 
-    needs_privileged_work = (
-        not check_webview2_runtime()
-        or find_arduino_cli() is None
-        or not check_cp210x_driver()
-        # Only include CH34x in the elevation check when the installer is actually
-        # bundled with this deployment — avoids a UAC prompt on machines where the
-        # directory was not included but the driver is already installed system-wide.
-        or (not check_ch34x_driver() and _ch34x_installer_available())
-        or _find_usable_npm_cmd() is None
-    )
-    if not needs_privileged_work:
+    ledger = _prompt_ledger()
+    if _explicit_setup_requested():
+        ledger.forget()
+    missing = _missing_machine_components()
+    if not missing:
         return True
+    asking = [name for name in missing if not ledger.settled(name, _component_installer(name))]
+    if not asking:
+        status("System components without permission stay as they are: " + ", ".join(missing)
+               + ". Run Setup with --repair to be asked again.")
+        return True
+    for name in missing:
+        ledger.record(name, "asked", _component_installer(name))
 
     if gui:
         gui.set_status("Requesting Administrator permission once for first-run system components...")
@@ -10399,15 +10544,23 @@ def _request_first_run_privileged_setup(gui: Optional[BootstrapGUI] = None) -> b
             [helper_script, "--privileged-first-run"],
             timeout=1200,
         )
-        if exit_code == 0:
+        still_missing = _missing_machine_components()
+        for name in missing:
+            ledger.record(name, "failed" if name in still_missing else "done", _component_installer(name))
+        if exit_code == 0 and not still_missing:
             ok("First-run system components prepared with one Administrator approval.")
             return True
-        warn(f"First-run elevated helper exited with code {exit_code}; setup will re-check each component normally.")
+        warn(f"System components still missing after setup: {', '.join(still_missing) or 'none'} "
+             f"(helper exit {exit_code}). They are not asked for again until Setup runs with --repair.")
         return False
     except PermissionError:
-        warn("Administrator permission was declined; system-level components may require approval later.")
+        for name in missing:
+            ledger.record(name, "declined", _component_installer(name))
+        warn("Administrator permission was declined. It is not asked for again until Setup runs with --repair.")
         return False
     except Exception as exc:
+        for name in missing:
+            ledger.record(name, "failed", _component_installer(name))
         warn(f"Could not complete one-time elevated setup: {exc}")
         return False
     finally:
@@ -11146,11 +11299,11 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 lambda: gui.log_ok(cp_message) if cp_ok else gui.log_warn(cp_message),
             )
             if not cp_ok:
-                _fail_and_exit(
-                    "CP210x USB Serial Driver",
-                    cp_message,
-                )
-                return
+                # Only boards with this USB chip need it, and Windows Update offers
+                # it when one is connected: never a reason to keep the app closed.
+                gui.root.after(0, lambda: gui.log_dim(
+                    "Boards with a CP210x USB chip appear once Windows has its driver. "
+                    "Run Setup with --repair to install the bundled one."))
 
         gui.root.after(0, lambda: gui.log_section("Checking OpenCode AI Assistant"))
         if sys.platform == "win32":

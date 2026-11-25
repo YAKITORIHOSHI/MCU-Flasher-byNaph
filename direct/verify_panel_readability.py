@@ -112,6 +112,77 @@ class PanelReadabilityChecks(unittest.TestCase):
             panel.apply_theme(mode)
             self.assert_readable(rendered_color(panel._output, "No devices match"), get_palette(mode)["BG_DARKEST"])
 
+    def compatible_data(self, **changes):
+        boards = [{"name": f"Fixture S3 board {n:02d}", "family": "ESP32-S3", "mcu": "esp32s3",
+                   "search": f"fixture s3 board {n:02d} esp32-s3 esp32s3"} for n in range(24)]
+        boards += [{"name": "Arduino UNO", "family": "Uno", "mcu": "atmega328p", "search": "arduino uno uno atmega328p"}]
+        return dict({"state": "ready", "sketch": "Fixture", "total": 60, "stale": False, "boards": boards,
+                     "updated_at": "20:14:11", "selected": "Arduino UNO",
+                     "reasons": [f"reason {n}" for n in range(5)]}, **changes)
+
+    def test_compatible_devices_header_is_one_line_at_every_width(self):
+        panel = self.widget(CompatPanel())
+        panel.set_status("25 of 60 boards   20:14:11")
+        panel.show()
+        for width in (1600, 1100, 840, 640, 480, 320):
+            panel.resize(width, 260)
+            APP.processEvents()
+            row = [control for control in (panel.search_input, panel.btn_clear_search, panel.lbl_status, panel.btn_copy)
+                   if control.isVisible()]
+            header = row[0].parentWidget()
+            self.assertTrue(all(control.parentWidget() is header for control in row))
+            self.assertLessEqual(header.height(), 36)
+            rights = [control.geometry().right() for control in row]
+            self.assertEqual(rights, sorted(rights))
+            self.assertTrue(all(header.rect().contains(control.geometry()) for control in row), width)
+        self.assertEqual(panel.lbl_status.full_text(), "25 of 60 boards   20:14:11")
+
+    def test_compatible_devices_cards_group_filter_open_and_mark_the_selected_board(self):
+        panel = self.widget(CompatPanel())
+        panel.resize(1000, 420)
+        panel.show()
+        panel.set_data(self.compatible_data())
+        APP.processEvents()
+        view = panel._output
+        text = view.toPlainText()
+        self.assertIn("25 of 60 boards can run this sketch", text)
+        self.assertIn("and 2 more reasons", text)
+        self.assertIn("Fixture S3 board 05", text)
+        self.assertNotIn("Fixture S3 board 23", text, "A closed family previews its first boards")
+        self.assertIn("selected", text, "The selected board's family is open")
+        view.toggle("family:ESP32-S3")
+        self.assertIn("Fixture S3 board 23", view.toPlainText())
+        self.assertGreater(panel._columns, 1)
+        self.assertEqual(view.horizontalScrollBar().maximum(), 0, "Aligned columns stay inside their card")
+        for mode in MODES:
+            panel.apply_theme(mode)
+            self.assertIn("Fixture S3 board 23", view.toPlainText(), "Opened families stay open")
+            for part in ("25 of 60 boards", "reason 1", "Fixture S3 board 23", "atmega328p", "ESP32-S3"):
+                self.assert_readable(rendered_color(view, part), glass_worst(mode)["reading"])
+        panel.search_input.setText("uno")
+        text = view.toPlainText()
+        self.assertIn("Arduino UNO", text)
+        self.assertNotIn("Fixture S3", text)
+        panel.search_input.setText("atmega328p")
+        self.assertIn("Arduino UNO", view.toPlainText(), "The filter also matches the chip")
+        panel.search_input.setText("zzz")
+        self.assertIn("No devices match 'zzz'", view.toPlainText())
+        panel.btn_clear_search.click()
+        panel._on_board_selected({"board_name": "Fixture S3 board 23"})
+        APP.processEvents()
+        self.assertEqual(view.toPlainText().count("selected"), 1)
+        panel._copy_output()
+        self.assertIn("ESP32-S3 (24 boards)", APP.clipboard().text())
+        self.assertIn("Fixture S3 board 23", APP.clipboard().text())
+        for state, words in (("empty", "Compile to see compatible devices"), ("analyzing", "Checking this sketch"),
+                             ("error", "Compatibility could not be checked")):
+            panel.set_data({"state": state, "message": "fixture"})
+            APP.processEvents()
+            self.assertIn(words, view.toPlainText())
+        panel.set_data(self.compatible_data(stale=True))
+        APP.processEvents()
+        self.assertIn("Compile again to refresh it", view.toPlainText())
+
     def test_selected_compatibility_rows_survive_repeated_empty_filter_theme_rebuilds(self):
         panel = self.widget(CompatPanel())
         panel.resize(520, 210)
@@ -180,6 +251,87 @@ class PanelReadabilityChecks(unittest.TestCase):
             panel._append_notification_card({"type": "info", "message": "live retained message"})
             panel.apply_theme("light")
             self.assert_readable(rendered_color(panel._browser, "live retained message"), glass_worst("light")["reading"])
+
+    def test_notification_cards_expand_to_details_and_stay_readable(self):
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QKeyEvent, QMouseEvent, QTextCursor
+        long_message = "First line of a long build failure\n" + "\n".join(f"detail line {n}" for n in range(6))
+        records = [{"id": "n1", "category": "usb", "level": "success", "title": "Hardware Connected",
+                    "message": "USB device connected: /dev/ttyUSB0", "date": "2026-11-20", "time": "20:26:31"},
+                   {"id": "n2", "category": "system", "level": "error", "title": "Build Failed", "message": long_message,
+                    "date": "2026-11-20", "time": "20:27:00", "details": {"file": "demo.ino", "line": 42}}]
+        history = patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=list(reversed(records)))
+        history.start()
+        self.addCleanup(history.stop)
+        panel = self.widget(NotifPanel())
+        view = panel._browser
+        panel.resize(900, 420)
+        panel.show()
+        APP.processEvents()
+        text = view.toPlainText()
+        self.assertLess(text.index("Build Failed"), text.index("Hardware Connected"), "Newest first")
+        self.assertIn("detail line 0", text)
+        self.assertNotIn("detail line 3", text, "A long message is previewed until its card is opened")
+        self.assertNotIn("demo.ino", text)
+        self.assertEqual(panel._error_count.text(), "1" if panel.width() < 1000 else "1 error")
+
+        def click(point):
+            for kind, buttons in ((QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton),
+                                  (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton)):
+                APP.sendEvent(view.viewport(), QMouseEvent(kind, QPointF(point), view.viewport().mapToGlobal(QPointF(point)),
+                                                           Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier))
+            APP.processEvents()
+        arrow = view._arrow_rect(view._card_rect(view._frames()[0])).center()
+        click(arrow)
+        text = view.toPlainText()
+        for expected in ("detail line 5", "Level:  Error", "From:  Workspace", "When:  2026-11-20 20:27:00",
+                         "File:  demo.ino", "Line:  42"):
+            self.assertIn(expected, text)
+        self.assertNotIn("From:  USB device", text, "Only the clicked card opens")
+        for mode in MODES:
+            panel.apply_theme(mode)
+            self.assertIn("detail line 5", view.toPlainText(), "Opened cards stay open through a theme change")
+            for part in ("Level:", "demo.ino", "detail line 5", "Hardware Connected", "USB device   Nov 20"):
+                self.assert_readable(rendered_color(view, part), glass_worst(mode)["reading"])
+        panel._append_notification_card({"id": "n3", "type": "info", "title": "Newer", "message": "Arrived later"})
+        self.assertTrue(view.toPlainText().startswith("Newer"))
+        self.assertIn("demo.ino", view.toPlainText(), "A newer card does not close an opened one")
+        # The same card closes from the keyboard.
+        view.setTextCursor(QTextCursor(view.document().find("Build Failed").block()))
+        APP.sendEvent(view, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier))
+        self.assertNotIn("demo.ino", view.toPlainText())
+        panel._btn_expand.click()
+        self.assertEqual(panel._btn_expand.accessibleName(), "Collapse all")
+        self.assertIn("From:  USB device", view.toPlainText())
+        panel._btn_expand.click()
+        self.assertNotIn("From:  USB device", view.toPlainText())
+        # Dragging selects text instead of opening a card.
+        before = view.toPlainText()
+        rect = view._card_rect(view._frames()[1])
+        start, end = QPointF(rect.left() + 40, rect.top() + 16), QPointF(rect.left() + 160, rect.top() + 16)
+        for kind, point, buttons in ((QEvent.Type.MouseButtonPress, start, Qt.MouseButton.LeftButton),
+                                     (QEvent.Type.MouseMove, end, Qt.MouseButton.LeftButton),
+                                     (QEvent.Type.MouseButtonRelease, end, Qt.MouseButton.NoButton)):
+            APP.sendEvent(view.viewport(), QMouseEvent(kind, point, view.viewport().mapToGlobal(point),
+                                                       Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier))
+        self.assertEqual(view.toPlainText(), before)
+        self.assertTrue(view.textCursor().hasSelection())
+
+    def test_hidden_notifications_do_no_rendering_until_shown(self):
+        with patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=[]):
+            panel = self.widget(NotifPanel())
+            panel._render_if_needed()
+            with patch.object(panel._browser, "set_cards", wraps=panel._browser.set_cards) as render:
+                for index in range(40):
+                    panel._append_notification_card({"message": f"background {index}"})
+                    panel.apply_theme(MODES[index % len(MODES)])
+                render.assert_not_called()
+                panel.show()
+                APP.processEvents()
+                self.assertGreaterEqual(render.call_count, 1)
+                self.assertLessEqual(render.call_count, 3, "Opening the tab renders once, not once per event")
+            self.assertIn("background 39", panel._browser.toPlainText())
+            panel.hide()
 
     def test_notification_display_retention_stays_bounded_after_recolor(self):
         with patch("main.qt.notif_panel.dbs_read.get_notifications", return_value=[]):

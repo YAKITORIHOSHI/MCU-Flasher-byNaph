@@ -79,7 +79,7 @@ def main():
                 saved = json.loads((state / "settings.json").read_text())
                 check(saved["shared"]["recent_projects"] == recent, "recent sketches persist in Lite's settings")
 
-                uno = "Arduino Uno [atmelavr:uno]"
+                uno = worker.boards.canonical("Arduino Uno [atmelavr:uno]")
                 names = [uno] + [name for name in worker.boards if name != uno][:5]
                 for name in names:
                     worker.dispatch({"cmd": "board", "name": name})

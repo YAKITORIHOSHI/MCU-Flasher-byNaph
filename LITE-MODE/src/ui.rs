@@ -1,4 +1,5 @@
 use crate::bridge::{Bridge, Event};
+use crate::preferences::{self, Preferences};
 use eframe::egui::{
     self, Align, Align2, Color32, FontFamily, FontId, RichText, Sense, Stroke, Vec2,
 };
@@ -307,6 +308,8 @@ const PROJECT_DIALOG: &str = "Open sketch";
 const RESOURCES_DIALOG: &str = "Resources";
 const BOARD_DIALOG: &str = "Choose your board";
 const PROJECT_PATH: &str = "lite-project-path";
+/// Open sketch and Resources share one roomy size, bounded by the workspace.
+const DIALOG_SIZE: Vec2 = egui::vec2(1040.0, 640.0);
 
 /// Same sketch folder, ignoring trailing separators (and case on Windows).
 fn same_folder(a: &str, b: &str) -> bool {
@@ -551,7 +554,7 @@ fn picker_window(
         .frame(frame)
 }
 
-fn status_box(ui: &mut egui::Ui, label: &str, value: &str, width: f32) {
+fn status_box(ui: &mut egui::Ui, label: &str, value: &str, width: f32) -> egui::Response {
     let palette = Palette::from_context(ui.ctx());
     egui::Frame::new()
         .fill(palette.surface)
@@ -563,7 +566,8 @@ fn status_box(ui: &mut egui::Ui, label: &str, value: &str, width: f32) {
             caption(ui, label);
             ui.add(egui::Label::new(RichText::new(value).size(12.0)).truncate())
                 .on_hover_text(value);
-        });
+        })
+        .response
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -573,6 +577,20 @@ struct Board {
     platform: String,
     #[serde(default)]
     mcu: String,
+    /// The exact target, which tells two boards of one name apart.
+    #[serde(default)]
+    id: String,
+}
+
+impl Board {
+    fn detail(&self) -> String {
+        [&self.platform, &self.mcu, &self.id]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -709,6 +727,11 @@ pub struct LiteApp {
     resource_busy: bool,
     stop_enabled: bool,
     stop_reason: String,
+    /// Lite's own start-up work, which closing may end but Stop does not.
+    starting: bool,
+    preferences: Preferences,
+    preferences_folder: Option<PathBuf>,
+    preferences_changed: Option<Instant>,
     compact_controls: bool,
     last_monitor: Option<(Vec2, f32)>,
     phase: String,
@@ -721,6 +744,9 @@ pub struct LiteApp {
     project_dialog: bool,
     /// `--project <path>`: the sketch this window was opened for.
     startup_project: Option<String>,
+    startup_board: Option<String>,
+    sketch_offered: bool,
+    project_focus: bool,
     /// Sketch folders open in other Lite windows.
     open_elsewhere: Vec<String>,
     board: String,
@@ -750,6 +776,7 @@ pub struct LiteApp {
     resources_open: bool,
     installed: resource_browser::ResourceBrowser,
     resource_tab: bool,
+    find_more: bool,
     library_query: String,
     libraries: Vec<Library>,
     state_path: String,
@@ -790,6 +817,12 @@ pub struct LiteApp {
     picker_actions: Option<(egui::Rect, egui::Rect)>,
     #[cfg(test)]
     monitor_frame: Option<egui::Rect>,
+    #[cfg(test)]
+    baud_geometry: Option<egui::Rect>,
+    #[cfg(test)]
+    speed_geometry: Option<egui::Rect>,
+    #[cfg(test)]
+    resource_columns: Option<(egui::Rect, egui::Rect)>,
 }
 
 impl LiteApp {
@@ -798,6 +831,9 @@ impl LiteApp {
         let offline_preview = args.iter().any(|arg| arg == "--preview");
         let mut app = Self::with_context(&cc.egui_ctx, offline_preview || startup_error.is_some());
         app.startup_project = crate::desktop::startup_project(&args);
+        if !offline_preview {
+            app.restore(&cc.egui_ctx, preferences::directory());
+        }
         if !offline_preview && startup_error.is_none() {
             app.project_dialog = app.startup_project.is_none();
         }
@@ -809,6 +845,82 @@ impl LiteApp {
             app.error = error;
         }
         app
+    }
+
+    /// Open as this window was left, before its first frame is painted.
+    fn restore(&mut self, ctx: &egui::Context, folder: Option<PathBuf>) {
+        let Some(folder) = folder else { return };
+        self.preferences = preferences::load(&folder);
+        self.preferences_folder = Some(folder);
+        let left = &self.preferences;
+        self.serial_tab = left.serial_tab;
+        self.compact_controls = left.compact_controls;
+        self.autoscroll = left.follow;
+        self.line_ending = left.line_ending.clone();
+        self.baud = left.baud;
+        self.speed = left.upload_speed;
+        // Another sketch's window, opened with --project, starts without a board.
+        if self.startup_project.is_none() && !left.board.is_empty() {
+            self.startup_board = Some(left.board.clone());
+        }
+        apply_theme(ctx, left.dark);
+    }
+
+    /// Note what is on screen; the file is written once it has settled.
+    fn remember(&mut self, ctx: &egui::Context) {
+        if self.preferences_folder.is_none() {
+            return;
+        }
+        let mut now = self.preferences.clone();
+        now.dark = Palette::from_context(ctx).dark;
+        now.serial_tab = self.serial_tab;
+        now.compact_controls = self.compact_controls;
+        now.follow = self.autoscroll;
+        now.line_ending = self.line_ending.clone();
+        now.baud = self.baud;
+        now.upload_speed = self.speed;
+        if !self.board.is_empty() {
+            now.board.clone_from(&self.board);
+        }
+        // Wayland reports no window position, so take the size from the content.
+        let size = ctx.content_rect().size() * ctx.zoom_factor();
+        ctx.input(|input| {
+            let viewport = input.viewport();
+            // A minimized window reports no useful size; keep the last real one.
+            if viewport.minimized == Some(true) || viewport.fullscreen == Some(true) {
+                return;
+            }
+            match viewport.maximized {
+                Some(true) => now.maximized = true,
+                Some(false) => {
+                    now.maximized = false;
+                    if size.x >= 360.0 && size.y >= 240.0 {
+                        now.width = size.x.round();
+                        now.height = size.y.round();
+                    }
+                }
+                None => {}
+            }
+        });
+        if now != self.preferences {
+            self.preferences = now;
+            self.preferences_changed = Some(Instant::now());
+        }
+        if self
+            .preferences_changed
+            .is_some_and(|changed| changed.elapsed() >= Duration::from_millis(800))
+        {
+            self.save_preferences();
+        }
+    }
+
+    fn save_preferences(&mut self) {
+        if self.preferences_changed.take().is_some()
+            && let Some(folder) = &self.preferences_folder
+            && let Err(error) = preferences::save(folder, &self.preferences)
+        {
+            eprintln!("Window state was not saved: {error}");
+        }
     }
 
     fn with_context(ctx: &egui::Context, offline_preview: bool) -> Self {
@@ -829,6 +941,10 @@ impl LiteApp {
             resource_busy: false,
             stop_enabled: false,
             stop_reason: "No cancellable operation is running".into(),
+            starting: false,
+            preferences: Preferences::default(),
+            preferences_folder: None,
+            preferences_changed: None,
             compact_controls: false,
             last_monitor: None,
             phase: "Starting Python tools".into(),
@@ -840,6 +956,9 @@ impl LiteApp {
             project_input: String::new(),
             project_dialog: false,
             startup_project: None,
+            startup_board: None,
+            sketch_offered: false,
+            project_focus: false,
             open_elsewhere: Vec::new(),
             board: String::new(),
             platform: String::new(),
@@ -868,6 +987,7 @@ impl LiteApp {
             resources_open: false,
             installed: resource_browser::ResourceBrowser::default(),
             resource_tab: false,
+            find_more: false,
             library_query: String::new(),
             libraries: vec![],
             state_path: String::new(),
@@ -912,6 +1032,12 @@ impl LiteApp {
             picker_actions: None,
             #[cfg(test)]
             monitor_frame: None,
+            #[cfg(test)]
+            baud_geometry: None,
+            #[cfg(test)]
+            speed_geometry: None,
+            #[cfg(test)]
+            resource_columns: None,
         };
         app.build_log.push("MCU Flasher / Lite\nOpen a sketch folder, select its exact board, then Compile or Upload.", "info", true);
         if offline_preview {
@@ -958,6 +1084,7 @@ impl LiteApp {
                     ("Long vendor and product name to demonstrate stable board rows [ststm32:example]", "ststm32", "STM32"),
                 ].map(|(name, platform, mcu)| Board {
                     name: name.into(), platform: platform.into(), mcu: mcu.into(),
+                    id: name.rsplit_once(':').map(|(_, id)| id.trim_end_matches(']').to_owned()).unwrap_or_default(),
                 }).to_vec();
                 app.board_total = app.boards.len();
                 app.open_board_picker();
@@ -1015,6 +1142,26 @@ impl LiteApp {
 
     fn idle(&self) -> bool {
         self.ready && !self.busy && !self.pending && !self.resource_busy
+    }
+
+    /// The opening dialog offers the last sketch no other window has open.
+    fn offer_last_sketch(&mut self) {
+        if self.sketch_offered || !self.project_dialog || !self.source.is_empty() {
+            return;
+        }
+        let last = self.recent_projects.iter().find(|path| {
+            !self
+                .open_elsewhere
+                .iter()
+                .any(|open| same_folder(open, path))
+        });
+        if let Some(last) = last {
+            self.sketch_offered = true;
+            if self.project_input.is_empty() {
+                self.project_input.clone_from(last);
+                self.project_focus = true;
+            }
+        }
     }
 
     fn take_developer_request(&mut self, now: Instant) -> bool {
@@ -1215,7 +1362,11 @@ impl LiteApp {
             }
             "ready" => {
                 self.ready = true;
-                self.phase = "Ready".into();
+                // The worker's first state follows at once and says whether its
+                // start is still running; nothing may be sent before that.
+                self.busy = true;
+                self.phase = "Finishing start".into();
+                self.stop_reason = "Lite is finishing its start. This step ends by itself".into();
                 self.state_path = text("state_path");
                 self.send(json!({"cmd": "boards", "query": ""}));
                 self.send(json!({"cmd": "history"}));
@@ -1238,6 +1389,8 @@ impl LiteApp {
                 self.connected = data["monitor"].as_bool().unwrap_or(false);
                 self.developer_open = data["developer_access"].as_bool().unwrap_or(false);
                 self.baud = data["baud"].as_u64().unwrap_or(self.baud as u64) as u32;
+                self.speed = data["upload_speed"].as_u64().unwrap_or(self.speed as u64) as u32;
+                self.starting = data["starting"].as_bool().unwrap_or(false);
                 if !self.busy {
                     self.phase = "Ready".into();
                 }
@@ -1245,7 +1398,8 @@ impl LiteApp {
             "ports" => self.ports = serde_json::from_value(data).unwrap_or_default(),
             "sketches" => {
                 self.open_elsewhere =
-                    serde_json::from_value(data["open_elsewhere"].clone()).unwrap_or_default()
+                    serde_json::from_value(data["open_elsewhere"].clone()).unwrap_or_default();
+                self.offer_last_sketch();
             }
             "boards" => {
                 if text("query") == self.board_query {
@@ -1361,6 +1515,7 @@ impl LiteApp {
                     self.ready = false;
                     self.developer_open = false;
                     self.busy = false;
+                    self.starting = false;
                     self.resource_busy = false;
                     self.stop_enabled = false;
                     self.stop_reason = "Python tools are unavailable".into();
@@ -1379,10 +1534,9 @@ impl LiteApp {
         let palette = Palette::from_context(ctx);
         let mut open = self.project_dialog;
         let mut browse = false;
-        let window = picker_window(ctx, PROJECT_DIALOG, egui::vec2(520.0, 300.0), 300.0)
+        let window = picker_window(ctx, PROJECT_DIALOG, DIALOG_SIZE, 300.0)
             .open(&mut open)
             .enabled(self.folder_picker.is_none())
-            .resizable([true, false])
             .show(ctx, |ui| {
                 let help = "Choose a folder with .ino, .cpp or .c files at its root.";
                 if ui.available_height() >= 180.0 {
@@ -1397,6 +1551,9 @@ impl LiteApp {
                             .desired_width(f32::INFINITY),
                     )
                     .on_hover_text(help);
+                if std::mem::take(&mut self.project_focus) {
+                    path.request_focus();
+                }
                 let ready = self.idle() && self.folder_picker.is_none();
                 let can_open = ready && !self.project_input.trim().is_empty();
                 let mut submit =
@@ -1439,10 +1596,10 @@ impl LiteApp {
                 let mut selected = None;
                 if ui.available_height() >= 36.0 {
                     caption(ui, "Recently opened");
-                    let height = ui.available_height().min(218.0);
+                    let height = (ui.available_height() - 2.0).max(1.0);
                     egui::ScrollArea::vertical()
                         .id_salt("recent-projects-picker")
-                        .auto_shrink([false, true])
+                        .auto_shrink([false, false])
                         .min_scrolled_height(height)
                         .max_height(height)
                         .show(ui, |ui| {
@@ -1562,7 +1719,7 @@ impl LiteApp {
                                 .boards
                                 .iter()
                                 .find(|b| &b.name == name)
-                                .map(|b| format!("{} / {}", b.platform, b.mcu))
+                                .map(Board::detail)
                                 .unwrap_or_else(|| "Recently selected target".into());
                             let response =
                                 picker_row(ui, name, &detail, self.board_candidate == *name);
@@ -1584,7 +1741,7 @@ impl LiteApp {
                         if recent.contains(&board.name) {
                             continue;
                         }
-                        let detail = format!("{} / {}", board.platform, board.mcu);
+                        let detail = board.detail();
                         let response = picker_row(
                             ui,
                             &board.name,
@@ -1691,64 +1848,51 @@ impl LiteApp {
             let request = self.installed.refresh();
             self.send(request);
         }
-        let palette = Palette::from_context(ctx);
+        #[cfg(test)]
+        {
+            self.resource_columns = None;
+        }
+        let content = ctx.content_rect();
+        // Two columns need room for a readable list and a readable source.
+        let wide = content.width() >= 760.0 && content.height() >= 430.0;
         let mut open = self.resources_open;
-        let minimum = if self.installed.showing_source() {
-            (ctx.content_rect().height() - 180.0).clamp(80.0, 620.0)
+        let minimum = if wide {
+            300.0
+        } else if self.installed.showing_source() {
+            (content.height() - 180.0).clamp(80.0, 620.0)
         } else {
             0.0
         };
-        let window = picker_window(ctx, RESOURCES_DIALOG, egui::vec2(640.0, 420.0), minimum)
+        let window = picker_window(ctx, RESOURCES_DIALOG, DIALOG_SIZE, minimum)
             .open(&mut open)
-            .vscroll(true)
+            .vscroll(!wide)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    for (boards, label) in [(false, "Libraries"), (true, "Boards")] {
-                        if tab(ui, self.resource_tab == boards, label).clicked() { self.resource_tab = boards; }
+                    let find = if ui.available_width() < 300.0 {
+                        "Find"
+                    } else {
+                        "Find more"
+                    };
+                    for (boards, more, label) in [
+                        (false, false, "Libraries"),
+                        (false, true, find),
+                        (true, false, "Boards"),
+                    ] {
+                        let selected =
+                            self.resource_tab == boards && (boards || self.find_more == more);
+                        if tab(ui, selected, label).clicked() {
+                            self.resource_tab = boards;
+                            self.find_more = more;
+                        }
                     }
                 });
-                ui.add_space(14.0);
-                let commands = self.installed.show(ui, self.resource_tab, self.idle());
-                for request in commands { self.send(request); }
-                ui.add_enabled_ui(self.idle(), |ui| {
-                    if !self.resource_tab { ui.collapsing("Find more libraries", |ui| {
-                        let stacked = ui.available_width() < 264.0;
-                        action_row(ui, stacked, 36.0, |ui| {
-                            let width = ui.available_width() - if stacked { 0.0 } else { 112.0 };
-                            let enter = ui.add(egui::TextEdit::singleline(&mut self.library_query).hint_text("Search PlatformIO libraries").margin(egui::vec2(6.0, 6.0)).desired_width(width.max(1.0)));
-                            if button(ui, "Search", "", Tone::Primary, egui::vec2(104.0, 36.0)).clicked() || (enter.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                                self.pending = true; self.send(json!({"cmd": "library_search", "query": self.library_query}));
-                            }
-                        });
-                        ui.add_space(10.0);
-                        let mut install = None;
-                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                            if self.libraries.is_empty() { ui.label("Search for a library to see its publisher, description and latest version."); }
-                            for library in &self.libraries {
-                                egui::Frame::new().stroke(Stroke::new(2.0_f32, palette.border)).fill(palette.surface).inner_margin(12).show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.label(RichText::new(&library.name).family(FontFamily::Name("bold".into())).size(17.0));
-                                    ui.label(RichText::new(format!("{} / {}", library.owner, library.version)).small().color(palette.muted));
-                                    ui.label(&library.description);
-                                    ui.add_space(6.0);
-                                    if button(ui, "Install", "resources", Tone::Primary, egui::vec2(115.0, 36.0)).clicked() { install = Some(library.spec.clone()); }
-                                });
-                                ui.add_space(8.0);
-                            }
-                        });
-                        if let Some(spec) = install { self.pending = true; self.send(json!({"cmd": "library_install", "spec": spec})); }
-                    }); }
-                });
-                if self.resource_busy {
+                if wide {
+                    ui.add_space(6.0);
+                    self.resource_columns(ui);
+                } else {
                     ui.add_space(14.0);
-                    ui.label("Working. Download and install output appears in the Build monitor.");
-                    ui.add_enabled_ui(self.stop_enabled, |ui| {
-                        let width = ui.available_width().min(250.0);
-                        let label = if width < 250.0 { "Stop operation" } else { "Cancel resource operation" };
-                        if button(ui, label, "stop", Tone::Danger, egui::vec2(width, 36.0)).on_disabled_hover_text(&self.stop_reason).clicked() { self.send(json!({"cmd": "stop"})); }
-                    });
+                    self.resource_stack(ui);
                 }
-                ui.add_space(10.0); ui.label(RichText::new("Prepared resources from MCU Flasher and Lite are available here. Compile checks the selected board automatically.").small().color(palette.muted));
             });
         #[cfg(test)]
         {
@@ -1760,6 +1904,220 @@ impl LiteApp {
         if !open {
             self.installed.open = false;
         }
+    }
+
+    /// Short and narrow windows: one scrolling column, code below its list.
+    fn resource_stack(&mut self, ui: &mut egui::Ui) {
+        if self.find_more && !self.resource_tab {
+            self.library_finder(ui, 320.0);
+        } else {
+            let commands = self.installed.show(
+                ui,
+                self.resource_tab,
+                self.idle(),
+                resource_browser::Fit::Stacked,
+            );
+            for request in commands {
+                self.send(request);
+            }
+        }
+        self.resource_footer(ui);
+    }
+
+    /// Roomy windows: the list on the left, the sample code beside it.
+    fn resource_columns(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::from_context(ui.ctx());
+        // Whole points: a fraction would leave a scrollbar with nothing to scroll.
+        let size = (ui.available_size() - egui::vec2(0.0, 2.0))
+            .max(Vec2::splat(1.0))
+            .floor();
+        if self.resource_tab || self.find_more {
+            // Boards and the registry have no code to show beside them.
+            ui.allocate_ui_with_layout(size, egui::Layout::top_down(Align::Min), |ui| {
+                ui.set_min_size(size);
+                let height = (size.y - self.resource_footer_height(ui)).max(1.0);
+                if self.resource_tab {
+                    let commands = self.installed.show(
+                        ui,
+                        true,
+                        self.idle(),
+                        resource_browser::Fit::Column(height),
+                    );
+                    for request in commands {
+                        self.send(request);
+                    }
+                } else {
+                    ui.add_space(8.0);
+                    self.library_finder(ui, height - 58.0);
+                }
+                self.resource_footer(ui);
+            });
+            return;
+        }
+        let gap = 16.0;
+        let left = (size.x * 0.38).clamp(260.0, 400.0).floor();
+        let right = (size.x - left - gap).max(1.0);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let list = ui.allocate_ui_with_layout(
+                egui::vec2(left, size.y),
+                egui::Layout::top_down(Align::Min),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.set_width(left);
+                    ui.set_min_height(size.y);
+                    let height = (ui.available_height() - self.resource_footer_height(ui)).max(1.0);
+                    let commands = self.installed.show(
+                        ui,
+                        false,
+                        self.idle(),
+                        resource_browser::Fit::Column(height),
+                    );
+                    for request in commands {
+                        self.send(request);
+                    }
+                    self.resource_footer(ui);
+                },
+            );
+            ui.add_space(gap * 0.5);
+            let line = ui.cursor().left_top();
+            ui.painter().vline(
+                line.x,
+                line.y..=line.y + size.y,
+                Stroke::new(2.0_f32, palette.border),
+            );
+            ui.add_space(gap * 0.5);
+            let code = ui.allocate_ui_with_layout(
+                egui::vec2(right, size.y),
+                egui::Layout::top_down(Align::Min),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.set_width(right);
+                    ui.set_min_height(size.y);
+                    self.installed.code_pane(ui);
+                },
+            );
+            #[cfg(test)]
+            {
+                self.resource_columns = Some((list.response.rect, code.response.rect));
+            }
+            #[cfg(not(test))]
+            let _ = (list, code);
+        });
+    }
+
+    fn library_finder(&mut self, ui: &mut egui::Ui, height: f32) {
+        let palette = Palette::from_context(ui.ctx());
+        ui.add_enabled_ui(self.idle(), |ui| {
+            let stacked = ui.available_width() < 264.0;
+            action_row(ui, stacked, 36.0, |ui| {
+                let width = ui.available_width() - if stacked { 0.0 } else { 112.0 };
+                let enter = ui.add(
+                    egui::TextEdit::singleline(&mut self.library_query)
+                        .hint_text("Search PlatformIO libraries")
+                        .margin(egui::vec2(6.0, 6.0))
+                        .desired_width(width.max(1.0)),
+                );
+                if button(ui, "Search", "", Tone::Primary, egui::vec2(104.0, 36.0)).clicked()
+                    || (enter.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                {
+                    self.pending = true;
+                    self.send(json!({"cmd": "library_search", "query": self.library_query}));
+                }
+            });
+            ui.add_space(6.0);
+            let mut install = None;
+            egui::ScrollArea::vertical()
+                .id_salt("library-results")
+                .auto_shrink([false, true])
+                .max_height(height.max(60.0))
+                .show(ui, |ui| {
+                    if self.libraries.is_empty() {
+                        ui.label(
+                            "Search for a library to see its publisher, description and latest version.",
+                        );
+                    }
+                    for library in &self.libraries {
+                        egui::Frame::new()
+                            .stroke(Stroke::new(2.0_f32, palette.border))
+                            .fill(palette.surface)
+                            .inner_margin(12)
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(
+                                    RichText::new(&library.name)
+                                        .family(FontFamily::Name("bold".into()))
+                                        .size(17.0),
+                                );
+                                ui.label(
+                                    RichText::new(format!("{} / {}", library.owner, library.version))
+                                        .small()
+                                        .color(palette.muted),
+                                );
+                                ui.label(&library.description);
+                                ui.add_space(6.0);
+                                if button(
+                                    ui,
+                                    "Install",
+                                    "resources",
+                                    Tone::Primary,
+                                    egui::vec2(115.0, 36.0),
+                                )
+                                .clicked()
+                                {
+                                    install = Some(library.spec.clone());
+                                }
+                            });
+                        ui.add_space(8.0);
+                    }
+                });
+            if let Some(spec) = install {
+                self.pending = true;
+                self.send(json!({"cmd": "library_install", "spec": spec}));
+            }
+        });
+    }
+
+    /// Room the footer takes below a list that fills the rest of its column.
+    fn resource_footer_height(&self, ui: &egui::Ui) -> f32 {
+        let note = ui.text_style_height(&egui::TextStyle::Small) * 2.0;
+        let gap = ui.spacing().item_spacing.y;
+        note + gap * 2.0
+            + 4.0
+            + if self.resource_busy {
+                36.0 + ui.text_style_height(&egui::TextStyle::Body) * 2.0 + gap * 3.0
+            } else {
+                0.0
+            }
+    }
+
+    fn resource_footer(&mut self, ui: &mut egui::Ui) {
+        let palette = Palette::from_context(ui.ctx());
+        if self.resource_busy {
+            ui.label("Working. Download and install output appears in the Build monitor.");
+            ui.add_enabled_ui(self.stop_enabled, |ui| {
+                let width = ui.available_width().min(250.0);
+                let label = if width < 250.0 {
+                    "Stop operation"
+                } else {
+                    "Cancel resource operation"
+                };
+                if button(ui, label, "stop", Tone::Danger, egui::vec2(width, 36.0))
+                    .on_disabled_hover_text(&self.stop_reason)
+                    .clicked()
+                {
+                    self.send(json!({"cmd": "stop"}));
+                }
+            });
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Prepared resources from MCU Flasher and Lite are available here. Compile checks the selected board automatically.",
+            )
+            .small()
+            .color(palette.muted),
+        );
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
@@ -1930,44 +2288,26 @@ impl LiteApp {
                     self.send(json!({"cmd": "port", "value": self.port}));
                 }
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
-                    ui.vertical(|ui| {
-                        ui.set_width(width);
-                        caption(ui, "Monitor baud");
-                        let old = self.baud;
-                        egui::ComboBox::from_id_salt("baud")
-                            .width(width)
-                            .selected_text(self.baud.to_string())
-                            .show_ui(ui, |ui| {
-                                for rate in [
-                                    300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880,
-                                    115200, 230400, 250000, 460800, 921600,
-                                ] {
-                                    ui.selectable_value(&mut self.baud, rate, rate.to_string());
-                                }
-                            });
-                        if self.baud != old {
-                            self.send(json!({"cmd": "baud", "value": self.baud}));
+                caption(ui, "Upload speed");
+                let old = self.speed;
+                let speed = egui::ComboBox::from_id_salt("speed")
+                    .width(ui.available_width())
+                    .selected_text(self.speed.to_string())
+                    .show_ui(ui, |ui| {
+                        for rate in preferences::UPLOAD_SPEEDS {
+                            ui.selectable_value(&mut self.speed, rate, rate.to_string());
                         }
                     });
-                    ui.vertical(|ui| {
-                        ui.set_width(width);
-                        caption(ui, "Upload speed");
-                        let old = self.speed;
-                        egui::ComboBox::from_id_salt("speed")
-                            .width(width)
-                            .selected_text(self.speed.to_string())
-                            .show_ui(ui, |ui| {
-                                for rate in [9600, 19200, 57600, 115200, 230400, 460800, 921600] {
-                                    ui.selectable_value(&mut self.speed, rate, rate.to_string());
-                                }
-                            });
-                        if self.speed != old {
-                            self.send(json!({"cmd": "upload_speed", "value": self.speed}));
-                        }
-                    });
-                });
+                #[cfg(test)]
+                {
+                    self.speed_geometry = Some(speed.response.rect);
+                }
+                speed
+                    .response
+                    .on_hover_text("Serial speed used to upload firmware");
+                if self.speed != old {
+                    self.send(json!({"cmd": "upload_speed", "value": self.speed}));
+                }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(!self.port.is_empty(), |ui| {
@@ -2195,10 +2535,12 @@ impl LiteApp {
                 let maximum = (monitor - egui::vec2(32.0, 96.0)).max(egui::vec2(320.0, 200.0));
                 let current = ctx.content_rect().size();
                 let fitted = current.min(maximum);
+                let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
                     egui::vec2(360.0, 240.0).min(maximum),
                 ));
-                if fitted != current {
+                // A window left maximized already fits; resizing would restore it.
+                if fitted != current && !maximized {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(fitted));
                 }
             }
@@ -2261,6 +2603,39 @@ impl LiteApp {
         });
     }
 
+    /// The serial monitor's own speed, as tall as the status boxes beside it.
+    fn baud_selector(&mut self, ui: &mut egui::Ui, width: f32, height: f32) {
+        ui.add_enabled_ui(self.idle(), |ui| {
+            ui.spacing_mut().interact_size.y = height;
+            let old = self.baud;
+            let text = if width >= 132.0 {
+                format!("{} baud", self.baud)
+            } else {
+                self.baud.to_string()
+            };
+            let selector = egui::ComboBox::from_id_salt("baud")
+                .width(width)
+                .selected_text(text)
+                .show_ui(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = 32.0;
+                    for rate in preferences::BAUD_RATES {
+                        ui.selectable_value(&mut self.baud, rate, rate.to_string());
+                    }
+                });
+            #[cfg(test)]
+            {
+                self.baud_geometry = Some(selector.response.rect);
+            }
+            selector
+                .response
+                .on_hover_text("Serial monitor baud rate")
+                .on_disabled_hover_text("Wait for the current operation to finish");
+            if self.baud != old {
+                self.send(json!({"cmd": "baud", "value": self.baud}));
+            }
+        });
+    }
+
     fn monitor_tools(&mut self, ui: &mut egui::Ui) {
         if button(ui, "Clear", "", Tone::Secondary, egui::vec2(70.0, 34.0)).clicked() {
             if self.serial_tab {
@@ -2312,15 +2687,33 @@ impl LiteApp {
         ui.add_space(4.0);
         let port = if self.port.is_empty() {
             "No port selected".to_owned()
-        } else if self.connected {
-            format!("{} / {} baud", self.port, self.baud)
-        } else {
+        } else if !self.connected {
             format!("{} / monitor disconnected", self.port)
+        } else if self.serial_tab {
+            format!("{} / connected", self.port)
+        } else {
+            format!("{} / {} baud", self.port, self.baud)
         };
-        let status_width = (ui.available_width() - ui.spacing().item_spacing.x) * 0.5;
+        let gap = ui.spacing().item_spacing.x;
+        let baud_width = if self.serial_tab {
+            (ui.available_width() * 0.26).clamp(96.0, 168.0)
+        } else {
+            0.0
+        };
+        let status_width = (ui.available_width()
+            - gap
+            - if self.serial_tab {
+                baud_width + gap
+            } else {
+                0.0
+            })
+            * 0.5;
         ui.horizontal(|ui| {
-            status_box(ui, "STATUS", &self.phase, status_width);
+            let status = status_box(ui, "STATUS", &self.phase, status_width);
             status_box(ui, "USB PORT", &port, status_width);
+            if self.serial_tab {
+                self.baud_selector(ui, baud_width, status.rect.height());
+            }
         });
         if narrow && !short {
             ui.horizontal(|ui| {
@@ -2483,10 +2876,13 @@ impl LiteApp {
         }
         // Catalog refresh and first-upgrade cleanup may still own startup.
         // Keep the requested sketch until the worker can accept it once.
-        if self.idle()
-            && let Some(path) = self.startup_project.take()
-        {
-            self.send(json!({"cmd": "project", "path": path}));
+        if self.idle() {
+            if let Some(path) = self.startup_project.take() {
+                self.send(json!({"cmd": "project", "path": path}));
+            } else if let Some(name) = self.startup_board.take() {
+                // The worker leaves a board it no longer knows unselected.
+                self.send(json!({"cmd": "board", "name": name, "restore": true}));
+            }
         }
         if let Some(picker) = &self.folder_picker {
             match picker.try_recv() {
@@ -2526,12 +2922,10 @@ impl LiteApp {
             self.board_loading = true;
         }
         ctx.request_repaint_after(Duration::from_millis(if self.ready { 250 } else { 1000 }));
+        self.remember(ctx);
+        let working = self.busy || self.pending || self.resource_busy;
         if ctx.input(|i| i.viewport().close_requested())
-            && (self.busy
-                || self.pending
-                || self.resource_busy
-                || self.developer_open
-                || self.folder_picker.is_some())
+            && ((working && !self.starting) || self.developer_open || self.folder_picker.is_some())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.error = if self.folder_picker.is_some() {
@@ -2696,6 +3090,10 @@ impl LiteApp {
 impl eframe::App for LiteApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.update_ui(ctx, Some(frame));
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_preferences();
     }
 }
 
@@ -2970,21 +3368,23 @@ mod verification {
                     heights.push(window.unwrap().height());
                 }
                 let last = *heights.last().unwrap();
-                // Open sketch fits its content; Resources keeps its 420-point default.
-                let limit = if kind == 0 { 360.0 } else { 520.0 };
+                // Both open at one roomy size and neither outgrows it.
                 assert!(
-                    last < limit,
-                    "Dialog {kind} at {scale} opens empty space: {heights:?}"
-                );
-                // ...and still shows its whole content: path, actions and recents.
-                assert!(
-                    last > 200.0,
-                    "Dialog {kind} at {scale} hides its content: {heights:?}"
+                    (DIALOG_SIZE.y..DIALOG_SIZE.y + 90.0).contains(&last),
+                    "Dialog {kind} at {scale} is not the shared size: {heights:?}"
                 );
                 assert!(
                     (heights[3] - last).abs() < 1.0,
                     "Dialog {kind} at {scale} keeps growing: {heights:?}"
                 );
+                if kind == 0 {
+                    // The recents take the spare room; the buttons stay a row.
+                    let (actions, _) = app.picker_actions.unwrap();
+                    assert!(
+                        actions.height() <= 40.0,
+                        "Actions stretch at {scale}: {actions:?}"
+                    );
+                }
             }
         }
     }
@@ -3184,6 +3584,279 @@ mod verification {
     }
 
     #[test]
+    fn resources_show_the_sample_code_beside_its_list() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for size in [
+                egui::vec2(1140.0, 800.0),
+                egui::vec2(1334.0, 672.0),
+                egui::vec2(760.0, 430.0),
+                egui::vec2(1888.0, 984.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = LiteApp::with_context(&ctx, true);
+                ctx.set_pixels_per_point(scale);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                app.installed.preview(true);
+                app.resources_open = true;
+                let mut windows = Vec::new();
+                for _ in 0..10 {
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(screen),
+                            ..Default::default()
+                        },
+                        |ctx| app.resources(ctx),
+                    );
+                    windows.push(app.resource_geometry.unwrap());
+                }
+                let window = *windows.last().unwrap();
+                assert!(
+                    screen.expand(1.0).contains_rect(window),
+                    "Resources leaves {size:?}/{scale}: {window:?}"
+                );
+                assert!(
+                    (windows[4].size() - window.size()).length() < 1.0,
+                    "Resources keeps growing at {size:?}/{scale}: {windows:?}"
+                );
+                let (list, code) = app.resource_columns.expect("Two columns");
+                assert!(
+                    window.contains_rect(list) && window.expand(0.5).contains_rect(code),
+                    "A column leaves the window at {size:?}/{scale}: {list:?} {code:?} in {window:?}"
+                );
+                assert!(
+                    list.right() + 8.0 <= code.left() && code.width() > list.width(),
+                    "The code needs the larger side at {size:?}/{scale}: {list:?} {code:?}"
+                );
+                assert!(
+                    (list.top() - code.top()).abs() < 1.0 && code.height() > window.height() * 0.6,
+                    "The code does not use its side at {size:?}/{scale}: {code:?} in {window:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn narrow_resources_keep_the_code_below_its_list() {
+        for size in [egui::vec2(700.0, 800.0), egui::vec2(1140.0, 380.0)] {
+            let ctx = egui::Context::default();
+            let mut app = LiteApp::with_context(&ctx, true);
+            app.installed.preview(true);
+            app.resources_open = true;
+            for _ in 0..5 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| app.resources(ctx),
+                );
+            }
+            assert!(app.resource_columns.is_none(), "{size:?}");
+        }
+    }
+
+    #[test]
+    fn monitor_baud_belongs_to_the_serial_tab_and_upload_speed_stays_in_connection() {
+        for scale in [1.0, 1.5, 2.0] {
+            for size in [
+                egui::vec2(1140.0, 800.0),
+                egui::vec2(660.0, 520.0),
+                egui::vec2(360.0, 420.0),
+                egui::vec2(496.0, 240.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = LiteApp::with_context(&ctx, true);
+                ctx.set_pixels_per_point(scale);
+                app.ready = true;
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                let frame = |app: &mut LiteApp| {
+                    for _ in 0..3 {
+                        let _ = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |ctx| app.update_ui(ctx, None),
+                        );
+                    }
+                };
+                app.serial_tab = false;
+                frame(&mut app);
+                assert!(
+                    app.baud_geometry.is_none(),
+                    "Build has no baud at {size:?}/{scale}"
+                );
+                app.serial_tab = true;
+                app.compact_controls = false;
+                frame(&mut app);
+                let baud = app
+                    .baud_geometry
+                    .expect("The serial monitor offers its baud");
+                assert!(
+                    screen.contains_rect(baud) && baud.width() >= 90.0 && baud.height() >= 28.0,
+                    "Baud is clipped at {size:?}/{scale}: {baud:?}"
+                );
+                app.compact_controls = true;
+                app.speed_geometry = None;
+                frame(&mut app);
+                let speed = app
+                    .speed_geometry
+                    .expect("Connection keeps the upload speed");
+                let card = app.control_cards[1];
+                assert!(
+                    speed.left() >= card.left() && speed.right() <= card.right(),
+                    "Upload speed leaves its card at {size:?}/{scale}: {speed:?} in {card:?}"
+                );
+                assert!(speed.width() > card.width() * 0.75, "{speed:?} in {card:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn worker_state_owns_both_speeds_and_startup_work_never_offers_stop() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.event(Event {
+            event: "state".into(),
+            data: json!({"busy": true, "baud": 74880, "upload_speed": 921600, "starting": true,
+                "stop": {"enabled": false, "reason": "Lite is finishing its start"}}),
+        });
+        assert_eq!((app.baud, app.speed), (74880, 921600));
+        assert!(app.starting && !app.stop_enabled);
+        let closes = |app: &mut LiteApp| {
+            let mut raw = egui::RawInput::default();
+            raw.viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .events
+                .push(egui::ViewportEvent::Close);
+            let output = ctx.run(raw, |ctx| app.update_ui(ctx, None));
+            !output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .contains(&egui::ViewportCommand::CancelClose)
+        };
+        app.resource_busy = true;
+        assert!(closes(&mut app), "Start-up work ends with the window");
+        app.starting = false;
+        assert!(
+            !closes(&mut app),
+            "An operation the user started finishes first"
+        );
+    }
+
+    #[test]
+    fn the_window_reopens_as_it_was_left() {
+        let folder = std::env::temp_dir().join(format!("lite-window-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.restore(&ctx, Some(folder.clone()));
+        assert!(!Palette::from_context(&ctx).dark);
+        apply_theme(&ctx, true);
+        app.serial_tab = true;
+        app.autoscroll = false;
+        app.line_ending = "nl".into();
+        app.speed = 115200;
+        app.board = "Arduino UNO".into();
+        let input = |size: Vec2, maximized| {
+            let mut raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                ..Default::default()
+            };
+            let viewport = raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap();
+            viewport.maximized = Some(maximized);
+            raw
+        };
+        let _ = ctx.run(input(egui::vec2(900.0, 640.0), false), |ctx| {
+            app.remember(ctx)
+        });
+        assert!(!folder.exists(), "Changes settle before they are written");
+        app.save_preferences();
+
+        let ctx = egui::Context::default();
+        let mut reopened = LiteApp::with_context(&ctx, true);
+        reopened.restore(&ctx, Some(folder.clone()));
+        assert!(
+            Palette::from_context(&ctx).dark,
+            "Dark mode must be on before the first frame"
+        );
+        assert!(reopened.serial_tab && !reopened.autoscroll);
+        assert_eq!(reopened.line_ending, "nl");
+        assert_eq!(reopened.speed, 115200);
+        assert_eq!(reopened.startup_board.as_deref(), Some("Arduino UNO"));
+        assert!(
+            reopened.board.is_empty(),
+            "Only the worker confirms a board"
+        );
+        let mut another = LiteApp::with_context(&ctx, true);
+        another.startup_project = Some("another sketch".into());
+        another.restore(&ctx, Some(folder.clone()));
+        assert!(
+            another.startup_board.is_none(),
+            "Another sketch's window starts without a board"
+        );
+        assert_eq!(
+            (reopened.preferences.width, reopened.preferences.height),
+            (900.0, 640.0)
+        );
+        // Maximizing keeps the size to restore to.
+        let _ = ctx.run(input(egui::vec2(1920.0, 1000.0), true), |ctx| {
+            reopened.remember(ctx)
+        });
+        assert!(reopened.preferences.maximized);
+        assert_eq!(reopened.preferences.width, 900.0);
+        let mut preview = LiteApp::with_context(&ctx, true);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| preview.remember(ctx));
+        assert!(
+            preview.preferences_folder.is_none() && preview.preferences_changed.is_none(),
+            "A preview never reads or writes window state"
+        );
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn one_row_per_board_shows_its_exact_target() {
+        let board: Board = serde_json::from_value(json!({
+            "name": "Arduino UNO", "platform": "atmelavr", "mcu": "atmega328p", "id": "uno"
+        }))
+        .unwrap();
+        assert_eq!(board.detail(), "atmelavr / atmega328p / uno");
+        let older: Board =
+            serde_json::from_value(json!({"name": "X", "platform": "p", "mcu": "m"})).unwrap();
+        assert_eq!(older.detail(), "p / m");
+    }
+
+    #[test]
+    fn the_last_sketch_is_offered_in_the_opening_dialog() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.project_dialog = true;
+        app.event(Event {
+            event: "history".into(),
+            data: json!({"projects": ["/sketches/Blink", "/sketches/Fade"], "boards": []}),
+        });
+        let sketches = || Event {
+            event: "sketches".into(),
+            data: json!({"open_elsewhere": ["/sketches/Blink"]}),
+        };
+        app.event(sketches());
+        assert_eq!(
+            app.project_input, "/sketches/Fade",
+            "A sketch open in another window is not offered"
+        );
+        app.project_input.clear();
+        app.event(sketches());
+        assert!(app.project_input.is_empty(), "Offered once, never forced");
+        assert_eq!(app.next_id, 0, "Offering it opens nothing");
+        let mut typing = LiteApp::with_context(&ctx, true);
+        typing.project_dialog = true;
+        typing.project_input = "/typed".into();
+        typing.recent_projects = vec!["/sketches/Fade".into()];
+        typing.event(sketches());
+        assert_eq!(typing.project_input, "/typed", "Typing is never replaced");
+    }
+
+    #[test]
     fn workspace_keeps_stop_visible_and_monitor_reachable_on_scaled_screens() {
         for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
             for physical in [
@@ -3231,11 +3904,41 @@ mod verification {
     }
 
     #[test]
+    fn nothing_is_sent_between_ready_and_the_first_state() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.ready = false;
+        app.startup_board = Some("Arduino UNO".into());
+        app.startup_project = Some("fixture startup sketch".into());
+        app.event(Event {
+            event: "ready".into(),
+            data: json!({"state_path": "fixture"}),
+        });
+        let frame = |app: &mut LiteApp| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.update_ui(ctx, None));
+        };
+        frame(&mut app);
+        assert!(
+            !app.idle() && app.startup_project.is_some() && app.next_id == 0,
+            "The worker's start-up work is not known yet"
+        );
+        let state = |busy| Event {
+            event: "state".into(),
+            data: json!({"busy": busy, "starting": busy, "stop": {"enabled": false}}),
+        };
+        app.event(state(true));
+        frame(&mut app);
+        assert!(app.startup_project.is_some());
+        app.event(state(false));
+        frame(&mut app);
+        assert!(app.startup_project.is_none() && app.phase == "Ready");
+    }
+
+    #[test]
     fn startup_project_waits_for_busy_startup_and_dispatches_only_once() {
         let ctx = egui::Context::default();
         let mut app = LiteApp::with_context(&ctx, true);
         app.ready = false;
-        app.busy = true;
         app.startup_project = Some("fixture startup sketch".into());
         app.event(Event {
             event: "ready".into(),
@@ -3263,6 +3966,25 @@ mod verification {
     }
 
     #[test]
+    fn the_last_board_waits_for_startup_and_dispatches_only_once() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.busy = true;
+        app.startup_board = Some("Arduino UNO".into());
+        let frame = |app: &mut LiteApp| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| app.update_ui(ctx, None));
+        };
+        frame(&mut app);
+        assert!(app.startup_board.is_some(), "Startup work ends first");
+        app.busy = false;
+        frame(&mut app);
+        assert!(app.startup_board.is_none());
+        assert_eq!(app.next_id, 1);
+        frame(&mut app);
+        assert_eq!(app.next_id, 1, "The last board must not be replayed");
+    }
+
+    #[test]
     fn startup_does_not_discard_the_developer_gesture() {
         let ctx = egui::Context::default();
         let mut app = LiteApp::with_context(&ctx, true);
@@ -3284,7 +4006,7 @@ mod verification {
             ("Arduino Uno [atmelavr:uno]", "atmelavr", "ATmega328P"),
             ("ESP32 Development Board with a deliberately long vendor and product name [espressif32:esp32dev]", "espressif32", "ESP32"),
             ("STM32 Nucleo [ststm32:nucleo_f401re]", "ststm32", "STM32F401RE"),
-        ].map(|(name, platform, mcu)| Board { name: name.into(), platform: platform.into(), mcu: mcu.into() }).to_vec();
+        ].map(|(name, platform, mcu)| Board { name: name.into(), platform: platform.into(), mcu: mcu.into(), id: String::new() }).to_vec();
         app.board_total = app.boards.len();
         app.recent_boards = vec![app.boards[0].name.clone()];
     }

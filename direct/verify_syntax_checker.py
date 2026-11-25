@@ -320,6 +320,69 @@ class SyntaxCheckerChecks(unittest.TestCase):
                          '  callback(1);\n'
                          '}\n')
 
+    def test_valid_library_shapes_stay_clean(self):
+        for source in (
+            # Return types, storage and attributes on a line of their own.
+            "static esp_err_t\nread_value(int pin) {\n  return pin;\n}\n",
+            "void IRAM_ATTR\nonTick() {}\nstatic const\nint limit = 3;\n",
+            "void send(const void* data)\n  ATTR_WARN_UNUSED_RESULT ATTR_NON_NULL_PTR_ARG(1);\n",
+            "typedef typename Buffer::const_type\n  buffer_type;\n",
+            # Macros that already end a statement, or take one as an argument.
+            "IMPLEMENT_ISR(INT0_vect, EXTERNAL_INT_0)\nIMPLEMENT_ISR(INT1_vect, EXTERNAL_INT_1)\n",
+            "void work() {\n  UNITY_BEGIN()\n  RUN_TEST(test_pass)\n}\n",
+            'int check(int* value) {\n  LWIP_ERROR("value", (value != 0), return 0;);\n  return 1;\n}\n',
+            'const char* version = "v" VERSION_TEXT(MAJOR) "."\n  VERSION_TEXT(MINOR);\n',
+            # Conditional code whose alternatives each balance.
+            '#ifdef __cplusplus\nextern "C" {\n#endif\nint call(void);\n#ifdef __cplusplus\n}\n#endif\n',
+            "void work(int a, int b) {\n#if FAST\n  if (a) {\n#else\n  if (b) {\n#endif\n    run();\n  }\n}\n",
+            "#define PIN 4 /* the pin\n  that isn't used */\nint pin = PIN;\n",
+            # Blocks after labels, functions returning named types, casts and templates.
+            "int pick(int value) {\n  switch (value) {\n    case Kind::First: {\n      return 1;\n    }\n"
+            "    default:\n    {\n      break;\n    }\n  }\n  return 0;\n}\n",
+            "enum Mode mode_of(int value) {\n  return (enum Mode)value;\n}\nstruct State* state(void) {\n  return 0;\n}\n",
+            "int wide(long value) {\n  return (int)\n    value;\n}\n",
+            "void work() {\n  do {\n    step();\n  } while (busy());\n  while (count--)\n    step();\n}\n",
+            "Foo::Foo(int a)\n  : a_(a),\n    b_{1}\n{\n  run();\n}\n",
+            "void work() {\n  list.forEach([](int value) {\n    use(value);\n  });\n}\n",
+        ):
+            with self.subTest(source=source):
+                self.assertClean(source)
+
+    def test_unfinished_statements_are_errors_just_after_their_last_token(self):
+        for source, line, text in (
+            ("int led = 4\nvoid setup() {}\n", 1, "int led = 4"),
+            ("const char* name = NAME\nconst char* other = OTHER;\n", 1, "const char* name = NAME"),
+            ("void setup() {\n  Serial.begin(115200)\n  pinMode(13, OUTPUT);\n}\n", 2, "  Serial.begin(115200)"),
+            ("void setup() {\n  int led = HIGH // note\n  run();\n}\n", 2, "  int led = HIGH"),
+            ("int read() {\n  return\n}\n", 2, "  return"),
+            ("void work() {\n  while (busy()) {\n    break\n  }\n}\n", 3, "    break"),
+            ('void work() {\n  char ok[3] = "OK"\n  EEPROM.put(0, ok);\n}\n', 2, '  char ok[3] = "OK"'),
+            ("void work() {\n  Serial.println(value)\n}\n", 2, "  Serial.println(value)"),
+            ("using namespace std\nint value;\n", 1, "using namespace std"),
+            ("#include <Arduino.h>\n#define A 1\nServo servo = Servo()\n\nvoid setup() {}\n", 3, "Servo servo = Servo()"),
+        ):
+            with self.subTest(source=source):
+                issues = self.analyze(source)
+                self.assertEqual([(issue["line"], issue["severity"]) for issue in issues], [(line, "error")], issues)
+                self.assertIn("semicolon", issues[0]["message"])
+                self.assertEqual(issues[0]["col"], len(text) + 1)
+
+    def test_code_in_the_other_branch_is_checked_too(self):
+        source = ("#if USB_MODE\n#warning not here\n#else\nvoid setup() {\n  Serial.begin(9600)\n  run();\n"
+                  "}\nvoid loop() {\n  if (ready() {\n    run();\n  }\n}\n#endif\n")
+        messages = [issue["message"] for issue in self.analyze(source)]
+        self.assertTrue(any("semicolon" in message for message in messages), messages)
+        self.assertTrue(any("missing" in message.lower() and "')'" in message for message in messages), messages)
+        self.assertIssue("#ifdef WIFI\nvoid join() {\n  if (ready()) {\n    run();\n}\n#endif\nvoid setup() {}\n", "never closed")
+
+    def test_an_unclosed_call_is_one_error_on_its_own_line(self):
+        for broken in ('  Serial.println("ready";', "  digitalWrite(13, HIGH", "  values[3 = 4;"):
+            with self.subTest(broken=broken):
+                issues = self.analyze(f"void setup() {{\n  begin();\n{broken}\n  run();\n}}\n\nvoid loop() {{\n  run();\n}}\n")
+                self.assertEqual({issue["line"] for issue in issues if issue["severity"] == "error"}, {3}, issues)
+                self.assertIn("never closed", issues[0]["message"])
+        self.assertClean("void loop() {\n  for (int i = 0; i < 4; i++) run(i);\n  if (int a = read(); a > 2) run(a);\n}\n")
+
     def test_excessive_bracket_nesting_reports_live_check_limit(self):
         issues = self.analyze("(" * 10_000)
         self.assertTrue(any("nest" in issue["message"].lower()

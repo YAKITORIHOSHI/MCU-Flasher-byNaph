@@ -21,11 +21,13 @@ see the [README](README.md).
   bootloader, partition table and application). The console lists Libraries,
   Target Board, Compile Time, Actual Board (what the connected chip reports) and
   Upload Time, with one-line progress for flashing and repeat full builds.
-- **Serial Monitor.** Opening, reconnecting and closing never reset the board.
+- **Serial Monitor.** Opening, reconnecting and closing never reset the board, and
+  a board that is unplugged and plugged back in is picked up again.
   The baud rate follows the sketch's `Serial.begin()`, with timestamps, pause,
-  copy and send. After an upload the boot log appears from its first line.
-- **Editor.** An offline Monaco editor with source tabs, live syntax checks,
-  bracket pairing, auto-save, Ctrl+Click / F12 into sketch and library headers,
+  copy and send. After an upload the boot log appears from its first line, and
+  runs of unreadable bytes are summarized.
+- **Editor.** An offline Monaco editor with source tabs, live syntax checks that
+  follow blocks and conditional code, bracket pairing, auto-save, Ctrl+Click / F12 into sketch and library headers,
   and project-wide search. Save and Auto-Save support writable SMB/network
   folders whose permissions are managed by the share. With Auto-Save on, edits
   save themselves; a Ghost Sketch offers only Save, which chooses its folder.
@@ -34,12 +36,17 @@ see the [README](README.md).
   its own window. Ghost Sketch saves support new and empty network folders,
   preserving the temporary original and refusing occupied destinations.
 - **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
-  and an embedded OpenCode assistant whose file edits are highlighted for you
-  to accept or reject. Once started, **Restart** beside its status opens a
-  fresh session.
+  and the coding assistant you choose: OpenCode (built in), Claude, Codex,
+  Gemini or Hermes, downloaded only when you ask for it. Its file edits are
+  highlighted for you to accept or reject, and an edit or a whole session can be
+  reverted later. Beside its status, one button returns to the list and **Restart**
+  opens a fresh session.
+- **Notifications and devices.** Both are cards with a short line and details on
+  request.
 - **Boards and libraries.** Browse, download and prepare board packages and
-  Arduino libraries, and read their example sketches. Offline Mode prepares
-  every default board's tools in advance and uses local packages only.
+  Arduino libraries, and read their example sketches. Each board is listed once.
+  Offline Mode prepares every default board's tools in advance and uses local
+  packages only.
 - **Board recovery.** Soft and Hard Reset reflash a board to a known state,
   clearing lockups, boot loops and frozen sketches.
 - **Safe hardware use.** A serial port belongs to the window that selected it;
@@ -49,8 +56,9 @@ see the [README](README.md).
   required packages, the board list and the default boards' tools (Arduino
   Uno, NodeMCU and ESP32 Dev Module), plus the CP210x and CH34x USB drivers on
   Windows, in its own setup window. Any other board's compiler and uploader
-  download the first time you compile for it. A repair launch rebuilds
-  anything missing.
+  download the first time you compile for it. Windows components come from winget
+  where it offers them, and a normal start asks for no permission. A repair launch
+  rebuilds anything missing.
 - **Interface.** Liquid Glass surfaces (specular rims and edge lensing) and
   capsule actions in Glass Dark, Frosted Light and Solarized Dark themes, an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
@@ -61,6 +69,7 @@ see the [README](README.md).
   source bytes after tool preparation before reusing a build.
   Sketch and board pickers keep their confirmation actions visible on small
   windows. Choosing a board configures its platform and framework automatically.
+  Sample code opens beside its list, and Lite reopens as it was left.
 - **Developer Access.** Private issue tickets shared across your signed-in
   devices, with aligned search and filter fields and evenly spaced count tiles.
 
@@ -71,7 +80,7 @@ see the [README](README.md).
 | `LAUNCHER/` | One launcher per system: `WINDOWS.exe`, `UBUNTU`, `UBUNTU_ARM64`, `LINUX_MINT`, `FEDORA`, `FEDORA_ARM64` and `MacOS.command` |
 | `mcu_flash_gui.py`, `main/`, `src/` | The application, its offline editor, fonts, icons and themes |
 | `src/_python/` | The private Windows Python runtime and its packages, so Windows needs no system Python |
-| `installers/` | Windows installers: CP210x and CH34x USB drivers, Microsoft WebView2, Arduino CLI, MSYS2 and Python |
+| `installers/` | Windows installers: CP210x and CH34x USB drivers, and Microsoft WebView2, Arduino CLI, MSYS2 and Python for PCs without winget |
 | `LITE-MODE/` | MCU Flasher Lite for Ubuntu and Windows |
 | `soft_reset/` | Recovery sketches for ESP32, ESP8266, AVR, STM32, RP2040, SAMD, nRF52, Renesas and Teensy boards |
 | `index_json/` | Board package catalogs |

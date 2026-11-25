@@ -152,17 +152,31 @@ class UbuntuEventFilterChecks(unittest.TestCase):
         self.process()
         return owner, view, follow
 
-    def test_pointer_is_scoped_on_both_hosts_and_windows_log_filter_is_preserved(self):
+    def test_no_host_installs_python_filters_on_the_application(self):
+        """An application filter runs Python for every GUI event and can wrap
+        Qt objects still under construction. The Windows log filter did both."""
         owner = self.widget()
         view = self.widget(QPlainTextEdit, owner)
         with patch.object(self.app, "installEventFilter") as install:
-            guard = WorkspacePointerGuard(owner)
-            follow = LogFollow(view)
+            for platform in ("linux", "win32", "darwin"):
+                with patch("sys.platform", platform):
+                    WorkspacePointerGuard(owner)
+                    LogFollow(view)
             install.assert_not_called()
-            with patch("sys.platform", "win32"):
-                windows_guard = WorkspacePointerGuard(owner)
-                windows_follow = LogFollow(view)
-            self.assertEqual([item.args[0] for item in install.call_args_list], [windows_follow])
+
+    def test_retired_scroll_anchors_outlive_the_native_edit_on_every_host(self):
+        """Dropping a captured cursor while Qt walks its cursor list frees an entry
+        the native edit uses next; the Windows path used to skip this protection."""
+        with patch("sys.platform", "win32"):
+            _owner, view, follow = self.log()
+            view.verticalScrollBar().setValue(20)
+            follow._pending_scroll = state = follow._capture(False, follow_output=False)
+            self.assertIsNotNone(state["anchor"])
+            follow._cancel_settle()
+            self.assertIsNone(follow._pending_scroll)
+            self.assertIn(state, follow._retired_scroll_states.values())
+            self.process()
+            self.assertEqual(follow._retired_scroll_states, {})
 
     def test_new_owned_and_detached_widgets_restore_pointer_without_changing_normal_cursors(self):
         owner = self.widget()

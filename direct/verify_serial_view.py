@@ -229,6 +229,29 @@ class SerialViewChecks(unittest.TestCase):
             self.assertTrue(panel._wrap_action.isChecked())
             save.assert_called_once_with({"serial_line_wrap": True}, shared_updates={"serial_line_wrap": True})
 
+    def test_noise_summary_choice_saves_and_reaches_the_live_reader(self):
+        panel = self.panel()
+        panel._backend = SimpleNamespace(serial_collapse_noise=True)
+        self.assertTrue(panel._output._collapse_noise, "Summaries are on by default")
+        with patch.object(config, "save_gui_config", return_value=True) as save:
+            panel._noise_action.trigger()
+            save.assert_called_once_with({"serial_collapse_noise": False}, shared_updates={"serial_collapse_noise": False})
+        self.assertFalse(panel._backend.serial_collapse_noise)
+
+        def raw_again(menu, _position):
+            action = next(action for action in menu.actions() if action.objectName() == "serial-collapse-noise")
+            self.assertFalse(action.isChecked())
+            action.trigger()
+        with patch.object(config, "save_gui_config", return_value=True):
+            self.inspect_context_event(panel._output, raw_again)
+        self.assertTrue(panel._backend.serial_collapse_noise)
+        self.assertTrue(panel._noise_action.isChecked())
+        with patch.object(config, "save_gui_config", return_value=False), \
+             patch("main.qt.preferences.report_preference_failure"):
+            panel._noise_action.trigger()
+        self.assertTrue(panel._backend.serial_collapse_noise, "A failed save keeps the current display")
+        self.assertTrue(panel._noise_action.isChecked())
+
     def test_failed_wrap_write_preserves_display_and_restores_menu_choices(self):
         panel = self.panel()
         with patch.object(config, "save_gui_config", return_value=False), \

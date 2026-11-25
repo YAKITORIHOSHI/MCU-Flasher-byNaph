@@ -1049,6 +1049,8 @@ class MCUMainWindow(QMainWindow):
         data, self._pending_catalog = self._pending_catalog, None
         from main.core.board_catalog import SUPPORTED_BOARDS
         SUPPORTED_BOARDS.replace(data.get("boards", {}))
+        if self._backend and hasattr(self._backend, "adopt_catalog_labels"):
+            self._backend.adopt_catalog_labels()
         self._primary_toolbar._update_action_button_states()
         if self._backend and self._backend.current_board:
             self._controls_bar._update_hardware_defaults_for_board(self._backend.current_board, update_monitor=False)
@@ -1067,23 +1069,6 @@ class MCUMainWindow(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────────
     # Slots
     # ─────────────────────────────────────────────────────────────────────────
-
-    def nativeEvent(self, event_type, message):
-        """Handle Windows OS-level hardware messages (e.g. WM_DEVICECHANGE for USB hotplug)."""
-        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
-            try:
-                import ctypes
-                from ctypes import wintypes
-                ptr = int(message)
-                if ptr:
-                    msg = wintypes.MSG.from_address(ptr)
-                    WM_DEVICECHANGE = 0x0219
-                    if msg.message == WM_DEVICECHANGE:
-                        if hasattr(self, "_backend") and self._backend:
-                            QTimer.singleShot(250, self._backend.refresh_ports)
-            except Exception:
-                pass
-        return super().nativeEvent(event_type, message)
 
     @Slot(bool)
     def _set_window_closable(self, closable: bool) -> None:

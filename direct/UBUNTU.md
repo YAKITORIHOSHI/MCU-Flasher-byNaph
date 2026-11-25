@@ -551,10 +551,13 @@ Linux's **Terminal** tab uses a native Bash PTY with the bundled xterm frontend.
 Input writes are nonblocking and retain partial UTF-8/paste bytes through PTY
 backpressure. Queued input is bounded to 4 MiB; an over-capacity input is rejected
 with a visible notice. Closing a session clears pending input without replay.
-The **AI Assistant** pane uses `main/qt/posix_ai_panel.py` to render a dedicated
-OpenCode TUI with one protected native PTY. **Hide** and reveal keep the same
-session running; an independent close of its container is ignored. Closing the
-owning workspace ends it. The separate **Terminal** tab remains empty until
+The **AI Assistant** pane (`main/qt/posix_ai_panel.py`) opens on a list of coding
+agents: Gemini, Codex, Claude, Hermes and OpenCode (Built-in). Others already on
+the computer are marked **(Downloaded)**; **Download** gets another one for your
+account, from its maker, without administrator rights. The chosen agent runs in one
+protected native PTY, and the button beside **Restart** returns to the list.
+**Hide** and reveal keep the same session running; an independent close of its container is ignored. Closing
+the owning workspace ends it. The separate **Terminal** tab remains empty until
 **New Bash** creates a general shell session.
 If a project-terminal renderer stops or its assets fail to load, only that
 session's PTY closes. Its tab remains available, and **New Bash** starts a new
@@ -577,12 +580,11 @@ supervisor is reaped; it no longer suppresses them by returning from `finally`.
 
 `/exit` starts a fresh assistant PTY without replaying input. Unexpected exits
 allow at most two automatic restarts within one minute, then leave a visible
-**Retry OpenCode** control. `main/platforms/ubuntu_opencode.py` discovers the
-certified `.ubuntu-tools/opencode` executable first, then native OpenCode through
-the desktop account's PATH and standard user installation
-directories: `~/.opencode/bin`, `~/.local/bin`, `~/.npm-global/bin` and
-`~/.bun/bin`. Bootstrap verifies an installed CLI or prepares a pinned release;
-configure the provider and model in OpenCode itself. Runtime discovery does not
+retry control. `main/core/ai_agents.py` finds agents by their files alone, through
+the desktop account's PATH and standard user installation directories; for OpenCode
+`main/platforms/ubuntu_opencode.py` checks the certified `.ubuntu-tools/opencode`
+executable first. Bootstrap verifies an installed OpenCode or prepares a pinned
+release; sign in and choose a model inside each agent. Runtime discovery does not
 download packages or run a shell. Windows keeps its existing PowerShell/CMD
 terminal and assistant integration.
 

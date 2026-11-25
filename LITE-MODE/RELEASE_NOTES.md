@@ -9,31 +9,34 @@ uses the same build tools, boards and libraries. To open and use it, see the
 
 ## What it does
 
-- **Sketches.** Offers a system folder chooser and recent sketches on startup.
-  Lite validates a folder or source path before opening the sketch. Each sketch
+- **Sketches.** Offers a system folder chooser and recent sketches on startup, with
+  the last sketch ready to reopen. Lite validates a folder or source path before opening the sketch. Each sketch
   has its own workspace window. Lite refreshes the open sketch as you save
   changes in your editor.
 - **Boards.** Searches the official PlatformIO board catalog by name, ID, vendor,
   platform, MCU or framework, ranks exact matches first and suggests close
-  matches for typos. Selecting a board sets its platform and default framework
+  matches for typos. Each board is listed once, with its platform, MCU and ID.
+  Selecting a board sets its platform and default framework
   using the main app's catalog, without a separate framework dropdown.
 - **Compile, Upload and Clean.** Runs the main app's build and upload actions.
   Missing tools are prepared automatically before the first build. After tool
   preparation, Lite reads the latest saved source bytes. Upload reuses firmware
   when the saved build for that board still verifies against those bytes.
 - **Monitors.** Separate Build and Serial monitors with Follow, Copy and Clear.
-  Connecting never resets the board; the Connection panel holds the port, baud
-  rate and send controls.
+  Connecting never resets the board. The Serial monitor holds its baud rate; the
+  Connection panel holds the port, upload speed and send controls.
 - **Shared tools.** Lite and the main app use one package store, so boards and
   libraries prepared in either are available in both.
 - **Resources.** Lists installed boards and libraries with their example
-  sketches and source files, including those inside ZIPs, in a read-only code
-  viewer with syntax colors, copy and find. **Find more libraries** searches and
-  installs from the PlatformIO registry.
+  sketches and source files, including those inside ZIPs, beside a read-only code
+  viewer with syntax colors, copy and find. **Find more** searches and installs
+  from the PlatformIO registry.
 - **Safe ports.** A serial port selected in one Lite or MCU Flasher window is
   shown as in use and cannot be selected in another.
-- **Stop.** Always visible; it cancels preparation, searches and other work that
-  can be stopped safely, and explains when it cannot.
+- **Stop.** Always visible; it cancels preparation, searches and other work you
+  started that can be stopped safely, and explains when it cannot.
+- **Remembered state.** Reopens in the theme, window size, monitor view, speeds and
+  board it was left with. A port is never chosen automatically.
 - **Interface.** Light and Dark themes, layouts that fit small, scaled and
   portrait screens, and a narrow view that switches between Monitor and
   Sketch & Connection. Board results and recent sketches scroll while their

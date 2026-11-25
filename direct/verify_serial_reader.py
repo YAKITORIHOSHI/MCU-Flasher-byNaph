@@ -283,8 +283,9 @@ class ReaderChecks(unittest.TestCase):
                 notice_thread.join(1)
                 self.assertFalse(notice_thread.is_alive())
 
-    def start_and_finish(self, port):
+    def start_and_finish(self, port, *, collapse=True):
         api, events = backend_fixture(port)
+        api.serial_collapse_noise = collapse
         api._start_serial_monitor()
         thread = api._serial_thread
         thread.join(2)
@@ -326,11 +327,47 @@ class ReaderChecks(unittest.TestCase):
     def test_high_rate_and_expanded_bytes_have_bounded_lossless_events(self):
         data = b"\xc2" + b"\xff" * 12000 + b"tail"
         port = FakePort([data])
-        _, events = self.start_and_finish(port)
+        _, events = self.start_and_finish(port, collapse=False)
         self.assertEqual(device_text(events), "\\xc2" + "\\xff" * 12000 + "tail")
         self.assertLessEqual(max(port.read_sizes), 2048)
         self.assertTrue(all(len(payload["text"]) <= 8192 for name, payload in events
                             if name == "serial:log" and payload.get("stream")))
+
+    def test_noise_floods_become_one_counted_summary_and_keep_readable_text(self):
+        noise = bytes([0xff, 0xfe, 0x80, 0x0a, 0x61, 0x00]) * 400
+        _, events = self.start_and_finish(FakePort([b"ready\n", noise, b"\nets Jul 29 2019 12:21:46\r\n> "]))
+        text = device_text(events)
+        self.assertTrue(text.startswith("ready\n\\xff\\xfe\\x80\n"), text[:80])
+        self.assertEqual(text.count("unreadable byte"), 1, text)
+        self.assertIn("(check the baud rate)", text)
+        self.assertTrue(text.endswith("ets Jul 29 2019 12:21:46\n> "), text[-80:])
+        self.assertLess(text.count("\n"), 10, "A flood must not print line after line")
+        self.assertEqual(len([name for name, _ in events if name == "notification"]), 1)
+
+    def test_isolated_control_and_binary_bytes_stay_visible(self):
+        decoder = SerialTextDecoder(collapse=True)
+        data = b"".join(b"frame %02d \x02payload-%02d\x03 ok\n" % (n, n) for n in range(200))
+        self.assertEqual(decoder.feed(data, final=True), SerialTextDecoder().feed(data, final=True))
+
+    def test_prompt_after_noise_appears_without_waiting_for_more_output(self):
+        now = [0.0]
+        decoder = SerialTextDecoder(collapse=True, clock=lambda: now[0])
+        first = decoder.feed(b"\xff" * 100 + b"> ")
+        self.assertNotIn("> ", first)
+        self.assertEqual(decoder.idle(), "", "One pause inside a noisy stream is not its end")
+        now[0] += 0.5
+        self.assertEqual(decoder.idle(), "\n[92 unreadable bytes (check the baud rate)]\n> ")
+        self.assertEqual(decoder.idle(), "")
+
+    def test_continuous_noise_reports_at_growing_intervals(self):
+        now = [0.0]
+        decoder = SerialTextDecoder(collapse=True, clock=lambda: now[0])
+        text = ""
+        for _ in range(600):
+            now[0] += 0.1
+            text += decoder.feed(b"\xf0\xff\x00a" * 20) + decoder.idle()
+        self.assertLessEqual(text.count("unreadable byte"), 4)
+        self.assertEqual(text.count("check the baud rate"), 1)
 
     def test_per_byte_bursts_are_coalesced(self):
         _, events = self.start_and_finish(FakePort([b"x"] * 1000))

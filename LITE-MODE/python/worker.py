@@ -28,6 +28,32 @@ BUILD_SOURCE_EXTENSIONS = {".ino", ".cpp", ".c"}
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 SOURCE_REFRESH_SECONDS = 2.0
 MAX_FRAME = 256 * 1024
+# The rates Lite's menus offer, as listed in src/preferences.rs.
+MONITOR_RATES = frozenset({300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880, 115200,
+                           230400, 250000, 460800, 921600})
+UPLOAD_RATES = frozenset({9600, 19200, 57600, 115200, 230400, 460800, 921600})
+
+
+def window_speeds(state):
+    """The monitor baud and upload speed in the window's own state file, if usable."""
+    try:
+        with (state / "window.json").open("rb") as stream:
+            text = stream.read(16 * 1024 + 1)
+        left = json.loads(text) if len(text) <= 16 * 1024 else {}
+    except (OSError, ValueError, RecursionError):
+        return {}
+    if not isinstance(left, dict):
+        return {}
+    return {key: left[key] for key, rates in (("baud", MONITOR_RATES), ("upload_speed", UPLOAD_RATES))
+            if type(left.get(key)) is int and left[key] in rates}
+
+
+def upload_speed_value(value):
+    """The backend keeps its upload speed as text; the window shows a number."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def developer_launch_options():
@@ -283,6 +309,7 @@ class Worker:
         self._source_watch = None
         self._stop_source_watch = threading.Event()
         self.resource_busy = False
+        self.starting = False
         self.process = None
         self.catalog_thread = None
         self.developer_process = None
@@ -300,7 +327,7 @@ class Worker:
         # Official PlatformIO catalog, bundled for offline board selection.
         # It is a picker catalog, never evidence that a board is attached or a
         # toolchain is installed. Native installed manifests override it later.
-        from main.core.board_catalog import _native_board_entry
+        from main.core.board_catalog import _native_board_entry, board_target, merge_board_rows
         catalog = {}
         records = json.loads((LITE / "assets/boards.json").read_text(encoding="utf-8"))
         for record in records:
@@ -313,19 +340,26 @@ class Worker:
             catalog[name] = _native_board_entry(record)
         self.catalog_boards = catalog
         from main.core.target_profile import target_problem
-        self.boards.replace({**catalog, **{name: info for name, info in self.boards.items()
-                                          if not target_problem(info)}})
+
+        def one_row_per_target(rows):
+            # The bundled list and the main catalog describe many of the same
+            # boards. They are one row per build target, never one per source.
+            return merge_board_rows({**catalog, **{name: info for name, info in rows.items()
+                                                   if not target_problem(info)}})
+        self.boards.replace(one_row_per_target(dict(self.boards.items())))
         owner = self
 
         class LiteBackend(MCUWebBackendAPI):
+            monitor_follows_port = False  # Only Connect opens a port here.
+
             def emit(self, name, data=None):
                 # No Qt windows, notifications database, hardware-state generation
                 # or journal persistence is driven by this view's event transport.
                 if name == "boards:updated" and isinstance(data, dict) and isinstance(data.get("boards"), dict):
                     # Unresolved Arduino aliases must never replace an exact
                     # native definition or become a selectable build target.
-                    owner.boards.replace({**owner.catalog_boards,
-                        **{name: info for name, info in data["boards"].items() if not target_problem(info)}})
+                    owner.boards.replace(one_row_per_target(data["boards"]))
+                    self.adopt_catalog_labels()
                 if name not in {"console:log", "serial:log", "console:clear", "serial:clear", "operation:phase", "serial:status", "console:progress", "notification"}:
                     return
                 if name == "notification" and isinstance(data, dict):
@@ -385,12 +419,21 @@ class Worker:
             # The main backend's legacy default is not a user selection.
             self.api.current_board = ""
         self.api.reset_on_baud_change = False
+        self._restore_speeds()
         self.api.clear_console_on_action = False
         self.api.skip_compile = True
         self.api._package_event_root = str(self.package_events)
         # AI review/editor services are outside Lite's monitor-only scope.
         self.api.ai_watcher = None
         self.api.ai_review_manager = None
+
+    def _restore_speeds(self):
+        """The monitor baud and upload speed this window was left with."""
+        left = window_speeds(self.state)
+        if "baud" in left:
+            self.api.current_baud = left["baud"]
+        if "upload_speed" in left:
+            self.api.set_upload_speed(left["upload_speed"])
 
     def read_resource(self, request):
         """One active disk reader plus one latest request; no UI-thread scans."""
@@ -416,16 +459,21 @@ class Worker:
             try:
                 if kind == "resources":
                     libraries = self.inventory.scan(cancel)
-                    from main.core.board_catalog import _load_platformio_board_catalog, _native_board_entry
+                    from main.core.board_catalog import _load_platformio_board_catalog, _native_board_entry, board_target
                     installed = []
                     for row in _load_platformio_board_catalog():
                         if cancel.is_set():
                             raise InterruptedError("Resource scan stopped")
-                        name = f"{row['name']} [{row['platform']}:{row['id']}]"
                         entry = _native_board_entry(row)
-                        self.boards.set_definition(name, entry)
+                        # Keep the board's one picker row; add it only when it is new.
+                        name = self.boards.label_for(board_target(row["name"], entry))
+                        if not name:
+                            name = f"{row['name']} [{row['platform']}:{row['id']}]"
+                            self.boards.set_definition(name, entry)
+                        elif not self.boards[name].get("arduino_source_file"):
+                            self.boards.set_definition(name, dict(entry, label=self.boards[name].get("label") or row["name"]))
                         installed.append({"name": name, "platform": row["platform"], "mcu": row.get("mcu", ""),
-                                          "frameworks": entry["frameworks"]})
+                                          "id": row["id"], "frameworks": entry["frameworks"]})
                     payloads = [("resources:libraries", libraries), ("resources:boards", installed)]
                 elif kind == "samples":
                     payloads = [("resources:samples", self.inventory.examples(str(request.get("library", "")), cancel))]
@@ -453,15 +501,27 @@ class Worker:
         return (self.resource_busy or self.api.is_busy or self.api._operation_worker_alive()
                 or self.api._catalog_refresh_running)
 
+    def starting_up(self):
+        """Only work Lite began by itself is running. Stop is not offered for it, and
+        the window may close: it ends at its next safe point."""
+        if self.starting:
+            return True
+        return (self.api._catalog_refresh_running and not self.resource_busy and not self.api.is_busy
+                and not self.api._operation_worker_alive())
+
     def consolidate_packages(self):
-        """Upgrade old stores off the command thread, with the ordinary Stop gate."""
+        """Upgrade old stores off the command thread, as part of starting."""
         from shared_store import legacy_cores
         if self.main_core is None or not any((old / folder).is_dir() for old in legacy_cores(self.state)
                                             for folder in ("platforms", "packages", "lib")):
             return False
         self.cancel.clear()
         self.resource_busy = True
+        # Part of starting, not something the user began: Stop stays off, and
+        # closing the window ends it at its next safe point.
+        self.starting = True
         self.output.send("resource:busy", True)
+        self.output.send("console:progress", {"action": "Finishing start"})
         self.status()
 
         def work():
@@ -491,6 +551,7 @@ class Worker:
                     if not self.closing:
                         self.api.refresh_board_catalog(invalidate_parsed=True)
                     self.resource_busy = False
+                    self.starting = False
                     self.output.send("resource:busy", False)
                     self.status()
         self.catalog_thread = threading.Thread(target=work, name="LiteSharedStore", daemon=True)
@@ -511,6 +572,10 @@ class Worker:
             return {"enabled": False, "reason": "Wait for cache cleanup to finish"}
         if getattr(self.api, "_framework_download_active", False):
             return {"enabled": False, "reason": "Wait for the native package installation to finish"}
+        if self.starting_up():
+            return {"enabled": False, "reason":
+                "Lite is finishing its start. This step ends by itself" if self.starting else
+                "Lite is reading its board list. This step ends by itself"}
         if self.resource_busy:
             return {"enabled": not self.cancel.is_set(), "reason":
                 "Stopping the resource operation" if self.cancel.is_set() else
@@ -528,6 +593,7 @@ class Worker:
         self.output.send("state", {
             "busy": self.busy(), "board": self.api.current_board,
             "port": self.api.current_port, "baud": self.api.current_baud,
+            "upload_speed": upload_speed_value(self.api.upload_speed), "starting": self.starting_up(),
             "monitor": self.api.serial_running, "phase": self.api.active_operation or "idle",
             "stop": self.stop_state(),
             "developer_access": self.developer_process is not None and self.developer_process.poll() is None,
@@ -536,14 +602,18 @@ class Worker:
 
     def ports(self):
         ports = self.api._scan_ports()
+        from main.core import port_inventory
         devices = {p["device"] for p in ports}
+        previous = {p["device"]: p for p in self.last_ports}
         if self.api.current_port and self.api.current_port not in devices and not self.api.is_busy:
             self.api._stop_serial_monitor()
             # Keep the claim while the device is absent so no other window can
-            # take it; the backend reselects it here when it returns.
+            # take it; it is reselected below when its board returns.
+            self.api._returning_identity = port_inventory.usb_identity(previous.get(self.api.current_port))
             self.api._returning_port = self.api.current_port
             self.api.current_port = ""
             self.log("Selected port disconnected; it stays reserved for this window until it returns.", "warning")
+        self.api._restore_if_returned(ports, devices - set(previous))
         self.last_ports = ports
         from main.core.config import annotate_port_owners
         self.output.send("ports", annotate_port_owners(ports))
@@ -643,7 +713,8 @@ class Worker:
     def history(self, *, expected_project=None, expected_board=None):
         from main.core.config import load_recent_projects, load_recent_boards
         projects = load_recent_projects()[:10]
-        boards = [name for name in load_recent_boards() if name in self.boards][:5]
+        current = (self.boards.canonical(name) for name in load_recent_boards())
+        boards = list(dict.fromkeys(name for name in current if name))[:5]
         self.output.send("history", {"projects": projects, "boards": boards})
         if ((expected_project and expected_project not in projects)
                 or (expected_board and expected_board not in boards)):
@@ -1012,7 +1083,7 @@ class Worker:
     def _dispatch(self, request):
         cmd = request.get("cmd")
         if cmd == "shutdown":
-            if self.busy():
+            if self.busy() and not self.starting_up():
                 raise RuntimeError("Wait for the current operation before closing Lite")
             return False
         if cmd == "stop":
@@ -1053,6 +1124,14 @@ class Worker:
                                 open_in_new_window=request.get("open_in_new_window") is True)
         elif cmd == "board":
             name = str(request.get("name", ""))
+            if request.get("restore") is True:
+                # The board this window was left with. One the catalog no longer
+                # knows as an exact target simply stays unselected.
+                from main.core.target_profile import target_problem
+                name = self.boards.canonical(name)
+                if not name or self.api.current_board or target_problem(self.api._resolve_board_info(name)):
+                    self.status()
+                    return True
             if name not in self.boards:
                 raise ValueError("Select an exact board from search results")
             self.api.select_board(name)

@@ -15,7 +15,6 @@ Features:
 from __future__ import annotations
 
 import re
-import sys
 from datetime import datetime
 from itertools import chain
 from collections import deque
@@ -200,6 +199,7 @@ class SerialOutputView(QPlainTextEdit):
     """
     copy_started = Signal()
     line_wrap_changed = Signal(bool)
+    collapse_noise_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -233,6 +233,7 @@ class SerialOutputView(QPlainTextEdit):
         from main.core.config import load_gui_config
         cfg = load_gui_config()
         self._line_wrap_enabled = bool(cfg.get("serial_line_wrap", True))
+        self._collapse_noise = bool(cfg.get("serial_collapse_noise", True))
         self._apply_line_wrap()
         self._timestamp_enabled = bool(cfg.get("timestamp_enabled", False))
         self._entries = LogBuffer(self._history_limit, profile.terminal_scrollback, lambda item: item[0])
@@ -328,6 +329,18 @@ class SerialOutputView(QPlainTextEdit):
         self.set_line_wrap_enabled(enabled)
         return True
 
+    def request_collapse_noise(self, enabled: bool) -> bool:
+        """Choose between summarized and raw unreadable bytes; saved like line wrap."""
+        enabled = bool(enabled)
+        if enabled == self._collapse_noise:
+            return True
+        from main.qt.preferences import save_display_preference
+        if not save_display_preference("serial_collapse_noise", enabled, "Unreadable serial data"):
+            return False
+        self._collapse_noise = enabled
+        self.collapse_noise_changed.emit(enabled)
+        return True
+
     def set_paused(self, paused: bool) -> None:
         self._paused = bool(paused)
         if not self._paused and self._paused_dirty:
@@ -408,6 +421,19 @@ class SerialOutputView(QPlainTextEdit):
             wrap_action.blockSignals(previous)
 
         wrap_action.toggled.connect(toggle_wrap)
+        noise_action = menu.addAction(self.tr("Summarize unreadable data"))
+        noise_action.setObjectName("serial-collapse-noise")
+        noise_action.setCheckable(True)
+        noise_action.setChecked(self._collapse_noise)
+        noise_action.setToolTip("Show a byte count for noise instead of every \\xNN; turn off to see raw bytes")
+
+        def toggle_noise(enabled):
+            self.request_collapse_noise(enabled)
+            previous = noise_action.blockSignals(True)
+            noise_action.setChecked(self._collapse_noise)
+            noise_action.blockSignals(previous)
+
+        noise_action.toggled.connect(toggle_noise)
         try:
             menu.exec(self.viewport().mapToGlobal(position))
         finally:
@@ -669,10 +695,7 @@ class SerialOutputView(QPlainTextEdit):
             return
 
         if cleared:
-            if sys.platform != "win32":
-                self._follow.clear_document(super().clear)
-            else:
-                super().clear()
+            self._follow.clear_document(super().clear)
             self._follow.reset()
         chunks, self._render_line_start = self._formatted_chunks(
             additions, self._timestamp_enabled, self._render_line_start)
@@ -700,10 +723,7 @@ class SerialOutputView(QPlainTextEdit):
         self._paused_dirty = False
         if self._flush_timer.isActive():
             self._flush_timer.stop()
-        if sys.platform != "win32":
-            self._follow.clear_document(super().clear)
-        else:
-            super().clear()
+        self._follow.clear_document(super().clear)
         self._follow.reset()
 
 
@@ -982,6 +1002,12 @@ class SerialPanel(QWidget):
         self._wrap_action.setChecked(bool(cfg.get("serial_line_wrap", True)))
         self._wrap_action.setToolTip("Fit long lines to the panel width; copied output keeps its original line breaks")
         self._wrap_action.toggled.connect(self._on_line_wrap_changed)
+        self._noise_action = menu.addAction("Summarize unreadable data")
+        self._noise_action.setObjectName("serial-collapse-noise")
+        self._noise_action.setCheckable(True)
+        self._noise_action.setChecked(bool(cfg.get("serial_collapse_noise", True)))
+        self._noise_action.setToolTip("Show a byte count for noise instead of every \\xNN; turn off to see raw bytes")
+        self._noise_action.toggled.connect(self._on_collapse_noise_changed)
         for label, checkbox in (("Auto-scroll", self.cb_autoscroll), ("Clear on Action", self.cb_auto_clear), ("Clear-screen", self.cb_ansi_clear)):
             action = menu.addAction(label)
             action.setCheckable(True)
@@ -1003,6 +1029,7 @@ class SerialPanel(QWidget):
         self._output = SerialOutputView()
         self._output.copy_started.connect(self._cancel_copy_output)
         self._output.line_wrap_changed.connect(self._sync_display_options)
+        self._output.collapse_noise_changed.connect(self._apply_collapse_noise)
         self._output.set_autoscroll(self.cb_autoscroll.isChecked())
         self._output.set_ansi_clear_enabled(self.cb_ansi_clear.isChecked())
         output_policy = self._output.sizePolicy()
@@ -1160,6 +1187,9 @@ class SerialPanel(QWidget):
         previous = self._wrap_action.blockSignals(True)
         self._wrap_action.setChecked(self._output._line_wrap_enabled)
         self._wrap_action.blockSignals(previous)
+        previous = self._noise_action.blockSignals(True)
+        self._noise_action.setChecked(self._output._collapse_noise)
+        self._noise_action.blockSignals(previous)
         for action, checkbox in self._display_option_actions:
             action.blockSignals(True)
             action.setChecked(checkbox.isChecked())
@@ -1412,6 +1442,16 @@ class SerialPanel(QWidget):
 
     def _on_line_wrap_changed(self, enabled: bool) -> None:
         self._output.request_line_wrap(enabled)
+        self._sync_display_options()
+
+    def _on_collapse_noise_changed(self, enabled: bool) -> None:
+        self._output.request_collapse_noise(enabled)
+        self._sync_display_options()
+
+    def _apply_collapse_noise(self, enabled: bool) -> None:
+        """The reader picks this up on its next bytes, without reopening the port."""
+        if self._backend is not None:
+            self._backend.serial_collapse_noise = bool(enabled)
         self._sync_display_options()
 
     def _on_ansi_clear_changed(self, state: int) -> None:

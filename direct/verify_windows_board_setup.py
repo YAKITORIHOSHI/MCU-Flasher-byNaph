@@ -245,7 +245,7 @@ class WindowsBoardSetupChecks(unittest.TestCase):
 
 
 class ArduinoExecutableSetupChecks(unittest.TestCase):
-    def ensure_cli(self, *, existing):
+    def ensure_cli(self, *, existing, elevated=False, for_user=False):
         source = ROOT / "src/modules/bootstrap.py"
         tree = ast.parse(source.read_text(encoding="utf-8-sig"))
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
@@ -257,6 +257,9 @@ class ArduinoExecutableSetupChecks(unittest.TestCase):
                      find_arduino_cli=Mock(side_effect=["fixture-arduino-cli.exe"] if existing else
                                            [None, "fixture-arduino-cli.exe"]),
                      _cache_arduino_cli_path=cache, _is_valid_msi=Mock(return_value=True),
+                     _is_process_elevated=lambda: elevated,
+                     _install_arduino_cli_with_winget=Mock(return_value=elevated),
+                     _install_arduino_cli_for_user=Mock(return_value=for_user),
                      _refresh_bundled_msi=Mock(), _run_arduino_cli_msi=installer,
                      subprocess=SimpleNamespace(run=spawn, Popen=spawn),
                      _prewarm_arduino_cli_cores=spawn,
@@ -272,6 +275,10 @@ class ArduinoExecutableSetupChecks(unittest.TestCase):
 
     def test_new_cli_installs_only_executable(self):
         self.ensure_cli(existing=False).assert_called_once()
+
+    def test_account_copy_or_winget_replaces_the_msi_and_its_prompt(self):
+        self.ensure_cli(existing=False, for_user=True).assert_not_called()
+        self.ensure_cli(existing=False, elevated=True).assert_not_called()
 
 
 if __name__ == "__main__":

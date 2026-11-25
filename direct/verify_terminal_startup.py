@@ -71,6 +71,16 @@ class TerminalStartupChecks(unittest.TestCase):
         self.assertFalse(self.panel._btn_clear.isEnabled())
         self.assertFalse(self.panel._btn_kill.isEnabled())
         self.assertEqual(self.panel._status_dot.toolTip(), 'Project Terminal: No active sessions')
+        # Like the Linux panel: a title and the shell actions, no session chrome.
+        self.assertTrue(self.panel._btn_add_tab.isHidden())
+        self.assertFalse(self.panel._btn_open_pwsh.isHidden())
+        self.assertFalse(self.panel._btn_open_cmd.isHidden())
+        self.assertIn('No terminal sessions', self.panel._lbl_no_term.text())
+
+    def open_shell(self, kind):
+        button = {'pwsh': self.panel._btn_open_pwsh, 'cmd': self.panel._btn_open_cmd}[kind]
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        pump()
 
     def open_chooser(self, choose=None):
         observations = []
@@ -121,12 +131,15 @@ class TerminalStartupChecks(unittest.TestCase):
         self.panel.show()
         pump()
         self.assertEqual(self.panel._btn_add_tab.popupMode(), QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.open_chooser()
         self.assert_empty()
         self.start.assert_not_called()
-        self.open_chooser('pwsh')
+        self.open_shell('pwsh')
         self.start.assert_called_once()
         self.assertEqual(self.panel._tab_bar.count(), 1)
+        self.assertTrue(self.panel._empty_title.isHidden())
+        self.assertTrue(self.panel._btn_open_pwsh.isHidden(), 'Open sessions add shells through +')
+        self.open_chooser()
+        self.assertEqual(self.panel._tab_bar.count(), 1, 'Opening or dismissing + must not start a shell')
         new_calls = [call for call in self.sent.call_args_list if call.args[0] == 'new']
         self.assertEqual(len(new_calls), 1)
         self.assertEqual(new_calls[0].kwargs['extra']['kind'], 'pwsh')
@@ -144,11 +157,35 @@ class TerminalStartupChecks(unittest.TestCase):
         self.start.assert_called_once()
         self.assertEqual(len([call for call in self.sent.call_args_list if call.args[0] == 'new']), 2)
 
+    def test_empty_message_is_never_squeezed_into_a_column(self):
+        """A wrapping label laid out with an alignment flag takes its narrowest hint."""
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QFontMetrics
+        self.panel.show()
+        for theme in ('default', 'light', 'solarized_dark'):
+            APP.setStyleSheet(build_stylesheet(theme))
+            self.panel.apply_theme(theme)
+            for width, height in ((1400, 260), (900, 200), (640, 140), (480, 110), (320, 90)):
+                with self.subTest(theme=theme, width=width, height=height):
+                    self.panel.resize(width, height)
+                    pump()
+                    label = self.panel._lbl_no_term
+                    self.assertEqual(label.width(), self.panel._empty_card.width(), 'The message uses the whole pane')
+                    metrics = QFontMetrics(label.font())
+                    wanted = metrics.boundingRect(QRect(0, 0, label.contentsRect().width() - 4, 4000),
+                                                  int(Qt.TextFlag.TextWordWrap), label.text())
+                    self.assertLessEqual(wanted.height(), label.height(), 'Every line of the message fits')
+                    if width >= 640:
+                        self.assertLessEqual(wanted.height(), metrics.lineSpacing() * 2 + 2, 'Two lines, as on Linux')
+                    for button in (self.panel._btn_open_pwsh, self.panel._btn_open_cmd,
+                                   self.panel._btn_clear, self.panel._btn_kill):
+                        self.assertTrue(self.panel._header.rect().contains(button.geometry()), button.text())
+
     def test_shell_exit_disposes_only_its_own_tab(self):
         self.panel.resize(800, 220)
         self.panel.show()
         pump()
-        self.open_chooser('pwsh')
+        self.open_shell('pwsh')
         self.open_chooser('cmd')
         first, second = (self.panel._tab_bar.tabData(index) for index in range(2))
         self.sent.reset_mock()

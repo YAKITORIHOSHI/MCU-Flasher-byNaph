@@ -9,6 +9,61 @@ from __future__ import annotations
 from functools import lru_cache
 from contextlib import contextmanager
 import os
+import threading
+
+_RETIRE_LOCK = threading.Lock()
+
+
+def track_reader(conn):
+    """Register the one reader thread that will use `conn`; it sets this on leaving."""
+    left = threading.Event()
+    conn._mcu_reader_left = left
+    return left
+
+
+def retire_connection(conn, *, timeout=1.5) -> bool:
+    """Close one monitor connection exactly once, never from under its own reader.
+
+    The operating system reuses a handle number as soon as it is closed. Closing a
+    port while its reader is still inside a read lets that read land on whatever
+    opened next, including one of the embedded browser's own pipes, and a second
+    close can shut an unrelated handle. Wake the reader, wait for it to leave the
+    driver, then close. A removed device whose driver never returns is left to a
+    small owned thread, so no caller waits longer than `timeout`.
+    """
+    if conn is None:
+        return True
+    with _RETIRE_LOCK:
+        done = getattr(conn, "_mcu_retired", None)
+        first = done is None
+        if first:
+            done = conn._mcu_retired = threading.Event()
+    if not first:
+        return done.wait(timeout)
+    left = getattr(conn, "_mcu_reader_left", None)
+    if left is not None and not left.is_set():
+        cancel = getattr(conn, "cancel_read", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:
+                pass  # The finite read timeout ends this read as well.
+
+    def close():
+        try:
+            if left is not None:
+                left.wait()
+            conn.close()
+        except Exception:
+            pass  # A removed device can refuse its own close.
+        finally:
+            done.set()
+
+    try:
+        threading.Thread(target=close, name="MCU_SerialCloser", daemon=True).start()
+    except RuntimeError:
+        close()
+    return done.wait(timeout)
 
 
 @contextmanager

@@ -101,8 +101,13 @@ class CodePreview(QPlainTextEdit):
         self._number_area.update()
 
 
+_EDIT, _SESSION = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1
+
+
 class AIChangesPanel(QWidget):
     _deleted = Signal(object)
+    _sessions_read = Signal(int, object)
+    _edit_read = Signal(str, object)
 
     def __init__(self, backend=None, parent=None):
         super().__init__(parent)
@@ -116,6 +121,9 @@ class AIChangesPanel(QWidget):
         self._stale = False
         self._busy = False
         self._closed = False
+        self._archive = None            # Saved sessions, once "Earlier sessions" was opened
+        self._archive_edits = {}        # Their full texts, the last few read
+        self._archive_token = 0
         # History changes arrive in bursts while an assistant edits several
         # files. Coalesce them, and refresh a hidden panel only when it shows.
         self._refresh_timer = QTimer(self)
@@ -132,6 +140,10 @@ class AIChangesPanel(QWidget):
         self._review.setToolTip("Open this file's pending Accept / Reject review")
         self._review.clicked.connect(self._review_selected)
         header.addWidget(self._review)
+        self._revert = ActionButton("Revert edit", self, icon_name="undo")
+        self._revert.setToolTip("Preview and undo this AI edit, or every edit of the selected session")
+        self._revert.clicked.connect(self._revert_selected)
+        header.addWidget(self._revert)
         self._delete = ActionButton("Delete card", self)
         self._delete.setToolTip("Remove this history card; retain pending reviews and recovery copies")
         self._delete.clicked.connect(lambda: self._remove(False))
@@ -160,6 +172,7 @@ class AIChangesPanel(QWidget):
         self._tree.setUniformRowHeights(False)
         self._tree_indent = self._tree.indentation()
         self._tree.currentItemChanged.connect(self._select)
+        self._tree.itemExpanded.connect(self._open_archive)
         self._tree.itemDoubleClicked.connect(lambda *_: self._review_selected())
         previews = QWidget(splitter)
         side = QHBoxLayout(previews)
@@ -175,6 +188,8 @@ class AIChangesPanel(QWidget):
         signals.ai_review_resolved.connect(self._request_refresh)
         signals.project_updated.connect(self._request_refresh)
         self._deleted.connect(self._finish_delete, Qt.ConnectionType.QueuedConnection)
+        self._sessions_read.connect(self._show_archive, Qt.ConnectionType.QueuedConnection)
+        self._edit_read.connect(self._show_archived_edit, Qt.ConnectionType.QueuedConnection)
         self.apply_theme()
         self.refresh()
 
@@ -221,16 +236,23 @@ class AIChangesPanel(QWidget):
         self._stale = False
         manager = getattr(self._backend, "ai_review_manager", None)
         records = manager.get_ai_changes() if manager else []
+        project = str(getattr(manager, "project_dir", "") or "")
+        if project != getattr(self, "_project", None):
+            # Saved sessions belong to one sketch; read another sketch's on demand.
+            self._project, self._archive, self._archive_edits = project, None, {}
+            self._archive_token += 1
         signature = tuple((item.get("id"), item.get("updatedAt"), item.get("status"), item.get("statusNote"),
                            item.get("groupId"), item.get("prompt")) for item in records)
+        signature = (project, signature)
         if signature == self._records_signature and self._tree.topLevelItemCount() == len(
-                {item.get("groupId", "") for item in records}):
+                {item.get("groupId", "") for item in records}) + bool(self._archive_item()):
             # Same cards: keep the tree, its scroll position and selection.
             self._records = {item["id"]: item for item in records}
             self._select(self._tree.currentItem())
             return
         self._records_signature = signature
         selected = self._selected_id()
+        archive_open = bool(self._archive_item() and self._archive_item().isExpanded())
         self._tree.blockSignals(True)
         self._tree.clear()
         self._records = {item["id"]: item for item in records}
@@ -251,15 +273,18 @@ class AIChangesPanel(QWidget):
                 edited = str(record.get("timestamp", ""))
             decision = record.get("status", "pending").capitalize()
             card = QTreeWidgetItem([f"{Path(record['path']).name}\n{edited}", decision])
-            card.setData(0, Qt.ItemDataRole.UserRole, record["id"])
+            card.setData(0, _EDIT, record["id"])
             tooltip = f"{record['path']}\nEdited: {edited}\nDecision: {decision}\nSource: {self._prompt_title(record)}"
             if record.get("statusNote"):
                 tooltip += f"\n{record['statusNote']}"
             card.setToolTip(0, tooltip)
             card.setToolTip(1, tooltip)
             groups[group_id].addChild(card)
+            groups[group_id].setData(0, _SESSION, (groups[group_id].data(0, _SESSION) or []) + [record["id"]])
             if record["id"] == selected or target is None:
                 target = card
+        if callable(getattr(manager, "list_ai_sessions", None)):
+            self._add_archive_item(archive_open)
         self._tree.blockSignals(False)
         self._tree.setCurrentItem(target)
         self._select(target)
@@ -270,14 +295,152 @@ class AIChangesPanel(QWidget):
 
     def _selected_id(self):
         item = self._tree.currentItem()
-        return item.data(0, Qt.ItemDataRole.UserRole) if item else ""
+        return item.data(0, _EDIT) or "" if item else ""
+
+    # ── Saved sessions ─────────────────────────────────────────────────────
+
+    def _archive_item(self):
+        last = self._tree.topLevelItem(self._tree.topLevelItemCount() - 1)
+        return last if last is not None and last.data(0, _SESSION) == "archive" else None
+
+    def _add_archive_item(self, expanded=False):
+        item = QTreeWidgetItem(["Earlier sessions", ""])
+        item.setToolTip(0, "AI edits kept by earlier sessions of this sketch, stored hidden inside it")
+        item.setData(0, _SESSION, "archive")
+        item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+        self._tree.addTopLevelItem(item)
+        item.setFirstColumnSpanned(True)
+        if self._archive is not None:
+            self._fill_archive(item)
+            item.setExpanded(expanded)
+
+    def _open_archive(self, item):
+        if item is not self._archive_item() or self._archive is not None:
+            return
+        manager = getattr(self._backend, "ai_review_manager", None)
+        self._archive_token += 1
+        token = self._archive_token
+        item.takeChildren()
+        item.addChild(QTreeWidgetItem(["Reading saved sessions…", ""]))
+
+        def read():
+            try:
+                sessions = manager.list_ai_sessions()
+            except Exception as exc:
+                sessions = exc
+            try:
+                self._sessions_read.emit(token, sessions)
+            except RuntimeError:
+                pass
+        threading.Thread(target=read, daemon=True, name="MCU_AISessions").start()
+
+    def _show_archive(self, token, sessions):
+        item = self._archive_item()
+        if token != self._archive_token or item is None:
+            return
+        if isinstance(sessions, Exception):
+            item.takeChildren()
+            item.addChild(QTreeWidgetItem([f"Saved sessions could not be read: {sessions}", ""]))
+            return
+        self._archive = sessions
+        self._fill_archive(item)
+        item.setExpanded(True)
+
+    def _fill_archive(self, item):
+        item.takeChildren()
+        if not self._archive:
+            item.addChild(QTreeWidgetItem(["No earlier AI sessions were kept for this sketch", ""]))
+        for session in self._archive or ():
+            year, month, day = session["date"]
+            try:
+                date = datetime(year, month, day).strftime("%b %d, %Y")
+            except ValueError:
+                date = session["id"].split("/")[0]
+            count = len(session["edits"])
+            node = QTreeWidgetItem([f"{date} · Session {session['session']} ({count} edit{'s' if count != 1 else ''})", ""])
+            node.setData(0, _SESSION, [edit["id"] for edit in session["edits"] if edit.get("available")])
+            item.addChild(node)
+            node.setFirstColumnSpanned(True)
+            for edit in session["edits"]:
+                try:
+                    edited = datetime.fromisoformat(edit["timestamp"]).astimezone().strftime("%b %d, %Y %H:%M:%S")
+                except (ValueError, KeyError):
+                    edited = str(edit.get("timestamp", ""))
+                decision = str(edit.get("status") or "pending").replace("-applied", "").capitalize()
+                child = QTreeWidgetItem([f"{Path(edit['path']).name}\n{edited}", decision])
+                child.setData(0, _EDIT, edit["id"])
+                tooltip = f"{edit['path']}\nEdited: {edited}\nDecision: {decision}"
+                if not edit.get("available"):
+                    tooltip += "\nThis file is not a source of this sketch."
+                for column in (0, 1):
+                    child.setToolTip(column, tooltip)
+                node.addChild(child)
+
+    def _read_archived_edit(self, edit_id):
+        manager = getattr(self._backend, "ai_review_manager", None)
+
+        def read():
+            try:
+                record = manager.get_ai_edit(edit_id)
+            except Exception as exc:
+                record = {"error": str(exc)}
+            try:
+                self._edit_read.emit(edit_id, record)
+            except RuntimeError:
+                pass
+        threading.Thread(target=read, daemon=True, name="MCU_AISessionEdit").start()
+
+    def _show_archived_edit(self, edit_id, record):
+        while len(self._archive_edits) >= 8:
+            self._archive_edits.pop(next(iter(self._archive_edits)))
+        self._archive_edits[edit_id] = record
+        if self._selected_id() == edit_id:
+            self._select(self._tree.currentItem())
+
+    def _revert_targets(self, item=None):
+        """(ids newest first, title) for the selected edit or session."""
+        item = item or self._tree.currentItem()
+        if item is None:
+            return [], ""
+        edit_id = item.data(0, _EDIT)
+        if edit_id:
+            name = item.text(0).split("\n")[0]
+            return [edit_id], f"Revert this AI edit in {name}"
+        ids = item.data(0, _SESSION)
+        if not isinstance(ids, list) or not ids:
+            return [], ""
+        return ids, f"Revert {len(ids)} AI edit{'s' if len(ids) != 1 else ''} from {item.text(0)}"
+
+    def _revert_selected(self):
+        ids, title = self._revert_targets()
+        if not ids or not callable(getattr(self._backend, "revert_ai_edits", None)):
+            return
+        from main.qt.ai_revert_dialog import AIRevertDialog
+        dialog = AIRevertDialog(self._backend, ids, title, self.window())
+        self._revert_dialog = dialog
+        dialog.destroyed.connect(lambda *_: setattr(self, "_revert_dialog", None))
+        dialog.finished.connect(self._request_refresh)
+        dialog.open()
 
     def _select(self, item=None, *_):
-        record = self._records.get(item.data(0, Qt.ItemDataRole.UserRole), {}) if item else {}
+        edit_id = str(item.data(0, _EDIT) or "") if item else ""
+        record = self._records.get(edit_id, {})
+        if edit_id.startswith("archive:"):
+            record = self._archive_edits.get(edit_id)
+            if record is None:
+                self._read_archived_edit(edit_id)
+                record = {}
+            elif record.get("error"):
+                self._status.setText(record["error"])
+        ids, _title = self._revert_targets(item) if item else ([], "")
+        self._revert.setEnabled(bool(ids) and not self._busy and callable(getattr(self._backend, "revert_ai_edits", None)))
+        compact = getattr(self, "_compact", False)
+        session = item is not None and not edit_id and bool(ids)
+        self._revert.setText("Revert" if compact else "Revert session" if session else "Revert edit")
         before, after = str(record.get("beforeContent", "")), str(record.get("content", ""))
-        self._delete.setEnabled(bool(record) and not self._busy)
+        self._delete.setEnabled(edit_id in self._records and not self._busy)
         manager = getattr(self._backend, "ai_review_manager", None)
-        self._review.setEnabled(bool(record and manager and manager.has_pending_ai_edit(record["path"])))
+        self._review.setEnabled(bool(edit_id in self._records and manager and manager.has_pending_ai_edit(record["path"])))
         added, removed = getattr(self, "_added", None), getattr(self, "_removed", None)
         key = (record.get("id"), record.get("updatedAt"), len(before), len(after), hash(before), hash(after),
                added.name(QColor.NameFormat.HexArgb) if added is not None else "",
@@ -422,6 +585,7 @@ class AIChangesPanel(QWidget):
 
     def _adapt_layout(self, width, height):
         compact = width < 650
+        self._compact = compact
         metrics = self._tree.fontMetrics()
         self._tree.setMinimumWidth(0 if compact else (
             metrics.horizontalAdvance("Sep 30, 2000 23:59:59") + metrics.horizontalAdvance("Accepted")
@@ -437,6 +601,8 @@ class AIChangesPanel(QWidget):
                                     (self._delete, "Delete card", "Delete"),
                                     (self._clear, "Delete all", "Clear")):
             button.setText(short if compact else full)
+        session = bool(self._tree.currentItem()) and not self._selected_id()
+        self._revert.setText("Revert" if compact else "Revert session" if session else "Revert edit")
         self._splitter.setOrientation(Qt.Orientation.Vertical if stacked else Qt.Orientation.Horizontal)
         if getattr(self, "_short_history", None) != short_history:
             self._short_history = short_history

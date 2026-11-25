@@ -136,8 +136,40 @@ def main():
             check(output.events[-1] == ("sketches", {"open_elsewhere": []}), "the port poll reports sketches open in other Lite windows")
             worker.dispatch({"cmd": "boards", "query": "Arduino Uno [atmelavr:uno]"})
             found = [data for event, data in output.events if event == "boards"][-1]["items"]
-            check(any(item["name"] == "Arduino Uno [atmelavr:uno]" for item in found), "exact boards are searchable before packages are installed")
+            uno_rows = [item for item in found if (item["platform"], item["id"]) == ("atmelavr", "uno")]
+            check(len(uno_rows) == 1 and found[0] == uno_rows[0], "an exact board is searchable before packages are installed, as one row")
+            uno = uno_rows[0]["name"]
+            check(worker.boards.canonical("Arduino Uno [atmelavr:uno]") == uno, "a board saved under its earlier name is still the same row")
             check(len(worker.boards) > 1000, "bundled catalog supplies a broad board picker")
+            from main.core.board_catalog import board_target
+            targets = [board_target(name, info) for name, info in worker.boards.items()]
+            check(len(targets) == len(set(targets)), "the picker lists every build target once")
+            multi_name = worker.boards.canonical(multi_name)
+            first = len(output.events)
+            for unknown in ("", "A board that was removed", "Arduino Uno [another:core]"):
+                worker.dispatch({"cmd": "board", "name": unknown, "restore": True})
+            check(not worker.api.current_board and {event for event, _ in output.events[first:]} == {"state"},
+                  "a saved board the catalog no longer knows stays unselected without an error")
+            worker.dispatch({"cmd": "board", "name": "Arduino Uno [atmelavr:uno]", "restore": True})
+            check(worker.api.current_board == uno and [data for event, data in output.events if event == "target"][-1]["name"] == uno,
+                  "the board a window was left with returns as its current row")
+            worker.dispatch({"cmd": "board", "name": multi_name, "restore": True})
+            check(worker.api.current_board == uno, "restoring never replaces a board chosen in this window")
+            sent = [data for event, data in output.events if event == "state"][-1]
+            check(sent["upload_speed"] == int(worker.api.upload_speed) and sent["starting"] is False,
+                  "the window receives the upload speed the backend uses")
+            (state / "window.json").write_text(json.dumps({"dark": True, "baud": 74880, "upload_speed": 921600}))
+            worker._restore_speeds()
+            check(worker.api.current_baud == 74880 and worker.api.upload_speed == "921600",
+                  "the monitor baud and upload speed a window was left with reach the backend")
+            for damaged in ("", "not json", "[]", json.dumps({"baud": 1, "upload_speed": "921600"}),
+                            json.dumps({"baud": True, "upload_speed": -1}), "[" * 5000, " " * 20000):
+                (state / "window.json").write_text(damaged)
+                worker._restore_speeds()
+            check(worker.api.current_baud == 74880 and worker.api.upload_speed == "921600",
+                  "a damaged or impossible window file changes no speed")
+            (state / "window.json").unlink()
+            worker.api.current_baud, worker.api.upload_speed = 115200, "460800"
             worker.dispatch({"cmd": "board", "name": multi_name})
             target = [data for event, data in output.events if event == "target"][-1]
             check(target["framework"] == worker.boards[multi_name]["framework"] == "arduino",
@@ -153,7 +185,7 @@ def main():
             worker.source = source
             worker.api.sketch_dir_path = staged
             for cmd, method in [("compile", "compile_sketch"), ("upload", "upload_sketch"), ("clean", "clean_cache")]:
-                worker.api.current_board = "Arduino Uno [atmelavr:uno]"
+                worker.api.current_board = uno
                 worker.api.current_port = "fixture-port" if cmd == "upload" else ""
                 with patch.object(worker.api, "_scan_ports", return_value=[{"device": "fixture-port"}]), patch.object(worker.api, method) as called, patch.object(worker, "prepare_board", return_value={}) as prepared:
                     worker.dispatch({"cmd": cmd})
@@ -176,7 +208,7 @@ def main():
             worker.api.current_port = ""
             worker.api.is_busy = True
             try:
-                worker.dispatch({"cmd": "board", "name": "Arduino Uno [atmelavr:uno]"})
+                worker.dispatch({"cmd": "board", "name": uno})
             except RuntimeError:
                 check(True, "target changes are refused during an active operation")
             else:
@@ -184,6 +216,12 @@ def main():
             worker.api.is_busy = False
             worker.api._catalog_refresh_running = True
             check(worker.busy(), "catalog refresh retains operation ownership until target definitions settle")
+            check(worker.starting_up() and not worker.stop_state()["enabled"]
+                  and "board list" in worker.stop_state()["reason"],
+                  "a board list refresh is Lite's own work, without Stop")
+            worker.api.is_busy = True
+            check(not worker.starting_up(), "an operation the user started is never called Lite's own work")
+            worker.api.is_busy = False
             worker.api._catalog_refresh_running = False
             check(not worker.stop_state()["enabled"], "idle and Developer Access do not advertise a cancellable operation")
             with patch.object(worker.api, "stop_operation") as stop:

@@ -91,6 +91,11 @@
       --sheet-bevel: rgba(255, 255, 255, 0.08);
       --reading: rgba(16, 27, 42, 0.667);
       --popover: rgba(16, 27, 42, 0.84);
+      --ai-bar: rgba(16, 27, 42, 0.6);
+      --btn-spec: rgba(255, 255, 255, 0.18);
+      --btn-lit: rgba(255, 255, 255, 0.34);
+      --btn-floor: rgba(255, 255, 255, 0.1);
+      --btn-drop: rgba(0, 0, 0, 0.3);
       --reading-rim: rgba(255, 255, 255, 0.133);
       --handle: rgba(246, 251, 255, 0.29);
       --chip: #f6fbff;
@@ -139,6 +144,11 @@
       --sheet-bevel: rgba(255, 255, 255, 0.3);
       --reading: rgba(255, 255, 255, 0.69);
       --popover: rgba(255, 255, 255, 0.88);
+      --ai-bar: rgba(255, 255, 255, 0.72);
+      --btn-spec: rgba(255, 255, 255, 0.92);
+      --btn-lit: rgba(255, 255, 255, 0.98);
+      --btn-floor: rgba(255, 255, 255, 0.66);
+      --btn-drop: rgba(31, 60, 90, 0.16);
       --reading-rim: rgba(255, 255, 255, 0.824);
       --handle: rgba(31, 35, 40, 0.345);
       --chip: #0969da;
@@ -187,6 +197,11 @@
       --sheet-bevel: rgba(255, 255, 255, 0.08);
       --reading: rgba(0, 27, 34, 0.667);
       --popover: rgba(0, 27, 34, 0.84);
+      --ai-bar: rgba(0, 27, 34, 0.64);
+      --btn-spec: rgba(255, 255, 255, 0.15);
+      --btn-lit: rgba(255, 255, 255, 0.28);
+      --btn-floor: rgba(255, 255, 255, 0.08);
+      --btn-drop: rgba(0, 0, 0, 0.3);
       --reading-rim: rgba(255, 255, 255, 0.133);
       --handle: rgba(255, 255, 255, 0.29);
       --chip: #ffffff;
@@ -1092,14 +1107,18 @@
       justify-content: flex-start;
       flex-wrap: nowrap;
       gap: 6px;
-      background: linear-gradient(var(--sheet-light), transparent 2px), var(--popover);
+      /* One floating sheet: lit rim, specular top, lensed floor, blurred source behind it. */
+      background:
+        linear-gradient(180deg, var(--sheet-light), transparent 42%),
+        radial-gradient(120% 90% at 50% 130%, var(--btn-floor), transparent 70%),
+        var(--ai-bar);
       border: 1px solid var(--reading-rim);
-      border-top-color: var(--accent);
-      border-radius: 12px;
+      border-top-color: var(--btn-lit);
+      border-radius: 20px;
       padding: 6px 8px;
-      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38), inset 0 1px 0 var(--sheet-light);
-      -webkit-backdrop-filter: blur(18px) saturate(1.25);
-      backdrop-filter: blur(18px) saturate(1.25);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34), inset 0 1px 0 var(--btn-lit), inset 0 -1px 0 var(--btn-floor);
+      -webkit-backdrop-filter: blur(26px) saturate(1.5);
+      backdrop-filter: blur(26px) saturate(1.5);
       font-family: 'Montserrat', 'Segoe UI', sans-serif;
       font-size: 12px;
       color: var(--text);
@@ -1202,11 +1221,12 @@
     #ai-diff-banner .diff-badge-add,
     #ai-diff-banner .diff-badge-remove,
     #ai-diff-banner .diff-badge-modify {
-      padding: 4px 7px;
-      border-radius: 6px;
+      padding: 4px 8px;
+      border-radius: 11px;
       font-weight: 600;
       font-size: 11px;
       flex: 0 1 auto;
+      box-shadow: inset 0 1px 0 var(--btn-floor);
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1236,22 +1256,32 @@
       gap: 3px;
       min-width: 28px;
       min-height: 28px;
-      background: var(--tab-fill);
+      --btn-body: var(--tab-fill);
+      --btn-rim: var(--tab-rim);
+      --btn-glow: var(--btn-drop);
+      /* Liquid Glass, as on the window's own actions: specular top, clear body, lensed floor. */
+      background:
+        linear-gradient(180deg, var(--btn-spec), transparent 44%),
+        radial-gradient(130% 80% at 50% 125%, var(--btn-floor), transparent 72%),
+        var(--btn-body);
       color: var(--text);
-      border: 1px solid var(--tab-rim);
-      border-radius: 9px;
-      padding: 4px 9px;
+      border: 1px solid var(--btn-rim);
+      border-top-color: var(--btn-lit);
+      border-radius: 14px;
+      padding: 4px 10px;
       cursor: pointer;
       font: 600 11px 'Montserrat', 'Segoe UI', sans-serif;
       white-space: nowrap;
-      box-shadow: inset 0 1px 0 var(--tab-sheen);
-      transition: background-color .14s ease, border-color .14s ease, transform .1s ease;
+      box-shadow: inset 0 1px 0 var(--btn-lit), inset 0 -1px 1px var(--btn-floor), 0 3px 10px var(--btn-glow);
+      transition: border-color .14s ease, box-shadow .14s ease, transform .1s ease;
     }
-    #ai-diff-banner .review-btn:hover:not(:disabled) {
-      background: var(--tab-fill-hover);
-      border-color: var(--accent);
+    #ai-diff-banner .review-btn:hover:not(:disabled),
+    #ai-diff-banner .review-btn:focus-visible {
+      --btn-body: var(--tab-fill-hover);
+      --btn-rim: var(--accent);
+      outline: none;
     }
-    #ai-diff-banner .review-btn:active:not(:disabled) { transform: scale(.97); }
+    #ai-diff-banner .review-btn:active:not(:disabled) { transform: scale(.97); box-shadow: inset 0 2px 5px var(--btn-drop); }
     #ai-diff-banner .review-icon {
       width: 14px;
       height: 14px;
@@ -1268,16 +1298,32 @@
     #ai-diff-banner .review-btn:disabled {
       color: var(--text-dim);
       cursor: default;
+      box-shadow: inset 0 1px 0 var(--btn-floor);
     }
-    #ai-diff-banner .review-btn.reject {
+    #ai-diff-banner .review-btn.reject,
+    #ai-diff-banner .review-btn.reject:hover:not(:disabled),
+    #ai-diff-banner .review-btn.reject:focus-visible {
       color: var(--diff-remove-text);
-      border-color: var(--diff-remove-solid);
-      background: rgba(var(--diff-remove-rgb), 0.12);
+      --btn-body: linear-gradient(180deg, rgba(var(--diff-remove-rgb), .28), rgba(var(--diff-remove-rgb), .13) 55%, rgba(var(--diff-remove-rgb), .24));
+      --btn-rim: rgba(var(--diff-remove-rgb), .62);
+      --btn-glow: rgba(var(--diff-remove-rgb), .2);
     }
-    #ai-diff-banner .review-btn.accept {
+    #ai-diff-banner .review-btn.accept,
+    #ai-diff-banner .review-btn.accept:hover:not(:disabled),
+    #ai-diff-banner .review-btn.accept:focus-visible {
       color: var(--diff-add-text);
-      border-color: var(--diff-add-solid);
-      background: rgba(var(--diff-add-rgb), 0.12);
+      --btn-body: linear-gradient(180deg, rgba(var(--diff-add-rgb), .28), rgba(var(--diff-add-rgb), .13) 55%, rgba(var(--diff-add-rgb), .24));
+      --btn-rim: rgba(var(--diff-add-rgb), .62);
+      --btn-glow: rgba(var(--diff-add-rgb), .2);
+    }
+    #ai-diff-banner .review-btn.reject:hover:not(:disabled),
+    #ai-diff-banner .review-btn.reject:focus-visible { --btn-rim: var(--diff-remove-solid); --btn-glow: rgba(var(--diff-remove-rgb), .38); }
+    #ai-diff-banner .review-btn.accept:hover:not(:disabled),
+    #ai-diff-banner .review-btn.accept:focus-visible { --btn-rim: var(--diff-add-solid); --btn-glow: rgba(var(--diff-add-rgb), .38); }
+
+    @media (min-width: 901px) and (min-height: 421px) {
+      #ai-diff-banner .review-btn.accept,
+      #ai-diff-banner .review-btn.reject { padding: 4px 13px; }
     }
 
     /* Compact the chrome for short panes as well as narrow/scaled windows.
@@ -1414,6 +1460,12 @@
         transform: translateY(0) scale(1);
         opacity: 1;
       }
+    }
+    /* No live blur on a low-end device: the bar keeps its rims over a denser tint. */
+    .resource-constrained #ai-diff-banner {
+      --ai-bar: var(--popover);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
     }
     .resource-constrained *, .resource-constrained *::before,
     .resource-constrained *::after { animation: none !important; transition: none !important; }
@@ -3234,6 +3286,19 @@
           await refreshAiHistoryBanner();
         }
       }
+
+      // AI Changes writes a reverted file itself; show its text in the open tabs.
+      window.reloadRevertedFiles = async function (paths, shapeChanged, names) {
+        if (shapeChanged) {
+          scheduleWorkspaceReload('');
+        } else {
+          for (const path of paths || []) {
+            const model = await activateAndResolveModel(path, 700);
+            if (model) await reloadThroughBundle(path);
+          }
+        }
+        await refreshAiHistoryBanner(`Reverted AI edit: ${names || ''}`);
+      };
 
       async function reloadThroughBundleOnce(expectedPath) {
         if (typeof bundledReloadActiveFile !== 'function') return false;

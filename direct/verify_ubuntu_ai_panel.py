@@ -111,8 +111,11 @@ class DedicatedAssistantChecks(unittest.TestCase):
         for name, value in (("PtySession", FakePty), ("QWebEngineView", FakeView),
                             ("QWebChannel", lambda *_: SimpleNamespace(registerObject=Mock())),
                             ("prepare_context", Mock(return_value=True)),
-                            ("find_opencode_cli", Mock(return_value="/fixture/opencode"))):
+                            ("find_opencode_cli", Mock(return_value="/fixture/opencode")),
+                            ("find_agent", Mock(side_effect=lambda agent_id: f"/fixture/{agent_id}")),
+                            ("last_agent", Mock(return_value="opencode")), ("remember_agent", Mock())):
             self.stack.enter_context(patch.object(ai, name, value))
+        self.stack.enter_context(patch("main.core.ai_agents.installed_agents", return_value={"opencode": "/fixture/opencode"}))
         self.stack.enter_context(patch("main.core.config.get_monitor_font_size", return_value=12))
 
     def panel(self):
@@ -133,7 +136,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
     def started_panel(self):
         panel = self.panel()
         panel.show()
-        panel.ensure_started()
+        panel.start_agent("opencode")
         self.wait_for(lambda: panel._session is not None)
         self.assertTrue(panel._session.start())
         return panel
@@ -164,6 +167,11 @@ class DedicatedAssistantChecks(unittest.TestCase):
         self.assertEqual(FakePty.instances, [])
         panel.show()
         panel.ensure_started()
+        self.wait_for(lambda: panel._chooser._checked_files)
+        self.assertEqual(panel._state, "choose")
+        self.assertIs(panel._stack.currentWidget(), panel._chooser)
+        self.assertEqual(FakePty.instances, [], "Opening the assistant only offers the list")
+        panel._chooser.primary.click()
         self.wait_for(lambda: panel._session is not None)
         session, view = panel._session, panel._view
         session.start()
@@ -209,13 +217,67 @@ class DedicatedAssistantChecks(unittest.TestCase):
         self.assertEqual(len(FakePty.instances), count)
         panel.show()
         panel.ensure_started()
+        self.assertEqual(panel._state, "choose", "A new project offers the list again")
+        self.assertIsNone(panel._session)
+        panel.start_agent("opencode")
         self.wait_for(lambda: panel._session is not None)
         self.assertEqual(panel._session.cwd, str(destination))
+
+    def test_other_assistants_use_their_own_program_and_restart_rules(self):
+        panel = self.panel()
+        panel.resize(420, 500)
+        panel.show()
+        panel.start_agent("claude")
+        ai.remember_agent.assert_called_with("claude")
+        self.wait_for(lambda: panel._session is not None)
+        session = panel._session
+        self.assertIn("inline=1", panel._view.setUrl.call_args.args[0].toString())
+        self.assertTrue(session.start())
+        child = session._child
+        self.assertEqual(child.argv, ["/fixture/claude"], "Only OpenCode takes the project as an argument")
+        self.assertEqual(child.cwd, str(self.root))
+        self.assertNotIn("OPENCODE_DISABLE_AUTOUPDATE", child.extra_environment)
+        self.assertIn("Claude", panel._title.text())
+        session.write(session._generation, "/quit\r")
+        self.assertTrue(session._intentional_exit)
+        child.ended.emit("exited")
+        self.assertIn("fresh Claude session", panel._load_sub.text())
+        destination = self.root / "next project"
+        destination.mkdir()
+        panel.reset_for_project(str(destination))
+        self.wait_for(lambda: panel._session is not None and panel._session is not session)
+        self.assertEqual(panel._session.agent.id, "claude", "Another project keeps the chosen assistant")
+
+    def test_switching_ends_the_session_and_offers_the_list(self):
+        panel = self.started_panel()
+        panel.resize(420, 500)
+        child = panel._session._child
+        self.assertTrue(panel._btn_switch.isVisibleTo(panel))
+        panel._btn_switch.click()
+        child.close.assert_called_once()
+        self.assertIsNone(panel._session)
+        self.assertEqual(panel._state, "choose")
+        self.assertFalse(panel._btn_switch.isVisibleTo(panel) or panel._btn_restart.isVisibleTo(panel))
+        self.assertTrue(panel._chooser.isEnabled())
+        panel._chooser.select("codex")
+        panel._chooser.set_installed({"codex": "/fixture/codex"})
+        panel._chooser.primary.click()
+        self.wait_for(lambda: panel._session is not None)
+        self.assertEqual(panel._session.executable, "/fixture/codex")
+        self.assertFalse(panel._chooser.isEnabled(), "A covered list must not take keys")
+
+    def test_a_removed_assistant_explains_itself_without_starting_anything(self):
+        ai.find_agent.side_effect = lambda agent_id: None
+        panel = self.panel()
+        panel.start_agent("hermes")
+        self.wait_for(lambda: panel._state == "error")
+        self.assertIn("Hermes is not here any more", panel._load_sub.text())
+        self.assertEqual(FakePty.instances, [])
 
     def test_missing_opencode_shows_wrapped_error_without_starting_bash(self):
         ai.find_opencode_cli.return_value = None
         panel = self.panel()
-        panel.ensure_started()
+        panel.start_agent("opencode")
         self.wait_for(lambda: panel._state == "error")
         self.assertIsNone(panel._view)
         self.assertEqual(FakePty.instances, [])
@@ -226,7 +288,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
     def test_missing_local_assets_fail_before_creating_a_process_or_view(self):
         panel = self.panel()
         with patch.object(ai, "ROOT", self.root):
-            panel.ensure_started()
+            panel.start_agent("opencode")
             self.wait_for(lambda: panel._state == "error")
         self.assertIn("assets are missing", panel._load_sub.text())
         self.assertIsNone(panel._view)
@@ -235,7 +297,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
     def test_failed_context_preparation_cannot_start_or_attach_an_assistant(self):
         ai.prepare_context.side_effect = RuntimeError("Project connection state could not be saved")
         panel = self.panel()
-        panel.ensure_started()
+        panel.start_agent("opencode")
         self.wait_for(lambda: panel._state == "error")
         self.assertIn("could not be saved", panel._load_sub.text())
         self.assertIsNone(panel._view)
@@ -269,7 +331,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
             return "/fixture/opencode"
 
         ai.find_opencode_cli.side_effect = find
-        panel.ensure_started()
+        panel.start_agent("opencode")
         self.wait_for(entered.is_set)
         panel._backend.sketch_dir_path = str(destination)
         panel.reset_for_project(str(destination))
@@ -461,6 +523,9 @@ while True:
         executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " + shlex.quote(str(program)) + ' "$@"\n', encoding="utf-8")
         executable.chmod(0o700)
         patches.enter_context(patch.object(ai, "find_opencode_cli", return_value=str(executable)))
+        patches.enter_context(patch.object(ai, "remember_agent"))
+        patches.enter_context(patch.object(ai, "last_agent", return_value="opencode"))
+        patches.enter_context(patch("main.core.ai_agents.installed_agents", return_value={"opencode": str(executable)}))
         patches.enter_context(patch.object(ai, "prepare_context", return_value=True))
         patches.enter_context(patch("main.core.config.get_monitor_font_size", return_value=14))
         patches.enter_context(patch("src.modules.ai_prompt_context.PromptInputTracker._publish"))
@@ -527,6 +592,8 @@ while True:
                 panel.resize(760, 520)
                 panel.show()
                 panel.ensure_started()
+            assert panel._state == "choose", "Opening the assistant offers the list"
+            panel._chooser.primary.click()
             wait_for(lambda: panel._state == "active", "rendered OpenCode fixture")
             session, view = panel._session, panel._view
             first = session._child

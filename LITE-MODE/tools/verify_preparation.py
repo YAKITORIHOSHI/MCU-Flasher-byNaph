@@ -159,7 +159,7 @@ def main():
                 patch("main.web_bridge.MCUWebBackendAPI._scan_ports", return_value=[]):
             worker = Worker(state, output)
             worker.select_project(str(source))
-            worker.api.current_board = "Arduino Uno [atmelavr:uno]"
+            worker.api.current_board = worker.boards.canonical("Arduino Uno [atmelavr:uno]")
             worker.api.current_port = "fixture-port"
             worker.api._scan_ports = lambda: [{"device": "fixture-port"}]
             def join():

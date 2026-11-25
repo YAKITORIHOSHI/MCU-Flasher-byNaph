@@ -8,7 +8,7 @@ Faithfully aligned with the original native architecture:
   • Real interactive ConPTY sessions (PowerShell & Command Prompt) via pywinpty + xterm.js
   • Clean Win32 HWND embedding (SetParent) into a native Qt widget container
   • True multi-session tabs: sleek VS Code-style tabs ([ pwsh ], [ cmd ], [+])
-  • Compact toolbar controls: [•], [Clear], [Kill] (red)
+  • One header row like every host: shell choices or tabs, [Clear], [End session]
   • Active theme synchronization: live updates xterm.js colors when theme changes
   • Seamless resizing: dynamically updates terminal geometry without corrupting DirectComposition
 """
@@ -62,6 +62,10 @@ from main.qt.icons import IconLabel as QLabel
 
 from main.qt.icons import ActionButton as QPushButton, icon, ClosableTerminalTabs, terminal_tab_rules
 from main.qt.combo_popup import GlassMenu
+
+EMPTY_TITLE = "No terminal sessions"
+EMPTY_TEXT = f"{EMPTY_TITLE}\nChoose New PowerShell or New CMD to start a shell in this project."
+
 
 class _EmbedContainer(QWidget):
     """Native window embedding container with automatic geometry synchronization."""
@@ -211,14 +215,23 @@ class TerminalPanel(QWidget):
         header = self._header
         header.setObjectName("terminal-header")
         header.setMinimumHeight(32)
-        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # The wide labels must not hold a narrowing window at their width; the header
+        # shortens them as soon as it is resized.
+        header.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         header.setStyleSheet("QFrame#terminal-header { background: #0b0e14; border-bottom: 1px solid #1a2230; }")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(6, 2, 6, 2)
         hl.setSpacing(4)
         self._header_layout = hl
 
-        # ── Left: Session Tabs ([ pwsh ] [ cmd ]) ─────────────────────────
+        # ── Left: title while empty, then Session Tabs ([ pwsh ] [ cmd ]) ───────
+        self._empty_title = QLabel("Project terminal", header)
+        self._empty_title.setObjectName("terminal-title")
+        self._empty_title.setStyleSheet(
+            "QLabel#terminal-title { background: transparent; border: none; padding: 0 4px; }")
+        self._empty_title.setToolTip("Commands run in the selected sketch directory. "
+                                     "Sessions never restart or replay commands automatically.")
+        hl.addWidget(self._empty_title)
         self._tab_bar = _SessionTabBar(header)
         self._tab_bar.setObjectName("terminal-session-tabs")
         self._tab_bar.setTabsClosable(True)
@@ -265,7 +278,7 @@ class TerminalPanel(QWidget):
 
         hl.addStretch()
 
-        # ── Right Toolbar Controls ([•] [Clear] [Kill]) ──────────────────
+        # ── Right Toolbar Controls ([•] [Clear] [End session]) ────────────
         # Status dot indicator
         self._status_dot = QLabel("", icon_name="disconnected")
         self._status_dot.setObjectName("terminal-status-dot")
@@ -281,49 +294,32 @@ class TerminalPanel(QWidget):
         """)
         hl.addWidget(self._status_dot)
 
-        # Clear button
+        # Shell choices, Clear and End session: the header actions every host shares.
+        self._btn_open_pwsh = QPushButton("New PowerShell", icon_name="terminal")
+        self._btn_open_pwsh.setObjectName("btn-open-pwsh")
+        self._btn_open_pwsh.setToolTip("Start PowerShell in this project")
+        self._btn_open_pwsh.clicked.connect(lambda: self.add_session("pwsh"))
+        self._btn_open_cmd = QPushButton("New CMD", icon_name="terminal")
+        self._btn_open_cmd.setObjectName("btn-open-cmd")
+        self._btn_open_cmd.setToolTip("Start Command Prompt in this project")
+        self._btn_open_cmd.clicked.connect(lambda: self.add_session("cmd"))
+        self._btn_new_empty = self._btn_open_pwsh
         self._btn_clear = QPushButton("Clear", icon_name="clear")
         self._btn_clear.setObjectName("btn-terminal-clear")
         self._btn_clear.setToolTip("Clear active terminal display")
-        self._btn_clear.setFixedHeight(22)
-        self._btn_clear.setEnabled(False)
-        self._btn_clear.setCursor(Qt.CursorShape.ArrowCursor)
-        self._btn_clear.setStyleSheet("""
-            QPushButton#btn-terminal-clear:enabled {
-                background: #10151c; color: #cdd6f4; font-size: 11px; font-weight: 600;
-                border: 1px solid #1c2636; border-radius: 3px; padding: 2px 8px;
-            }
-            QPushButton#btn-terminal-clear:enabled:hover { background: #1c2636; color: #ffffff; border-color: #3d5069; }
-            QPushButton#btn-terminal-clear:disabled {
-                background: #0b0e14; color: #4b5563; font-size: 11px;
-                border: 1px solid #151b24; border-radius: 3px; padding: 2px 8px;
-            }
-        """)
         self._btn_clear.clicked.connect(self._clear_active_session)
-        hl.addWidget(self._btn_clear)
-
-        # Kill button (prominent red styling just like RECENT-WORKING-MCU-FLASHER)
-        self._btn_kill = QPushButton("Kill", icon_name="clear")
+        self._btn_kill = QPushButton("End session", icon_name="stop")
         self._btn_kill.setObjectName("btn-terminal-kill")
-        self._btn_kill.setToolTip("Kill active terminal session")
-        self._btn_kill.setFixedHeight(22)
-        self._btn_kill.setEnabled(False)
-        self._btn_kill.setCursor(Qt.CursorShape.ArrowCursor)
-        self._btn_kill.setStyleSheet("""
-            QPushButton#btn-terminal-kill:enabled {
-                background: #10151c; color: #e74c3c; font-size: 11px; font-weight: 600;
-                border: 1px solid #1c2636; border-radius: 3px; padding: 2px 8px;
-            }
-            QPushButton#btn-terminal-kill:enabled:hover {
-                background: #251417; color: #ff6b6b; border-color: #e74c3c;
-            }
-            QPushButton#btn-terminal-kill:disabled {
-                background: #0b0e14; color: #4b5563; font-size: 11px;
-                border: 1px solid #151b24; border-radius: 3px; padding: 2px 8px;
-            }
-        """)
+        self._btn_kill.setToolTip("End the active terminal session")
         self._btn_kill.clicked.connect(self._kill_active_session)
-        hl.addWidget(self._btn_kill)
+        for button in (self._btn_open_pwsh, self._btn_open_cmd):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        for button in (self._btn_clear, self._btn_kill):
+            button.setEnabled(False)
+            button.setCursor(Qt.CursorShape.ArrowCursor)
+        for button in (self._btn_open_pwsh, self._btn_open_cmd, self._btn_clear, self._btn_kill):
+            button.setFixedHeight(24)
+            hl.addWidget(button)
 
         main_layout.addWidget(header)
 
@@ -372,52 +368,16 @@ class TerminalPanel(QWidget):
         # Only the message and its actions show; the placeholder paints no box.
         self._empty_card.setStyleSheet("QFrame#terminal-empty { background: transparent; border: none; }")
         el = QVBoxLayout(self._empty_card)
-        el.setContentsMargins(8, 10, 8, 10)
-        el.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        el.setSpacing(10)
-
-        self._lbl_no_term = QLabel("No active terminal sessions")
-        lbl_no_term = self._lbl_no_term
-        lbl_no_term.setStyleSheet(
-            "QLabel { background: transparent; border: none; font-size: 14px; font-weight: 600; padding: 4px 4px; }")
-        lbl_no_term.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_no_term.setWordWrap(True)
-        el.addWidget(lbl_no_term, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self._btn_open_pwsh = QPushButton("+ PowerShell (pwsh)")
-        self._btn_open_pwsh.setObjectName("btn-open-pwsh")
-        self._btn_open_pwsh.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_open_pwsh.setFixedHeight(28)
-        self._btn_open_pwsh.setStyleSheet("""
-            QPushButton#btn-open-pwsh {
-                background: #10151c; color: #56cfbf; font-size: 11px; font-weight: 600;
-                border: 1px solid #1c2636; border-radius: 4px; padding: 4px 14px;
-            }
-            QPushButton#btn-open-pwsh:hover { background: #1c2636; color: #ffffff; border-color: #56cfbf; }
-        """)
-        self._btn_open_pwsh.clicked.connect(lambda: self.add_session("pwsh"))
-        btn_row.addWidget(self._btn_open_pwsh)
-
-        self._btn_open_cmd = QPushButton("+ Command Prompt (cmd)")
-        self._btn_open_cmd.setObjectName("btn-open-cmd")
-        self._btn_open_cmd.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._btn_open_cmd.setFixedHeight(28)
-        self._btn_open_cmd.setStyleSheet("""
-            QPushButton#btn-open-cmd {
-                background: #10151c; color: #cdd6f4; font-size: 11px; font-weight: 600;
-                border: 1px solid #1c2636; border-radius: 4px; padding: 4px 14px;
-            }
-            QPushButton#btn-open-cmd:hover { background: #1c2636; color: #ffffff; border-color: #3d5069; }
-        """)
-        self._btn_open_cmd.clicked.connect(lambda: self.add_session("cmd"))
-        btn_row.addWidget(self._btn_open_cmd)
-
-        self._btn_new_empty = self._btn_open_pwsh
-        el.addLayout(btn_row)
+        el.setContentsMargins(0, 0, 0, 0)
+        # No alignment flag: an aligned, wrapping label is laid out at its narrowest
+        # hint, which squeezed this text into a column of single words.
+        self._lbl_no_term = QLabel(EMPTY_TEXT, self._empty_card)
+        self._lbl_no_term.setObjectName("terminal-empty-text")
+        self._lbl_no_term.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_no_term.setWordWrap(True)
+        self._lbl_no_term.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self._lbl_no_term.setMinimumSize(0, 0)
+        el.addWidget(self._lbl_no_term, 1)
 
         self._stack.addWidget(self._empty_card)
 
@@ -432,23 +392,31 @@ class TerminalPanel(QWidget):
 
     def set_responsive_width(self, width: int) -> None:
         """Dynamically adapt terminal header buttons based on width."""
-        if width < 700:
-            self._btn_clear.set_icon("clear")
-            self._btn_clear.setText("")
-            self._btn_kill.set_icon("clear")
-            self._btn_kill.setText("")
-        else:
-            self._btn_clear.set_icon("clear")
-            self._btn_clear.setText("Clear")
-            self._btn_kill.set_icon("clear")
-            self._btn_kill.setText("Kill")
-        if width < 480:
-            self._btn_open_pwsh.setText("+ PowerShell")
-            self._btn_open_cmd.setText("+ CMD")
-        else:
-            self._btn_open_pwsh.setText("+ PowerShell (pwsh)")
-            self._btn_open_cmd.setText("+ Command Prompt (cmd)")
-        self._lbl_no_term.setVisible(self._stack.height() >= 84)
+        wide = width >= 700
+        self._btn_clear.set_icon("clear")
+        self._btn_clear.setText("Clear" if wide else "")
+        self._btn_kill.set_icon("stop")
+        self._btn_kill.setText("End session" if wide else "")
+        self._btn_kill.setAccessibleName("End terminal session")
+        self._btn_open_pwsh.setText("New PowerShell" if wide else "PowerShell")
+        self._btn_open_cmd.setText("New CMD" if wide else "CMD")
+        for button in (self._btn_open_pwsh, self._btn_open_cmd):
+            button.set_icon("terminal")
+        self._title_fits = width >= 460
+        self._empty_title.setVisible(self._title_fits and not self._tab_bar.count())
+        self._fit_empty_text()
+
+    def _fit_empty_text(self) -> None:
+        """Keep the whole message readable: less padding, then one line, on short panes."""
+        height = self._stack.height()
+        text = EMPTY_TEXT if height >= 52 else EMPTY_TITLE
+        if self._lbl_no_term.text() != text:
+            self._lbl_no_term.setText(text)
+        padding = "18px 24px" if height >= 96 else "2px 8px"
+        sheet = ("QLabel#terminal-empty-text { background: transparent; border: none; "
+                 f"font-size: 14px; padding: {padding}; }}")
+        if self._lbl_no_term.styleSheet() != sheet:
+            self._lbl_no_term.setStyleSheet(sheet)
 
     def _tick_spinner(self) -> None:
         self._spin_idx = (self._spin_idx + 1) % len(_SPIN_CHARS)
@@ -833,7 +801,14 @@ class TerminalPanel(QWidget):
     def _update_buttons_state(self) -> None:
         # An empty QTabBar still reserves a size hint. Hide it so '+' starts at
         # the header's left padding, and restore it when sessions are created.
-        self._tab_bar.setVisible(self._tab_bar.count() > 0)
+        has_sessions = self._tab_bar.count() > 0
+        self._tab_bar.setVisible(has_sessions)
+        # Empty shows the title and both shell choices; open sessions show + beside their tabs.
+        self._btn_add_tab.setVisible(has_sessions)
+        self._status_dot.setVisible(has_sessions)
+        self._empty_title.setVisible(not has_sessions and getattr(self, "_title_fits", True))
+        for button in (self._btn_open_pwsh, self._btn_open_cmd):
+            button.setVisible(not has_sessions)
         has_active = bool(self._tab_bar.count() > 0 and self._active_session_id)
         self._btn_kill.setEnabled(has_active)
         self._btn_kill.setCursor(Qt.CursorShape.PointingHandCursor if has_active else Qt.CursorShape.ArrowCursor)
@@ -1136,8 +1111,8 @@ class TerminalPanel(QWidget):
                 border: 1px solid {glass['rim']}; border-radius: 9px; padding: 2px 8px;
             }}
         """
-        if hasattr(self, "_btn_clear") and self._btn_clear:
-            self._btn_clear.setStyleSheet(btn_act_style)
+        for button in (self._btn_open_pwsh, self._btn_open_cmd, self._btn_clear, self._btn_kill):
+            button.setStyleSheet(btn_act_style)
 
         if hasattr(self, "_loader_card") and self._loader_card:
             self._loader_card.setStyleSheet(f"QFrame#terminal-loader {{ background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}")
@@ -1145,22 +1120,6 @@ class TerminalPanel(QWidget):
             self._empty_card.setStyleSheet("QFrame#terminal-empty { background: transparent; border: none; }")
         if hasattr(self, "_embed_container") and self._embed_container:
             self._embed_container.setStyleSheet(f"background: {bg_darkest};")
-        if hasattr(self, "_btn_open_pwsh") and self._btn_open_pwsh:
-            self._btn_open_pwsh.setStyleSheet(f"""
-                QPushButton#btn-open-pwsh {{
-                    background: {glass['button']}; color: {text_bright}; font-size: 11px; font-weight: 600;
-                    border: 1px solid {glass['button_rim']}; border-radius: 10px; padding: 4px 14px;
-                }}
-                QPushButton#btn-open-pwsh:hover {{ background: {glass['button_hover']}; color: {text_bright}; border-color: {cyan}; }}
-            """)
-        if hasattr(self, "_btn_open_cmd") and self._btn_open_cmd:
-            self._btn_open_cmd.setStyleSheet(f"""
-                QPushButton#btn-open-cmd {{
-                    background: {glass['button']}; color: {text_bright}; font-size: 11px; font-weight: 600;
-                    border: 1px solid {glass['button_rim']}; border-radius: 10px; padding: 4px 14px;
-                }}
-                QPushButton#btn-open-cmd:hover {{ background: {glass['button_hover']}; color: {text_bright}; border-color: {border_lit}; }}
-            """)
 
     def apply_theme(self, theme_name: str) -> None:
         """Update xterm.js theme and Qt container styles on theme change."""

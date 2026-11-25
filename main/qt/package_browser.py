@@ -38,13 +38,13 @@ from main.qt.responsive import ScreenWatcher, fit_dialog
 from main.qt.taskbar import window_hidden, window_shown
 from main.qt.theme import build_stylesheet, glass_tokens, install_no_focus_lines, register_fonts
 from main.core.config import get_monitor_font_size
+from src.modules import app_identity
 from src.modules import arduino_lib_req as engine
 from src.modules import ubuntu_download_manager as manager
 from src.modules.browser_loading import LatestScan, scan_package_details, search_catalog
 from src.modules.ui_palette import readable_foreground
 
 SEARCH_DELAY_MS = 120
-BROWSER_USER_MODEL_ID = "Naph.MCUFlasher.GUI.V6"
 THIRD_PARTY_INDEXES ="https://github.com/arduino/Arduino/wiki/Unofficial-list-of-3rd-party-boards-support-urls"
 _DRAIN_BUDGET_SECONDS = 0.006
 
@@ -1304,8 +1304,9 @@ class ArduinoBrowser(engine.BrowserEngine, QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        # No relaunch command: the browser has its own taskbar group but no launcher.
-        window_shown(self, app_id=BROWSER_USER_MODEL_ID, relaunch=False)
+        # The workspace's own identity: one taskbar button holds both windows, and
+        # pinning it from here still starts MCU Flasher.
+        window_shown(self)
 
     def hideEvent(self, event):
         super().hideEvent(event)
@@ -1884,12 +1885,7 @@ def main() -> int:
             channel = manager.DownloadManagerChannel(engine.SCRIPT_DIR)
         except manager.AlreadyRunning:
             return 0 if manager.request(engine.SCRIPT_DIR, "wake") else 1
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(BROWSER_USER_MODEL_ID)
-        except (AttributeError, OSError):
-            pass
+    app_identity.claim_process()
     try:
         from main.qt.interface_size import prepare_interface_size, settle_interface_size
         interface_factor = prepare_interface_size()
@@ -1897,7 +1893,7 @@ def main() -> int:
         from main.qt.garbage_collection import install_gui_garbage_collector
         cycle_collector = install_gui_garbage_collector(app)
         settle_interface_size(app, interface_factor)
-        app.setApplicationName("MCU Flasher Library & Board Browser")
+        app_identity.claim_application(app)
         app.setQuitOnLastWindowClosed(False)
         register_fonts()
         install_no_focus_lines(app)

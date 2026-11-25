@@ -1,0 +1,57 @@
+{
+  "base_revision": "6984f70a69ac0120098abe847d1887bc81357235",
+  "host": "Ubuntu 26.04.1 LTS x86_64",
+  "checks": {
+    "rust_tests": 41,
+    "widget_scale_percent": [
+      100,
+      125,
+      150,
+      200
+    ],
+    "cargo_fmt_check_and_strict_clippy": "passed on Linux, with strict Clippy also passing for Windows GNU",
+    "lite_worker": 113,
+    "lite_preparation": 60,
+    "lite_history_search_and_readiness": 28,
+    "lite_resources": 15,
+    "lite_shared_store": 20,
+    "lite_developer_access": 25,
+    "ubuntu_renderer_captures": 28,
+    "compiler_phases": [
+      "initial Uno build",
+      "unchanged Uno build",
+      "Uno with edited source",
+      "separate Nano build"
+    ],
+    "upload_cache_decisions_with_device_boundary_mocked": 9,
+    "supplied_launcher_end_to_end": "Owned Xvfb, throwaway HOME and state: resized, closed, reopened dark from its first frame with its size, monitor tab, speeds and board; the last sketch offered and never opened by itself"
+  },
+  "renderer_report": "LITE-MODE/temp/pms-layout/report.json",
+  "launchers": {
+    "UBUNTU": {
+      "sha256": "f9a97b65feb23c99bc2f08c23d0ea8efa474b20d7b00bc7b244684b6dd8a8b2a",
+      "target": "x86_64-unknown-linux-gnu.2.39",
+      "renderer": "Glow on an owned Xvfb display"
+    },
+    "WINDOWS.exe": {
+      "sha256": "b6b7c70176351a0be24ec903999734918e8b42d5bf7ef0073e12aafcf8de0e07",
+      "target": "x86_64-pc-windows-gnu",
+      "subsystem": "Windows GUI",
+      "verification": "cross-built and linted on Ubuntu"
+    }
+  },
+  "source_sha256": {
+    "LITE-MODE/src/ui.rs": "f46cad2bc5332dcaa3be88ee7a63d214aa9cd2cc31716b950bcbcbe3ff7809ad",
+    "LITE-MODE/src/resources.rs": "37e4dfaf69816d5383d0ad23879146170af184462c94820e80bc3879a2053bd0",
+    "LITE-MODE/src/preferences.rs": "e66e92838d945230e4d8312df21fedaf2cdc0de3248736e3b7f03ce8d8f615ec",
+    "LITE-MODE/src/main.rs": "bb5e29bcc965ab655893bb1400a44f9da1b493048176cb299fc6ca5717565257",
+    "LITE-MODE/python/worker.py": "772733d1cc0f7733c5528931ef9a272ad2feb96e60107c76ed0df50c88948e29",
+    "LITE-MODE/python/search.py": "4c67b6a5bfa350d571c4ba0708b844891eec232c81bc49ddf9ebd44ed168edfc",
+    "main/core/board_labels.py": "c7fcb3c6bd3fc1f1accb783b21b9a3c13210f30ea69bb3cbf01fccc399f05d33",
+    "main/core/port_inventory.py": "eae1ca2cdf35715467f14192daa8f2a138e7b591971819b1dfbcf5252677b8ec"
+  },
+  "pending": [
+    "Native Windows desktop verification",
+    "Physical USB unplug, replug and upload verification"
+  ]
+}

@@ -71,6 +71,7 @@ class PtySession(QObject):
         self._prompt_observer = None
         self.assistant_active = None
         self.prompt_source = "cli"
+        self.extra_environment = {}
 
     @Slot(result=bool)
     def start(self):
@@ -89,6 +90,7 @@ class PtySession(QObject):
             if "NO_COLOR" in env:
                 env.pop("FORCE_COLOR", None)
             env.update(TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="MCUFlasher")
+            env.update(self.extra_environment)
             # The private supervisor adopts detached tool descendants when a
             # shell or assistant exits, so they cannot outlive this session.
             supervisor = ROOT / "main/platforms/ubuntu_pty_supervisor.py"

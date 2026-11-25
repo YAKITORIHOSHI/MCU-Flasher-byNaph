@@ -144,7 +144,7 @@ class RealIncrementalBuilds(unittest.TestCase):
         self.assertGreater(len(first), 20, "The first build should compile the Arduino core")
         self.assertEqual(self.compile(), [], "An unchanged sketch recompiled something")
         self.edit_pin(12)
-        self.assertEqual(self.compile(), ["Compiling first.ino.cpp.o..."])
+        self.assertEqual(self.compile(), ["Compiling src/first.ino.cpp"])
 
     def test_upload_step_preserves_objects_and_firmware(self):
         self.compile()
@@ -157,7 +157,7 @@ class RealIncrementalBuilds(unittest.TestCase):
         self.assertTrue((build / "firmware.hex").is_file(), "The upload step deleted the firmware")
         self.assertEqual(object_file.stat().st_mtime_ns, stamp, "The upload step deleted the objects")
         self.edit_pin(11)
-        self.assertEqual(self.compile(), ["Compiling first.ino.cpp.o..."])
+        self.assertEqual(self.compile(), ["Compiling src/first.ino.cpp"])
 
     def test_saved_upload_reuses_the_verified_firmware(self):
         self.compile()
@@ -284,7 +284,7 @@ class RealEsp32Builds(RealIncrementalBuilds):
         build = self.api._board_build_dir()
         self.assertTrue(all((build / name).is_file() for name in ("firmware.bin", "bootloader.bin", "partitions.bin")))
         self.edit_pin(4)
-        self.assertEqual(self.compile(), ["Compiling first.ino.cpp.o..."])
+        self.assertEqual(self.compile(), ["Compiling src/first.ino.cpp"])
         self.assertTrue(self.api.check_can_skip_compile())
 
     def test_hard_reset_images_are_built_once_and_independent_of_the_sketch(self):

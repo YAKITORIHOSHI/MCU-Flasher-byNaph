@@ -167,30 +167,37 @@ class SourceNamespaceChecks(unittest.TestCase):
         support.publish_prepared_targets(self.core, root, [row])
         return record
 
-    def test_three_equal_board_names_and_ids_retain_every_source_as_platformio_rows(self):
+    def s3_rows(self, boards):
+        return {name: row for name, row in boards.items() if row.get("arduino_board_id") == "esp32s3"}
+
+    def test_copies_that_build_one_platformio_target_are_one_row(self):
         roots = [self.fixture / f"source-{index}" for index in range(3)]
         records = [self.intent(root, version=f"3.3.{11 + index}") for index, root in enumerate(roots)]
         actual = self.refresh(roots=roots)
-        s3 = {name: row for name, row in actual.items() if row.get("arduino_board_id") == "esp32s3"}
-        self.assertEqual(len(s3), 3)
-        self.assertEqual({row["arduino_source_file"] for row in s3.values()}, {row["source_file"] for row in records})
-        for info in s3.values():
-            self.assertTrue(info["pio_resolved"])
-            self.assertEqual(info["board"], self.candidates()[0]["id"])
-            self.assertNotIn("arduino_cli", info)
-        again = self.refresh(roots=list(reversed(roots)), previous=actual)
+        s3 = self.s3_rows(actual)
+        self.assertEqual(list(s3), [self.record["name"]], "Three downloaded copies are one board")
+        info = s3[self.record["name"]]
+        self.assertIn(info["arduino_source_file"], {row["source_file"] for row in records})
+        self.assertTrue(info["pio_resolved"])
+        self.assertEqual(info["board"], self.candidates()[0]["id"])
+        self.assertNotIn("arduino_cli", info)
+        again = self.s3_rows(self.refresh(roots=list(reversed(roots)), previous=actual))
         self.assertEqual({name: row["arduino_source_file"] for name, row in s3.items()},
-                         {name: row["arduino_source_file"] for name, row in again.items() if row.get("arduino_board_id") == "esp32s3"})
+                         {name: row["arduino_source_file"] for name, row in again.items()})
+        repeated = self.s3_rows(self.refresh(roots=roots + roots, previous=copy.deepcopy(actual)))
+        self.assertEqual(list(repeated), list(s3))
 
-    def test_three_equal_core_versions_get_distinct_stable_source_labels(self):
-        roots = [self.fixture / f"same-core-{index}" for index in range(3)]
-        for root in roots:
-            self.intent(root)
-        actual = self.refresh(roots=roots)
-        labels = {name: row["arduino_source_file"] for name, row in actual.items() if row.get("arduino_board_id") == "esp32s3"}
-        self.assertEqual(len(labels), 3)
-        again = self.refresh(roots=roots + roots, previous=copy.deepcopy(actual))
-        self.assertEqual(labels, {name: row["arduino_source_file"] for name, row in again.items() if row.get("arduino_board_id") == "esp32s3"})
+    def test_arduino_cli_sources_stay_separate_because_the_copy_is_the_compiler(self):
+        roots = [self.fixture / f"cli-{index}" for index in range(3)]
+        for index, root in enumerate(roots):
+            self.intent(root, version=f"3.3.{11 + index}")
+        actual = self.refresh(roots=roots, candidates=[])
+        rows = self.s3_rows(actual)
+        self.assertEqual(len(rows), 3, sorted(rows))
+        self.assertTrue(all(row["backend"] == "arduino-cli" for row in rows.values()))
+        again = self.s3_rows(self.refresh(roots=list(reversed(roots)), candidates=[], previous=copy.deepcopy(actual)))
+        self.assertEqual({name: row["arduino_source_file"] for name, row in rows.items()},
+                         {name: row["arduino_source_file"] for name, row in again.items()})
 
     def test_changed_declaration_bytes_cannot_borrow_primary_intent(self):
         row = self.ready()

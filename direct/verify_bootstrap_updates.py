@@ -152,7 +152,7 @@ class UpdateChecks(unittest.TestCase):
         self.assertTrue(any("not verified" in message for _, message in self.messages))
         self.assertFalse(any("upgraded and verified" in message for _, message in self.messages))
 
-    def arduino_cli_update_fixture(self, versions, *, msi_ok=True):
+    def arduino_cli_update_fixture(self, versions, *, installed=True):
         """run_update_checks with an arduino-cli update whose executables report ``versions``."""
         source = ROOT / "src/modules/bootstrap.py"
         tree = ast.parse(source.read_text(encoding="utf-8-sig"))
@@ -178,7 +178,8 @@ class UpdateChecks(unittest.TestCase):
             check_pip_package_update=lambda name, *args: {}, SCRIPT_DIR=self.root, CYAN="", RESET="",
             find_arduino_cli=lambda: "C:/old/arduino-cli.exe",
             _search_arduino_cli_install_dirs=lambda: "C:/Program Files/Arduino CLI/arduino-cli.exe",
-            _refresh_bundled_msi=Mock(return_value=True), _run_arduino_cli_msi=Mock(return_value=msi_ok),
+            _user_arduino_cli=lambda: None, _install_arduino_cli_for_user=Mock(return_value=installed),
+            _run_arduino_cli_msi=Mock(side_effect=AssertionError("An update must not need an administrator")),
             _cache_arduino_cli_path=cached.append,
             subprocess=SimpleNamespace(run=run, CREATE_NO_WINDOW=0),
             shutil=SimpleNamespace(which=lambda name: None))
@@ -194,6 +195,11 @@ class UpdateChecks(unittest.TestCase):
         self.assertEqual(cached, ["C:/Program Files/Arduino CLI/arduino-cli.exe"],
                          "The next update check must read the upgraded executable")
         self.assertTrue(any("upgraded and verified at 1.5.1" in message for _, message in self.messages))
+
+    def test_arduino_cli_update_that_cannot_install_keeps_the_current_one(self):
+        runs, cached = self.arduino_cli_update_fixture({"C:/old/arduino-cli.exe": "1.4.0"}, installed=False)
+        self.assertEqual(cached, [])
+        self.assertTrue(any("1.4.0 stays in use" in message for _, message in self.messages), self.messages)
 
     def test_arduino_cli_update_is_not_reported_when_the_version_stayed(self):
         runs, cached = self.arduino_cli_update_fixture(
@@ -215,6 +221,7 @@ class UpdateChecks(unittest.TestCase):
                 stdout=f"arduino-cli  Version: {versions.get(command[0], '')} Commit: fixture\n"), CREATE_NO_WINDOW=0),
             shutil=SimpleNamespace(which=lambda name: None), find_arduino_cli=lambda: "C:/old/arduino-cli.exe",
             _search_arduino_cli_install_dirs=lambda: "C:/Program Files/Arduino CLI/arduino-cli.exe",
+            _user_arduino_cli=lambda: None,
             _cache_arduino_cli_path=cached.append, _arduino_cli_latest_version=lambda: "1.5.1")
         exec(compile(ast.Module(body=[node for node in tree.body
             if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[]), str(source), "exec"), namespace)

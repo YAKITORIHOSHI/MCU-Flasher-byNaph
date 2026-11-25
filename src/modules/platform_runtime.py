@@ -62,6 +62,14 @@ def app_cache_dir() -> Path:
     return _native_xdg_base("XDG_CACHE_HOME", Path.home() / ".cache") / "mcu-flasher"
 
 
+def app_data_dir() -> Path:
+    """This account's app-owned data: helpers it downloaded, never sketches or settings."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        return (Path(base) if base else Path.home() / "AppData" / "Local") / "MCUFlasherByNaph"
+    return _native_xdg_base("XDG_DATA_HOME", Path.home() / ".local" / "share") / "mcu-flasher"
+
+
 def native_platformio_dir() -> Path:
     """Separate native toolchains from portable Windows executables.
 
