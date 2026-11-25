@@ -78,7 +78,7 @@ class Fixture(unittest.TestCase):
 
 class RegistryChecks(unittest.TestCase):
     def test_the_list_is_the_requested_names_with_opencode_built_in(self):
-        self.assertEqual([agent.name for agent in ai_agents.AGENTS], ["Gemini", "Codex", "Claude", "Hermes", "OpenCode"])
+        self.assertEqual([agent.name for agent in ai_agents.AGENTS], ["Antigravity", "Codex", "Claude", "Hermes", "OpenCode"])
         for agent in ai_agents.AGENTS:
             self.assertNotIn("CLI", agent.name)
             self.assertEqual(agent.builtin, agent.id == "opencode")
@@ -86,7 +86,7 @@ class RegistryChecks(unittest.TestCase):
         self.assertEqual(ai_agents.agent("no such").id, "opencode")
 
     def test_download_sources_are_the_makers_own_over_https(self):
-        hosts = {"codex": "chatgpt.com", "claude": "claude.ai", "hermes": "hermes-agent.nousresearch.com"}
+        hosts = {"antigravity": "antigravity.google", "codex": "chatgpt.com", "claude": "claude.ai", "hermes": "hermes-agent.nousresearch.com"}
         for platform in ("linux", "darwin", "win32"):
             with patch.object(ai_agents.sys, "platform", platform):
                 self.assertIsNone(ai_agents.install_plan("opencode"), "Setup provides the built-in assistant")
@@ -96,12 +96,13 @@ class RegistryChecks(unittest.TestCase):
                     self.assertTrue(plan.url.endswith(".ps1" if platform == "win32" else ".sh"))
                     self.assertIn(host, plan.source)
                     self.assertNotIn("sudo", plan.command)
-                self.assertEqual(ai_agents.install_plan("gemini").package, "@google/gemini-cli")
+                self.assertIsNone(ai_agents.install_plan("gemini"), "Gemini is no longer offered")
 
     def test_only_opencode_takes_the_project_as_an_argument(self):
         self.assertEqual(ai_agents.agent_argv("opencode", "/x/opencode", "/a sketch"), ["/x/opencode", "/a sketch"])
-        for agent_id in ("gemini", "codex", "claude", "hermes"):
+        for agent_id in ("codex", "claude", "hermes"):
             self.assertEqual(ai_agents.agent_argv(agent_id, "/x/tool", "/a sketch"), ["/x/tool"])
+        self.assertEqual(ai_agents.agent_argv("antigravity", "/x/agy", "/a sketch"), ["/x/agy", "--dangerously-skip-permissions"])
         with self.assertRaises(ValueError):
             ai_agents.agent_argv("claude", "", "/x")
 
@@ -115,20 +116,23 @@ class DetectionChecks(Fixture):
                 patch("subprocess.run", side_effect=AssertionError("Detection must not start anything")):
             self.assertEqual(ai_agents.find_agent("claude"), str(self.home / ".local/bin/claude"))
             self.assertEqual(ai_agents.find_agent("codex"), str(self.root / "path/codex"))
-            self.assertIsNone(ai_agents.find_agent("gemini"))
+            self.assertIsNone(ai_agents.find_agent("antigravity"))
 
     def test_another_program_of_the_same_name_is_not_the_agent(self):
         self.program(self.root / "path/hermes", "#!/bin/sh\n# a JavaScript engine\n")
-        self.program(self.root / "path/gemini", "#!/usr/bin/env python3\n# a Gemini protocol browser\n")
+        self.program(self.root / "path/agy", "#!/usr/bin/env bash\n# opens the Antigravity editor\n")
         self.assertIsNone(ai_agents.find_agent("hermes"))
-        self.assertIsNone(ai_agents.find_agent("gemini"))
+        self.assertIsNone(ai_agents.find_agent("antigravity"))
         self.program(self.home / ".local/bin/hermes", '#!/bin/sh\nexec "$HOME/.hermes/hermes-agent/run" "$@"\n')
         self.assertEqual(ai_agents.find_agent("hermes"), str(self.home / ".local/bin/hermes"))
-        package = self.program(self.data / "agents/gemini/lib/node_modules/@google/gemini-cli/dist/index.js", "#!/usr/bin/env node\n")
-        link = self.data / "agents/gemini/bin/gemini"
+        native = self.home / ".local/bin/agy"
+        native.write_bytes(Path(sys.executable).resolve().read_bytes()[:4096])
+        native.chmod(0o755)
+        self.assertEqual(ai_agents.find_agent("antigravity"), str(native), "The native CLI counts; the editor's script does not")
+        link = self.data / "agents/hermes/bin/hermes"
         link.parent.mkdir(parents=True)
-        link.symlink_to(package)
-        self.assertEqual(ai_agents.find_agent("gemini"), str(link), "The app's own download comes first")
+        link.symlink_to(self.home / ".local/bin/hermes")
+        self.assertEqual(ai_agents.find_agent("hermes"), str(link), "The app's own download comes first")
 
     def test_windows_programs_and_unfinished_files_do_not_count(self):
         self.program(self.home / ".local/bin/claude", "MZ copied from Windows")
@@ -142,8 +146,8 @@ class DetectionChecks(Fixture):
             self.program(self.data / f"agents/node/{version}/bin/node")
         self.assertEqual(ai_agents.node_directory(), self.data / "agents/node/v26.13.1/bin")
         self.assertNotIn(str(self.data), ai_agents.agent_environment("claude").get("PATH", ""))
-        (self.data / "agents/gemini").mkdir()
-        path = ai_agents.agent_environment("gemini")["PATH"].split(os.pathsep)
+        (self.data / "agents/codex").mkdir()
+        path = ai_agents.agent_environment("codex")["PATH"].split(os.pathsep)
         self.assertEqual(path[0], str(self.data / "agents/node/v26.13.1/bin"))
         self.assertIn(str(self.root / "path"), path)
         self.assertEqual(ai_agents.agent_environment("opencode")["OPENCODE_DISABLE_AUTOUPDATE"], "1")
@@ -278,19 +282,20 @@ class DownloadChecks(Fixture):
 
         def run(command, *, env, cwd, on_line, cancelled):
             ran.append((command, env["PATH"]))
-            self.program(self.data / "agents/gemini/bin/gemini", "#!/usr/bin/env node\n// @google/gemini-cli\n")
+            self.program(self.data / "agents/codex/bin/codex", "#!/usr/bin/env node\n")
             return 0, []
         with patch.object(agent_setup.sys, "platform", "linux"), patch.object(agent_setup, "system_npm", return_value=None), \
                 patch.object(agent_setup, "ensure_private_node",
                              side_effect=lambda **options: real(fetch=fetch, download=download, **options)), \
-                patch.object(ai_agents.sys, "platform", "linux"):
-            found = agent_setup.install("gemini", run=run)
-        self.assertEqual(found, str(self.data / "agents/gemini/bin/gemini"))
+                patch.object(ai_agents.sys, "platform", "linux"), \
+                patch.object(ai_agents, "install_plan", return_value=ai_agents.InstallPlan("npm", "npm", "npm", package="@openai/codex")):
+            found = agent_setup.install("codex", run=run)
+        self.assertEqual(found, str(self.data / "agents/codex/bin/codex"))
         command, path = ran[0]
         self.assertEqual(command[:2], [str(self.data / f"agents/node/{version}/bin/node"),
                                        str(self.data / f"agents/node/{version}/lib/node_modules/npm/bin/npm-cli.js")])
-        self.assertEqual(command[command.index("--prefix") + 1], str(self.data / "agents/gemini"))
-        self.assertEqual(command[-1], "@google/gemini-cli@latest")
+        self.assertEqual(command[command.index("--prefix") + 1], str(self.data / "agents/codex"))
+        self.assertEqual(command[-1], "@openai/codex@latest")
         self.assertTrue(path.startswith(str(self.data / f"agents/node/{version}/bin")))
         self.assertEqual([item.name for item in (self.data / "agents/node").iterdir()], [version], "No staging folder may remain")
         with self.assertRaisesRegex(agent_setup.AgentSetupError, "no checksum"):
@@ -323,7 +328,7 @@ class ChooserChecks(unittest.TestCase):
     def test_names_built_in_and_italic_green_downloaded(self):
         widget = self.chooser()
         shown = {row.spec.id: [text for text, _font, _ink in row.suffixes()] for row in widget.package.rows}
-        self.assertEqual(shown, {"gemini": [], "codex": [DOWNLOADED_TEXT], "claude": [DOWNLOADED_TEXT], "hermes": [],
+        self.assertEqual(shown, {"antigravity": [], "codex": [DOWNLOADED_TEXT], "claude": [DOWNLOADED_TEXT], "hermes": [],
                                  "opencode": [BUILTIN_TEXT]}, "Setup provides the built-in agent: only the others can be downloaded")
         self.assertEqual(widget.row("opencode").accessibleName(), "OpenCode (Built-in)")
         self.assertEqual((BUILTIN_TEXT, DOWNLOADED_TEXT), ("(Built-in)", "(Downloaded)"))
@@ -358,7 +363,7 @@ class ChooserChecks(unittest.TestCase):
         widget = self.chooser()
         for mode in ("default", "light", "solarized_dark"):
             widget.apply_theme(mode)
-            for agent_id in ("gemini", "hermes"):
+            for agent_id in ("antigravity", "hermes"):
                 widget.select(agent_id)
                 APP.processEvents()
                 image = widget.package.grab().toImage()

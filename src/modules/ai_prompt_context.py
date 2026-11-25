@@ -15,7 +15,7 @@ def assistant_process_active(pid):
         import psutil
         process = psutil.Process(int(pid))
         names = {Path(child.name()).stem.casefold() for child in [process, *process.children(recursive=True)]}
-        return bool(names & {"codex", "agy", "opencode", "claude", "gemini", "hermes"})
+        return bool(names & {"codex", "agy", "opencode", "claude", "hermes"})
     except Exception:
         return False
 

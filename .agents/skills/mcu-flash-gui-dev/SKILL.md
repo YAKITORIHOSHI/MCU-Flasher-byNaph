@@ -56,13 +56,16 @@ Arduino CLI opt-ins stay separate and same-name boards keep their ID. Nothing on
 is deleted. Saved names resolve through `canonical()`/`resolve_label`, which returns
 nothing rather than guess. Both products use it. Verify `verify_board_labels.py`.
 
-**AI Assistant.** Opening it shows `agent_chooser.py`'s list: Gemini, Codex, Claude,
+**AI Assistant.** Opening it shows `agent_chooser.py`'s list: Antigravity, Codex, Claude,
 Hermes and OpenCode (Built-in). `main/core/ai_agents.py` finds agents by files only and
 never runs one to check; `src/modules/agent_setup.py` downloads one only when chosen,
 for this account, from its maker, as complete files, and ends the whole tree on Cancel.
 `start_agent(id)` starts it, the button beside Restart returns to the list, hide/reveal
 keeps the session and reopening lists the last choice first. Bootstrap still prepares
-only OpenCode and the never-update rule is unchanged. Tests patch
+only OpenCode and the never-update rule is unchanged. Antigravity always starts as
+`agy --dangerously-skip-permissions` (`Agent.arguments`, both launch paths), and only a
+native `agy` counts (`Agent.native`): the Antigravity editor's script of that name opens
+a window. That is the app's launch; assistant delegation keeps `agy-delegation`'s limits. Tests patch
 `last_agent`/`remember_agent`. Verify `verify_ai_agents.py`, `verify_ubuntu_ai_panel.py`
 and `verify_assistant_startup.py`.
 

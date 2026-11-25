@@ -37,7 +37,7 @@ see the [README](README.md).
   preserving the temporary original and refusing occupied destinations.
 - **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
   and the coding assistant you choose: OpenCode (built in), Claude, Codex,
-  Gemini or Hermes, downloaded only when you ask for it. Its file edits are
+  Antigravity or Hermes, downloaded only when you ask for it. Its file edits are
   highlighted for you to accept or reject, and an edit or a whole session can be
   reverted later. Beside its status, one button returns to the list and **Restart**
   opens a fresh session.

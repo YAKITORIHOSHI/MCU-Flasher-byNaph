@@ -12,6 +12,7 @@ import shutil
 import sys
 
 from src.modules.platform_runtime import app_data_dir
+from src.modules.ubuntu_architecture import MACH_O_MAGICS
 
 
 @dataclass(frozen=True)
@@ -37,13 +38,16 @@ class Agent:
     # Full-screen agents take over the terminal; inline ones print into it.
     inline: bool = True
     takes_project: bool = False     # Wants the project folder as an argument
+    arguments: tuple = ()           # Always passed, before the project
+    native: bool = False            # Only a native program counts, never a script of that name
     executables: tuple = ()
     markers: tuple = field(default=(), compare=False)   # Text that tells it from another program of that name
 
 
 AGENTS = (
-    Agent("gemini", "Gemini", "Google", "Needs a Gemini Code Assist Standard or Enterprise licence, or an API key",
-          executables=("gemini",), markers=("gemini-cli", "@google/gemini")),
+    # The Antigravity editor installs a script called agy too; that one opens its window.
+    Agent("antigravity", "Antigravity", "Google", "Signs in with Google and acts without asking permission",
+          arguments=("--dangerously-skip-permissions",), native=True, executables=("agy",)),
     Agent("codex", "Codex", "OpenAI", "Signs in with ChatGPT or an API key", executables=("codex",)),
     Agent("claude", "Claude", "Anthropic", "Signs in with Claude or an API key", executables=("claude",)),
     Agent("hermes", "Hermes", "Nous Research", "Works with the model provider you choose",
@@ -98,7 +102,7 @@ def _posix_directories() -> list[Path]:
 def _windows_directories() -> list[Path]:
     found = []
     for variable, parts in (("APPDATA", ("npm",)), ("USERPROFILE", (".local/bin", "scoop/shims", "AppData/Roaming/npm")),
-                            ("LOCALAPPDATA", ("Programs/OpenAI/Codex/bin", "hermes/bin", "Microsoft/WinGet/Links", "npm",
+                            ("LOCALAPPDATA", ("agy/bin", "Programs/OpenAI/Codex/bin", "hermes/bin", "Microsoft/WinGet/Links", "npm",
                                               "Programs/nodejs")),
                             ("ProgramFiles", ("nodejs",))):
         base = os.environ.get(variable, "").strip()
@@ -109,6 +113,13 @@ def _windows_directories() -> list[Path]:
 
 def _is_this(spec: Agent, path: Path) -> bool:
     """Tell an agent from another program of the same name, from its location or its first text."""
+    if spec.native:
+        try:
+            with path.open("rb") as stream:
+                head = stream.read(4)
+        except OSError:
+            return False
+        return head[:2] == b"MZ" or head == b"\x7fELF" or head in MACH_O_MAGICS
     if not spec.markers:
         return True
     try:
@@ -188,11 +199,12 @@ def installed_agents() -> dict[str, str | None]:
 
 
 def agent_argv(agent_id: str, executable, project) -> list[str]:
-    """Literal arguments: the executable, and the project only where the agent takes it."""
+    """Literal arguments: the executable, its fixed options, and the project only where the agent takes it."""
     executable, project = os.fspath(executable), os.fspath(project)
     if not executable or not project:
         raise ValueError("An assistant requires an executable and project directory.")
-    return [executable, os.path.abspath(project)] if agent(agent_id).takes_project else [executable]
+    spec = agent(agent_id)
+    return [executable, *spec.arguments, *([os.path.abspath(project)] if spec.takes_project else [])]
 
 
 def agent_environment(agent_id: str, base=None) -> dict[str, str]:
@@ -217,8 +229,11 @@ def install_plan(agent_id: str) -> InstallPlan | None:
     windows = sys.platform == "win32"
     shell = "powershell" if windows else "bash"
     suffix = "ps1" if windows else "sh"
-    if agent_id == "gemini":
-        return InstallPlan("npm", "npm (@google/gemini-cli)", "npm install -g @google/gemini-cli", package="@google/gemini-cli")
+    if agent_id == "antigravity":
+        return InstallPlan("script", "antigravity.google (Google's installer)",
+                           "irm https://antigravity.google/cli/install.ps1 | iex" if windows else
+                           "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+                           url=f"https://antigravity.google/cli/install.{suffix}", shell=shell)
     if agent_id == "codex":
         return InstallPlan("script", "chatgpt.com (OpenAI's installer)",
                            "irm https://chatgpt.com/codex/install.ps1 | iex" if windows else

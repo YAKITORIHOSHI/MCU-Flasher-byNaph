@@ -552,10 +552,12 @@ Input writes are nonblocking and retain partial UTF-8/paste bytes through PTY
 backpressure. Queued input is bounded to 4 MiB; an over-capacity input is rejected
 with a visible notice. Closing a session clears pending input without replay.
 The **AI Assistant** pane (`main/qt/posix_ai_panel.py`) opens on a list of coding
-agents: Gemini, Codex, Claude, Hermes and OpenCode (Built-in). Others already on
+agents: Antigravity, Codex, Claude, Hermes and OpenCode (Built-in). Others already on
 the computer are marked **(Downloaded)**; **Download** gets another one for your
 account, from its maker, without administrator rights. The chosen agent runs in one
 protected native PTY, and the button beside **Restart** returns to the list.
+Antigravity always starts as `agy --dangerously-skip-permissions`, so it acts without
+asking first.
 **Hide** and reveal keep the same session running; an independent close of its container is ignored. Closing
 the owning workspace ends it. The separate **Terminal** tab remains empty until
 **New Bash** creates a general shell session.

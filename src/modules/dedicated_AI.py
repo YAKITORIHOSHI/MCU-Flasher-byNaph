@@ -706,6 +706,8 @@ class TerminalServer:
             invocation = f'"{cmd_to_run}"'
         else:
             invocation = cmd_to_run
+        if self.agent is not None and self.agent.arguments:
+            invocation = " ".join((invocation, *self.agent.arguments))
         if self.agent is None or self.agent.takes_project:
             invocation = f'{invocation} "{target_dir}"'
         node = ""

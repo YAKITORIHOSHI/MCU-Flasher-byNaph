@@ -474,6 +474,10 @@ class WindowsServerChecks(unittest.TestCase):
         self.assertIn('claude.exe" & timeout', command, "Only OpenCode takes the project as an argument")
         self.assertEqual(self.server._supervised_opencode_command(str(self.root)).count(str(self.root)), 2)
         self.assertEqual(server.agent_name, "Claude")
+        server = self.scope["TerminalServer"](target_dir=str(self.root), command="C:/fixture path/agy.exe", agent=agent("antigravity"))
+        with patch("main.core.ai_agents.node_directory", return_value=None):
+            command = server._supervised_opencode_command(str(self.root))
+        self.assertIn('agy.exe" --dangerously-skip-permissions & timeout', command)
 
     def test_the_page_decides_and_byte_timing_stays_out_of_the_way(self):
         socket, _started = self.run_socket(dict(type="client_ready", readiness=True),
@@ -659,9 +663,9 @@ class WindowsPanelChecks(unittest.TestCase):
         buttons = self.module.QMessageBox.StandardButton
         with patch.object(panel, "_check_internet", return_value=False), patch.object(self.module.subprocess, "Popen") as spawn, \
              patch.object(self.module.QMessageBox, "question", return_value=buttons.No) as question:
-            panel.start_agent("gemini")
+            panel.start_agent("antigravity")
         spawn.assert_not_called()
-        self.assertIn("Gemini", question.call_args.args[2])
+        self.assertIn("Antigravity", question.call_args.args[2])
         self.assertIs(panel._stack.currentWidget(), panel._chooser)
         text = (ROOT / "main/qt/ai_panel.py").read_text(encoding="utf-8")
         self.assertNotIn("as Administrator", text, "The assistant has never been started elevated")
