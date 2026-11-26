@@ -7,7 +7,7 @@
 use serde_json::{Map, Value};
 use std::fmt;
 
-/// Existing application policy, main/core/constants.py::MAX_BAUD_RATE.
+/// Existing application policy, main/core/constants.py::MAX_UPLOAD_SPEED.
 pub const MAX_BAUD_RATE: u64 = 921_600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

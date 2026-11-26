@@ -20,7 +20,7 @@ from src.modules.ubuntu_architecture import elf_matches_host
 SOURCE_TREES = ("main", "src/modules", "src/dbs", "direct", "cleaner", "DANGER-ZONE")
 PROTECTED = frozenset((".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode",
                        ".clangd", ".opencode", ".git", "node_modules", "env", "_python",
-                       ".venv-linux", ".ubuntu-tools", "offline-extras", ".platformio-mcu-gui"))
+                       ".venv-linux", ".ubuntu-tools", ".ai-agents", "offline-extras", ".platformio-mcu-gui"))
 CORE_NAMES = frozenset(("packages", "platforms", "lib", "penv", "arduino-cli", ".cache",
                         ".tmp", "appstate.json", "homestate.json", ".mcu-offline-ready.json",
                         ".mcu-offline-catalog.json", ".mcu-bootstrap-board-coverage.json",

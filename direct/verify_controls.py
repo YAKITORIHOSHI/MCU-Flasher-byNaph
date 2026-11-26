@@ -90,6 +90,8 @@ class ControlChecks(unittest.TestCase):
             self.stack.enter_context(patch.object(settings_module, name, return_value=value))
         self.save = self.stack.enter_context(patch.object(settings_module, "_save_raw_config", return_value=True))
         self.stack.enter_context(patch.object(settings_module, "get_editor_auto_pairs", return_value=True))
+        # The user's own Settings never reach a fixture: the assistant size starts standard.
+        self.stack.enter_context(patch.object(settings_module, "get_ai_assistant_scale", return_value=100))
         self.stack.enter_context(patch("src.dbs.dbs_create.add_notification"))
         self.stack.enter_context(patch("src.dbs.dbs_create.queue_notification"))
         self.stack.enter_context(patch.object(QMessageBox, "warning"))
@@ -486,7 +488,8 @@ class ControlChecks(unittest.TestCase):
 
     def test_settings_cancel_does_not_persist_and_live_signals_match_saved_values(self):
         dialog = self.settings()
-        dialog.theme_combo.setCurrentText(dialog._theme_rev["light"])
+        # Frost White is the default, so a change of theme means another one.
+        dialog.theme_combo.setCurrentText(dialog._theme_rev["solarized_dark"])
         dialog.cb_reset_on_baud.setChecked(True)
         dialog.reject()
         self.save.assert_not_called()
@@ -505,11 +508,29 @@ class ControlChecks(unittest.TestCase):
         dialog.cb_g_accel.setChecked(False)
         dialog._save_and_apply()
         callbacks["font_size_changed"].assert_called_once_with(17)
-        callbacks["theme_changed"].assert_called_once_with("light")
+        callbacks["theme_changed"].assert_called_once_with("solarized_dark")
         callbacks["hide_warnings_changed"].assert_called_once_with(True)
         callbacks["autosave_settings_changed"].assert_called_once_with(True, 1800)
         callbacks["graphics_accel_changed"].assert_called_once_with(False)
         self.backend.set_reset_on_baud_change.assert_called_once_with(True)
+
+    def test_assistant_text_size_is_a_setting_that_signals_its_change(self):
+        dialog = self.settings()
+        combo = dialog.assistant_scale_combo
+        self.assertEqual([combo.itemData(i) for i in range(combo.count())], [75, 90, 100, 110, 125, 150, 175, 200])
+        self.assertEqual(combo.currentData(), 100, "Standard size until chosen")
+        changed = Mock()
+        settings_module.signals.ai_assistant_scale_changed.connect(changed)
+        self.addCleanup(settings_module.signals.ai_assistant_scale_changed.disconnect, changed)
+        combo.setCurrentIndex(combo.findData(150))
+        dialog._save_and_apply()
+        changed.assert_called_once_with(150)
+        self.assertEqual(self.save.call_args.args[0]["shared"]["ai_assistant_scale"], 150)
+        from main.qt.posix_ai_panel import PosixAIPanel
+        probe = SimpleNamespace(_font_size=12, _scale=150)
+        self.assertEqual(PosixAIPanel.assistant_font_size(probe), 18)
+        probe._scale = 75
+        self.assertEqual(PosixAIPanel.assistant_font_size(probe), 9)
 
     def test_clicked_save_shows_progress_and_cannot_be_closed_half_applied(self):
         # Closing Settings restyles every window when the theme changes. Show that work,
@@ -518,7 +539,7 @@ class ControlChecks(unittest.TestCase):
         dialog = self.settings()
         dialog.show()
         APP.processEvents()
-        dialog.theme_combo.setCurrentText(dialog._theme_rev["light"])
+        dialog.theme_combo.setCurrentText(dialog._theme_rev["solarized_dark"])
         finished = []
         dialog.finished.connect(finished.append)
         dialog.btn_save.click()

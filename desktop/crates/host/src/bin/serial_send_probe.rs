@@ -104,6 +104,9 @@ struct Controller {
     // Python requests retain connection object identity, including its current
     // is_open flag. A close changes only that token, even after replacement.
     connections: BTreeMap<u64, bool>,
+    // The host retires a connection once (main.core.monitor_connection.retire_connection):
+    // a second close could shut a handle the system has since reused.
+    retired: std::collections::BTreeSet<u64>,
     queue: SerialSendQueue,
 }
 
@@ -112,6 +115,7 @@ impl Controller {
         let mut controller = Self {
             state: state.clone(),
             connections: BTreeMap::new(),
+            retired: std::collections::BTreeSet::new(),
             queue: SerialSendQueue::new(),
         };
         controller.set_state(state);
@@ -225,8 +229,10 @@ impl Controller {
                 }
                 if let Some(failure) = completion.failure {
                     let token = failure.close_connection.0;
-                    self.connections.insert(token, false);
-                    effects["close"] = json!(token);
+                    if self.retired.insert(token) {
+                        self.connections.insert(token, false);
+                        effects["close"] = json!(token);
+                    }
                     if let Some(disconnect) = failure.disconnect {
                         let DisconnectEffect::AdvanceGeneration(generation) = disconnect else {
                             return Err(

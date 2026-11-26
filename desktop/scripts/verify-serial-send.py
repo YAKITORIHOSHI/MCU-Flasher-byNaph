@@ -21,6 +21,9 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_PATH = ROOT / "main/core/serial_send.py"
+# The isolated class closes a failed connection through main.core.monitor_connection.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 EXE = ROOT / "desktop/target/debug" / (
     "serial_send_probe.exe" if sys.platform == "win32" else "serial_send_probe")
 MAX_BATCH_BYTES = 1_000_000

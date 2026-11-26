@@ -1308,11 +1308,16 @@ class ProjectChecks(unittest.TestCase):
                 def cancel_prompt(name):
                     prompt = next(widget for widget in APP.topLevelWidgets()
                                   if isinstance(widget, QMessageBox) and widget.isVisible())
-                    from main.qt.theme import get_palette
-                    self.assertIn(get_palette(theme)['BG_MID'], prompt.styleSheet())
-                    if RENDER_DIR:
-                        self.assertTrue(prompt.grab().save(str(RENDER_DIR / f'project-{theme}-{name}.png')))
-                    prompt.button(QMessageBox.StandardButton.Cancel).click()
+                    try:
+                        # The choice buttons are the theme's glass, like the selector's own.
+                        from main.qt.theme import liquid_button_sheet
+                        self.assertIn(liquid_button_sheet(theme, "glass", radius=11, selector="QMessageBox QPushButton",
+                                                          padding="7px 12px"), prompt.styleSheet())
+                        if RENDER_DIR:
+                            self.assertTrue(prompt.grab().save(str(RENDER_DIR / f'project-{theme}-{name}.png')))
+                    finally:
+                        # A failed check must never leave the modal prompt waiting forever.
+                        prompt.button(QMessageBox.StandardButton.Cancel).click()
 
                 QTimer.singleShot(0, lambda: cancel_prompt('window-choice'))
                 self.assertIsNone(dialog._choose_project_window('SensorLogger'))

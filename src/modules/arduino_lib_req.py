@@ -360,12 +360,12 @@ def _resolve_lib_req_theme() -> str:
                 shared = data.get("shared", data)
                 if shared.get("theme_follow_system", False):
                     return _detect_system_theme()
-                m = str(shared.get("theme_mode", "default")).strip().lower()
+                m = str(shared.get("theme_mode", "light")).strip().lower()
                 if m in ("default", "light") or m in ("solarized", "solarize", "solarized-dark", "solarized_dark", "solarize_dark"):
                     return m
         except Exception:
             pass
-    return "default"
+    return "light"      # Frost White until a theme is chosen.
 
 
 

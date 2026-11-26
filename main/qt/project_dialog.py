@@ -31,7 +31,7 @@ from main.qt.icons import ActionButton as QPushButton, IconLabel as QLabel, icon
 from main.qt.setup_components import GlassCard
 from main.qt.glass import GlassDialog, WorkspaceTabBar, paint_scene
 from main.qt.taskbar import window_hidden, window_shown
-from src.modules.ui_palette import readable_foreground, setup_text_palette
+from src.modules.ui_palette import setup_text_palette
 
 from main.core.constants import is_application_codebase_dir
 
@@ -582,8 +582,14 @@ class ProjectDialog(GlassDialog):
             card.set_palette(original)
         self._brand_mark.setPixmap(icon("brand", pal["CYAN"], size=40).pixmap(40, 40))
         self._tabs.tabBar()._focus_ink = pal["CYAN"]
-        primary_ink = readable_foreground(pal["BTN_COMPILE"])
         glass = glass_tokens(theme_mode)
+        # Actions are the theme's glass like every other button: the primary one is accent
+        # glass with the theme's bright text, never a solid block with a computed ink.
+        primary_ink = pal["TEXT_BRIGHT"]
+        from main.qt.theme import _liquid
+        accent_fill = _liquid(glass["accent_top"], glass["accent_bottom"], glass["accent_top"], glass["accent_inner"])
+        accent_hover = _liquid(glass["accent_hover_top"], glass["accent_hover_bottom"], glass["accent_hover_top"],
+                               glass["accent_inner"])
         self.setStyleSheet(f"""
             QDialog#project-selector {{ color: {pal['TEXT']}; }}
             QLabel {{ background: transparent; color: {pal['TEXT']}; font-size: 12px; }}
@@ -622,15 +628,18 @@ class ProjectDialog(GlassDialog):
             QListWidget#existing-project-files::item {{ padding: 0px 7px; border-width: 0px; }}
             QCheckBox {{ color: {pal['TEXT']}; font-size: 12px; background: transparent; }}
             QPushButton {{ min-height: 18px; padding: 7px 12px; border: 1px solid {glass['button_rim']};
-                border-radius: 10px; color: {pal['TEXT_BRIGHT']}; font-size: 12px; font-weight: 600;
+                border-top-color: {glass['button_spec']}; border-bottom-color: {glass['button_floor']};
+                border-radius: 11px; color: {pal['TEXT_BRIGHT']}; font-size: 12px; font-weight: 600;
                 background: {glass['button']}; }}
             QPushButton:hover {{ background: {glass['button_hover']}; border-color: {pal['BORDER_LIT']}; }}
             QPushButton:pressed {{ background: {glass['button_pressed']}; }}
             QPushButton:focus {{ border: 2px solid {pal['CYAN']}; padding: 6px 11px; }}
-            QPushButton[projectAction="primary"]:enabled {{ color: {primary_ink}; border-color: {pal['BORDER_LIT']};
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {pal['BTN_COMPILE_H']},stop:1 {pal['BTN_COMPILE']}); }}
-            QPushButton[projectAction="primary"]:enabled:hover {{ background: {pal['BTN_COMPILE_H']}; }}
-            QPushButton:disabled {{ background: {glass['button_disabled']}; color: {glass['disabled_ink']}; border-color: {glass['rim']}; }}
+            QPushButton[projectAction="primary"]:enabled {{ color: {primary_ink}; background: {accent_fill};
+                border: 1px solid {pal['BORDER_LIT']}; border-top-color: {glass['accent_spec']}; }}
+            QPushButton[projectAction="primary"]:enabled:hover {{ background: {accent_hover}; border-color: {pal['CYAN']}; }}
+            QPushButton[projectAction="primary"]:enabled:focus {{ border: 2px solid {pal['CYAN']}; padding: 6px 11px; }}
+            QPushButton:disabled {{ background: {glass['button_disabled_liquid']}; color: {glass['disabled_ink']};
+                border: 1px solid {glass['button_disabled_rim']}; border-top-color: {glass['button_disabled_spec']}; }}
         """)
         for label in self.findChildren(QLabel):
             tone = label.property("projectTone")
@@ -1280,26 +1289,19 @@ class ProjectDialog(GlassDialog):
         try:
             from main.core.config import get_theme_mode
             from main.qt.theme import get_palette
-            pal = get_palette(getattr(self, "_theme_mode", None) or get_theme_mode())
+            mode = getattr(self, "_theme_mode", None) or get_theme_mode()
+            pal = get_palette(mode)
         except Exception:
-            pal = {}
-        bg = pal.get("BG_DARK", "#151922")
-        surface = pal.get("BG_MID", "#1c2333")
-        hover = pal.get("BG_HOVER", "#2a3a55")
+            mode, pal = "light", {}
         text = pal.get("TEXT", "#e0e6ed")
-        bright = pal.get("TEXT_BRIGHT", "#ffffff")
-        border = pal.get("BORDER", "#2d3748")
         cyan = pal.get("CYAN", "#00d2ff")
+        from main.qt.theme import liquid_button_sheet
         prompt.setStyleSheet(f"""
             QMessageBox {{ background: transparent; color: {text}; }}
             QMessageBox QLabel {{ color: {text}; background: transparent; font-size: 12px; }}
-            QMessageBox QPushButton {{
-                min-width: 82px; padding: 7px 12px;
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 {surface},stop:1 {bg});
-                color: {bright}; border: 1px solid {border}; border-radius: 6px;
-            }}
-            QMessageBox QPushButton:hover {{ background-color: {hover}; border-color: {cyan}; }}
-            QMessageBox QPushButton:pressed {{ background-color: {bg}; }}
+        """ + liquid_button_sheet(mode, "glass", radius=11, selector="QMessageBox QPushButton",
+                                  padding="7px 12px") + f"""
+            QMessageBox QPushButton {{ min-width: 82px; }}
             QMessageBox QPushButton:focus, QMessageBox QPushButton:default {{ border: 2px solid {cyan}; padding: 6px 11px; }}
         """)
 

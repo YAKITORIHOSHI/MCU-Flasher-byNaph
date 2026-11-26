@@ -295,7 +295,6 @@ FIXTURE = r"""
     get_ai_edit_reviews:() => [], get_ai_history_state:() => ({canUndo:false,canRedo:false}),
     mark_modified:() => true, update_editor_buffer:() => true,
     snapshot_buffer:() => true, on_editor_content_change:() => true,
-    realtime_check_syntax:() => 'null',
     set_active_file:() => true, set_cursor_position:() => true,
     save_project_tab_order:(renderer,root,paths) => {f.orders.push({root,paths});return root===f.root;},
     save_tab_order:() => {throw new Error('Incremental refresh requires project-bound persistence');},

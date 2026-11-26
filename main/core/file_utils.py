@@ -418,7 +418,8 @@ def _on_network_mount(path) -> bool:
     if not sys.platform.startswith("linux"):
         return False
     try:
-        target = os.path.abspath(path)
+        import posixpath  # Linux mount points use POSIX rules, whichever OS runs a check.
+        target = posixpath.abspath(os.fspath(path))
         best, kind = "", ""
         with open("/proc/self/mounts", encoding="utf-8", errors="replace") as mounts:
             for line in mounts:
@@ -1483,7 +1484,9 @@ def application_agent_guidance(project_dir) -> str:
         "once, through `retire_connection`, after its reader left. List one row per build target "
         "(`board_labels.py`); never guess a saved board. Verify port_replug and board_labels.\n"
         "- The AI Assistant opens on its agent list: find agents by files alone (`ai_agents.py`), download "
-        "one only when chosen (`agent_setup.py`). Revert AI edits through `ai_revert.py` and the review "
+        "one only when chosen (`agent_setup.py`). On Linux and macOS Hermes stays whole in git-ignored "
+        "`.ai-agents/<host>/hermes` (its own HERMES_HOME and a stand-in home for its installer); never in "
+        "`~/.hermes` or `~/.local/bin`. Revert AI edits through `ai_revert.py` and the review "
         "journal; history stays hidden in the sketch. Verify ai_agents and ai_revert.\n"
         "- Windows components come from winget, checked per-user archives or bundled installers "
         "(`windows_components.py`); a normal start asks for no permission and `PromptLedger` asks once.\n"
@@ -1542,8 +1545,8 @@ def application_agent_guidance(project_dir) -> str:
         "reject missing/malformed releases without cleanup, never admit a host from `ID_LIKE`, and never route Fedora through apt. "
         "Require four CPU cores (physical when detectable, logical fallback), and keep four/six-core resource budgets.\n"
         "- Show the workspace before starting services. Keep discovery and parsing off the GUI "
-        "thread; bound log events, display histories and caches. Return syntax completion through "
-        "queued Qt signals and discard stale revisions.\n"
+        "thread; bound log events, display histories and caches. Code is checked only by compiling "
+        "(Build Console); never reintroduce a live syntax checker.\n"
         "- Consider HDD/removable/network storage independently of CPU speed. Keep storage "
         "probes and source scans off the GUI thread, avoid unchanged metadata writes, and "
         "verify actual source bytes before firmware reuse on coarse-timestamp filesystems.\n"
@@ -1687,7 +1690,8 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             "  - Upload status, device connect/disconnect logs, and library installations.\n\n"
             "### 4STEP 4: Strict No-Touch on Build & Cache Files\n"
             f"- Files inside `{PROJECT_BUILD_CACHE_DIR}/` are internal build inputs, backups, and PlatformIO toolchain data.\n"
-            f"- **NEVER** edit, modify, rename, or delete files inside `{PROJECT_BUILD_CACHE_DIR}/`, `.pio/`, `.vscode/`, `.clangd/`, or `.opencode/`.\n\n"
+            f"- **NEVER** edit, modify, rename, or delete files inside `{PROJECT_BUILD_CACHE_DIR}/`, `.pio/`, `.vscode/`, `.clangd/`, `.opencode/`, `.claude/` or `.agents/`.\n"
+            "- Compiler errors appear in MCU Flasher's Build Console with file and line; the app checks code only by compiling it.\n\n"
             "### 5AI Edit Backup & Recovery\n"
             f"- Backup root: `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}` (relative to the project root).\n"
             "- Folder layout: `M-D-YY/sessionN/editN.txt`. Each edit file contains exact BEFORE, AI/AFTER, current-applied, and Undo-target copies.\n"
@@ -1696,7 +1700,7 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
             f"- Never read or edit `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}/.state`; it is application journal data.\n"
             "- When the user explicitly asks to recover or compare an earlier AI edit, locate the matching project/file entry and restore only the requested content section.\n\n"
             + application_agent_guidance(s_dir) + "---\n"
-            "*Generated automatically by MCU Flash GUI for OpenCode and compatible coding assistants. Paths are project-relative; hardware state is read at runtime.*\n"
+            "*Generated automatically by MCU Flash GUI for this sketch's coding assistants (OpenCode, Claude, Codex, Antigravity and Hermes); each also gets these instructions' skills where it reads them. Paths are project-relative; hardware state is read at runtime.*\n"
         )
 
         agents_file = s_dir / "AGENTS.md"
@@ -1706,122 +1710,250 @@ def ensure_hidden_read_first_md(sketch_dir) -> None:
         except Exception:
             pass
 
-        # 4. Portable skills for Sketch Workflow & Target Discovery.
-        workflow_skill_content = (
-            "---\n"
-            "name: sketch-workflow\n"
-            "description: \"Live hardware state, exact board/framework settings, serial ports and root-sketch workflow. Use for firmware and hardware questions; use mcu-flash-gui-dev for application changes.\"\n"
-            "---\n\n"
-            "# Sketch Project Workflow & Priority Guide\n\n"
-            "## Live Hardware State\n"
-            "Hardware values are not fixed in this portable skill. Use the current MCU Flasher GUI when available; otherwise read `"
-            f"{PROJECT_BUILD_CACHE_DIR}/project_state.json` (read-only). Report only values present in that state. If a value is absent, say it is unavailable; never infer it from manifests or installed packages.\n\n"
-            "### Step 1: Hardware Query\n"
-            f"Use current GUI state or `{PROJECT_BUILD_CACHE_DIR}/project_state.json` (read-only). "
-            "Inspect the `hardware` object: if `hardware.mcu_connected` is false or `hardware.port` is null, report that no microcontroller is connected. "
-            "If `hardware.board_selected` is false or `hardware.board_name` is null, report that no board is selected. "
-            "Do not recursively scan disks, package trees, or inspect `platformio.ini` to guess board selection.\n\n"
-            "### Step 2: Read & Edit Only Root Sketch Files\n"
-            "Confine firmware source changes strictly to the active project's root:\n"
-            "- Primary Arduino sketches: `*.ino` (Main sketch file at root)\n"
-            "- Header files: `*.h`, `*.hpp` (C/C++ header files at root)\n"
-            "- Source files: `*.cpp`, `*.c` (C/C++ source code files at root)\n"
-            "- Project documentation: `NOTE.txt` or other user-requested root text files\n"
-            "Never search parent or sibling directories, and never create nested source directories or submodules unless explicitly requested.\n\n"
-            "### Step 3: Check Build & Notification History\n"
-            f"When troubleshooting compilation errors, upload failures, or reset issues, read `{PROJECT_BUILD_CACHE_DIR}/dbs_notif.json` (read-only) "
-            "to inspect recent compiler errors, missing library warnings, toolchain logs, upload status, device connect/disconnect events, and library installations.\n\n"
-            "### Step 4: Strict No-Touch on Build & Cache Files\n"
-            f"Files and directories inside `{PROJECT_BUILD_CACHE_DIR}/`, `.pio/`, `.vscode/`, `.clangd/`, and `.opencode/` are internal build inputs, "
-            "backups, and PlatformIO toolchain data. NEVER edit, modify, rename, or delete files inside these protected locations.\n\n"
-            "### Step 5: AI Edit Backup & Recovery\n"
-            f"Automated edit backups are maintained in `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}` (relative to project root) "
-            "following the layout `M-D-YY/sessionN/editN.txt`. Each file preserves exact BEFORE, AI/AFTER, current-applied, and Undo-target copies. "
-            f"Treat the backup tree as READ-ONLY. Never modify backup files or `{PROJECT_BUILD_CACHE_DIR}/{AI_PROJECT_STORAGE_DIR}/.state`. "
-            "When the user requests recovering or comparing an earlier AI edit, locate the matching file entry and restore only the requested content section.\n"
-        )
-
-        target_skill_content = (
-            "---\n"
-            "name: mcu-sketch-target\n"
-            "description: \"Exact target and declared framework, architecture-specific GPIO/library constraints, upload transport and root firmware source boundaries.\"\n"
-            "---\n\n"
-            "# Microcontroller Target & Hardware Specifications\n\n"
-            "## Current Target & Live Hardware State\n"
-            "No board, port, baud rate, upload speed, platform, or FQBN is embedded here. Read current GUI state or `"
-            f"{PROJECT_BUILD_CACHE_DIR}/project_state.json` (read-only) when a task needs those values. If the requested value is unavailable, ask rather than guessing.\n\n"
-            "## Project State JSON Schema\n"
-            f"The `{PROJECT_BUILD_CACHE_DIR}/project_state.json` file contains a `hardware` block updated automatically in the background:\n"
-            "- `board_selected` (boolean): `true` if a board is currently selected in the GUI, `false` otherwise.\n"
-            "- `board_name` (string | null): Resolved board display name (e.g. `\"ESP32 Dev Module\"`, `\"Arduino Uno\"`).\n"
-            "- `mcu_connected` (boolean): `true` if a microcontroller is actively detected on a communication port, `false` otherwise.\n"
-            "- `port` (string | null): Operating system port device path (e.g. `\"COM4\"`, `\"/dev/ttyUSB0\"`).\n"
-            "- `port_name` (string | null): Active port device name (e.g. `\"COM4\"`, `\"/dev/ttyUSB0\"`).\n"
-            "- `port_number` (integer | null): Integer port index extracted from the device string (e.g. `4` for `COM4`, `0` for `/dev/ttyUSB0`).\n"
-            "- `platform` (string | null): Microcontroller platform identifier (e.g. `\"espressif32\"`, `\"espressif8266\"`, `\"atmelavr\"`).\n"
-            "- `framework` (string | null): Declared firmware framework (e.g. `\"arduino\"`).\n"
-            "- `baud_rate` (integer): Serial monitor baud rate (e.g. `115200`).\n\n"
-            "## Architecture-Specific Firmware Constraints\n\n"
-            "### ESP32 (ESP32-WROOM, ESP32-WROVER, ESP32-S2, ESP32-S3, ESP32-C3)\n"
-            "- **Strapping Pins**: Pay careful attention to boot strapping pins:\n"
-            "  - `GPIO 0`: Boot mode selection (LOW = UART download bootloader, HIGH = SPI boot/run). Avoid pulling LOW during normal boot.\n"
-            "  - `GPIO 2`: Must be left floating or pulled LOW during flashing on ESP32-WROOM modules.\n"
-            "  - `GPIO 12` (MTDI): Selects flash voltage (LOW = 3.3V, HIGH = 1.8V). Pulling HIGH at boot will brick/brownout flash on 3.3V flash modules.\n"
-            "  - `GPIO 15` (MTDO): Boot log silencing (pull LOW to suppress ROM debug output).\n"
-            "  - Do not attach external pull-up/pull-down loads, sensors, or relays to strapping pins without verified circuit isolation.\n"
-            "- **Prohibited SPI Flash Pins**: `GPIO 6` through `GPIO 11` (CLK, SD0, SD1, SD2, SD3, CMD) connect directly to the integrated SPI flash IC. Never configure or use GPIO 6–11 in user firmware; accessing them will immediately crash the CPU.\n"
-            "- **ADC2 & WiFi Coexistence Conflict**: All ADC2 channels (`GPIO 0`, `GPIO 2`, `GPIO 4`, `GPIO 12`, `GPIO 13`, `GPIO 14`, `GPIO 15`, `GPIO 25`, `GPIO 26`, `GPIO 27`) share internal hardware with the Wi-Fi subsystem. When Wi-Fi is active (`WiFi.begin()`), `analogRead()` calls on ADC2 channels fail and return invalid readings. Always use ADC1 channels (`GPIO 32` through `GPIO 39`) for analog input whenever Wi-Fi is used.\n"
-            "- **Input-Only Pins (GPI)**: `GPIO 34`, `GPIO 35`, `GPIO 36` (SENSOR_VP), and `GPIO 39` (SENSOR_VN) are input-only. They have no internal pull-up or pull-down resistors (`pinMode(pin, INPUT_PULLUP)` is unsupported). External pull resistors are required.\n\n"
-            "### ESP8266 (NodeMCU, Wemos D1 Mini, ESP-01)\n"
-            "- **Watchdog Timer (WDT) Starvation**: The single-core CPU handles WiFi, TCP/IP, and user code sequentially. Blocking loops longer than ~1–3 seconds cause hardware/software watchdog resets (`wdt reset`). In heavy loops, always call `yield()` or `delay(0)` to service WiFi and feed the watchdog.\n"
-            "- **Strapping & Boot Pins**: `GPIO 0` (must be HIGH for run mode, LOW for UART flash), `GPIO 2` (must be HIGH at boot), `GPIO 15` (must be pulled LOW at boot).\n"
-            "- **Deep Sleep Wake Connection**: To wake from `ESP.deepSleep()`, connect `GPIO 16` (D0 / WAKE) directly to the `RST` pin.\n\n"
-            "### AVR Architecture (Arduino Uno, Nano, Mega 2560, Leonardo)\n"
-            "- **SRAM Budget & F() Macro**: ATmega328P has only 2 KB of SRAM. Constant string literals placed in `Serial.print(\"...\")` consume SRAM by default. Always wrap string literals in the `F()` macro (e.g. `Serial.println(F(\"Message\"))`) to store them in Flash memory (PROGMEM).\n"
-            "- **Hardware UART Pins**: `GPIO 0` (RX) and `GPIO 1` (TX) are directly connected to the USB-serial bridge. Avoid using pins 0 and 1 for general I/O to prevent upload errors and corrupted serial monitoring.\n\n"
-            "### STM32 & RP2040 (Raspberry Pi Pico)\n"
-            "- **Native USB CDC**: Native USB CDC ports require a 1200 bps touch sequence to trigger bootloader mode. When waiting for serial output in `setup()`, use a non-blocking timeout: `while (!Serial && millis() < 3000);` so execution continues if no host serial monitor connects.\n\n"
-            "## Coding & File Boundaries\n"
-            "- **Exact target**: Use the resolved PlatformIO definition and declared framework. Arduino `.ino` sketches require Arduino; other frameworks need matching sources/libraries. Never substitute a family or invent hardware.\n"
-            "- **Host and ports**: Windows uses COM ports; Linux/macOS uses native device paths. USB/debug programmer targets may use native transports without a serial port.\n"
-            "- **Arduino / ESP32 Code**: Write high-quality, non-blocking Arduino C++ code.\n"
-            "- **Libraries**: Use standard Arduino libraries matching the architecture (e.g. `Adafruit_NeoPixel`, `FastLED`, `WiFi`, `BluetoothSerial`, `Wire`, `SPI`).\n"
-            "- **Pin Assignments**: Verify GPIO pin compatibility with the current board before assigning pins.\n"
-            f"- **File Boundary**: Firmware edits stay strictly in root sketch files (`*.ino`, `*.cpp`, `*.c`, `*.h`, `*.hpp`, `NOTE.txt`) relative to the active project. Never touch `{PROJECT_BUILD_CACHE_DIR}/`, `.pio/`, or other cache/toolchain folders.\n"
-        )
-
-        try:
-            # Install in .opencode/skills/
-            opencode_skills_base = s_dir / ".opencode" / "skills"
-            workflow_dir = opencode_skills_base / "sketch-workflow"
-            workflow_dir.mkdir(parents=True, exist_ok=True)
-            workflow_file = workflow_dir / "SKILL.md"
-            write_generated_text(workflow_file, workflow_skill_content)
-
-            target_dir = opencode_skills_base / "mcu-sketch-target"
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_file = target_dir / "SKILL.md"
-            write_generated_text(target_file, target_skill_content)
-
-            hide_generated_directory(s_dir / ".opencode")
-
-            # Also install in .agents/skills/ for agent tools that discover .agents/
-            agents_skills_base = s_dir / ".agents" / "skills"
-            a_wf_dir = agents_skills_base / "sketch-workflow"
-            a_wf_dir.mkdir(parents=True, exist_ok=True)
-            a_wf_file = a_wf_dir / "SKILL.md"
-            write_generated_text(a_wf_file, workflow_skill_content)
-
-            a_tgt_dir = agents_skills_base / "mcu-sketch-target"
-            a_tgt_dir.mkdir(parents=True, exist_ok=True)
-            a_tgt_file = a_tgt_dir / "SKILL.md"
-            write_generated_text(a_tgt_file, target_skill_content)
-
-            hide_generated_directory(s_dir / ".agents")
-        except Exception:
-            pass
+        # 4. Portable skills, for each coding agent on this computer, where it reads them.
+        if not is_application_codebase_dir(s_dir):
+            _install_sketch_skills(s_dir)
     except Exception:
         pass
+
+# Where each coding agent reads a project's skills. OpenCode is built in, so its copy is
+# always written; Codex and Antigravity share the open .agents/skills folder, and Claude
+# Code (which OpenCode also reads) uses .claude/skills. The isolated Hermes reads trusted
+# git checkouts only, so it gets these skills in its own home instead.
+_AGENT_SKILL_FOLDERS = (("opencode", ".opencode"), ("claude", ".claude"), ("codex", ".agents"), ("antigravity", ".agents"))
+_SKILL_MARKER = "Generated automatically by MCU Flash GUI"
+_installed_agents_cache: tuple[float, frozenset] = (0.0, frozenset())
+
+
+def _installed_agent_ids() -> frozenset:
+    """Coding agents on this computer, by files only; OpenCode always. Cached for 15 seconds."""
+    global _installed_agents_cache
+    stamp, found = _installed_agents_cache
+    now = time.monotonic()
+    if stamp and now - stamp < 15:
+        return found
+    ids = {"opencode"}
+    try:
+        from main.core import ai_agents
+        for spec in ai_agents.AGENTS:
+            if not spec.builtin and ai_agents.find_agent(spec.id):
+                ids.add(spec.id)
+    except Exception:
+        pass
+    _installed_agents_cache = (now, frozenset(ids))
+    return _installed_agents_cache[1]
+
+
+def forget_installed_agents() -> None:
+    """A download just finished: the next guidance refresh looks for agents again."""
+    global _installed_agents_cache
+    _installed_agents_cache = (0.0, frozenset())
+
+
+def _sketch_skills() -> dict[str, str]:
+    """The skills every coding agent gets in a sketch, by name."""
+    cache = PROJECT_BUILD_CACHE_DIR
+    backups = f"{cache}/{AI_PROJECT_STORAGE_DIR}"
+    footer = f"\n---\n*{_SKILL_MARKER} for this sketch's coding assistants; it is rewritten when the sketch opens.*\n"
+    workflow = (
+        "---\n"
+        "name: sketch-workflow\n"
+        "description: \"Root-sketch workflow in MCU Flasher: live board and port state, which files to edit, "
+        "where compile and upload results are, and what never to touch. Use for any firmware or hardware task in this sketch.\"\n"
+        "---\n\n"
+        "# Sketch workflow in MCU Flasher\n\n"
+        "MCU Flasher compiles, uploads and monitors this sketch. You edit its source files; the user presses "
+        "Compile or Upload. Do not run compilers, PlatformIO or upload tools yourself.\n\n"
+        "## 1. Live hardware state\n"
+        f"Board, port and speeds change while the app runs. Read `{cache}/project_state.json` (read-only) and its "
+        "`hardware` object. If `hardware.mcu_connected` is false or `hardware.port` is null, say no microcontroller is "
+        "connected. If `hardware.board_selected` is false or `hardware.board_name` is null, say no board is selected. "
+        "Report only values present there; never infer a board or port from `platformio.ini`, package folders or older "
+        "generated text.\n\n"
+        "## 2. Edit only the sketch's root files\n"
+        "- `*.ino`: the main Arduino sketch, and other tabs of it\n"
+        "- `*.h`, `*.hpp`: headers\n"
+        "- `*.cpp`, `*.c`: C/C++ sources\n"
+        "- `NOTE.txt` and other root text notes the user asks for\n\n"
+        "Never read parent or sibling folders, and never create nested source folders unless the user asks.\n\n"
+        "## 3. Compile and upload results\n"
+        "The Build Console shows every compiler error and warning with its file and line, and the upload log. When the "
+        "user reports a failed build, ask for those lines or read the recent results in "
+        f"`{cache}/dbs_notif.json` (read-only): compiler errors, missing libraries, upload status and device connect or "
+        "disconnect events. Fix the reported file and line in the root sources; the app checks syntax only by compiling.\n\n"
+        "## 4. Never touch\n"
+        f"`{cache}/`, `.pio/`, `.vscode/`, `.clangd/`, `.opencode/`, `.claude/` and `.agents/` hold build inputs, caches, "
+        "backups and these instructions. Never edit, rename or delete anything inside them.\n\n"
+        "## 5. AI edit backups\n"
+        f"Every AI edit is backed up in `{backups}`, laid out as `M-D-YY/sessionN/editN.txt` with the exact before, after, "
+        f"applied and undo copies. Treat it as read-only and never read `{backups}/.state`. When the user asks to recover or "
+        "compare an earlier AI edit, find the matching file entry and restore only the requested part. The user can also "
+        "revert an edit or a whole session from the app's AI Changes tab.\n"
+        + footer
+    )
+    serial = (
+        "---\n"
+        "name: serial-monitor-output\n"
+        "description: \"How MCU Flasher's Serial Monitor shows a sketch's Serial output: the baud it follows, line endings, "
+        "clearing, and the ANSI color palette (30-37/90-97 text, 40-47/100-107 backgrounds). Use when writing Serial "
+        "diagnostics or colored output.\"\n"
+        "---\n\n"
+        "# Serial Monitor output\n\n"
+        "- **Baud**: after an upload the monitor follows the sketch's `Serial.begin(rate)`. Keep one literal rate in a root "
+        "source (for example `Serial.begin(115200);`). The monitor offers exactly the Arduino IDE's rates: 300, 600, 750, "
+        "1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880, 115200, 230400, 250000, 460800, 500000, 921600, "
+        "1000000 and 2000000; use one of them.\n"
+        "- **Input**: the Send bar adds the line ending the user picked (none, newline, carriage return or both). Read "
+        "with `Serial.readStringUntil('\\n')` and `trim()` the result.\n"
+        "- **Timestamps** are added by the monitor when the user turns them on; do not print your own unless asked.\n"
+        "- **Clearing**: `\\033[2J` clears the monitor's view when that option is on.\n\n"
+        "## ANSI colors\n"
+        "The monitor paints ANSI SGR sequences (`ESC [ codes m`) with a real 16-color palette. Normal and bright colors "
+        "stay distinct, a black or white background is black or white, and text is kept readable on the user's theme.\n\n"
+        "| Codes | Meaning |\n"
+        "|---|---|\n"
+        "| 0 | reset everything |\n"
+        "| 1, 2, 3, 4, 7, 9 | bold, dim, italic, underline, inverse, strikethrough (22-29 undo them) |\n"
+        "| 30-37 | text: black, red, green, yellow, blue, magenta, cyan, white |\n"
+        "| 90-97 | bright text in the same order |\n"
+        "| 40-47, 100-107 | normal and bright backgrounds |\n"
+        "| 39, 49 | default text, default background |\n"
+        "| 38;5;n / 48;5;n, 38;2;r;g;b / 48;2;r;g;b | 256-color and truecolor text / background |\n\n"
+        "Helpers for any `Print` (Serial, Serial1, ...):\n\n"
+        "```cpp\n"
+        "constexpr uint8_t C_RST = 0;\n"
+        "constexpr uint8_t C_RED = 31,  C_GREEN = 32,  C_YELLOW = 33,  C_BLUE = 34;   // +60: bright (91-94)\n"
+        "constexpr uint8_t BG_BLUE = 44, BG_RED = 41;                                 // +60: bright (101, 104)\n\n"
+        "inline void ansiSet(Print &out, uint8_t code) { out.print(\"\\033[\"); out.print(code); out.print('m'); }\n"
+        "inline void ansiSet(Print &out, uint8_t fg, uint8_t bg) {\n"
+        "  out.print(\"\\033[\"); out.print(fg); out.print(';'); out.print(bg); out.print('m');\n"
+        "}\n"
+        "inline void ansiReset(Print &out) { ansiSet(out, C_RST); }\n\n"
+        "// ansiSet(Serial, 92); Serial.println(F(\"OK\")); ansiReset(Serial);\n"
+        "// ansiSet(Serial, 97, 44) -> ESC[97;44m\n"
+        "```\n\n"
+        "End every colored line with a reset (`ESC[0m`) so later output, and the next boot log, start plain. On AVR boards "
+        "wrap literal text in `F()` to keep it out of RAM.\n"
+        + footer
+    )
+    target = (
+        "---\n"
+        "name: mcu-sketch-target\n"
+        "description: \"Exact target and declared framework, architecture-specific GPIO/library constraints, upload transport and root firmware source boundaries.\"\n"
+        "---\n\n"
+        "# Microcontroller Target & Hardware Specifications\n\n"
+        "## Current Target & Live Hardware State\n"
+        "No board, port, baud rate, upload speed, platform, or FQBN is embedded here. Read current GUI state or `"
+        f"{PROJECT_BUILD_CACHE_DIR}/project_state.json` (read-only) when a task needs those values. If the requested value is unavailable, ask rather than guessing.\n\n"
+        "## Project State JSON Schema\n"
+        f"The `{PROJECT_BUILD_CACHE_DIR}/project_state.json` file contains a `hardware` block updated automatically in the background:\n"
+        "- `board_selected` (boolean): `true` if a board is currently selected in the GUI, `false` otherwise.\n"
+        "- `board_name` (string | null): Resolved board display name (e.g. `\"ESP32 Dev Module\"`, `\"Arduino Uno\"`).\n"
+        "- `mcu_connected` (boolean): `true` if a microcontroller is actively detected on a communication port, `false` otherwise.\n"
+        "- `port` (string | null): Operating system port device path (e.g. `\"COM4\"`, `\"/dev/ttyUSB0\"`).\n"
+        "- `port_name` (string | null): Active port device name (e.g. `\"COM4\"`, `\"/dev/ttyUSB0\"`).\n"
+        "- `port_number` (integer | null): Integer port index extracted from the device string (e.g. `4` for `COM4`, `0` for `/dev/ttyUSB0`).\n"
+        "- `platform` (string | null): Microcontroller platform identifier (e.g. `\"espressif32\"`, `\"espressif8266\"`, `\"atmelavr\"`).\n"
+        "- `framework` (string | null): Declared firmware framework (e.g. `\"arduino\"`).\n"
+        "- `baud_rate` (integer): Serial monitor baud rate (e.g. `115200`).\n\n"
+        "## Architecture-Specific Firmware Constraints\n\n"
+        "### ESP32 (ESP32-WROOM, ESP32-WROVER, ESP32-S2, ESP32-S3, ESP32-C3)\n"
+        "- **Strapping Pins**: Pay careful attention to boot strapping pins:\n"
+        "  - `GPIO 0`: Boot mode selection (LOW = UART download bootloader, HIGH = SPI boot/run). Avoid pulling LOW during normal boot.\n"
+        "  - `GPIO 2`: Must be left floating or pulled LOW during flashing on ESP32-WROOM modules.\n"
+        "  - `GPIO 12` (MTDI): Selects flash voltage (LOW = 3.3V, HIGH = 1.8V). Pulling HIGH at boot will brick/brownout flash on 3.3V flash modules.\n"
+        "  - `GPIO 15` (MTDO): Boot log silencing (pull LOW to suppress ROM debug output).\n"
+        "  - Do not attach external pull-up/pull-down loads, sensors, or relays to strapping pins without verified circuit isolation.\n"
+        "- **Prohibited SPI Flash Pins**: `GPIO 6` through `GPIO 11` (CLK, SD0, SD1, SD2, SD3, CMD) connect directly to the integrated SPI flash IC. Never configure or use GPIO 6–11 in user firmware; accessing them will immediately crash the CPU.\n"
+        "- **ADC2 & WiFi Coexistence Conflict**: All ADC2 channels (`GPIO 0`, `GPIO 2`, `GPIO 4`, `GPIO 12`, `GPIO 13`, `GPIO 14`, `GPIO 15`, `GPIO 25`, `GPIO 26`, `GPIO 27`) share internal hardware with the Wi-Fi subsystem. When Wi-Fi is active (`WiFi.begin()`), `analogRead()` calls on ADC2 channels fail and return invalid readings. Always use ADC1 channels (`GPIO 32` through `GPIO 39`) for analog input whenever Wi-Fi is used.\n"
+        "- **Input-Only Pins (GPI)**: `GPIO 34`, `GPIO 35`, `GPIO 36` (SENSOR_VP), and `GPIO 39` (SENSOR_VN) are input-only. They have no internal pull-up or pull-down resistors (`pinMode(pin, INPUT_PULLUP)` is unsupported). External pull resistors are required.\n\n"
+        "### ESP8266 (NodeMCU, Wemos D1 Mini, ESP-01)\n"
+        "- **Watchdog Timer (WDT) Starvation**: The single-core CPU handles WiFi, TCP/IP, and user code sequentially. Blocking loops longer than ~1–3 seconds cause hardware/software watchdog resets (`wdt reset`). In heavy loops, always call `yield()` or `delay(0)` to service WiFi and feed the watchdog.\n"
+        "- **Strapping & Boot Pins**: `GPIO 0` (must be HIGH for run mode, LOW for UART flash), `GPIO 2` (must be HIGH at boot), `GPIO 15` (must be pulled LOW at boot).\n"
+        "- **Deep Sleep Wake Connection**: To wake from `ESP.deepSleep()`, connect `GPIO 16` (D0 / WAKE) directly to the `RST` pin.\n\n"
+        "### AVR Architecture (Arduino Uno, Nano, Mega 2560, Leonardo)\n"
+        "- **SRAM Budget & F() Macro**: ATmega328P has only 2 KB of SRAM. Constant string literals placed in `Serial.print(\"...\")` consume SRAM by default. Always wrap string literals in the `F()` macro (e.g. `Serial.println(F(\"Message\"))`) to store them in Flash memory (PROGMEM).\n"
+        "- **Hardware UART Pins**: `GPIO 0` (RX) and `GPIO 1` (TX) are directly connected to the USB-serial bridge. Avoid using pins 0 and 1 for general I/O to prevent upload errors and corrupted serial monitoring.\n\n"
+        "### STM32 & RP2040 (Raspberry Pi Pico)\n"
+        "- **Native USB CDC**: Native USB CDC ports require a 1200 bps touch sequence to trigger bootloader mode. When waiting for serial output in `setup()`, use a non-blocking timeout: `while (!Serial && millis() < 3000);` so execution continues if no host serial monitor connects.\n\n"
+        "## Coding & File Boundaries\n"
+        "- **Exact target**: Use the resolved PlatformIO definition and declared framework. Arduino `.ino` sketches require Arduino; other frameworks need matching sources/libraries. Never substitute a family or invent hardware.\n"
+        "- **Host and ports**: Windows uses COM ports; Linux/macOS uses native device paths. USB/debug programmer targets may use native transports without a serial port.\n"
+        "- **Arduino / ESP32 Code**: Write high-quality, non-blocking Arduino C++ code.\n"
+        "- **Libraries**: Use standard Arduino libraries matching the architecture (e.g. `Adafruit_NeoPixel`, `FastLED`, `WiFi`, `BluetoothSerial`, `Wire`, `SPI`).\n"
+        "- **Pin Assignments**: Verify GPIO pin compatibility with the current board before assigning pins.\n"
+        f"- **File Boundary**: Firmware edits stay strictly in root sketch files (`*.ino`, `*.cpp`, `*.c`, `*.h`, `*.hpp`, `NOTE.txt`) relative to the active project. Never touch `{PROJECT_BUILD_CACHE_DIR}/`, `.pio/`, or other cache/toolchain folders.\n"
+    )
+
+    return {"sketch-workflow": workflow, "mcu-sketch-target": target + footer, "serial-monitor-output": serial}
+
+
+def _is_generated_skill(path: Path, name: str) -> bool:
+    """A skill file this app wrote: ours by marker, or an older generated copy of that name."""
+    try:
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 256 * 1024:
+            return False
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return _SKILL_MARKER in text or (f"name: {name}\n" in text and PROJECT_BUILD_CACHE_DIR in text)
+
+
+def _remove_generated_skills(root: Path, names) -> None:
+    """Retire this app's skills from an agent folder whose agent is gone; leave everything else."""
+    skills = root / "skills"
+    for name in names:
+        target = skills / name / "SKILL.md"
+        if _is_generated_skill(target, name):
+            try:
+                ensure_file_writable(target)
+                target.unlink()
+            except OSError:
+                continue
+        for folder in (skills / name,):
+            try:
+                folder.rmdir()          # Only when nothing else is in it.
+            except OSError:
+                pass
+    for folder in (skills, root):
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
+def _install_sketch_skills(s_dir: Path) -> None:
+    """Write the sketch skills for every installed coding agent and retire them for the others."""
+    skills = _sketch_skills()
+    installed = _installed_agent_ids()
+    wanted = {folder for agent_id, folder in _AGENT_SKILL_FOLDERS if agent_id in installed}
+    for folder in dict.fromkeys(folder for _agent_id, folder in _AGENT_SKILL_FOLDERS):
+        root = s_dir / folder
+        if folder not in wanted:
+            _remove_generated_skills(root, skills)
+            continue
+        try:
+            for name, content in skills.items():
+                target = root / "skills" / name / "SKILL.md"
+                if target.exists() and not _is_generated_skill(target, name):
+                    continue        # A skill of the user's own with that name stays.
+                target.parent.mkdir(parents=True, exist_ok=True)
+                write_generated_text(target, content)
+            hide_generated_directory(root)
+        except OSError:
+            pass
+    if "hermes" in installed:
+        try:
+            from main.core.ai_agents import isolation
+            place = isolation("hermes")
+            if place is not None and place.data.is_dir():
+                for name, content in skills.items():
+                    target = place.data / "skills" / "mcu-flasher" / name / "SKILL.md"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    write_generated_text(target, content)
+        except OSError:
+            pass
+
 
 def get_sketch_files_fast(sketch_dir, supported_extensions=None, *, strict=False) -> list[Path]:
     """Perform an optimized, shallow-pruned directory walk over sketch_dir.

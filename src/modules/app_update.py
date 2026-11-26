@@ -105,7 +105,7 @@ _WINDOWS_RESERVED_BASENAMES = frozenset((
 _PROTECTED_TOP_LEVEL = frozenset((
     ".git", ".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode",
     ".clangd", ".opencode", "temp", "logs", "env", ".venv", ".venv-linux",
-    ".venv-macos", ".ubuntu-tools", ".macos-tools", "index_json", "installers",
+    ".venv-macos", ".ubuntu-tools", ".macos-tools", ".ai-agents", "index_json", "installers",
 ))
 _PROTECTED_DYNAMIC_FILES = frozenset((
     "src/dbs/bootstrap_config.json",

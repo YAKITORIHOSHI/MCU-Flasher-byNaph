@@ -96,7 +96,9 @@ class HygieneChecks(unittest.TestCase):
         self.assertNotIn(self.project / ".vscode", [c.args[0] for c in directory.call_args_list])
 
     def test_instruction_generation_repeated_writes_remain_readable(self):
-        with patch.object(file_utils, "SCRIPT_DIR", self.project / "app"):
+        # Codex installed beside the built-in OpenCode: .agents/skills is written too.
+        with patch.object(file_utils, "SCRIPT_DIR", self.project / "app"), \
+                patch.object(file_utils, "_installed_agent_ids", return_value=frozenset({"opencode", "codex"})):
             file_utils.ensure_hidden_read_first_md(self.project)
             file_utils.ensure_hidden_read_first_md(self.project)
         agents = self.project / "AGENTS.md"
@@ -114,7 +116,7 @@ class HygieneChecks(unittest.TestCase):
         target = (self.project / ".agents/skills/mcu-sketch-target/SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn(str(self.project.resolve()), workflow)
         self.assertNotIn(str(self.project.resolve()), target)
-        self.assertIn("Hardware values are not fixed", workflow)
+        self.assertIn("Board, port and speeds change while the app runs", workflow)
         self.assertIn("No board, port, baud rate, upload speed, platform, or FQBN is embedded", target)
         if sys.platform == "win32":
             for name in ("AGENTS.md", ".opencodeignore", ".opencode", ".agents"):

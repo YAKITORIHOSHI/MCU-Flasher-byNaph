@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 
 const FILE: &str = "window.json";
 const LIMIT: u64 = 16 * 1024;
-pub const BAUD_RATES: [u32; 14] = [
-    300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880, 115200, 230400, 250000, 460800, 921600,
+/// Exactly the Arduino IDE Serial Monitor's rates (`main.core.constants.ARDUINO_IDE_BAUD_RATES`).
+pub const BAUD_RATES: [u32; 20] = [
+    300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880, 115200, 230400, 250000,
+    460800, 500000, 921600, 1000000, 2000000,
 ];
-pub const UPLOAD_SPEEDS: [u32; 7] = [9600, 19200, 57600, 115200, 230400, 460800, 921600];
+pub const UPLOAD_SPEEDS: [u32; 8] = [9600, 19200, 57600, 115200, 230400, 460800, 512000, 921600];
 pub const DEFAULT_SIZE: [f32; 2] = [1140.0, 800.0];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -153,6 +155,16 @@ mod verification {
         let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
         assert_eq!(files.len(), 1, "No temporary file may remain");
         std::fs::remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn the_baud_menu_is_the_arduino_ides_and_upload_keeps_512000() {
+        assert!(!BAUD_RATES.contains(&512000) && UPLOAD_SPEEDS.contains(&512000));
+        assert!(BAUD_RATES.contains(&31250) && BAUD_RATES.contains(&2000000));
+        assert!(BAUD_RATES.windows(2).all(|pair| pair[0] < pair[1]), "The menu lists rates in order");
+        assert!(UPLOAD_SPEEDS.windows(2).all(|pair| pair[0] < pair[1]), "The menu lists speeds in order");
+        let chosen = Preferences { baud: 512000, upload_speed: 512000, ..Preferences::default() }.repaired();
+        assert_eq!((chosen.baud, chosen.upload_speed), (Preferences::default().baud, 512000));
     }
 
     #[test]

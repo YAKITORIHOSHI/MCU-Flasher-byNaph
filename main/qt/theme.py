@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from main.core.theme import get_palette
+from main.core.theme import _palette_key, get_palette, glass_material
 
 # Resolve project root for font paths
 _this_file = Path(__file__).resolve()
@@ -33,7 +33,7 @@ def install_no_focus_lines(app=None) -> bool:
     """
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import (QAbstractButton, QAbstractSlider, QApplication, QComboBox,
-                                   QProxyStyle, QTabBar, QTabWidget)
+                                   QLabel, QProxyStyle, QTabBar, QTabWidget)
 
     app = app or QApplication.instance()
     if app is None or app.property("mcuNoFocusLinesInstalled"):
@@ -51,6 +51,8 @@ def install_no_focus_lines(app=None) -> bool:
             return super().standardIcon(standard, option, widget)
 
         def polish(self, target):
+            if isinstance(target, QLabel) and target.metaObject().className() == "QTipLabel":
+                theme_tooltip(target)
             if (isinstance(target, (QAbstractButton, QAbstractSlider, QTabBar, QTabWidget))
                     or (isinstance(target, QComboBox) and not target.isEditable())):
                 target.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -66,6 +68,57 @@ def install_no_focus_lines(app=None) -> bool:
     app.setStyle(NoFocusLineStyle("Fusion"))
     app.setProperty("mcuNoFocusLinesInstalled", True)
     return True
+
+
+def _mix(base: str, over: str, amount: float) -> str:
+    a, b = base.lstrip("#"), over.lstrip("#")
+    return "#" + "".join(f"{round(int(a[i:i + 2], 16) * (1 - amount) + int(b[i:i + 2], 16) * amount):02x}"
+                         for i in (0, 2, 4))
+
+
+def _rgba(color: str, alpha: int) -> str:
+    value = color.lstrip("#")
+    return f"rgba({int(value[0:2], 16)}, {int(value[2:4], 16)}, {int(value[4:6], 16)}, {alpha})"
+
+
+def tooltip_sheet(theme_mode: str = "default") -> str:
+    """A tooltip in the theme's glass: nearly opaque (it floats over anything), lit on top."""
+    pal = get_palette(theme_mode)
+    material = glass_material(theme_mode)
+    light = _palette_key(theme_mode) == "light"
+    if light:
+        top, bottom = _mix("#ffffff", material["tint"], .5), _mix("#eef3f9", material["edge"], .06)
+        rim, spec, floor = _rgba(material["edge"], 118), _rgba("#ffffff", 255), _rgba(material["caustic"], 70)
+    else:
+        base = pal.get("BG_MID", "#1c2333")
+        top = _mix(base, material["tint"], .16)
+        bottom = _mix(pal.get("BG_DARK", "#151922"), material["tint"], .06)
+        rim, spec, floor = _rgba(material["edge"], 86), _rgba(material["spec"], 120), _rgba(material["caustic"], 96)
+    return (f"QToolTip, QLabel {{ color: {pal.get('TEXT_BRIGHT', '#ffffff')}; font-size: 11px; padding: 5px 9px;"
+            f" border: 1px solid {rim}; border-top-color: {spec}; border-bottom-color: {floor};"
+            f" border-radius: 8px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            f" stop:0 {_rgba(top, 250)}, stop:1 {_rgba(bottom, 246)}); }}")
+
+
+def theme_tooltip(tip) -> None:
+    """Give a tooltip its own theme sheet as Qt creates it.
+
+    A tooltip belongs to the widget under the mouse, so a panel's ``QLabel`` rule (often
+    ``background: transparent``) outranks the application's ``QToolTip`` rule and left a
+    bare black or white box. Its own sheet outranks both. Applied while Qt polishes the new
+    label, before its window exists, so its rounded corners can be transparent.
+    """
+    from PySide6.QtCore import Qt
+    from main.core.theme import Theme
+    mode = str(getattr(Theme, "active_theme", "") or "default")
+    sheet = tooltip_sheet(mode)
+    # Qt resets each shown tooltip's sheet to "/* */" so it inherits from the hovered
+    # widget, then polishes it again; this puts the theme sheet back every time.
+    if tip.styleSheet() == sheet:
+        return
+    if not tip.testAttribute(Qt.WidgetAttribute.WA_WState_Created):
+        tip.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    tip.setStyleSheet(sheet)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,17 +176,25 @@ def _lit(top: str, bottom: str) -> str:
     return f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:1 {bottom})"
 
 
-def _liquid(top: str, middle: str, bottom: str) -> str:
+def _liquid(top: str, middle: str, bottom: str, spec: str | None = None) -> str:
     """Liquid Glass body: lit where light enters, clear through the middle, and a
-    softer return along the bottom where the sheet's thickness bends light back."""
-    return (f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:0.52 {middle}, "
-            f"stop:1 {bottom})")
+    softer return along the bottom where the sheet's thickness bends light back.
+
+    ``spec`` is the light caught just inside the top edge: a thin band above the body, so
+    the button's outline stays its own line on any surface.
+    """
+    if spec is None:
+        return (f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {top}, stop:0.52 {middle}, "
+                f"stop:1 {bottom})")
+    return (f"qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {spec}, stop:0.1 {top}, "
+            f"stop:0.52 {middle}, stop:1 {bottom})")
 
 
 def liquid_button_sheet(theme_mode: str = "default", role: str = "glass", *, radius: int = 12,
                         selector: str = "QPushButton", font_size: int = 12,
                         padding: str = "4px 16px") -> str:
-    """One Liquid Glass action: a specular top edge, a clear body and a lensed bottom.
+    """One Liquid Glass action in the theme's own glass: an outline on every side, the light
+    caught just inside its top, a clear body and the theme's accent along its lower edge.
 
     ``role`` is "glass" (neutral), "accent" (the primary action) or "danger".
     Use a radius of half the button's height for a capsule.
@@ -142,18 +203,22 @@ def liquid_button_sheet(theme_mode: str = "default", role: str = "glass", *, rad
     tokens = glass_tokens(theme_mode)
     bright = pal.get("TEXT_BRIGHT", "#ffffff")
     cyan, red = pal.get("CYAN", "#00d2ff"), pal.get("RED", "#e74c3c")
+    inner = tokens["button_inner"]
     if role == "accent":
-        fill = _liquid(tokens["accent_top"], tokens["accent_bottom"], tokens["accent_top"])
-        hover = _liquid(tokens["accent_hover_top"], tokens["accent_hover_bottom"], tokens["accent_hover_top"])
+        fill = _liquid(tokens["accent_top"], tokens["accent_bottom"], tokens["accent_top"], tokens["accent_inner"])
+        hover = _liquid(tokens["accent_hover_top"], tokens["accent_hover_bottom"], tokens["accent_hover_top"],
+                        tokens["accent_inner"])
         rim, lit_rim = pal.get("BORDER_LIT", cyan), cyan
+        spec, floor = tokens["accent_spec"], pal.get("BORDER_LIT", cyan)
     elif role == "danger":
-        fill = _liquid(_translucent(red, 120), _translucent(red, 64), _translucent(red, 96))
-        hover = _liquid(_translucent(red, 160), _translucent(red, 96), _translucent(red, 130))
+        fill = _liquid(_translucent(red, 120), _translucent(red, 64), _translucent(red, 96), inner)
+        hover = _liquid(_translucent(red, 160), _translucent(red, 96), _translucent(red, 130), inner)
         rim, lit_rim = _translucent(red, 180), red
+        spec, floor = tokens["danger_spec"], _translucent(red, 200)
     else:
         fill, hover = tokens["button"], tokens["button_hover"]
         rim, lit_rim = tokens["button_rim"], pal.get("BORDER_LIT", cyan)
-    spec, floor = tokens["button_spec"], tokens["button_floor"]
+        spec, floor = tokens["button_spec"], tokens["button_floor"]
     return f"""
 {selector}:enabled {{
     background: {fill}; color: {bright}; border: 1px solid {rim};
@@ -162,7 +227,7 @@ def liquid_button_sheet(theme_mode: str = "default", role: str = "glass", *, rad
 }}
 {selector}:enabled:hover {{
     background: {hover}; color: {bright}; border: 1px solid {lit_rim};
-    border-top-color: {spec}; border-radius: {radius}px;
+    border-radius: {radius}px;
 }}
 {selector}:enabled:pressed {{
     background: {tokens["button_pressed"]}; color: {bright}; border: 1px solid {lit_rim};
@@ -170,7 +235,7 @@ def liquid_button_sheet(theme_mode: str = "default", role: str = "glass", *, rad
 }}
 {selector}:disabled {{
     background: {tokens["button_disabled_liquid"]}; color: {tokens["disabled_ink"]};
-    border: 1px solid {_translucent(bright, 26)}; border-top-color: {tokens["button_disabled_spec"]};
+    border: 1px solid {tokens["button_disabled_rim"]}; border-top-color: {tokens["button_disabled_spec"]};
     border-radius: {radius}px;
     padding: {padding}; font-size: {font_size}px; font-weight: 600;
 }}
@@ -186,47 +251,58 @@ def css_color(value: str) -> str:
 
 
 def glass_tokens(theme_mode: str = "default") -> dict[str, str]:
-    """Fills for surfaces over the window's scene. Everything here is translucent but the chip."""
+    """Fills for surfaces over the window's scene, all in the theme's own glass (see
+    main.core.theme.glass_material). Everything here is translucent but the chip."""
     pal = get_palette(theme_mode)
+    material = glass_material(theme_mode)
+    tint, spec, edge, caustic = material["tint"], material["spec"], material["edge"], material["caustic"]
     bright, cyan = pal.get("TEXT_BRIGHT", "#ffffff"), pal.get("CYAN", "#00d2ff")
+    red = pal.get("RED", "#e74c3c")
     deepest = pal.get("BG_DARKEST", "#0d1117")
-    values = {"selected": _translucent(cyan, 44), "rim": _translucent(bright, 46),
-              "selection": _translucent(cyan, 76), "hover": _translucent(bright, 22)}
-    if theme_mode == "light":
-        values.update(glass="rgba(255, 255, 255, 96)", glass_highlight="rgba(255, 255, 255, 170)",
+    glassy = _translucent
+    values = {"selected": glassy(cyan, 44), "selection": glassy(cyan, 76)}
+    if _palette_key(theme_mode) == "light":
+        # Frost: white glass that keeps a steel hairline on every side. Its caught light sits
+        # inside the top edge, because a white line on a white sheet is no line at all.
+        values.update(glass=glassy(tint, 96), glass_highlight=glassy(tint, 170), rim=glassy(edge, 76),
+                      sheet_spec=glassy(edge, 112),
+                      hover=glassy(edge, 26),
                       reading="rgba(255, 255, 255, 176)", reading_alt="rgba(255, 255, 255, 70)",
                       reading_rim="rgba(255, 255, 255, 210)", well="rgba(255, 255, 255, 190)",
                       chip=cyan, chip_ink="#ffffff", handle=_translucent(bright, 88),
-                      button=_liquid("rgba(255, 255, 255, 232)", "rgba(255, 255, 255, 146)",
-                                     "rgba(255, 255, 255, 192)"),
-                      button_hover=_liquid("rgba(255, 255, 255, 255)", "rgba(255, 255, 255, 196)",
-                                           "rgba(255, 255, 255, 226)"),
-                      button_spec="rgba(255, 255, 255, 255)", button_floor="rgba(31, 35, 40, 46)",
-                      button_disabled_liquid=_liquid("rgba(255, 255, 255, 150)", "rgba(255, 255, 255, 76)",
-                                                     "rgba(255, 255, 255, 112)"),
-                      button_disabled_spec="rgba(255, 255, 255, 200)",
-                      button_pressed="rgba(255, 255, 255, 96)", button_disabled="rgba(255, 255, 255, 72)",
-                      button_rim=_translucent(bright, 58), disabled_ink="#5f6b76",
+                      button=_liquid(glassy(tint, 232), glassy(tint, 146), glassy(tint, 196), glassy(spec, 255)),
+                      button_hover=_liquid(glassy(tint, 255), glassy(tint, 200), glassy(tint, 228), glassy(spec, 255)),
+                      button_inner=glassy(spec, 150),
+                      button_spec=glassy(edge, 136), button_floor=glassy(edge, 168),
+                      button_rim=glassy(edge, 124),
+                      button_disabled_liquid=_liquid(glassy(tint, 150), glassy(tint, 76), glassy(tint, 112)),
+                      button_disabled_spec=glassy(edge, 64), button_disabled_rim=glassy(edge, 72),
+                      button_pressed=glassy(edge, 40), button_disabled="rgba(255, 255, 255, 72)",
+                      disabled_ink="#5f6b76",
                       accent_top=_translucent(cyan, 66), accent_bottom=_translucent(cyan, 30),
-                      accent_hover_top=_translucent(cyan, 96), accent_hover_bottom=_translucent(cyan, 50))
+                      accent_hover_top=_translucent(cyan, 96), accent_hover_bottom=_translucent(cyan, 50),
+                      accent_inner=glassy(spec, 190), accent_spec=glassy(cyan, 200), danger_spec=glassy(red, 220))
     else:
-        values.update(glass="rgba(255, 255, 255, 10)", glass_highlight="rgba(255, 255, 255, 18)",
-                      reading=_translucent(deepest, 170), reading_alt="rgba(255, 255, 255, 8)",
-                      reading_rim="rgba(255, 255, 255, 34)", well=_translucent(deepest, 150),
+        # Smoked and sea glass: the theme's tint, its light caught along the top and the
+        # theme's accent returning along the lower edge.
+        values.update(glass=glassy(tint, 12), glass_highlight=glassy(tint, 22), rim=glassy(edge, 52),
+                      sheet_spec=glassy(spec, 92),
+                      hover=glassy(tint, 24),
+                      reading=_translucent(deepest, 170), reading_alt=glassy(tint, 9),
+                      reading_rim=glassy(edge, 36), well=_translucent(deepest, 150),
                       chip=bright, chip_ink=deepest, handle=_translucent(bright, 74),
-                      button=_liquid("rgba(255, 255, 255, 26)", "rgba(255, 255, 255, 7)",
-                                     "rgba(255, 255, 255, 16)"),
-                      button_hover=_liquid("rgba(255, 255, 255, 38)", "rgba(255, 255, 255, 14)",
-                                           "rgba(255, 255, 255, 24)"),
-                      button_spec="rgba(255, 255, 255, 128)", button_floor="rgba(255, 255, 255, 30)",
-                      button_disabled_liquid=_liquid("rgba(255, 255, 255, 14)", "rgba(255, 255, 255, 4)",
-                                                     "rgba(255, 255, 255, 9)"),
-                      button_disabled_spec="rgba(255, 255, 255, 58)",
-                      button_pressed="rgba(0, 0, 0, 64)", button_disabled="rgba(255, 255, 255, 8)",
-                      button_rim="rgba(255, 255, 255, 62)",
-                      disabled_ink="#a3b6c9" if theme_mode == "default" else "#a8c2c8",
+                      button=_liquid(glassy(tint, 30), glassy(tint, 8), glassy(tint, 18), glassy(spec, 72)),
+                      button_hover=_liquid(glassy(tint, 44), glassy(tint, 16), glassy(tint, 28), glassy(spec, 100)),
+                      button_inner=glassy(spec, 64),
+                      button_spec=glassy(spec, 150), button_floor=glassy(caustic, 110),
+                      button_rim=glassy(edge, 72),
+                      button_disabled_liquid=_liquid(glassy(tint, 14), glassy(tint, 4), glassy(tint, 9)),
+                      button_disabled_spec=glassy(spec, 58), button_disabled_rim=glassy(edge, 30),
+                      button_pressed="rgba(0, 0, 0, 64)", button_disabled=glassy(tint, 8),
+                      disabled_ink="#a3b6c9" if _palette_key(theme_mode) == "default" else "#a8c2c8",
                       accent_top=_translucent(cyan, 72), accent_bottom=_translucent(cyan, 34),
-                      accent_hover_top=_translucent(cyan, 104), accent_hover_bottom=_translucent(cyan, 60))
+                      accent_hover_top=_translucent(cyan, 104), accent_hover_bottom=_translucent(cyan, 60),
+                      accent_inner=glassy(spec, 84), accent_spec=glassy(spec, 170), danger_spec=glassy(spec, 150))
     return values
 
 
@@ -313,6 +389,11 @@ def build_stylesheet(theme_mode: str = "default") -> str:
     disabled_liquid, disabled_spec = glass_values["button_disabled_liquid"], glass_values["button_disabled_spec"]
     accent_top, accent_bottom = glass_values["accent_top"], glass_values["accent_bottom"]
     accent_hover_top, accent_hover_bottom = glass_values["accent_hover_top"], glass_values["accent_hover_bottom"]
+    accent_inner, accent_spec = glass_values["accent_inner"], glass_values["accent_spec"]
+    button_inner, danger_spec = glass_values["button_inner"], glass_values["danger_spec"]
+    disabled_rim = glass_values["button_disabled_rim"]
+    accent_fill = liquid(accent_top, accent_bottom, accent_top, accent_inner)
+    accent_hover_fill = liquid(accent_hover_top, accent_hover_bottom, accent_hover_top, accent_inner)
     glass_button_ids = ("btn-clean", "btn-reload", "btn-project", "btn-download", "btn-detach-editor",
                         "btn-toggle-editor", "btn-toggle-monitors", "btn-settings", "btn-ai-assistant",
                         "btn-copy-console", "btn-clear-console", "btn-serial-send", "btn-terminal-new",
@@ -1107,14 +1188,7 @@ QLabel[role="title"] {{
 }}
 
 /* ── ToolTip ─────────────────────────────────────────────────────────────── */
-QToolTip {{
-    background-color: {bg_light};
-    color: {text_bright};
-    border: 1px solid {border};
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 11px;
-}}
+{tooltip_sheet(theme_mode).replace("QToolTip, QLabel", "QToolTip")}
 
 /* ── ListWidget ───────────────────────────────────────────────────────────── */
 QListWidget {{
@@ -1327,52 +1401,55 @@ QPushButton#btn-terminal-open {{
 
 /* Primary actions: Liquid Glass accent capsules. */
 QPushButton[role="primary"]:enabled, QDialogButtonBox QPushButton:first-child:enabled {{
-    background: {liquid(accent_top, accent_bottom, accent_top)}; color: {text_bright};
-    border: 1px solid {border_lit}; border-top-color: {button_spec}; border-radius: 11px;
+    background: {accent_fill}; color: {text_bright};
+    border: 1px solid {border_lit}; border-top-color: {accent_spec}; border-radius: 11px;
 }}
 QPushButton[role="primary"]:enabled:hover, QDialogButtonBox QPushButton:first-child:enabled:hover {{
-    background: {liquid(accent_hover_top, accent_hover_bottom, accent_hover_top)}; color: {text_bright};
-    border: 1px solid {cyan}; border-top-color: {button_spec};
+    background: {accent_hover_fill}; color: {text_bright};
+    border: 1px solid {cyan}; border-top-color: {accent_spec};
 }}
 
-/* Actions are glass too: a lit fill and a rim, never a solid block. */
+/* Actions are the theme's glass too: an outline on every side, light caught inside the top,
+   and the theme's accent along the lower edge; never a solid block. */
 {buttons(glass_button_ids, ":enabled", plain=True)} {{
     background: {button}; color: {text_bright}; border: 1px solid {button_rim};
     border-top-color: {button_spec}; border-bottom-color: {button_floor}; border-radius: 11px;
 }}
 {buttons(glass_button_ids, ":enabled:hover", plain=True)} {{
     background: {button_hover}; color: {text_bright}; border: 1px solid {border_lit};
-    border-top-color: {button_spec};
 }}
 {buttons(glass_button_ids, ":enabled:pressed", plain=True)} {{
     background: {button_pressed}; color: {text_bright}; border: 1px solid {cyan};
 }}
 {buttons((*glass_button_ids, *accent_button_ids, "btn-stop"), ":disabled", plain=True)} {{
     background: {disabled_liquid}; color: {disabled_ink};
-    border: 1px solid {translucent(text_bright, 26)}; border-top-color: {disabled_spec}; border-radius: 11px;
+    border: 1px solid {disabled_rim}; border-top-color: {disabled_spec}; border-radius: 11px;
 }}
 {buttons(accent_button_ids, ":enabled")} {{
-    background: {liquid(accent_top, accent_bottom, accent_top)}; color: {text_bright};
-    border: 1px solid {border_lit}; border-top-color: {button_spec}; border-radius: 11px;
+    background: {accent_fill}; color: {text_bright};
+    border: 1px solid {border_lit}; border-top-color: {accent_spec}; border-radius: 11px;
 }}
 {buttons(accent_button_ids, ":enabled:hover")} {{
-    background: {liquid(accent_hover_top, accent_hover_bottom, accent_hover_top)}; color: {text_bright};
-    border: 1px solid {cyan}; border-top-color: {button_spec};
+    background: {accent_hover_fill}; color: {text_bright};
+    border: 1px solid {cyan}; border-top-color: {accent_spec};
 }}
 {buttons(accent_button_ids, ":enabled:pressed")} {{
     background: {accent_bottom}; color: {text_bright}; border: 1px solid {cyan};
 }}
 QPushButton#btn-stop:enabled {{
-    background: {liquid(translucent(red, 120), translucent(red, 62), translucent(red, 96))}; color: {text_bright};
-    border: 1px solid {red}; border-top-color: {button_spec}; border-radius: 11px;
+    background: {liquid(translucent(red, 120), translucent(red, 62), translucent(red, 96), button_inner)};
+    color: {text_bright}; border: 1px solid {red}; border-top-color: {danger_spec}; border-radius: 11px;
 }}
-QPushButton#btn-stop:enabled:hover {{ background: {lit(translucent(red, 150), translucent(red, 92))}; color: {text_bright}; }}
+QPushButton#btn-stop:enabled:hover {{
+    background: {liquid(translucent(red, 150), translucent(red, 92), translucent(red, 120), button_inner)};
+    color: {text_bright};
+}}
 QPushButton:checked, QDialog QPushButton:checked {{
-    background: {liquid(accent_top, accent_bottom, accent_top)}; border: 1px solid {cyan};
-    border-top-color: {button_spec}; color: {text_bright};
+    background: {accent_fill}; border: 1px solid {cyan};
+    border-top-color: {accent_spec}; color: {text_bright};
 }}
 QPushButton:checked:hover, QDialog QPushButton:checked:hover {{
-    background: {lit(accent_hover_top, accent_hover_bottom)}; border: 1px solid {border_lit}; color: {text_bright};
+    background: {accent_hover_fill}; border: 1px solid {border_lit}; color: {text_bright};
 }}
 QComboBox::down-arrow {{
     image: url("{_icon_arrow}"); width: 12px; height: 12px; border: none;

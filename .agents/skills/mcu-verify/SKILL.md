@@ -8,7 +8,14 @@ description: "Verify serial unplug and replug, one row per board, the assistant 
 New in the sweep: `verify_port_replug` (hotplug, handle ownership and noise),
 `verify_board_labels`, `verify_windows_components` (mocked hosts; native Windows
 prompts stay unverified until seen there), `verify_ai_revert` (owned sketches only)
-and `verify_ai_agents` (files and fake installers; never a real download or sign-in).
+and `verify_ai_agents` (files and fake installers; never a real download or sign-in;
+`internet_available` is patched), plus `verify_bootstrap_recovery` (a disposable store under
+`temp/`: interrupted preparations, leftover children, staged board cores),
+`verify_chip_probe` (simulated Optiboot and STK500v2 loaders, never a real port),
+`verify_tooltips` and `verify_baud_rates`. Settings fixtures patch every getter the
+dialog reads (`get_ai_assistant_scale` too): the user's own settings must not decide a
+result. A check inside a timer that answers a modal prompt clicks it in `finally`, or a
+failure hangs the verifier instead of failing it.
 Anything calling `start_agent` patches `last_agent`/`remember_agent`, which save to
 the user's settings. Lite's `verify_shared_store` requires Stop to stay off while
 Lite starts, a stale Stop to change nothing and closing to cancel safely.
@@ -238,7 +245,10 @@ failure pre-existing. Name fragments select verifiers by file name.
 - Bootstrap or package changes: `bootstrap offline package`.
 - GUI changes: `runtime responsive controls performance shutdown package_browser monitor_matrix glass
   interface_size taskbar_identity renderer_color_depth`.
-- Assistant changes: `assistant_startup ubuntu_ai_panel embedded_viewports`.
+- Assistant changes: `assistant_startup ubuntu_ai_panel embedded_viewports ai_agents`; prompt
+  provenance and AI Changes rows: `ai_changes ai_revert prompt_sources`. Serial colors: `ansi_styles`.
+- Before any push to `main` or release upload: the clean fresh check in the hygiene skill
+  (a `git archive` stage, isolated HOME/XDG first launch, no agent downloaded, Frost White).
 - Dropdowns: `combo_popups`, plus native `verify_ui_layout.py` at every scale.
   Include compact Actions/Options, alpha corner pixels, cached repaint and native
   Windows Settings open/close/heartbeat in `controls`. Sample source find and

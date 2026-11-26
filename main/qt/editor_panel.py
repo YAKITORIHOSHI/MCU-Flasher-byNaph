@@ -60,10 +60,8 @@ _WEBCHANNEL_INIT_JS = """
 def editor_page_background(theme_name: str) -> str:
     """Use the workspace reading surface during page startup and repaint."""
     from main.core.theme import Theme
-    name = (theme_name or "default").lower().strip().replace("-", "_")
-    if name in ("solarized", "solarize_dark"):
-        name = "solarized_dark"
-    return Theme.PALETTES.get(name, Theme.PALETTES["default"])["BG_DARKEST"]
+    from main.core.theme import _palette_key
+    return Theme.PALETTES[_palette_key(theme_name)]["BG_DARKEST"]
 
 
 def _editor_workspace(panel):
@@ -141,7 +139,6 @@ class EditorBridgeAPI(QObject):
     cloud_reload_finished = Signal(str, bool)
     cloud_project_files_ready = Signal(str, dict)
     _cloud_manifest_finished = Signal(str, dict)
-    _syntax_finished = Signal(dict)
     editor_storage_ready = Signal(str, str, dict)
     _editor_storage_finished = Signal(str, str, str, dict)
     navigation_ready = Signal(str, str, dict)
@@ -157,9 +154,6 @@ class EditorBridgeAPI(QObject):
         self._recovery_buffers = {}
         self._recovering_buffers = False
         self._renderer_token = ""
-        self._syntax_generation = 0
-        self._syntax_running = False
-        self._syntax_pending = None
         self._save_failure_count = 0
         self._cloud_manifest_running = False
         self._editor_storage_running = False
@@ -170,10 +164,6 @@ class EditorBridgeAPI(QObject):
         self._navigation_pending = None
         self._navigation_previews = set()
         self.destroyed.connect(self._navigator.close)
-        self._syntax_finished.connect(self._finish_syntax, Qt.ConnectionType.QueuedConnection)
-        self._project_diagnostics: list = []
-        from main.qt.signals import signals as sig_bus
-        sig_bus.syntax_errors.connect(self._remember_diagnostics)
         self._cloud_manifest_finished.connect(self._finish_cloud_manifest, Qt.ConnectionType.QueuedConnection)
         self._editor_storage_finished.connect(self._finish_editor_storage, Qt.ConnectionType.QueuedConnection)
         self._navigation_finished.connect(self._finish_navigation, Qt.ConnectionType.QueuedConnection)
@@ -512,73 +502,6 @@ class EditorBridgeAPI(QObject):
         if panel and hasattr(panel, "show_project_search"):
             panel.show_project_search()
 
-    @Slot(str, str, result=str)
-    def realtime_check_syntax(self, file_path: str, content: str) -> str:
-        """Coalesce edits; parsing never blocks the WebChannel/UI thread."""
-        self._syntax_generation += 1
-        self._syntax_pending = (self._syntax_generation, file_path, content)
-        self._start_syntax()
-        return "null"  # Results arrive through the queued marker signal.
-
-    @Slot(str, result=bool)
-    def realtime_check_buffer(self, file_path: str) -> bool:
-        """Reuse the recovery snapshot instead of transferring the file twice."""
-        content = self._buffer_snapshots.get(str(Path(file_path).resolve()))
-        if content is None:
-            return False  # A clean/new model still needs its initial source text.
-        self.realtime_check_syntax(file_path, content)
-        return True
-
-    def _start_syntax(self):
-        if self._syntax_running or self._syntax_pending is None:
-            return
-        generation, path, content = self._syntax_pending
-        self._syntax_pending = None
-        self._syntax_running = True
-        from src.syntax_checker import analyze_cpp_syntax, get_syntax_executor
-        def analyze():
-            result = {"generation": generation, "path": path}
-            try:
-                result["diagnostics"] = analyze_cpp_syntax(content, Path(path))
-            except Exception as exc:
-                result["error"] = str(exc)
-            try:
-                self._syntax_finished.emit(result)
-            except RuntimeError:
-                pass
-        try:
-            get_syntax_executor().submit(analyze)
-        except Exception as exc:
-            self._finish_syntax({"generation": generation, "path": path, "error": str(exc)})
-
-    @Slot(list)
-    def _remember_diagnostics(self, diagnostics: list) -> None:
-        """The list now shown, so checking one file keeps the other files' results."""
-        self._project_diagnostics = [entry for entry in diagnostics or [] if isinstance(entry, dict)]
-
-    def _with_other_files(self, path: str, diagnostics: list) -> list:
-        """One file's fresh results among the sketch's other files' latest ones."""
-        def name(value):
-            return os.path.normcase(str(value or "").replace("\\", "/").rsplit("/", 1)[-1])
-        checked = name(path)
-        others = [entry for entry in self._project_diagnostics if name(entry.get("file")) != checked]
-        if not others:
-            return diagnostics
-        return sorted(others + list(diagnostics), key=lambda entry: (
-            str(entry.get("file") or ""), entry["line"] if isinstance(entry.get("line"), int) else 0))
-
-    @Slot(dict)
-    def _finish_syntax(self, result):
-        self._syntax_running = False
-        if result["generation"] == self._syntax_generation and self._backend and str(self._backend.active_file_path) == result["path"]:
-            from main.qt.signals import signals
-            if "error" in result:
-                from uuid import uuid4
-                signals.notification.emit({"id": "notif_" + uuid4().hex, "title": "Syntax check failed", "message": result["error"], "type": "warning"})
-            else:
-                signals.syntax_errors.emit(self._with_other_files(result["path"], result["diagnostics"]))
-        self._start_syntax()
-
     @Slot(str)
     def set_active_file(self, file_path: str) -> None:
         """Monaco reports the active tab changed."""
@@ -616,10 +539,6 @@ class EditorBridgeAPI(QObject):
             self._buffer_snapshots[str(path)] = content
             if self._recovering_buffers and str(path) in self._recovery_buffers:
                 self._recovery_buffers[str(path)] = content
-            # Invalidate old diagnostics immediately, before the next debounce
-            # requests a parse. Otherwise stale markers can appear while typing.
-            self._syntax_generation += 1
-            self._syntax_pending = None
 
     @Slot(str, str)
     def update_editor_buffer(self, file_path: str, content: str):
@@ -719,8 +638,6 @@ class EditorBridgeAPI(QObject):
                                   for path, content in self._buffer_snapshots.items()}
         self._recovery_buffers = {paths.get(path, path): content
                                   for path, content in self._recovery_buffers.items()}
-        self._syntax_generation += 1
-        self._syntax_pending = None
 
     @Slot(result="QVariant")
     def request_new_file(self) -> dict:
@@ -1416,9 +1333,7 @@ class MonacoEditorPanel(QWidget):
         """Connect to global Qt signal bus."""
         sig_bus.editor_load_file.connect(self.open_file)
         sig_bus.editor_goto_line.connect(self.goto_line)
-        sig_bus.editor_goto_diagnostic.connect(self.goto_diagnostic)
         sig_bus.editor_set_theme.connect(self.set_theme)
-        sig_bus.syntax_errors.connect(self.set_markers)
         sig_bus.project_updated.connect(self._on_project_updated)
         sig_bus.project_files_updated.connect(self._on_project_files_updated)
         if hasattr(sig_bus, "editor_font_size_changed"):
@@ -1455,16 +1370,6 @@ class MonacoEditorPanel(QWidget):
         names = ", ".join(str(item.get("fileName", "")) for item in files[:3])
         self._view.page().runJavaScript(
             f"window.reloadRevertedFiles?.({json.dumps(paths)}, {json.dumps(changed)}, {json.dumps(names)})")
-
-    @Slot(list)
-    def set_markers(self, diagnostics: list) -> None:
-        """Forward diagnostic errors/warnings to Monaco inline squiggly markers."""
-        try:
-            diag_json = json.dumps(diagnostics)
-            js = f"if (typeof window.setEditorMarkers === 'function') {{ window.setEditorMarkers({json.dumps(diag_json)}); }}"
-            self._view.page().runJavaScript(js)
-        except Exception:
-            pass
 
     @Slot(dict)
     def _on_project_updated(self, payload: dict) -> None:
@@ -1554,8 +1459,6 @@ class MonacoEditorPanel(QWidget):
         """Apply only the affected tab while retaining every other source model."""
         if (not self._backend or payload.get("path") != str(self._backend.sketch_dir_path)):
             return
-        self._bridge._syntax_generation += 1
-        self._bridge._syntax_pending = None
         removed = payload.get("old_file") if payload.get("operation") == "rename" else (
             payload.get("file") if payload.get("operation") == "delete" else "")
         if removed:
@@ -1580,21 +1483,8 @@ class MonacoEditorPanel(QWidget):
         """Navigate to file and scroll to line in Monaco editor."""
         self.goto_location(file_path, line_no)
 
-    @Slot(dict)
-    def goto_diagnostic(self, diagnostic: dict) -> None:
-        """Reveal the exact diagnostic range at the top without reloading buffers."""
-        self._navigate_source({
-            "path": str(diagnostic.get("file") or ""),
-            "line": diagnostic.get("line", 1),
-            "column": diagnostic.get("col", 1),
-            "endLine": diagnostic.get("endLine"),
-            "endColumn": diagnostic.get("endCol"),
-            "columnEncoding": diagnostic.get("columnEncoding", "codepoint"),
-            "reveal": "top",
-        })
-
     def goto_location(self, file_path: str, line_no: int, column: int = 1, end_column: int = 1) -> None:
-        """Wait for file activation before positioning a search/syntax result."""
+        """Wait for file activation before positioning a search result."""
         line_no, column = max(1, int(line_no)), max(1, int(column))
         end_column = max(column, int(end_column))
         self._navigate_source({"path": str(file_path or ""), "line": line_no,

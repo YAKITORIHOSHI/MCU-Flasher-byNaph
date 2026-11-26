@@ -324,7 +324,8 @@ class WindowsPageChecks(PageFixture):
     def load_page(self, html=None):
         html = html if html is not None else windows_template()
         for key, value in (("__THEME_BG__", "#f8f9fa"), ("__THEME_FG__", "#24292f"),
-                           ("__THEME_CURSOR__", "#0969da"), ("__THEME_SELECTION__", "#d0d7de")):
+                           ("__THEME_CURSOR__", "#0969da"), ("__THEME_SELECTION__", "#d0d7de"),
+                           ("__FONT_SIZE__", "14")):
             html = html.replace(key, value)
         html = html.replace("/xterm/", "../assets/xterm/").replace("/assistant_readiness.js", "assistant_readiness.js")
         self.load_html(html)
@@ -557,6 +558,9 @@ class WindowsPanelChecks(unittest.TestCase):
         found = patch("main.core.ai_agents.installed_agents", return_value={"opencode": "C:/fixture/opencode.cmd"})
         found.start()
         self.addCleanup(found.stop)
+        network = patch("main.core.ai_agents.internet_available", return_value=True)
+        network.start()
+        self.addCleanup(network.stop)
         self.panel = ai_panel.AIPanel(SimpleNamespace(sketch_dir_path=str(self.root)))
         self.addCleanup(self.panel.deleteLater)
         self.panel._proc = SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda timeout=None: 0)

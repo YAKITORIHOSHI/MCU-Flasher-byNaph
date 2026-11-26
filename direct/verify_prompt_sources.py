@@ -113,7 +113,8 @@ class PromptSourceChecks(unittest.TestCase):
 
     def send_terminal(self, server, data):
         socket = FixtureSocket(dict(type="input", shell="fixture", data=data))
-        with patch("src.modules.ai_prompt_context.assistant_process_active", return_value=True):
+        # The terminal runs Codex: its executable names the agent.
+        with patch("src.modules.ai_prompt_context.assistant_process_agent", return_value="codex"):
             asyncio.run(server.websocket_handler(socket))
 
     def test_windows_project_terminal_cli_restart_discards_partial_old_prompt(self):
@@ -128,6 +129,7 @@ class PromptSourceChecks(unittest.TestCase):
         self.send_terminal(server, INPUT)
         shell.pty.write.assert_called_once_with(INPUT)
         self.assertEqual(self.payload()["source"], "cli")
+        self.assertEqual(self.payload()["agent"], "codex", "A terminal prompt names the CLI that runs there")
         self.assertEqual(self.payload()["sourceVersion"], 1)
         self.assertEqual(self.payload()["prompt"], PROMPT)
         server._stop_session("fixture")
@@ -156,7 +158,7 @@ class PromptSourceChecks(unittest.TestCase):
                 finished.set()
 
             with patch.object(PromptInputTracker, "_publish", publish), \
-                    patch("src.modules.ai_prompt_context.assistant_process_active", side_effect=AssertionError("Explicit active context needs no scan")):
+                    patch("src.modules.ai_prompt_context.assistant_process_agent", side_effect=AssertionError("Explicit active context needs no scan")):
                 observer.feed(INPUT, 17)
                 self.assertTrue(finished.wait(2), "Observation did not publish after overflow")
                 payload = self.payload()
@@ -196,7 +198,7 @@ class PromptSourceChecks(unittest.TestCase):
                     if not session._input_bytes:
                         break
                 self.assertEqual(bytes(transmitted), INPUT.encode("utf-8"))
-                create.assert_called_once_with(str(self.root), active=True, source=source)
+                create.assert_called_once_with(str(self.root), active=True, source=source, agent=None)
                 observer.feed.assert_called_once_with(INPUT, 17)
                 session.close()
                 observer.close.assert_called_once()

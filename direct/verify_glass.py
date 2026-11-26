@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QMainWindow, QMenuBar,
                                QStatusBar, QTabWidget, QToolBar, QVBoxLayout, QWidget)
 
 from main.core.log_colors import contrast_ratio, glass_inks, themed_log_colors
-from main.core.theme import Theme, glass_worst
+from main.core.theme import Theme, glass_material, glass_worst
 from main.qt import glass
 from main.qt.setup_components import GlassCard
 from main.qt.theme import build_stylesheet, css_color, get_palette, glass_tokens, install_no_focus_lines
@@ -332,9 +332,10 @@ class Scene(unittest.TestCase):
                     rgb = ((pixel >> 16) & 255, (pixel >> 8) & 255, pixel & 255)
                     if frost is None or (level(rgb) < level(frost) if light else level(rgb) > level(frost)):
                         frost = rgb
-            white = (255, 255, 255)
-            sheet = over(white, 92 / 255, frost) if light else over(
-                white, glass.SHEET_TINT_TOP / 255, over(white, glass.SHEET_REFLECTION / 255, frost))
+            material = glass_material(mode)
+            tint, spec = (tuple(QColor(material[key]).getRgb()[:3]) for key in ("tint", "spec"))
+            sheet = over(tint, 92 / 255, frost) if light else over(
+                tint, glass.SHEET_TINT_TOP / 255, over(spec, glass.SHEET_REFLECTION / 255, frost))
             tokens = glass_tokens(mode)
             reading = over(*token(tokens["reading"]), sheet)
             well = over(*token(tokens["well"]), sheet)

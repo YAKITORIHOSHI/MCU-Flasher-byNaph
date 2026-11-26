@@ -56,15 +56,6 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-# Scintilla indicator constants
-SCI_INDICSETSTYLE = 2028
-SCI_INDICSETFORE = 2029
-SCI_SETINDICATORCURRENT = 2500
-SCI_INDICATORCLEARRANGE = 2501
-SCI_INDICATORFILLRANGE = 2502
-SCI_POSITIONFROMLINE = 2167
-SCI_GETTEXTLENGTH = 2183
-
 # --------------------------------------------------------------------------
 # Arduino API Vocabulary
 # --------------------------------------------------------------------------
@@ -156,12 +147,7 @@ class ArduinoEditor(QsciScintilla):
         self._configure_autocomplete()
         self._configure_edge_mode()
         self._configure_performance()
-        self._configure_indicators()
 
-        self.textChanged.connect(self._on_text_changed)
-        self._syntax_timer = QTimer_cls(self)
-        self._syntax_timer.setSingleShot(True)
-        self._syntax_timer.timeout.connect(self._run_local_syntax_check)
 
         # Keyboard-only zoom shortcuts (Ctrl+Plus/Minus/Equal)
         # pyrefly: ignore [missing-import]
@@ -298,53 +284,6 @@ class ArduinoEditor(QsciScintilla):
         except Exception:
             pass
 
-    def _configure_indicators(self):
-        # Setup indicator 8 (Error: Red wavy underline)
-        self.SendScintilla(SCI_INDICSETSTYLE, 8, 3) # INDIC_SQUIGGLY = 3
-        self.SendScintilla(SCI_INDICSETFORE, 8, QColor(220, 50, 50)) # Red color
-
-        # Setup indicator 9 (Warning: Orange wavy underline)
-        self.SendScintilla(SCI_INDICSETSTYLE, 9, 3) # INDIC_SQUIGGLY = 3
-        self.SendScintilla(SCI_INDICSETFORE, 9, QColor(220, 150, 50)) # Orange color
-
-    def set_syntax_indicators(self, errors):
-        length = self.SendScintilla(SCI_GETTEXTLENGTH)
-        self.SendScintilla(SCI_SETINDICATORCURRENT, 8)
-        self.SendScintilla(SCI_INDICATORCLEARRANGE, 0, length)
-        self.SendScintilla(SCI_SETINDICATORCURRENT, 9)
-        self.SendScintilla(SCI_INDICATORCLEARRANGE, 0, length)
-        
-        text = self.text()
-        text_len = len(text)
-        
-        for err in errors:
-            line = err.get("line", 1) - 1
-            col = err.get("col", 1) - 1
-            severity = err.get("severity", "error")
-            
-            line_start = self.SendScintilla(SCI_POSITIONFROMLINE, line)
-            if line_start < 0:
-                continue
-            pos = line_start + col
-            if pos >= text_len:
-                continue
-                
-            # Determine word/token length to highlight
-            indicator_len = 1
-            if err.get("endCol") and err.get("col") and err.get("endLine", err.get("line")) == err.get("line"):
-                indicator_len = max(1, err["endCol"] - err["col"])
-            else:
-                idx = pos
-                while idx < text_len and (text[idx].isalnum() or text[idx] == '_'):
-                    idx += 1
-                word_len = idx - pos
-                if word_len > 0:
-                    indicator_len = word_len
-                
-            indic_num = 8 if severity == "error" else 9
-            self.SendScintilla(SCI_SETINDICATORCURRENT, indic_num)
-            self.SendScintilla(SCI_INDICATORFILLRANGE, pos, indicator_len)
-
     def load_file(self, path):
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             self.setText(f.read())
@@ -364,64 +303,6 @@ class ArduinoEditor(QsciScintilla):
         self.file_path = path
         self.setModified(False)
         return True
-
-    def _on_text_changed(self):
-        self._syntax_timer.start(300)
-
-    def _run_local_syntax_check(self):
-        if not self.file_path:
-            return
-        # Only check C++ / Arduino files
-        if not (self.file_path.endswith('.ino') or self.file_path.endswith('.cpp') or self.file_path.endswith('.h')):
-            self.set_syntax_indicators([])
-            return
-            
-        try:
-            # pyrefly: ignore [missing-import]
-            from syntax_checker import analyze_cpp_syntax, extract_project_functions
-            from pathlib import Path
-            import json
-            
-            p = Path(self.file_path)
-            project_dir = p.parent
-            defined_funcs = extract_project_functions(project_dir)
-            errors = analyze_cpp_syntax(self.text(), p, defined_funcs)
-            
-            # Apply indicators locally in QScintilla (real-time wavy underlines!)
-            self.set_syntax_indicators(errors)
-            
-            # Keep syntax state beside the project, under the one hidden cache
-            # folder used by the main GUI.  The parent folder is hidden once by
-            # the project manager, so individual generated files need no flags.
-            project_cache_dir = project_dir / ".mcu_flasher_build_cache"
-            project_cache_dir.mkdir(parents=True, exist_ok=True)
-            err_file = project_cache_dir / ".mcu_flash_syntax_errors.json"
-            # Migrate the old root file only when the new cache has no copy.
-            legacy_err = project_dir / ".mcu_flash_syntax_errors.json"
-            if legacy_err.exists() and not err_file.exists():
-                try:
-                    os.replace(str(legacy_err), str(err_file))
-                except Exception:
-                    pass
-            try:
-                existing_errors = []
-                if err_file.exists():
-                    try:
-                        with open(err_file, "r", encoding="utf-8") as f:
-                            existing_errors = json.load(f)
-                    except Exception:
-                        pass
-                
-                # Replace entries for this file
-                updated_errors = [e for e in existing_errors if e.get("file") != p.name]
-                updated_errors.extend(errors)
-                
-                with open(err_file, "w", encoding="utf-8") as f:
-                    json.dump(updated_errors, f, indent=2)
-            except Exception:
-                pass
-        except Exception:
-            pass
 
 
 # --------------------------------------------------------------------------

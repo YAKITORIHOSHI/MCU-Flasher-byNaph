@@ -259,18 +259,35 @@ def _context_sources(context: dict | None) -> set[str]:
     return sources or {"external"}
 
 
+# Coding agents a prompt can name, as main.core.ai_agents names them.
+_AGENT_IDS = frozenset(("opencode", "claude", "codex", "antigravity", "hermes"))
+
+
+def _context_agents(context: dict | None) -> set[str]:
+    """The coding agents a prompt context names; none for older or unnamed prompts."""
+    context = context or {}
+    if type(context.get("sourceVersion")) is not int or context["sourceVersion"] != 1:
+        return set()
+    values = context.get("agents", [context.get("agent")])
+    if not isinstance(values, (list, tuple)):
+        values = [context.get("agent")]
+    return {value for value in values if value in _AGENT_IDS}
+
+
 def _merge_prompt_context(first: dict | None, latest: dict | None) -> dict | None:
     if first == latest:
         return first
     sources = set()
+    agents = set()
     for context in (first, latest):
         sources.update(_context_sources(context))
+        agents.update(_context_agents(context))
     prompts = list(dict.fromkeys(str((context or {}).get("prompt", ""))
                                  for context in (first, latest)))
     source = "external" if "external" in sources else "mixed" if len(sources) > 1 else next(iter(sources), "external")
     return {"id": (first or latest or {}).get("id", ""),
             "prompt": "\n\n".join(prompt for prompt in prompts if prompt)[:2000],
-            "sourceVersion": 1, "source": source, "sources": sorted(sources)}
+            "sourceVersion": 1, "source": source, "sources": sorted(sources), "agents": sorted(agents)}
 
 
 class AIReviewManager:
@@ -541,6 +558,7 @@ class AIReviewManager:
                 "promptSource": snapshot.get("promptSource", "external"),
                 "promptSourceVersion": snapshot.get("promptSourceVersion", 0),
                 "promptSources": list(snapshot.get("promptSources", [])),
+                "promptAgents": list(snapshot.get("promptAgents", [])),
             })
         self._published_snapshots = snapshots
         self._published_reviews = tuple(reviews)
@@ -752,9 +770,11 @@ class AIReviewManager:
         existing = next((item for item in self._ai_changes if item.get("id") == record_id), None)
         sources = set(payload.get("promptSources", []))
         sources.update(_context_sources(context))
+        agents = {value for value in payload.get("promptAgents", []) if value in _AGENT_IDS}
+        agents.update(_context_agents(context))
         payload.update(groupId=group, prompt=title or "Assistant changes", promptSourceVersion=1,
                        promptSources=sorted(sources), promptSource=("external" if "external" in sources else
-                           "mixed" if len(sources) > 1 else prompt_source))
+                           "mixed" if len(sources) > 1 else prompt_source), promptAgents=sorted(agents))
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         record = dict(payload, id=record_id, groupId=group, prompt=title or "Assistant changes",
                       timestamp=existing.get("timestamp", stamp) if existing else stamp,
@@ -879,6 +899,7 @@ class AIReviewManager:
             payload["prompt"] = existing.get("prompt", "")
             payload["promptSources"] = (list(existing.get("promptSources", []))
                 if existing.get("promptSourceVersion") == 1 else ["external"])
+            payload["promptAgents"] = list(existing.get("promptAgents", []))
         # If a manual save or project switch won meanwhile, do not start journal I/O.
         if expected_valid is not None and not expected_valid():
             return False
@@ -968,6 +989,7 @@ class AIReviewManager:
                 "promptSource": resolved.get("promptSource", "external"),
                 "promptSourceVersion": resolved.get("promptSourceVersion", 0),
                 "promptSources": list(resolved.get("promptSources", [])),
+                "promptAgents": list(resolved.get("promptAgents", [])),
                 "appliedExists": final_exists,
                 "appliedContent": final_content,
                 "undoExists": (
@@ -1040,6 +1062,7 @@ class AIReviewManager:
                 "promptSource": entry.get("promptSource", "external"),
                 "promptSourceVersion": entry.get("promptSourceVersion", 0),
                 "promptSources": list(entry.get("promptSources", [])),
+                "promptAgents": list(entry.get("promptAgents", [])),
             }
 
         undo_entry = self._ai_decision_history[-1] if self._ai_decision_history else None
@@ -1272,7 +1295,7 @@ class AIReviewManager:
                     "decisionId": f"{self._next_ai_review_revision_locked()}:{key}", "reviewId": review_id,
                     "project": str(self.project_dir or ""), "path": item["path"], "fileName": item["fileName"],
                     "action": "reverted", "prompt": "", "promptSource": "external", "promptSourceVersion": 0,
-                    "promptSources": [], "appliedExists": item["resultExists"], "appliedContent": item["result"],
+                    "promptSources": [], "promptAgents": [], "appliedExists": item["resultExists"], "appliedContent": item["result"],
                     "undoExists": item["exists"], "undoContent": item["current"],
                 }
                 if self._ai_backup_store:

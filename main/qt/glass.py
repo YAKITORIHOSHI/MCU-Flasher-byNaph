@@ -25,7 +25,7 @@ except ImportError:
     def isValid(obj):
         return obj is not None
 
-from main.core.theme import Theme
+from main.core.theme import Theme, glass_material
 
 _ASSETS = Path(__file__).resolve().parents[2] / "src" / "assets" / "glass"
 # Both images of every theme have this shape, so one fit describes them all.
@@ -42,6 +42,8 @@ LENS_BAND, LENS_LIGHT, LENS_DARK = 8, 30, 12
 # Liquid Glass specular on the rim: how far it reaches along an edge (logical pixels)
 # and its added white alpha on light and dark themes.
 SPECULAR_REACH, SPECULAR_LIGHT, SPECULAR_DARK = 120.0, 160, 80
+# The theme accent's caustic along a sheet's lower edge: strongest alpha on light and dark themes.
+CAUSTIC_LIGHT, CAUSTIC_DARK = 20, 26
 # Height of the soft shading behind the menu and status text, which sit straight on the scene.
 _EDGE_SHADE = 34
 
@@ -67,8 +69,8 @@ def bar_pane(bar: QWidget, window: QWidget) -> QRect:
 
 
 def _theme_name() -> str:
-    name = (Theme.active_theme or "default").lower().replace("-", "_")
-    return "solarized_dark" if name in ("solarized", "solarize_dark") else name if name in Theme.PALETTES else "default"
+    from main.core.theme import _palette_key
+    return _palette_key(Theme.active_theme)
 
 
 def theme_is_light(name: str | None = None) -> bool:
@@ -183,9 +185,31 @@ def _pane_path(width: float, height: float, radius: float, ratio: float, margin:
     return path
 
 
+def _material_name(theme) -> str:
+    """A theme name from a name, or from the light/dark flag older callers pass."""
+    if isinstance(theme, str):
+        return theme if theme in Theme.PALETTES else _theme_name()
+    if theme:
+        return "light"
+    active = _theme_name()
+    return active if not theme_is_light(active) else "default"
+
+
+def _material_color(value: str, alpha: int) -> QColor:
+    color = QColor(value)
+    color.setAlpha(max(0, min(255, round(alpha))))
+    return color
+
+
+def _shadow_image(width: int, height: int, radius: float, ratio: float, theme) -> QImage:
+    return _shadow_for(width, height, radius, ratio, _material_name(theme))
+
+
 @lru_cache(maxsize=32)
-def _shadow_image(width: int, height: int, radius: float, ratio: float, light: bool) -> QImage:
+def _shadow_for(width: int, height: int, radius: float, ratio: float, name: str) -> QImage:
     """A pane's soft shadow, PANE_SHADOW logical pixels larger on every side and hollow inside."""
+    light = theme_is_light(name)
+    shade = glass_material(name)["shadow"]
     margin = PANE_SHADOW
     image = QImage(math.ceil((width + 2 * margin) * ratio), math.ceil((height + 2 * margin) * ratio),
                    QImage.Format.Format_ARGB32_Premultiplied)
@@ -201,16 +225,24 @@ def _shadow_image(width: int, height: int, radius: float, ratio: float, light: b
     radius = min(radius, width / 2, height / 2)
     for spread in range(margin, 0, -1):
         share = (1 - spread / margin) ** 2
-        painter.setBrush(QColor(0, 0, 0, round((6 if light else 20) * share) + 1))
+        # Cast in the theme's own shade, a little stronger on frost so the sheet stands off it.
+        painter.setBrush(_material_color(shade, round((9 if light else 20) * share) + 1))
         painter.drawRoundedRect(QRectF(margin - spread, margin - spread + 2, width + 2 * spread, height + 2 * spread),
                                 radius + spread, radius + spread)
     painter.end()
     return image
 
 
+def _sheet_image(width: int, height: int, radius: float, ratio: float, theme) -> QImage:
+    return _sheet_for(width, height, radius, ratio, _material_name(theme))
+
+
 @lru_cache(maxsize=32)
-def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bool) -> QImage:
-    """One sheet of glass without what is behind it: its tint, reflection, bevel and rim."""
+def _sheet_for(width: int, height: int, radius: float, ratio: float, name: str) -> QImage:
+    """One sheet of the theme's glass without what is behind it: tint, reflection, lensing and rim."""
+    light = theme_is_light(name)
+    material = glass_material(name)
+    tint, spec, edge, caustic = material["tint"], material["spec"], material["edge"], material["caustic"]
     image = QImage(math.ceil(width * ratio), math.ceil(height * ratio), QImage.Format.Format_ARGB32_Premultiplied)
     image.setDevicePixelRatio(ratio)
     image.fill(Qt.GlobalColor.transparent)
@@ -220,23 +252,31 @@ def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bo
     bounds = path.boundingRect()
     radius = min(radius, bounds.width() / 2, bounds.height() / 2)
 
-    # The tint: strongest at the top, where light enters the sheet. Enough to lift the sheet
-    # off the scene and little enough that the scene stays what you see.
+    # The tint: the glass's own color, strongest at the top where light enters. Enough to lift
+    # the sheet off the scene and little enough that the scene stays what you see.
     body = QLinearGradient(0, bounds.top(), 0, bounds.bottom())
-    body.setColorAt(0, QColor(255, 255, 255, 132 if light else SHEET_TINT_TOP))
-    body.setColorAt(1, QColor(255, 255, 255, 92 if light else 10))
+    body.setColorAt(0, _material_color(tint, 132 if light else SHEET_TINT_TOP))
+    body.setColorAt(1, _material_color(tint, 92 if light else 10))
     painter.fillPath(path, body)
     painter.save()
     painter.setClipPath(path)
     # A broad reflection with no edge of its own: it fades out long before the far corner.
     reflection = QLinearGradient(bounds.topLeft(), bounds.topLeft() + QPointF(width * .5, height * .9))
-    reflection.setColorAt(0, QColor(255, 255, 255, 54 if light else SHEET_REFLECTION))
-    reflection.setColorAt(1, QColor(255, 255, 255, 0))
+    reflection.setColorAt(0, _material_color(spec, 54 if light else SHEET_REFLECTION))
+    reflection.setColorAt(1, _material_color(spec, 0))
     painter.fillPath(path, reflection)
+    # Light bent back through the glass's thickness gathers along its lower edge in the
+    # theme's accent: a faint caustic that fades out well before the middle.
+    reach = min(18.0, bounds.height() * .3)
+    if reach >= 4:
+        glow = QLinearGradient(0, bounds.bottom(), 0, bounds.bottom() - reach)
+        glow.setColorAt(0, _material_color(caustic, CAUSTIC_LIGHT if light else CAUSTIC_DARK))
+        glow.setColorAt(1, _material_color(caustic, 0))
+        painter.fillRect(QRectF(bounds.left(), bounds.bottom() - reach, bounds.width(), reach), glow)
     # The bevel: a highlight just inside the top edge, gone a little way down the sheet.
     bevel = QLinearGradient(0, bounds.top(), 0, bounds.top() + min(16.0, height * .5))
-    bevel.setColorAt(0, QColor(255, 255, 255, 110 if light else 46))
-    bevel.setColorAt(1, QColor(255, 255, 255, 0))
+    bevel.setColorAt(0, _material_color(spec, 110 if light else 46))
+    bevel.setColorAt(1, _material_color(spec, 0))
     inner = QPen(bevel, 1)
     inner.setCosmetic(True)
     painter.setPen(inner)
@@ -253,17 +293,24 @@ def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bo
         alpha = round((LENS_LIGHT if light else LENS_DARK) * share)
         if alpha <= 0:
             continue
-        painter.setPen(QPen(QColor(255, 255, 255, alpha), 1.0))
+        painter.setPen(QPen(_material_color(tint if not light else spec, alpha), 1.0))
         inset = step - .5
         painter.drawRoundedRect(bounds.adjusted(inset, inset, -inset, -inset),
                                 max(0, radius - inset), max(0, radius - inset))
     painter.restore()
 
-    # One device pixel wide: bright where light falls, fading along the sheet's far side.
+    # One device pixel wide: the caught light along the top, the glass's edge down the sides,
+    # and the theme's accent where light leaves at the bottom. Frost needs its steel edge
+    # on every side, or a white sheet's rim disappears into the white around it.
     rim = QLinearGradient(0, bounds.top(), 0, bounds.bottom())
-    rim.setColorAt(0, QColor(255, 255, 255, 240) if light else QColor(255, 255, 255, 96))
-    rim.setColorAt(.5, QColor(255, 255, 255, 170) if light else QColor(255, 255, 255, 58))
-    rim.setColorAt(1, QColor(31, 35, 40, 44) if light else QColor(255, 255, 255, 34))
+    if light:
+        rim.setColorAt(0, _material_color(edge, 96))
+        rim.setColorAt(.5, _material_color(edge, 70))
+        rim.setColorAt(1, _material_color(edge, 110))
+    else:
+        rim.setColorAt(0, _material_color(spec, 104))
+        rim.setColorAt(.5, _material_color(edge, 54))
+        rim.setColorAt(1, _material_color(caustic, 64))
     pen = QPen(rim, 1)
     pen.setCosmetic(True)
     painter.setPen(pen)
@@ -273,14 +320,15 @@ def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bo
     # bottom-right. Each is a short stretch of the rim, so no long edge turns into a bright line.
     reach = min(SPECULAR_REACH, bounds.width() * .35)
     band = radius + 2
-    for edge_x, edge_y, toward, alpha in (
-            (bounds.left(), bounds.top(), 1, SPECULAR_LIGHT if light else SPECULAR_DARK),
-            (bounds.right(), bounds.bottom() - band, -1, (SPECULAR_LIGHT if light else SPECULAR_DARK) // 2)):
+    for edge_x, edge_y, toward, alpha, color in (
+            (bounds.left(), bounds.top(), 1, SPECULAR_LIGHT if light else SPECULAR_DARK, spec),
+            (bounds.right(), bounds.bottom() - band, -1, (SPECULAR_LIGHT if light else SPECULAR_DARK) // 2,
+             caustic if light else spec)):
         if reach <= 0 or alpha <= 0:
             continue
         glow = QLinearGradient(edge_x, 0, edge_x + toward * reach, 0)
-        glow.setColorAt(0, QColor(255, 255, 255, alpha))
-        glow.setColorAt(1, QColor(255, 255, 255, 0))
+        glow.setColorAt(0, _material_color(color, alpha))
+        glow.setColorAt(1, _material_color(color, 0))
         painter.save()
         painter.setClipRect(QRectF(min(edge_x, edge_x + toward * reach), edge_y, reach, band))
         specular = QPen(glow, 1)
@@ -292,13 +340,16 @@ def _sheet_image(width: int, height: int, radius: float, ratio: float, light: bo
     return image
 
 
-def pane_image(width: int, height: int, radius: float, ratio: float, light: bool) -> QImage:
-    """A sheet with its shadow for a surface that paints itself, PANE_SHADOW pixels larger each way."""
+def pane_image(width: int, height: int, radius: float, ratio: float, theme) -> QImage:
+    """A sheet with its shadow for a surface that paints itself, PANE_SHADOW pixels larger each way.
+
+    ``theme`` is a theme name, or the light/dark flag older callers pass.
+    """
     margin = PANE_SHADOW
-    image = _shadow_image(width, height, radius, ratio, light).copy()
+    image = _shadow_image(width, height, radius, ratio, theme).copy()
     image.setDevicePixelRatio(ratio)
     painter = QPainter(image)
-    painter.drawImage(margin, margin, _sheet_image(width, height, radius, ratio, light))
+    painter.drawImage(margin, margin, _sheet_image(width, height, radius, ratio, theme))
     painter.end()
     return image
 
@@ -331,12 +382,11 @@ class GlassScene:
 
     def _paint_panes(self, painter: QPainter, panes, ratio: float, name: str, target: QRect) -> None:
         """Each sheet: the frosted scene clipped to its shape, then its own tint and rim."""
-        light = theme_is_light(name)
         margin = PANE_SHADOW
         # Every shadow first: one pane's shadow must never fall across its neighbor.
         for rect, radius in panes:
             painter.drawImage(rect.x() - margin, rect.y() - margin,
-                              _shadow_image(rect.width(), rect.height(), radius, ratio, light))
+                              _shadow_image(rect.width(), rect.height(), radius, ratio, name))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         for rect, radius in panes:
             painter.save()
@@ -344,7 +394,7 @@ class GlassScene:
                                 Qt.ClipOperation.IntersectClip)
             painter.drawPixmap(target, self._frost)
             painter.restore()
-            painter.drawImage(rect.topLeft(), _sheet_image(rect.width(), rect.height(), radius, ratio, light))
+            painter.drawImage(rect.topLeft(), _sheet_image(rect.width(), rect.height(), radius, ratio, name))
 
     def paint(self, painter: QPainter, panes=()) -> None:
         owner = self._owner
@@ -421,8 +471,10 @@ def page_surface(theme_name: str) -> dict[str, str]:
     from main.qt.theme import css_color, glass_tokens
     name = _palette_key(theme_name)
     tokens = glass_tokens(name)
+    tint = QColor(glass_material(name)["tint"])
+    alpha = 0.4 if theme_is_light(name) else 0.05
     return {"frost": f"../assets/glass/{name}-frosted.png", "fallback": Theme.PALETTES[name]["BG_DARK"],
-            "sheet": "rgba(255, 255, 255, 0.4)" if theme_is_light(name) else "rgba(255, 255, 255, 0.05)",
+            "sheet": f"rgba({tint.red()}, {tint.green()}, {tint.blue()}, {alpha})",
             "reading": css_color(tokens["reading"]), "readingRim": css_color(tokens["reading_rim"])}
 
 

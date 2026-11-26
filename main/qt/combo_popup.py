@@ -39,7 +39,7 @@ def frosted_pixmap(width: int, height: int, ratio: float, mode: str, *, paper: b
         path.addRoundedRect(QRectF(0, 0, width, height), radius, radius)
         painter.setClipPath(path)
         painter.drawPixmap(0, 0, scene)
-        painter.drawImage(0, 0, _sheet_image(width, height, radius, ratio, mode == "light"))
+        painter.drawImage(0, 0, _sheet_image(width, height, radius, ratio, mode))
     painter.end()
     return image
 

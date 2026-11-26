@@ -71,6 +71,7 @@ class PtySession(QObject):
         self._prompt_observer = None
         self.assistant_active = None
         self.prompt_source = "cli"
+        self.prompt_agent = None        # The assistant pane names its agent; a terminal finds it.
         self.extra_environment = {}
 
     @Slot(result=bool)
@@ -90,7 +91,11 @@ class PtySession(QObject):
             if "NO_COLOR" in env:
                 env.pop("FORCE_COLOR", None)
             env.update(TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="MCUFlasher")
-            env.update(self.extra_environment)
+            for key, value in self.extra_environment.items():
+                if value is None:
+                    env.pop(key, None)      # The session must not inherit this one.
+                else:
+                    env[key] = value
             # The private supervisor adopts detached tool descendants when a
             # shell or assistant exits, so they cannot outlive this session.
             supervisor = ROOT / "main/platforms/ubuntu_pty_supervisor.py"
@@ -186,7 +191,7 @@ class PtySession(QObject):
             try:
                 if self._prompt_observer is None:
                     self._prompt_observer = PromptObserver(self.cwd, active=self.assistant_active,
-                                                           source=self.prompt_source)
+                                                           source=self.prompt_source, agent=self.prompt_agent)
                 self._prompt_observer.feed(data, self.process.pid)
             except Exception:
                 pass

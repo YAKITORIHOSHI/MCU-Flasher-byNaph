@@ -8,7 +8,8 @@ import subprocess
 
 MANIFEST = ".mcu-flasher-sources.json"
 EXCLUDED = frozenset({".git", "__pycache__", "node_modules", "_python", "env", ".venv", ".venv-linux", ".venv-macos",
-    ".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode", ".clangd", ".opencode", "temp", "logs", "test", "tests"})
+    ".mcu_flasher_build_cache", ".mcu_ai_edits", ".pio", ".vscode", ".clangd", ".opencode", "temp", "logs", "test", "tests",
+    ".ai-agents"})
 DEVELOPMENT_ROOTS = frozenset({"audit", "desktop", "installers", ".github", ".migration-tools", ".tools", ".local"})
 STATE_NAMES = frozenset({".mcu_gui_config.json", "gui_config.json", "dbs_notif.json", "bootstrap_config.json",
     "arduino_browser_settings.json", "arduino_cli_path.txt", ".owner_config.json", ".owner_tickets.json", ".mcu_cloud_link.json"})

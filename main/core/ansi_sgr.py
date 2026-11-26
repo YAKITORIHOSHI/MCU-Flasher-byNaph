@@ -11,6 +11,11 @@ forms, and default foreground/background (39/49). Conceal (8) is deliberately no
 honoured: hiding device output would defeat a debugging monitor. Unknown or malformed
 parameters are skipped, never thrown. Every painted foreground keeps at least 4.5:1
 contrast against what it is painted on, like xterm's minimumContrastRatio.
+
+The Build Console paints the 16 system colors as the theme's semantic inks, so a
+compiler's red is the app's error red. The Serial Monitor paints them from
+``DEVICE_PALETTE`` instead: firmware chooses those colors on purpose, so normal and
+bright stay distinct and a black or white background is black or white.
 """
 from __future__ import annotations
 
@@ -164,6 +169,11 @@ def _hex(rgb) -> str:
     return "#" + "".join(f"{max(0, min(255, int(channel))):02x}" for channel in rgb)
 
 
+# Windows Terminal's "Campbell" scheme, normal 30–37/40–47 then bright 90–97/100–107.
+DEVICE_PALETTE = ("#0c0c0c", "#c50f1f", "#13a10e", "#c19c00", "#0037da", "#881798", "#3a96dd", "#cccccc",
+                  "#767676", "#e74856", "#16c60c", "#f9f1a5", "#3b78ff", "#b4009e", "#61d6d6", "#f2f2f2")
+
+
 def _system_color(index: int, theme_name: str) -> str:
     """The theme's readable stand-ins for the 16 system colors, as the terminals use."""
     from main.core.log_colors import themed_ansi_colors
@@ -171,10 +181,12 @@ def _system_color(index: int, theme_name: str) -> str:
     return ansi[30 + index] if index < 8 else ansi[90 + index - 8]
 
 
-def _rgb_of(color: tuple, theme_name: str) -> str:
+def _rgb_of(color: tuple, theme_name: str, device: bool = False) -> str:
     if color[0] == "i":
         index = color[1]
-        return _system_color(index, theme_name) if index < 16 else _hex(xterm_rgb(index))
+        if index < 16:
+            return DEVICE_PALETTE[index] if device else _system_color(index, theme_name)
+        return _hex(xterm_rgb(index))
     return _hex(color[1:4])
 
 
@@ -191,10 +203,14 @@ def readable_on(foreground: str, background: str, minimum: float = 4.5) -> str:
     return target
 
 
-def resolve_colors(style: SgrStyle, theme_name: str, default_fg: str, surface: str) -> tuple[str, str | None]:
-    """(foreground, background or None) in hex for one styled run on a reading surface."""
-    foreground = _rgb_of(style.fg, theme_name) if style.fg else default_fg
-    background = _rgb_of(style.bg, theme_name) if style.bg else None
+def resolve_colors(style: SgrStyle, theme_name: str, default_fg: str, surface: str, *,
+                   device: bool = False) -> tuple[str, str | None]:
+    """(foreground, background or None) in hex for one styled run on a reading surface.
+
+    ``device`` paints the 16 system colors from ``DEVICE_PALETTE`` (the Serial Monitor).
+    """
+    foreground = _rgb_of(style.fg, theme_name, device) if style.fg else default_fg
+    background = _rgb_of(style.bg, theme_name, device) if style.bg else None
     if style.inverse:
         foreground, background = (background or surface), foreground
     painted_on = background or surface

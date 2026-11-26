@@ -151,6 +151,8 @@ ___*.py
 node_modules/
 .venv-linux/
 .ubuntu-tools/
+# Coding agents the app downloads itself (Hermes and its tools), per OS and CPU.
+/.ai-agents/
 .venv-macos/
 .macos-tools/
 # Legacy optional amd64 filename; the shipped native entries are tracked.

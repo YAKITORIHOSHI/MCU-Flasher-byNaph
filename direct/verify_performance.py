@@ -50,12 +50,6 @@ def wait_until(predicate, timeout=3.0):
 class PerformanceChecks(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
-        # The parser pool belongs to this isolated process. Join it before Qt
-        # finalization rather than leaving its workers alive during teardown.
-        from src import syntax_checker
-        executor, syntax_checker._SYNTAX_EXECUTOR = syntax_checker._SYNTAX_EXECUTOR, None
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def setUp(self):
@@ -296,116 +290,26 @@ class PerformanceChecks(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_repeated_diagnostics_preserve_rows_selection_and_filters(self):
-        from main.qt.syntax_panel import SyntaxPanel
-        panel = SyntaxPanel()
-        panel._bg_timer.stop()
-        try:
-            panel.resize(700, 300)
-            panel.show()
-            diagnostics = [dict(file="fixture.cpp", line=i+1, severity="warning", message=f"Issue {i}")
-                           for i in range(80)]
-            panel.set_diagnostics(diagnostics)
-            panel._table.setCurrentCell(40, 3)
-            APP.processEvents()
-            item = panel._table.item(40, 3)
-            scroll = panel._table.verticalScrollBar().value()
-            with patch.object(panel, "_render_rows", wraps=panel._render_rows) as render:
-                for _ in range(20):
-                    panel.set_diagnostics(diagnostics)
-                render.assert_not_called()
-            self.assertIs(panel._table.item(40, 3), item)
-            self.assertEqual(panel._table.currentRow(), 40)
-            self.assertEqual(panel._table.verticalScrollBar().value(), scroll)
-            panel._filter_combo.setCurrentIndex(1)
-            self.assertEqual(panel._table.rowCount(), 0)
-            diagnostics[0]["severity"] = "error"
-            panel.set_diagnostics(diagnostics)
-            self.assertEqual(panel._table.rowCount(), 1)
-            self.assertIn("Error", panel._table.item(0, 2).text())
-            panel.clear()
-            panel.set_diagnostics(diagnostics)
-            self.assertEqual(panel._table.rowCount(), 1)
-        finally:
-            panel.close()
-            panel.deleteLater()
-
-    def test_editor_buffer_reuse_preserves_recovery_and_discards_stale_parse(self):
+    def test_editor_buffer_keeps_the_latest_recovery_text(self):
         from main.qt.editor_panel import EditorBridgeAPI
-        from main.qt.signals import signals
-        from src import syntax_checker
         project = ROOT / "temp/scratch/editor-resource-fixture"
         path = str(project / "sample.ino")
         backend = SimpleNamespace(active_file_path=path, sketch_dir_path=project, modified_files={})
         backend.mark_modified = lambda name, dirty: backend.modified_files.update({name: dirty})
         bridge = EditorBridgeAPI(backend)
-        entered, release = threading.Event(), threading.Event()
-        received = []
-        def analyze(content, source):
-            if content == "old revision":
-                entered.set()
-                release.wait(2)
-            return [dict(file=str(source), line=1, message=content)]
-        signals.syntax_errors.connect(received.append)
         try:
-            self.assertFalse(bridge.realtime_check_buffer(path))
-            with patch.object(syntax_checker, "analyze_cpp_syntax", side_effect=analyze):
-                bridge.update_editor_buffer(path, "old revision")
-                self.assertTrue(bridge.realtime_check_buffer(path))
-                self.assertTrue(entered.wait(1))
-                # The next edit arrives before the debounce requests its parse.
-                bridge.update_editor_buffer(path, "latest Unicode \U0001f600 revision")
-                release.set()
-                wait_until(lambda: not bridge._syntax_running)
-                self.assertEqual(received, [])
-                bridge.begin_buffer_recovery()
-                self.assertEqual(bridge.get_recovery_buffers()[path], "latest Unicode \U0001f600 revision")
-                bridge.recovery_complete()
-                self.assertTrue(bridge.realtime_check_buffer(path))
-                wait_until(lambda: not bridge._syntax_running)
-                self.assertEqual(received[-1][0]["message"], "latest Unicode \U0001f600 revision")
-                bridge.update_editor_buffer(path, "")
-                self.assertTrue(bridge.realtime_check_buffer(path))
-                wait_until(lambda: not bridge._syntax_running)
-                self.assertEqual(received[-1][0]["message"], "")
-            bridge.mark_modified(path, False)
-            self.assertFalse(bridge.realtime_check_buffer(path))
+            self.assertFalse(hasattr(bridge, "realtime_check_syntax"), "Compiling is the only code check")
+            bridge.update_editor_buffer(path, "old revision")
+            bridge.update_editor_buffer(path, "latest Unicode \U0001f600 revision")
+            self.assertTrue(backend.modified_files[path])
+            bridge.begin_buffer_recovery()
+            self.assertEqual(bridge.get_recovery_buffers()[path], "latest Unicode \U0001f600 revision")
+            bridge.recovery_complete()
+            bridge.update_editor_buffer(path, "")
+            bridge.begin_buffer_recovery()
+            self.assertEqual(bridge.get_recovery_buffers()[path], "", "An emptied buffer is still recoverable")
+            bridge.recovery_complete()
         finally:
-            release.set()
-            signals.syntax_errors.disconnect(received.append)
-            bridge.deleteLater()
-
-    def test_checking_one_file_keeps_the_other_files_results(self):
-        from types import SimpleNamespace
-        from src import syntax_checker
-        from main.qt.editor_panel import EditorBridgeAPI
-        from main.qt.signals import signals
-        path = str((ROOT / "fixture" / "active.ino").resolve())
-        backend = SimpleNamespace(active_file_path=path, modified_files={})
-        backend.mark_modified = lambda name, dirty: None
-        bridge = EditorBridgeAPI(backend)
-        received = []
-        signals.syntax_errors.connect(received.append)
-        row = lambda name, line, message: {"file": name, "line": line, "message": message, "severity": "error"}
-        try:
-            # A project check listed two files; typing then corrects only the active one.
-            signals.syntax_errors.emit([row("active.ino", 4, "old"), row("helper.cpp", 9, "stays"), row("wifi.h", 2, "stays too")])
-            with patch.object(syntax_checker, "analyze_cpp_syntax", side_effect=[[row("active.ino", 7, "new")], []]):
-                bridge.realtime_check_syntax(path, "one")
-                wait_until(lambda: not bridge._syntax_running)
-                self.assertEqual([(entry["file"], entry["message"]) for entry in received[-1]],
-                                 [("active.ino", "new"), ("helper.cpp", "stays"), ("wifi.h", "stays too")])
-                bridge.realtime_check_syntax(path, "two")
-                wait_until(lambda: not bridge._syntax_running)
-                self.assertEqual([entry["file"] for entry in received[-1]], ["helper.cpp", "wifi.h"])
-            # Clearing (another project) leaves nothing to carry over.
-            signals.syntax_errors.emit([])
-            with patch.object(syntax_checker, "analyze_cpp_syntax", return_value=[row("active.ino", 1, "only")]):
-                bridge.realtime_check_syntax(path, "three")
-                wait_until(lambda: not bridge._syntax_running)
-            self.assertEqual([entry["message"] for entry in received[-1]], ["only"])
-        finally:
-            signals.syntax_errors.disconnect(received.append)
             bridge.deleteLater()
 
     def test_build_queue_retains_diagnostics_and_event_order(self):
@@ -949,86 +853,6 @@ class PerformanceChecks(unittest.TestCase):
         self.assertFalse(bus._log_timer.isActive())
         bus.deleteLater()
 
-    def test_syntax_completion_is_on_gui_thread_and_can_repeat(self):
-        from main.qt.syntax_panel import SyntaxPanel
-        from src import syntax_checker
-        scratch = ROOT / "temp/scratch"
-        scratch.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as directory:
-            path = Path(directory) / "sample.ino"
-            path.write_text("void setup() {\n int x = 0\n}\n", encoding="utf-8")
-            backend = SimpleNamespace(get_project_dir=lambda: directory, is_busy=False)
-            panel = SyntaxPanel(backend)
-            panel._bg_timer.stop()
-            threads = []
-            original = panel.set_diagnostics
-            def record(diags):
-                threads.append(QThread.currentThread())
-                original(diags)
-            panel.set_diagnostics = record
-            # Keep this GUI-delivery check independent of the process-wide
-            # parser pool. Other tests exercise that pool; leaving its native
-            # worker alive across a Qt-heavy performance suite can trigger a
-            # PySide refcount abort during the next test on Linux.
-            with patch.object(syntax_checker, "analyze_files_parallel",
-                              side_effect=[[], OSError("fixture read failed"), []]):
-                panel._run_manual_check()
-                wait_until(lambda: not panel._is_checking)
-                self.assertTrue(threads)
-                self.assertTrue(all(thread == APP.thread() for thread in threads))
-                panel._run_manual_check()
-                wait_until(lambda: not panel._is_checking)
-                self.assertIn("failed", panel._lbl_status.text())
-                panel._run_manual_check()
-                wait_until(lambda: not panel._is_checking)
-                self.assertNotIn("failed", panel._lbl_status.text())
-                self.assertEqual(len(threads), 2)
-            panel.close()
-            panel.deleteLater()
-            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-            APP.processEvents()
-
-    def test_syntax_worker_start_failure_releases_checking_state(self):
-        child_flag = "MCU_FLASHER_PERF_SYNTAX_START_FAILURE_CHILD"
-        if os.environ.get(child_flag) != "1":
-            # Keep this Qt-heavy startup fixture in its own application
-            # lifetime. The full performance suite constructs WebEngine and
-            # many widgets first; some Linux/PySide builds abort while
-            # collecting wrappers during a later widget constructor.
-            child_env = dict(os.environ)
-            child_env[child_flag] = "1"
-            result = subprocess.run(
-                [sys.executable, "-B", str(Path(__file__).resolve()), "--no-finalize",
-                 "PerformanceChecks.test_syntax_worker_start_failure_releases_checking_state"],
-                cwd=ROOT, env=child_env, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("Ran 1 test", result.stdout + result.stderr)
-            return
-        from main.qt.syntax_panel import SyntaxPanel
-        from src import syntax_checker
-        # Qt and the parser pool are both process-wide fixtures. Retire any
-        # worker left by earlier parser checks before constructing more Qt
-        # objects, then let later tests create a fresh pool if they need one.
-        executor = syntax_checker._SYNTAX_EXECUTOR
-        if executor is not None:
-            executor.shutdown(wait=True)
-            syntax_checker._SYNTAX_EXECUTOR = None
-        backend = SimpleNamespace(get_project_dir=lambda: str(ROOT / "temp"), is_busy=False)
-        panel = SyntaxPanel(backend)
-        panel._bg_timer.stop()
-        try:
-            with patch("main.qt.syntax_panel.threading.Thread", side_effect=RuntimeError("No worker slot")):
-                panel._run_manual_check()
-                self.assertFalse(panel._is_checking)
-                self.assertIn("failed", panel._lbl_status.text())
-                self.assertIn("No worker slot", panel._lbl_status.toolTip())
-            with patch("main.qt.syntax_panel.threading.Thread") as start:
-                panel._run_manual_check()
-                start.return_value.start.assert_called_once()
-                self.assertTrue(panel._is_checking)
-        finally:
-            panel.deleteLater()
-
     def test_project_switch_releases_discarded_buffers_and_preserves_current_recovery(self):
         from main.qt.editor_panel import EditorBridgeAPI, MonacoEditorPanel
         scratch = ROOT / "temp/scratch"
@@ -1074,81 +898,7 @@ class PerformanceChecks(unittest.TestCase):
                 self.assertTrue(bridge._recovering_buffers)
             bridge.deleteLater()
 
-    def test_editor_only_parses_latest_pending_revision(self):
-        from main.qt.editor_panel import EditorBridgeAPI
-        from main.qt.signals import signals
-        from src import syntax_checker
-        backend = SimpleNamespace(active_file_path="sample.ino")
-        bridge = EditorBridgeAPI(backend)
-        entered, release = threading.Event(), threading.Event()
-        calls = []
-        diagnostics = []
-        def analyze(content, path):
-            calls.append(content)
-            if content == "first":
-                entered.set()
-                release.wait(2)
-            return [{"file": str(path), "line": 1, "message": content}]
-        signals.syntax_errors.connect(diagnostics.append)
-        try:
-            with patch.object(syntax_checker, "analyze_cpp_syntax", side_effect=analyze):
-                self.assertEqual(bridge.realtime_check_syntax("sample.ino", "first"), "null")
-                self.assertTrue(entered.wait(1))
-                for i in range(100):
-                    bridge.realtime_check_syntax("sample.ino", f"revision {i}")
-                release.set()
-                wait_until(lambda: not bridge._syntax_running and bridge._syntax_pending is None)
-            self.assertEqual(calls, ["first", "revision 99"])
-            self.assertEqual([d[0]["message"] for d in diagnostics], ["revision 99"])
-        finally:
-            release.set()
-            signals.syntax_errors.disconnect(diagnostics.append)
-            bridge.deleteLater()
-
-    def test_project_switch_discards_old_syntax_results(self):
-        from main.qt.syntax_panel import SyntaxPanel
-        from main.qt.signals import signals
-        from src import syntax_checker
-        scratch = ROOT / "temp/scratch"
-        scratch.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as directory:
-            root = Path(directory)
-            a, b = root / "a", root / "b"
-            a.mkdir()
-            b.mkdir()
-            (a / "sample.ino").write_text("void setup() {}", encoding="utf-8")
-            current = [str(a)]
-            panel = SyntaxPanel(SimpleNamespace(get_project_dir=lambda: current[0], is_busy=False))
-            panel._bg_timer.stop()
-            entered, release = threading.Event(), threading.Event()
-            def analyze(_files, **_kwargs):
-                entered.set()
-                release.wait(2)
-                return [{"file": str(a / "sample.ino"), "message": "stale", "line": 1}]
-            try:
-                panel.set_diagnostics([{"message": "old project", "line": 1}])
-                with patch.object(syntax_checker, "analyze_files_parallel", side_effect=analyze):
-                    panel._run_manual_check()
-                    self.assertTrue(entered.wait(1))
-                    current[0] = str(b)
-                    signals.project_updated.emit({"path": str(b)})
-                    self.assertEqual(panel._all_diagnostics, [])
-                    release.set()
-                    wait_until(lambda: not panel._is_checking)
-                self.assertEqual(panel._all_diagnostics, [])
-            finally:
-                release.set()
-                panel.deleteLater()
-
-    def test_low_end_parser_and_cache_budgets(self):
-        from src import syntax_checker
-        for cores in (4, 6):
-            with patch("src.modules.runtime_resources.performance_profile", return_value=performance_profile(cores, 8)):
-                self.assertEqual(syntax_checker.get_optimal_worker_count(), 1)
-        cache = {}
-        for revision in range(200):
-            syntax_checker._remember_diagnostics(cache, revision, [{"message": "error"}] * 500)
-        self.assertLessEqual(sum(len(value) for value in cache.values()), 8192)
+    def test_low_end_cache_budgets(self):
         from main.web_bridge import _SketchRAMCache
         ram = _SketchRAMCache()
         for revision in range(200):

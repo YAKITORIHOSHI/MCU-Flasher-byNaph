@@ -73,6 +73,14 @@ class GlassCard(QFrame):
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self._cached_surface)
 
+    def _theme_name(self) -> str:
+        """The theme whose palette this card was given, so it is that theme's glass."""
+        deepest = self._colors.get("BG_DARKEST")
+        for name, palette in Theme.PALETTES.items():
+            if palette.get("BG_DARKEST") == deepest:
+                return name
+        return "light" if QColor(deepest or "#000000").lightness() > 128 else "default"
+
     def _make_surface(self, ratio: float = 1.0) -> QPixmap:
         # Drawn at device pixels so the rim stays one crisp pixel at fractional display scales.
         surface = QPixmap(self.size() * ratio)
@@ -81,9 +89,9 @@ class GlassCard(QFrame):
         painter = QPainter(surface)
         # A card's shadow has to stay inside the card's own widget, so the sheet sits a little in.
         inset = min(3, self.width() // 8, self.height() // 8)
-        light = QColor(self._colors["BG_DARKEST"]).lightness() > 128
         painter.drawImage(inset - PANE_SHADOW, inset - PANE_SHADOW,
-                          pane_image(self.width() - 2 * inset, self.height() - 2 * inset, self._radius, ratio, light))
+                          pane_image(self.width() - 2 * inset, self.height() - 2 * inset, self._radius, ratio,
+                                     self._theme_name()))
         painter.end()
         return surface
 

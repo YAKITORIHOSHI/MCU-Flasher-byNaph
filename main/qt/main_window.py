@@ -70,7 +70,6 @@ _TOOL_TABS = (
     ("Serial Monitor", "Serial", "serial"),
     ("Compatible Devices", "Devices", "devices"),
     ("Notifications", "Alerts", "alerts"),
-    ("Syntax Check", "Syntax", "search"),
     ("Terminal", "Terminal", "terminal"),
     ("AI Changes", "AI Changes", "edit"),
 )
@@ -535,8 +534,6 @@ class MCUMainWindow(QMainWindow):
             self._compat_panel.set_responsive_width(panel_w)
         if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "set_responsive_width"):
             self._notif_panel.set_responsive_width(panel_w)
-        if hasattr(self, "_syntax_panel") and hasattr(self._syntax_panel, "set_responsive_width"):
-            self._syntax_panel.set_responsive_width(panel_w)
         if hasattr(self, "_terminal_panel") and hasattr(self._terminal_panel, "set_responsive_width"):
             self._terminal_panel.set_responsive_width(panel_w)
 
@@ -574,7 +571,6 @@ class MCUMainWindow(QMainWindow):
         from main.qt.serial_panel import SerialPanel
         from main.qt.compat_panel import CompatPanel
         from main.qt.notif_panel import NotifPanel
-        from main.qt.syntax_panel import SyntaxPanel
         if sys.platform != "win32":
             from main.qt.posix_terminal_panel import PosixTerminalPanel as TerminalPanel
         else:
@@ -711,13 +707,6 @@ class MCUMainWindow(QMainWindow):
         self._notif_panel = NotifPanel(self._backend)
         self._bottom_tabs.addTab(self._notif_panel, "Notifications")
 
-        # ── Syntax Check tab ──────────────────────────────────────────────────
-        self._syntax_panel = SyntaxPanel(self._backend)
-        self._syntax_panel.set_buffer_provider(
-            lambda: dict(self._editor_panel._bridge._buffer_snapshots),
-            lambda: self._editor_panel._bridge._syntax_generation)
-        self._bottom_tabs.addTab(self._syntax_panel, "Syntax Check")
-
         # ── Terminal tab ──────────────────────────────────────────────────────
         self._terminal_panel = TerminalPanel(self._backend, self)
         self._bottom_tabs.addTab(self._terminal_panel, "Terminal")
@@ -731,9 +720,8 @@ class MCUMainWindow(QMainWindow):
         self._bottom_tabs.setTabToolTip(1, "Serial Monitor & Real-time MCU Communication")
         self._bottom_tabs.setTabToolTip(2, "Compatible Microcontroller Devices")
         self._bottom_tabs.setTabToolTip(3, "Notifications & Event Log")
-        self._bottom_tabs.setTabToolTip(4, "Syntax Diagnostics & Code Analysis")
-        self._bottom_tabs.setTabToolTip(5, "Integrated Bash terminal" if sys.platform != "win32" else "Integrated PowerShell / CMD terminal")
-        self._bottom_tabs.setTabToolTip(6, "AI file changes grouped by prompt, with timestamps and before/after previews")
+        self._bottom_tabs.setTabToolTip(4, "Integrated Bash terminal" if sys.platform != "win32" else "Integrated PowerShell / CMD terminal")
+        self._bottom_tabs.setTabToolTip(5, "AI file changes grouped by prompt, with timestamps and before/after previews")
 
         # Ensure Build Console is always the default active bottom tab on startup
         self._bottom_tabs.setCurrentIndex(0)
@@ -830,8 +818,6 @@ class MCUMainWindow(QMainWindow):
             self._console_container.apply_theme(theme_name)
         if hasattr(self, "_serial_panel") and hasattr(self._serial_panel, "apply_theme"):
             self._serial_panel.apply_theme(theme_name)
-        if hasattr(self, "_syntax_panel") and hasattr(self._syntax_panel, "apply_theme"):
-            self._syntax_panel.apply_theme(theme_name)
         if hasattr(self, "_compat_panel") and hasattr(self._compat_panel, "apply_theme"):
             self._compat_panel.apply_theme(theme_name)
         if hasattr(self, "_notif_panel") and hasattr(self._notif_panel, "apply_theme"):
@@ -1009,7 +995,6 @@ class MCUMainWindow(QMainWindow):
         self._serial_panel.connect_signals(sig_bus, connect_theme=False)
         self._notif_panel.connect_signals(sig_bus, connect_theme=False)
         self._compat_panel.connect_signals(sig_bus, connect_theme=False)
-        self._syntax_panel.connect_signals(sig_bus, connect_theme=False)
         self._terminal_panel.connect_signals(sig_bus, connect_theme=False)
         self._editor_panel.connect_signals(sig_bus, connect_theme=False)
         self._primary_toolbar.connect_signals(sig_bus, connect_theme=False)
@@ -1115,7 +1100,6 @@ class MCUMainWindow(QMainWindow):
                 "reset": "Resetting Board",
                 "hard_reset": "Hard Resetting",
                 "soft_reset": "Soft Resetting",
-                "syntax": "Checking Syntax",
                 "toolchain": "Preparing Toolchain",
                 "save": "Saving",
                 "save_all": "Saving All",
@@ -1225,7 +1209,7 @@ class MCUMainWindow(QMainWindow):
             self._progress_bar.setVisible(False)
             return
         if action.lower() in ("completed", "ready", "idle", "done", "success"):
-            if not getattr(self, "_active_operation", None) or getattr(self, "_active_operation", None) in ("clean", "reset", "soft_reset", "hard_reset", "syntax"):
+            if not getattr(self, "_active_operation", None) or getattr(self, "_active_operation", None) in ("clean", "reset", "soft_reset", "hard_reset"):
                 self._set_status_text("Ready")
                 self._progress_bar.setVisible(False)
                 self._progress_bar.setRange(0, 0)

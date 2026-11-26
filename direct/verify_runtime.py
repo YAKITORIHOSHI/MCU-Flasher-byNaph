@@ -658,9 +658,6 @@ class PreviewBackend:
     def check_can_skip_compile(self, *args):
         return False
 
-    def realtime_check_syntax(self, *args):
-        return "[]"
-
     def set_active_file(self, path):
         self.active_file_path = path
 

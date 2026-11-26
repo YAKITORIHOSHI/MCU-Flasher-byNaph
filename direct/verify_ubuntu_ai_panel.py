@@ -116,6 +116,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
                             ("last_agent", Mock(return_value="opencode")), ("remember_agent", Mock())):
             self.stack.enter_context(patch.object(ai, name, value))
         self.stack.enter_context(patch("main.core.ai_agents.installed_agents", return_value={"opencode": "/fixture/opencode"}))
+        self.stack.enter_context(patch("main.core.ai_agents.internet_available", return_value=True))
         self.stack.enter_context(patch("main.core.config.get_monitor_font_size", return_value=12))
 
     def panel(self):
@@ -526,6 +527,7 @@ while True:
         patches.enter_context(patch.object(ai, "remember_agent"))
         patches.enter_context(patch.object(ai, "last_agent", return_value="opencode"))
         patches.enter_context(patch("main.core.ai_agents.installed_agents", return_value={"opencode": str(executable)}))
+        patches.enter_context(patch("main.core.ai_agents.internet_available", return_value=True))
         patches.enter_context(patch.object(ai, "prepare_context", return_value=True))
         patches.enter_context(patch("main.core.config.get_monitor_font_size", return_value=14))
         patches.enter_context(patch("src.modules.ai_prompt_context.PromptInputTracker._publish"))

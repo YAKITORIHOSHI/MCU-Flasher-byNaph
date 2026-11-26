@@ -42,7 +42,9 @@ echo '--- Cold first launch: empty runtime and store, real workspace, real Compi
 as_builder xvfb-run -a /usr/bin/python3 -B direct/verify_ubuntu_first_run.py --execute --allow-small-runner --timeout 3000
 fixture="$(dirname "$(ls -d temp/audit/ubuntu-first-run/*/result.json | tail -1)")"
 echo '--- The package browser in the runtime that first launch created'
-cd "$fixture/app"
+# Ubuntu, Mint and Fedora install per user; the portable source then has no runtime of its own.
+installed="$(/usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("installation_root") or sys.argv[2])' "$fixture/result.json" "$fixture/app")"
+cd "$installed"
 as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_package_browser.py
 as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_browser_loading.py
 as_builder env QT_QPA_PLATFORM=offscreen "$PWD/.venv-linux/bin/python" -B direct/verify_glass.py

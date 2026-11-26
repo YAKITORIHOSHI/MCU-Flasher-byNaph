@@ -24,7 +24,9 @@ uses the same build tools, boards and libraries. To open and use it, see the
   when the saved build for that board still verifies against those bytes.
 - **Monitors.** Separate Build and Serial monitors with Follow, Copy and Clear.
   Connecting never resets the board. The Serial monitor holds its baud rate; the
-  Connection panel holds the port, upload speed and send controls.
+  Connection panel holds the port, upload speed and send controls. The baud menu
+  is the Arduino IDE's (300 to 2000000); upload speeds run up to 921600,
+  including 512000.
 - **Shared tools.** Lite and the main app use one package store, so boards and
   libraries prepared in either are available in both.
 - **Resources.** Lists installed boards and libraries with their example

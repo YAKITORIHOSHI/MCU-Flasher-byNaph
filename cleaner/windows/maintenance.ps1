@@ -11,7 +11,7 @@ param(
 # Native Windows maintenance. Dot-source to use the same checked plan in reset.
 # No app imports, downloads, recovery cleanup, or inherited PlatformIO paths.
 $script:McuProtectedNames = @('.git', '.mcu_flasher_build_cache', '.mcu_ai_edits',
-    '.pio', '.vscode', '.clangd', '.opencode', '.venv-linux', '.ubuntu-tools',
+    '.pio', '.vscode', '.clangd', '.opencode', '.venv-linux', '.ubuntu-tools', '.ai-agents',
     '_python', 'env', 'node_modules', 'offline-extras', '.platformio-mcu-gui')
 
 function New-McuBudget([int]$Seconds) {

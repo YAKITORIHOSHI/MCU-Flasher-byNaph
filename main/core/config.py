@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 from main.core.constants import is_application_codebase_dir, SCRIPT_DIR
-from main.core.theme import Theme, get_theme_mode, get_theme_settings
+from main.core.theme import DEFAULT_THEME, Theme, get_theme_mode, get_theme_settings
 from main.core.config_store import ConfigSnapshot, config_lock, merge_changes
 
 LOCAL_GUI_CONFIG = SCRIPT_DIR / "src" / "gui_config.json"
@@ -359,7 +359,7 @@ def _detect_system_theme() -> str:
         except (ImportError, AttributeError):
             pass
         if sys.platform == "darwin":
-            return "default"  # Qt reports the macOS appearance above; there is no GNOME setting.
+            return DEFAULT_THEME  # Qt reports the macOS appearance above; there is no GNOME setting.
         try:
             import subprocess
             result = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
@@ -368,7 +368,7 @@ def _detect_system_theme() -> str:
                 return "default" if "dark" in result.stdout else "light"
         except (OSError, subprocess.TimeoutExpired):
             pass
-        return "default"
+        return DEFAULT_THEME
     try:
         import winreg
         key = winreg.OpenKey(
@@ -379,16 +379,16 @@ def _detect_system_theme() -> str:
         winreg.CloseKey(key)
         return "light" if val == 1 else "default"
     except Exception:
-        return "default"
+        return DEFAULT_THEME
 
 
 def get_theme_settings() -> tuple:
     """Return (theme_mode: str, follow_system: bool)."""
     data = _load_raw_config()
     shared = data.get("shared", {})
-    mode = shared.get("theme_mode", "default")
+    mode = shared.get("theme_mode", DEFAULT_THEME)
     if mode not in Theme.PALETTES:
-        mode = "default"
+        mode = DEFAULT_THEME
     follow_system = bool(shared.get("theme_follow_system", False))
     return mode, follow_system
 
@@ -405,7 +405,7 @@ def get_theme_mode() -> str:
 def set_theme_mode(mode: str, follow_system: bool = False):
     """Persist the theme mode preference and follow_system flag, then update Theme attributes."""
     if mode not in Theme.PALETTES:
-        mode = "default"
+        mode = DEFAULT_THEME
     data = _load_raw_config()
     data.setdefault("shared", {})["theme_mode"] = mode
     data["shared"]["theme_follow_system"] = bool(follow_system)
@@ -464,6 +464,19 @@ def get_monitor_font_size() -> int:
     except Exception:
         size = 12
     return max(6, min(48, size))
+
+
+# The AI Assistant's own text size, in percent of the monitor font.
+AI_ASSISTANT_SCALES = (75, 90, 100, 110, 125, 150, 175, 200)
+
+
+def get_ai_assistant_scale() -> int:
+    """The AI Assistant's text size in percent; 100 until chosen in Settings."""
+    try:
+        value = int(_load_raw_config().get("shared", {}).get("ai_assistant_scale", 100))
+    except (TypeError, ValueError, AttributeError):
+        return 100
+    return value if value in AI_ASSISTANT_SCALES else 100
 
 
 def set_monitor_font_size(size: int) -> bool:

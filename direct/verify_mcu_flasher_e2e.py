@@ -449,8 +449,9 @@ class TestTier1_R4_HardwareState_AgentSkills(BaseE2ETestCase):
         self.assertTrue(skill_path.exists(), "Workflow skill must exist")
         content = skill_path.read_text("utf-8")
 
-        self.assertIn("Hardware", content, "Must include Step 1 Hardware Query")
-        self.assertIn("Root Sketch", content, "Must include Step 2 Root Sketch boundary")
+        self.assertIn("Live hardware state", content, "Must include Step 1 Hardware Query")
+        self.assertIn("Edit only the sketch's root files", content, "Must include Step 2 Root Sketch boundary")
+        self.assertIn("Build Console", content, "Compile results come from the Build Console")
         self.assertNotIn("Monaco", content, "Must not contain out-of-place Monaco editor guidance")
         self.assertNotIn("PageBackdrop", content, "Must not contain glass backdrop GUI guidance")
 
@@ -781,13 +782,14 @@ class TestTier2_R4_HardwareState_Boundaries(BaseE2ETestCase):
 
     def test_r4_boundary_skill_templates_in_file_utils_match(self):
         """ensure_hidden_read_first_md() in file_utils contains synchronized skill templates."""
-        from main.core.file_utils import ensure_hidden_read_first_md
-        ensure_hidden_read_first_md(self.temp_path)
-
-        agent_target = self.temp_path / ".agents" / "skills" / "mcu-sketch-target" / "SKILL.md"
-        agent_workflow = self.temp_path / ".agents" / "skills" / "sketch-workflow" / "SKILL.md"
-        self.assertTrue(agent_target.exists(), "Target skill must be generated in sketch dir")
-        self.assertTrue(agent_workflow.exists(), "Workflow skill must be generated in sketch dir")
+        from main.core import file_utils
+        # Codex installed beside the built-in OpenCode: both folders get the skills.
+        with patch.object(file_utils, "_installed_agent_ids", return_value=frozenset({"opencode", "codex"})):
+            file_utils.ensure_hidden_read_first_md(self.temp_path)
+        for folder in (".opencode", ".agents"):
+            for name in ("mcu-sketch-target", "sketch-workflow", "serial-monitor-output"):
+                skill = self.temp_path / folder / "skills" / name / "SKILL.md"
+                self.assertTrue(skill.exists(), f"{folder} skill {name} must be generated in sketch dir")
 
 
 class TestTier2_R5_Bootstrap_Packaging_Boundaries(BaseE2ETestCase):

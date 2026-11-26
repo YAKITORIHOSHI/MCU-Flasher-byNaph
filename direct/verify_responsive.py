@@ -104,7 +104,7 @@ class QtResponsiveChecks(ControlChecks):
         tabs.setObjectName('workspace-tabs')
         tabs.setTabBar(WorkspaceTabBar(tabs))
         for name in ('Build Console', 'Serial Monitor', 'Compatible Devices',
-                     'Notifications', 'Syntax Check', 'Terminal', 'AI Changes'):
+                     'Notifications', 'Terminal', 'AI Changes'):
             tabs.addTab(QWidget(), name)
         layout.addWidget(tabs, 1)
         sidebar = QWidget(central)
@@ -140,7 +140,7 @@ class QtResponsiveChecks(ControlChecks):
             tabs = QTabWidget(host)
             tabs.setObjectName('workspace-tabs')
             tabs.setTabBar(WorkspaceTabBar(tabs))
-            for name in ('Build', 'Serial', 'Devices', 'Alerts', 'Syntax', 'Terminal', 'AI Changes'):
+            for name in ('Build', 'Serial', 'Devices', 'Alerts', 'Terminal', 'AI Changes'):
                 tabs.addTab(QWidget(), name)
             host.setCentralWidget(tabs)
             host.resize(1280, 640)
@@ -635,7 +635,6 @@ class QtResponsiveChecks(ControlChecks):
         self.assertEqual(new_calls, [])
 
     def test_remaining_tool_headers_and_history_fit_scaled_half_width(self):
-        from main.qt.syntax_panel import SyntaxPanel
         from main.qt.notif_panel import NotifPanel
         from main.qt.compat_panel import CompatPanel
         from main.qt.ai_changes_panel import AIChangesPanel
@@ -649,15 +648,12 @@ class QtResponsiveChecks(ControlChecks):
         self.backend.ai_review_manager = Mock()
         self.backend.ai_review_manager.get_ai_changes.return_value = [record]
         self.backend.ai_review_manager.has_pending_ai_edit.return_value = True
-        for cls in (SyntaxPanel, NotifPanel, CompatPanel, AIChangesPanel):
+        for cls in (NotifPanel, CompatPanel, AIChangesPanel):
             host = self.own(QWidget())
             layout = QVBoxLayout(host)
             layout.setContentsMargins(0, 0, 0, 0)
             panel = cls(parent=host) if cls is CompatPanel else cls(self.backend, host)
             layout.addWidget(panel)
-            if isinstance(panel, SyntaxPanel):
-                panel._bg_timer.stop()
-                panel._search_input.setText('controller')
             if isinstance(panel, CompatPanel):
                 panel.search_input.setText('controller')
             if isinstance(panel, AIChangesPanel):
@@ -667,8 +663,7 @@ class QtResponsiveChecks(ControlChecks):
             for mode in ('default', 'light', 'solarized_dark'):
                 APP.setStyleSheet(build_stylesheet(mode))
                 panel.apply_theme(mode)
-                focus_field = (panel._search_input if isinstance(panel, SyntaxPanel) else
-                               panel.search_input if isinstance(panel, CompatPanel) else
+                focus_field = (panel.search_input if isinstance(panel, CompatPanel) else
                                panel._tree if isinstance(panel, AIChangesPanel) else panel._filter_combo)
                 host.activateWindow()
                 focus_field.setFocus()
@@ -693,11 +688,6 @@ class QtResponsiveChecks(ControlChecks):
                                 self.contained(button, panel)
                                 self.assertTrue(button.visibleRegion().contains(button.rect().center()),
                                                 f'{button.text()} was clipped by an ancestor')
-                        if isinstance(panel, SyntaxPanel):
-                            for field in (panel._filter_combo, panel._search_input, panel._badge_errors, panel._badge_warnings):
-                                self.contained(field, panel._header)
-                            self.assertEqual(panel._search_input.text(), 'controller')
-                            self.assertEqual(panel._table.font().pointSize(), 11)
                         if isinstance(panel, CompatPanel):
                             self.assertEqual(panel.search_input.text(), 'controller')
                         if isinstance(panel, AIChangesPanel):
@@ -714,7 +704,7 @@ class QtResponsiveChecks(ControlChecks):
                         if width == 320:
                             capture(host, f'tool-{cls.__name__}-{mode}-compact')
             host.hide()
-            if isinstance(panel, (SyntaxPanel, AIChangesPanel)):
+            if isinstance(panel, AIChangesPanel):
                 host.show()
                 for size in (15, 11):
                     panel.set_font_size(size)
@@ -722,8 +712,7 @@ class QtResponsiveChecks(ControlChecks):
                     pump()
                     self.assertLessEqual(host.size().width(), 320)
                     self.assertLessEqual(host.size().height(), 180)
-                    readings = (panel._table,) if isinstance(panel, SyntaxPanel) else (panel._before, panel._after)
-                    for reading in readings:
+                    for reading in (panel._before, panel._after):
                         self.assertEqual(reading.font().pointSize(), size)
                         self.assertGreaterEqual(reading.viewport().height(), reading.fontMetrics().lineSpacing())
                     capture(host, f'tool-{cls.__name__}-font-{size}-short')

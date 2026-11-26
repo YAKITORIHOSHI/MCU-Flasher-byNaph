@@ -78,6 +78,8 @@ class UploadLog:
         self._progress = api._new_upload_progress_state() if self.is_esp else None
         self._chip: dict[str, str] = {}
         self._chip_shown = False
+        # USB rows for a chip that reports itself through its programmer (AVR signature).
+        self.chip_extra: list[tuple[str, str]] = []
         self._memory: dict[str, str] = {}
         self._memory_emitted: dict[str, str] = {}
         self._connection = ""
@@ -163,7 +165,18 @@ class UploadLog:
     def _consume_programmer(self, clean: str) -> bool:
         """Format known AVR/BOSSA/DFU/OpenOCD records; leave other output intact."""
         low = clean.lower()
-        if re.fullmatch(r"(?:avrdude:\s*)?(?:AVR device initialized and ready to accept instructions|Device signature = 0x[\da-f]+(?:\s+\([^\r\n]*\))?)", clean, re.I):
+        signature = re.fullmatch(r"(?:avrdude:\s*)?Device signature = 0x([\da-f]{6})(?:\s+\([^\r\n]*\))?", clean, re.I)
+        if signature:
+            self._connection_row("connected")
+            if not self._chip_shown:
+                from main.core.chip_probe import avr_fields
+                self._chip_shown = True
+                fields, warning = avr_fields(signature.group(1), self.info)
+                self.api._print_info_box("Actual Board", fields + list(self.chip_extra))
+                if warning:
+                    self._emit(f"  {warning}", "warning")
+            return True
+        if re.fullmatch(r"(?:avrdude:\s*)?AVR device initialized and ready to accept instructions", clean, re.I):
             self._connection_row("connected")
             return True
         rate = re.fullmatch(r"Overriding Baud Rate\s*:\s*(\d+)", clean, re.I)

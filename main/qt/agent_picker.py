@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from main.core import ai_agents
 
@@ -15,6 +15,7 @@ class AgentPicker(QObject):
     chosen = Signal(str)
     downloaded = Signal(str)
     _found = Signal(int, object)
+    _connection = Signal(int, bool)
     _line = Signal(int, str)
     _finished = Signal(int, str, str)
 
@@ -29,6 +30,13 @@ class AgentPicker(QObject):
         chooser.download_requested.connect(self.download)
         chooser.cancel_requested.connect(self.cancel)
         self._found.connect(self._show_found, Qt.ConnectionType.QueuedConnection)
+        self._connection.connect(self._show_connection, Qt.ConnectionType.QueuedConnection)
+        chooser.retry_requested.connect(self.refresh)
+        # While offline the list is hidden; look again now and then so it returns by itself.
+        self._recheck = QTimer(self)
+        self._recheck.setSingleShot(True)
+        self._recheck.setInterval(8000)
+        self._recheck.timeout.connect(self.refresh)
         self._line.connect(self._show_line, Qt.ConnectionType.QueuedConnection)
         self._finished.connect(self._finish, Qt.ConnectionType.QueuedConnection)
 
@@ -51,12 +59,28 @@ class AgentPicker(QObject):
             try:
                 self._found.emit(scan, found)
             except RuntimeError:
+                return
+            try:
+                online = ai_agents.internet_available()
+            except Exception:
+                online = False
+            try:
+                self._connection.emit(scan, online)
+            except RuntimeError:
                 pass
         threading.Thread(target=look, name="MCU_AgentScan", daemon=True).start()
 
     def _show_found(self, scan, found) -> None:
         if scan == self._scan and not self._closed:
             self._chooser.set_installed(found)
+
+    def _show_connection(self, scan, online) -> None:
+        if scan != self._scan or self._closed:
+            return
+        # A download already under way keeps its list and reports its own failure.
+        self._chooser.set_online(online or self.downloading)
+        if not online:
+            self._recheck.start()
 
     def download(self, agent_id: str) -> None:
         if self._closed or self._cancel is not None:
@@ -121,5 +145,6 @@ class AgentPicker(QObject):
     def close(self) -> None:
         """The owner is closing: end the download with it."""
         self._closed = True
+        self._recheck.stop()
         if self._cancel is not None:
             self._cancel.set()

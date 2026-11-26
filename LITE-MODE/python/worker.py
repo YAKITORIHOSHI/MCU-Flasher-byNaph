@@ -29,9 +29,10 @@ MAX_SOURCE_BYTES = 8 * 1024 * 1024
 SOURCE_REFRESH_SECONDS = 2.0
 MAX_FRAME = 256 * 1024
 # The rates Lite's menus offer, as listed in src/preferences.rs.
-MONITOR_RATES = frozenset({300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 74880, 115200,
-                           230400, 250000, 460800, 921600})
-UPLOAD_RATES = frozenset({9600, 19200, 57600, 115200, 230400, 460800, 921600})
+# Exactly the Arduino IDE Serial Monitor's rates, as in main.core.constants.
+MONITOR_RATES = frozenset({300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880,
+                           115200, 230400, 250000, 460800, 500000, 921600, 1000000, 2000000})
+UPLOAD_RATES = frozenset({9600, 19200, 57600, 115200, 230400, 460800, 512000, 921600})
 
 
 def window_speeds(state):

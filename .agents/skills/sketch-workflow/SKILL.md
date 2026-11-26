@@ -1,29 +1,31 @@
 ---
 name: sketch-workflow
-description: "Live hardware state, exact board/framework settings, serial ports and root-sketch workflow. Use for firmware and hardware questions; use mcu-flash-gui-dev for application changes."
+description: "Root-sketch workflow in MCU Flasher: live board and port state, which files to edit, where compile and upload results are, and what never to touch. Use for any firmware or hardware task in this sketch."
 ---
 
-# Sketch Project Workflow & Priority Guide
+# Sketch workflow in MCU Flasher
 
-## Live Hardware State
-Hardware values are not fixed in this portable skill. Use the current MCU Flasher GUI when available; otherwise read `.mcu_flasher_build_cache/project_state.json` (read-only). Report only values present in that state. If a value is absent, say it is unavailable; never infer it from manifests or installed packages.
+MCU Flasher compiles, uploads and monitors this sketch. You edit its source files; the user presses Compile or Upload. Do not run compilers, PlatformIO or upload tools yourself.
 
-### Step 1: Hardware Query
-Use current GUI state or `.mcu_flasher_build_cache/project_state.json` (read-only). Inspect the `hardware` object: if `hardware.mcu_connected` is false or `hardware.port` is null, report that no microcontroller is connected. If `hardware.board_selected` is false or `hardware.board_name` is null, report that no board is selected. Do not recursively scan disks, package trees, or inspect `platformio.ini` to guess board selection.
+## 1. Live hardware state
+Board, port and speeds change while the app runs. Read `.mcu_flasher_build_cache/project_state.json` (read-only) and its `hardware` object. If `hardware.mcu_connected` is false or `hardware.port` is null, say no microcontroller is connected. If `hardware.board_selected` is false or `hardware.board_name` is null, say no board is selected. Report only values present there; never infer a board or port from `platformio.ini`, package folders or older generated text.
 
-### Step 2: Read & Edit Only Root Sketch Files
-Confine firmware source changes strictly to the active project's root:
-- Primary Arduino sketches: `*.ino` (Main sketch file at root)
-- Header files: `*.h`, `*.hpp` (C/C++ header files at root)
-- Source files: `*.cpp`, `*.c` (C/C++ source code files at root)
-- Project documentation: `NOTE.txt` or other user-requested root text files
-Never search parent or sibling directories, and never create nested source directories or submodules unless explicitly requested.
+## 2. Edit only the sketch's root files
+- `*.ino`: the main Arduino sketch, and other tabs of it
+- `*.h`, `*.hpp`: headers
+- `*.cpp`, `*.c`: C/C++ sources
+- `NOTE.txt` and other root text notes the user asks for
 
-### Step 3: Check Build & Notification History
-When troubleshooting compilation errors, upload failures, or reset issues, read `.mcu_flasher_build_cache/dbs_notif.json` (read-only) to inspect recent compiler errors, missing library warnings, toolchain logs, upload status, device connect/disconnect events, and library installations.
+Never read parent or sibling folders, and never create nested source folders unless the user asks.
 
-### Step 4: Strict No-Touch on Build & Cache Files
-Files and directories inside `.mcu_flasher_build_cache/`, `.pio/`, `.vscode/`, `.clangd/`, and `.opencode/` are internal build inputs, backups, and PlatformIO toolchain data. NEVER edit, modify, rename, or delete files inside these protected locations.
+## 3. Compile and upload results
+The Build Console shows every compiler error and warning with its file and line, and the upload log. When the user reports a failed build, ask for those lines or read the recent results in `.mcu_flasher_build_cache/dbs_notif.json` (read-only): compiler errors, missing libraries, upload status and device connect or disconnect events. Fix the reported file and line in the root sources; the app checks syntax only by compiling.
 
-### Step 5: AI Edit Backup & Recovery
-Automated edit backups are maintained in `.mcu_flasher_build_cache/.mcu_ai_edits` (relative to project root) following the layout `M-D-YY/sessionN/editN.txt`. Each file preserves exact BEFORE, AI/AFTER, current-applied, and Undo-target copies. Treat the backup tree as READ-ONLY. Never modify backup files or `.mcu_flasher_build_cache/.mcu_ai_edits/.state`. When the user requests recovering or comparing an earlier AI edit, locate the matching file entry and restore only the requested content section.
+## 4. Never touch
+`.mcu_flasher_build_cache/`, `.pio/`, `.vscode/`, `.clangd/`, `.opencode/`, `.claude/` and `.agents/` hold build inputs, caches, backups and these instructions. Never edit, rename or delete anything inside them.
+
+## 5. AI edit backups
+Every AI edit is backed up in `.mcu_flasher_build_cache/.mcu_ai_edits`, laid out as `M-D-YY/sessionN/editN.txt` with the exact before, after, applied and undo copies. Treat it as read-only and never read `.mcu_flasher_build_cache/.mcu_ai_edits/.state`. When the user asks to recover or compare an earlier AI edit, find the matching file entry and restore only the requested part. The user can also revert an edit or a whole session from the app's AI Changes tab.
+
+---
+*Generated automatically by MCU Flash GUI for this sketch's coding assistants; it is rewritten when the sketch opens.*

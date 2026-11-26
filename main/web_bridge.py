@@ -234,7 +234,7 @@ import serial.tools.list_ports
 import psutil
 
 from main.core.constants import (
-    is_application_codebase_dir, MAX_BAUD_RATE, VALID_BAUD_RATES, DEFAULT_UPLOAD_SPEED,
+    is_application_codebase_dir, MAX_BAUD_RATE, MAX_UPLOAD_SPEED, VALID_BAUD_RATES, DEFAULT_UPLOAD_SPEED,
     SCRIPT_DIR, board_reset_capabilities, default_monitor_baud,
 )
 from main.core.config import (
@@ -512,7 +512,7 @@ class MCUWebBackendAPI:
         self.current_port = ""
         try:
             raw_upload = int(config.get("upload_speed", DEFAULT_UPLOAD_SPEED))
-            self.upload_speed = str(min(raw_upload, MAX_BAUD_RATE))
+            self.upload_speed = str(min(raw_upload, MAX_UPLOAD_SPEED))
         except Exception:
             self.upload_speed = str(DEFAULT_UPLOAD_SPEED)
         self.skip_compile = False
@@ -925,7 +925,6 @@ class MCUWebBackendAPI:
                     "project:updated":  bus.project_updated,
                     "project:files":    bus.project_files_updated,
                     "project:cloud": bus.cloud_project_updated,
-                    "syntax:errors":    bus.syntax_errors,
                     "notification":     bus.notification,
                     "package:progress": getattr(bus, "package_progress", None),
                     "telemetry":        bus.telemetry,
@@ -1364,12 +1363,12 @@ class MCUWebBackendAPI:
         return self.is_compile_or_upload_active()
 
     def set_upload_speed(self, speed: str | int) -> None:
-        """Set the upload baud rate, capped at MAX_BAUD_RATE (921600)."""
+        """Set the upload baud rate, capped at MAX_UPLOAD_SPEED (921600)."""
         if self.is_upload_phase_active():
             return
         try:
             val = int(speed)
-            self.upload_speed = str(min(val, MAX_BAUD_RATE))
+            self.upload_speed = str(min(val, MAX_UPLOAD_SPEED))
         except (ValueError, TypeError):
             self.upload_speed = str(speed)
 
@@ -2129,6 +2128,32 @@ class MCUWebBackendAPI:
         rows.append(("", "normal"))
         return rows
 
+    def _probe_board_details(self, port: str, info: dict, upload_log=None) -> bool:
+        """Actual Board for every non-ESP family: its bootloader, USB bridge and specs.
+
+        Classic AVR bootloaders are asked for the chip's signature before avrdude runs; when
+        one does not answer, avrdude's own signature line fills the table (``UploadLog``).
+        Never raises and never stops the upload.
+        """
+        try:
+            from main.core.chip_probe import board_report
+            title, fields, warning = board_report(port, info)
+        except Exception as error:
+            self.emit("console:log", {"text": f"  Chip details unavailable: {error}", "tag": "dim", "newline": True})
+            return False
+        if title is None:
+            if upload_log is not None:
+                upload_log.chip_extra = list(fields)
+            return False
+        if not fields:
+            return False
+        self._print_info_box(title, fields)
+        if warning:
+            self.emit("console:log", {"text": f"  {warning}", "tag": "warning", "newline": True})
+        if upload_log is not None:
+            upload_log._chip_shown = True
+        return True
+
     def _probe_chip_info(self, port: str) -> bool:
         """Connect to the chip via esptool and print hardware info to the build console."""
         esp = None
@@ -2245,6 +2270,11 @@ class MCUWebBackendAPI:
                        ("Crystal", crystal_str), ("MAC Address", mac)]
             if usb_mode:
                 fields.append(("USB Mode", usb_mode))
+            try:
+                from main.core.chip_probe import usb_fields
+                fields += usb_fields(port)
+            except Exception:
+                pass
             self._print_chip_info_box(chip_model, fields)
             return True
         except Exception as e:
@@ -3645,7 +3675,7 @@ class MCUWebBackendAPI:
         self.reset_on_baud_change = bool(enabled)
 
     def set_baud_rate(self, baud: int, *, allow_reset: bool = True):
-        """Change serial communication baud rate, capped at MAX_BAUD_RATE (921600)."""
+        """Change serial communication baud rate, capped at the Arduino IDE's highest rate."""
         new_baud = min(int(baud), MAX_BAUD_RATE)
         old_baud = getattr(self, "current_baud", 115200)
         baud_changed = (old_baud != new_baud)
@@ -7522,6 +7552,8 @@ class MCUWebBackendAPI:
                 str(getattr(self, "upload_speed", None) or info.get("upload_speed") or ""),
             )
             upload_log.start()
+            if str(info.get("platform") or "").lower() not in ("espressif32", "espressif8266"):
+                self._probe_board_details(port, info, upload_log)
             upload_started = time.monotonic()
             compiler_cwd = cache_root
             if sys.platform == "win32":
@@ -8741,6 +8773,8 @@ class MCUWebBackendAPI:
                 self._append_upload_boot_hint(
                     "  Hold BOOT now — the uploader will keep polling the bootloader.",
                 )
+            else:
+                probed_ok = self._probe_board_details(port, binfo, upload_log)
             pio_cmd = find_pio_executable()
             if not pio_cmd:
                 self.emit("console:log", {"text": "PlatformIO not available for upload.", "tag": "error", "newline": True})
@@ -10354,7 +10388,7 @@ class MCUWebBackendAPI:
             self.emit("console:log", {"text": f"Stop could not start: {exc}. Try Stop again.", "tag": "error", "newline": True})
 
     # ──────────────────────────────────────────────────────────
-    # JS-RPC: SETTINGS & SYNTAX
+    # JS-RPC: SETTINGS
     # ──────────────────────────────────────────────────────────
     def get_settings(self) -> dict[str, Any]:
         return load_gui_config()
@@ -10367,7 +10401,8 @@ class MCUWebBackendAPI:
             from main.core.theme import Theme
             mode = settings["theme_mode"]
             if mode not in Theme.PALETTES:
-                mode = "default"
+                from main.core.theme import DEFAULT_THEME
+                mode = DEFAULT_THEME
             shared_updates = {"theme_mode": mode, "theme_follow_system": False}
         if save_gui_config(cfg, shared_updates=shared_updates) is False:
             error = "The configuration files could not be written. Check that your settings folder is writable and try again."
@@ -10380,12 +10415,3 @@ class MCUWebBackendAPI:
     def get_theme_mode(self) -> str:
         return get_theme_mode()
 
-    def realtime_check_syntax(self, file_path: str, content: str) -> str:
-        """Realtime syntax checking bridge for Monaco editor."""
-        try:
-            from src.syntax_checker import analyze_cpp_syntax
-            diagnostics = analyze_cpp_syntax(content, Path(file_path))
-            self.emit("syntax:errors", diagnostics)
-            return json.dumps(diagnostics)
-        except Exception:
-            return "[]"

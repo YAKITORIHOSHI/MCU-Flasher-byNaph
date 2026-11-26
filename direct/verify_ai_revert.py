@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from main.core import ai_revert, file_utils
@@ -30,6 +31,19 @@ register_fonts()
 
 OLD = "int led = 13;\n\nvoid setup() {\n  pinMode(led, OUTPUT);\n}\n\nvoid loop() {\n  delay(1000);\n}\n"
 NEW = OLD.replace("int led = 13;", "int led = 2;\nint button = 4;").replace("delay(1000)", "delay(250)")
+
+
+def delete_on_gui_thread(obj) -> None:
+    """Destroy a Qt object here, never in whichever thread next runs Python's collector.
+
+    A watcher owns a QFileSystemWatcher (socket notifiers). Left to garbage collection it can
+    be destroyed from a revert or writer thread, which Qt reports and then crashes on.
+    """
+    try:
+        obj.deleteLater()
+    except RuntimeError:
+        return  # Already destroyed.
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def until(condition, message, seconds=8):
@@ -257,6 +271,7 @@ class BridgeChecks(Fixture):
         with patch("main.core.ai_review.threading.Thread"):
             watcher = AIEditWatcher(self.root, self.manager)
         watcher._scan_running = False
+        self.addCleanup(delete_on_gui_thread, watcher)  # Runs after shutdown (cleanups are LIFO).
         self.addCleanup(watcher.shutdown)
         backend = SimpleNamespace(ai_review_manager=self.manager, ai_watcher=watcher, is_busy=False, modified_files={},
                                   emit=Mock(), _get_qt_signals=lambda: signals, **state)
@@ -305,7 +320,7 @@ class PanelChecks(BridgeChecks):
         panel.resize(1000, 420)
         panel.show()
         self.addCleanup(QCoreApplication.sendPostedEvents, None, QEvent.Type.DeferredDelete)
-        self.addCleanup(panel.deleteLater)
+        self.addCleanup(delete_on_gui_thread, panel)
         self.addCleanup(panel.close)
         return panel
 
@@ -318,18 +333,34 @@ class PanelChecks(BridgeChecks):
         self.assertEqual(panel._revert.text(), "Revert edit")
         self.assertTrue(panel._revert.isEnabled())
         self.assertEqual(panel._revert_targets()[1], "Revert this AI edit in Other.cpp")
-        panel._tree.setCurrentItem(panel._tree.topLevelItem(0))
-        self.assertEqual(panel._revert.text(), "Revert session")
-        self.assertFalse(panel._delete.isEnabled() or panel._review.isEnabled())
+        group = panel._tree.topLevelItem(0)
+        self.assertFalse(group.flags() & Qt.ItemFlag.ItemIsSelectable, "A group row is never the selection")
+        shown, chosen = panel._after.toPlainText(), panel._selected_id()
+        panel._tree.setCurrentItem(group)
+        self.assertEqual((panel._revert.text(), panel._after.toPlainText(), panel._selected_id()),
+                         ("Revert edit", shown, chosen), "Moving onto a group keeps the file shown")
+        rect = panel._tree.visualItemRect(group)
+        QTest.mouseClick(panel._tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        self.assertFalse(group.isExpanded(), "One click closes a group")
+        QTest.mouseClick(panel._tree.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        self.assertTrue(group.isExpanded(), "and the next opens it")
+        menu = panel._session_menu(group)
+        self.addCleanup(delete_on_gui_thread, menu)
+        self.assertEqual([action.text() for action in menu.actions()], ["Revert session (1 edit)…"])
+        opened = []
+        with patch.object(panel, "_open_revert", side_effect=lambda ids, title: opened.append((ids, title))):
+            menu.actions()[0].trigger()
+        self.assertEqual(opened, [(group.data(0, Qt.ItemDataRole.UserRole + 1), panel._revert_targets(group)[1])])
         archive = panel._archive_item()
-        panel._tree.setCurrentItem(archive)
-        self.assertFalse(panel._revert.isEnabled())
+        self.assertIsNone(panel._session_menu(archive), "Earlier sessions has nothing to revert itself")
         archive.setExpanded(True)
         until(lambda: panel._archive is not None, "saved sessions")
         session = archive.child(0)
         self.assertIn("(1 edit)", session.text(0))
-        panel._tree.setCurrentItem(session)
-        self.assertEqual(panel._revert.text(), "Revert session")
+        self.assertFalse(session.flags() & Qt.ItemFlag.ItemIsSelectable)
+        session_menu = panel._session_menu(session)
+        self.addCleanup(delete_on_gui_thread, session_menu)
+        self.assertEqual([action.text() for action in session_menu.actions()], ["Revert session (1 edit)…"])
         panel._tree.setCurrentItem(session.child(0))
         until(lambda: panel._before.toPlainText() == OLD, "saved edit preview")
         self.assertEqual(panel._after.toPlainText(), NEW)
@@ -346,7 +377,7 @@ class PanelChecks(BridgeChecks):
         backend = self.backend()
         dialog = AIRevertDialog(backend, [card], "Revert this AI edit in Blink.ino")
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(delete_on_gui_thread, dialog)
         dialog.show()
         until(dialog._apply.isEnabled, "preview")
         self.assertIn("int led = 7;", dialog._then.toPlainText())
@@ -358,11 +389,37 @@ class PanelChecks(BridgeChecks):
         until(lambda: not dialog.isVisible(), "applied")
         self.assertEqual(path.read_text(encoding="utf-8"), OLD)
 
+    def test_a_dialog_deleted_while_its_preview_runs_is_never_called_back(self):
+        import threading
+        path, card = self.edit()
+        backend = self.backend()
+        release, started = threading.Event(), threading.Event()
+        original = backend.ai_review_manager.plan_ai_revert
+
+        def slow_plan(*args, **kwargs):
+            started.set()
+            release.wait(5)
+            return original(*args, **kwargs)
+        with patch.object(backend.ai_review_manager, "plan_ai_revert", side_effect=slow_plan):
+            dialog = AIRevertDialog(backend, [card], "Revert")
+            dialog.show()
+            until(started.is_set, "preview started")
+            finished = []
+            dialog._planned.connect(lambda *args: finished.append(args))
+            delete_on_gui_thread(dialog)
+            release.set()
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                APP.processEvents()
+                time.sleep(0.005)
+        self.assertEqual(finished, [], "a deleted dialog receives nothing")
+        self.assertEqual(path.read_text(encoding="utf-8"), NEW, "a preview never writes")
+
     def test_dialog_reports_a_newer_change_and_shows_it(self):
         path, card = self.edit()
         dialog = AIRevertDialog(self.backend(), [card], "Revert")
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self.addCleanup(dialog.deleteLater)
+        self.addCleanup(delete_on_gui_thread, dialog)
         dialog.show()
         until(dialog._apply.isEnabled, "preview")
         path.write_text(NEW + "// newer\n", encoding="utf-8")

@@ -333,6 +333,30 @@ Classify paths before changing attributes or deleting anything:
   read-only preview boundaries. Never run a live cleaner or system repair for
   verification. Record native cases skipped on the current host.
 
+## Clean fresh check before every push and release
+
+Run it every time before pushing to GitHub `main` or replacing the release asset (the
+user's rule, 2026-11-26): what is published must behave like a first download, with
+no AI agent downloaded and no dependency prepared.
+
+1. Stage exactly the commit to publish with `git archive HEAD`, plus the hydrated LFS
+   installers when needed, into a new folder under the scratchpad; never test the
+   working tree. Confirm it holds no `.ai-agents/`, `.venv-linux/`, `.ubuntu-tools/`,
+   `env/`, `src/_python/`, `node_modules/`, `__pycache__/`, `logs/`, `temp/` or
+   settings (`src/gui_config.json`, `.mcu_gui_config.json`).
+2. Run its first launch in an isolated home: HOME and every XDG_* folder inside the
+   stage, DISPLAY and WAYLAND_DISPLAY unset, under `systemd-run --user --scope -p
+   MemoryMax=8G` (the scratchpad is tmpfs, so files count as memory). Run
+   `direct/ubuntu/setup.py` and confirm Bootstrap prepares the runtime from nothing.
+3. Confirm the fresh state: Frost White (`DEFAULT_THEME`, no theme saved), OpenCode
+   listed as built in and every other agent as downloadable, nothing in `.ai-agents`,
+   and a new sketch given only `AGENTS.md`, `.opencodeignore` and `.opencode/skills`.
+4. Build the ZIP from that commit with `direct/build_release.py` and run
+   `direct/verify_release_sources.py`: no `.ai-agents`, environments, settings or logs.
+
+Push and publish only after it passes, and say what could not run here (the GUI
+first run needs Xvfb, which only CI has).
+
 ## File distribution conventions
 
 When replacing a named public release asset, build and verify the replacement

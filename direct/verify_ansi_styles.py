@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from main.core.ansi_sgr import PLAIN, SgrStream, SgrStyle, apply_sgr, resolve_colors, xterm_rgb
+from main.core.ansi_sgr import DEVICE_PALETTE, PLAIN, SgrStream, SgrStyle, apply_sgr, readable_on, resolve_colors, xterm_rgb
 from main.core.console_text import ConsoleTextCleaner
 from main.core.log_colors import contrast_ratio, themed_ansi_colors
 from main.core.theme import glass_worst
@@ -158,7 +158,8 @@ class ViewChecks(unittest.TestCase):
             view.apply_theme(theme)
             surface = glass_worst(theme)["reading"]
             fault = self.format_at(view, "FAULT")
-            self.assertEqual(fault.foreground().color().name(), themed_ansi_colors(theme)[31])
+            self.assertEqual(fault.foreground().color().name(), readable_on(DEVICE_PALETTE[1], surface),
+                             "Device output paints the real palette, readable on the surface")
             self.assertGreaterEqual(fault.fontWeight(), 700)
             amber = self.format_at(view, "amber").foreground().color().name()
             self.assertGreaterEqual(contrast_ratio(amber, surface), 4.5, theme)
@@ -177,6 +178,40 @@ class ViewChecks(unittest.TestCase):
         view.append_log({"text": "\x1b[2Jafter", "newline": True, "generation": 2})
         view._flush_queue()
         self.assertEqual(view.toPlainText(), "after\n")
+
+    def test_serial_monitor_paints_a_firmware_ansi_palette(self):
+        """The sketch helpers ansiSet(out, fg) / ansiSet(out, fg, bg) / ansiReset(out)."""
+        from main.qt.serial_panel import SerialOutputView
+        view = SerialOutputView()
+        self.addCleanup(view.deleteLater)
+        line = "".join(f"\x1b[{code}mF{code} " for code in (*range(30, 38), *range(90, 98)))
+        line += "".join(f"\x1b[97;{code}mB{code} " for code in (*range(40, 48), *range(100, 108)))
+        line += "\x1b[0mplain"
+        view.append_log({"text": line, "newline": True, "generation": 1})
+        view._flush_queue()
+        self.assertNotIn("\x1b", view.toPlainText())
+        self.assertIn("F30 F31", view.toPlainText())
+        for theme in THEMES:
+            view.apply_theme(theme)
+            surface = glass_worst(theme)["reading"]
+            foregrounds = {code: self.format_at(view, f"F{code}").foreground().color().name()
+                           for code in (*range(30, 38), *range(90, 98))}
+            for code in range(31, 37):
+                self.assertNotEqual(foregrounds[code], foregrounds[code + 60], (theme, code, "normal and bright differ"))
+            self.assertEqual(len(set(foregrounds.values())), 16, (theme, foregrounds))
+            for code, color in foregrounds.items():
+                self.assertGreaterEqual(contrast_ratio(color, surface), 4.5, (theme, code))
+            for code in (*range(40, 48), *range(100, 108)):
+                cell = self.format_at(view, f"B{code}")
+                index = code - 40 if code < 100 else code - 100 + 8
+                self.assertEqual(cell.background().color().name(), DEVICE_PALETTE[index], (theme, code))
+                self.assertGreaterEqual(contrast_ratio(cell.foreground().color().name(), DEVICE_PALETTE[index]), 4.5,
+                                        (theme, code, "bright white stays readable on its own background"))
+            self.assertEqual(self.format_at(view, "B40").background().color().name(), "#0c0c0c", "Black is black")
+            self.assertEqual(self.format_at(view, "B107").background().color().name(), "#f2f2f2", "White is white")
+            plain = self.format_at(view, "plain")
+            from PySide6.QtCore import Qt
+            self.assertEqual(plain.background().style(), Qt.BrushStyle.NoBrush, "ESC[0m ends the background")
 
     def test_build_console_paints_compiler_colors_and_keeps_diagnostics(self):
         from main.qt.console_panel import ConsolePanel

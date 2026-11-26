@@ -3,7 +3,9 @@
 Makers' installers are fetched over HTTPS into a private folder and run as files, so
 a transfer that breaks off never runs half of one; they verify their own payloads.
 npm agents use npm 10+ from the system, or a private Node.js checked against the
-publisher's checksums. Detection afterwards is by files, in main/core/ai_agents.py.
+publisher's checksums. An isolated agent (Hermes on Linux and macOS) installs whole
+into this app's folder: its installer runs with a stand-in home there. Detection
+afterwards is by files, in main/core/ai_agents.py.
 """
 from __future__ import annotations
 
@@ -147,14 +149,37 @@ def run_streamed(command, *, env, cwd, on_line, cancelled, timeout=INSTALL_SECON
         _end_tree(process)
 
 
-def _environment(agent_id, extra=()):
+def _environment(agent_id, extra=(), *, installer=False):
     env = {key: value for key, value in os.environ.items()
            if key not in ("PYTHONHOME", "PYTHONPATH", "PIP_NO_INDEX", "MCU_FLASHER_OFFLINE_RUNTIME",
                           "MCU_FLASHER_WORKSPACE_RUNTIME") and key.lower() != "npm_config_ignore_scripts"}
-    env.update(ai_agents.agent_environment(agent_id, env))
+    env.update((ai_agents.installer_environment if installer else ai_agents.agent_environment)(agent_id, env))
     env.update(extra)
     env.setdefault("NO_COLOR", "1")
-    return env
+    return ai_agents.without_removed(env)
+
+
+def _prepare_isolation(place):
+    """The agent's own folders, private like the home folder it stands in for."""
+    try:
+        place.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for folder in (place.data, place.home, place.temp):
+            folder.mkdir(mode=0o700, exist_ok=True)
+    except OSError as exc:
+        raise AgentSetupError(f"The agent's folder could not be created in {place.root}: {exc}") from exc
+
+
+def _keep_off_path(agent_id, launcher, place, *, on_line, cancelled, run):
+    """Hermes adds its commands to ~/.local/bin whenever it updates itself; this copy must not."""
+    if agent_id != "hermes":
+        return
+    on_line("Keeping Hermes inside MCU Flasher's folder…")
+    code, tail = run([launcher, "config", "set", "cli.expose_on_path", "false"],
+                     env=_environment(agent_id, installer=True), cwd=place.root, on_line=on_line, cancelled=cancelled)
+    if code:
+        reason = tail[-1] if tail else ""
+        raise AgentSetupError(f"Hermes was installed, but its commands could not be kept out of ~/.local/bin "
+                              f"(exit {code}). {reason}".strip())
 
 
 def _node_major(node: str) -> int:
@@ -273,6 +298,9 @@ def install(agent_id: str, *, on_line=lambda _line: None, cancelled=lambda: Fals
     if existing:
         return existing
     _check(cancelled)
+    place = ai_agents.isolation(agent_id)
+    if place is not None:
+        _prepare_isolation(place)
     on_line(f"Contacting {plan.source}…")
     if plan.kind == "npm":
         command, extra = _npm_command(on_line=on_line, cancelled=cancelled)
@@ -284,7 +312,7 @@ def install(agent_id: str, *, on_line=lambda _line: None, cancelled=lambda: Fals
         code, tail = run(command, env=_environment(agent_id, extra), cwd=prefix, on_line=on_line, cancelled=cancelled)
     else:
         script = fetch(plan.url, cancelled=cancelled)
-        with tempfile.TemporaryDirectory(prefix="mcu-agent-") as folder:
+        with tempfile.TemporaryDirectory(prefix="mcu-agent-", dir=place.temp if place else None) as folder:
             path = Path(folder) / plan.url.rsplit("/", 1)[1]
             path.write_bytes(script)
             if plan.shell == "powershell":
@@ -294,10 +322,17 @@ def install(agent_id: str, *, on_line=lambda _line: None, cancelled=lambda: Fals
                 if not program:
                     raise AgentSetupError(f"{plan.shell} is needed to run this installer.")
                 command = [program, str(path)]
-            code, tail = run([*command, *plan.arguments], env=_environment(agent_id, dict(plan.environment)), cwd=folder,
-                             on_line=on_line, cancelled=cancelled)
+            code, tail = run([*command, *plan.arguments], env=_environment(agent_id, dict(plan.environment), installer=True),
+                             cwd=folder, on_line=on_line, cancelled=cancelled)
     found = ai_agents.find_agent(agent_id)
     if found:
+        if place is not None:
+            _keep_off_path(agent_id, found, place, on_line=on_line, cancelled=cancelled, run=run)
+        try:
+            from main.core.file_utils import forget_installed_agents
+            forget_installed_agents()       # Its skills are written when it next starts.
+        except Exception:
+            pass
         return found
     reason = next((line for line in reversed(tail) if re.search(r"error|fail|cannot|not found|denied", line, re.I)),
                   tail[-1] if tail else "")

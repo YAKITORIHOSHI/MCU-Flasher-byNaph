@@ -12,8 +12,12 @@ def reading_surface(theme_name: str) -> str:
     return glass_worst(theme_name)["reading"]
 
 
-def styled_format(base: QTextCharFormat, style: SgrStyle | None, theme_name: str) -> QTextCharFormat:
-    """A copy of ``base`` with the style's colors, weight, slant and lines applied."""
+def styled_format(base: QTextCharFormat, style: SgrStyle | None, theme_name: str, *,
+                  device: bool = False) -> QTextCharFormat:
+    """A copy of ``base`` with the style's colors, weight, slant and lines applied.
+
+    ``device`` uses the device palette for the 16 system colors (see ``ansi_sgr``).
+    """
     fmt = QTextCharFormat(base)
     if style is None or style.plain:
         return fmt
@@ -23,7 +27,7 @@ def styled_format(base: QTextCharFormat, style: SgrStyle | None, theme_name: str
         from main.core.log_colors import themed_log_colors
         default_fg = themed_log_colors(theme_name)["normal"]
     if style.fg or style.bg or style.inverse or style.dim:
-        foreground, background = resolve_colors(style, theme_name, default_fg, surface)
+        foreground, background = resolve_colors(style, theme_name, default_fg, surface, device=device)
         fmt.setForeground(QColor(foreground))
         if background:
             fmt.setBackground(QColor(background))

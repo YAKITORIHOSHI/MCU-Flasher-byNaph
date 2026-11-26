@@ -149,7 +149,13 @@ class TargetResolutionChecks(unittest.TestCase):
                       + ("".join(traceback.format_stack(frame)) if frame is not None else "No live worker frame"))
         self.assertFalse(self.api.is_busy, detail)
         self.assertFalse(worker is not None and worker.is_alive(), detail)
-        QTest.qWait(10)
+        # The finished worker's last signals (the idle phase that re-enables the toolbar) are
+        # queued to this thread. Deliver every one now; a fixed 10 ms was too short on slow
+        # Windows runners.
+        for _ in range(5):
+            QCoreApplication.sendPostedEvents()
+            QCoreApplication.processEvents()
+            QTest.qWait(5)
 
     def test_compile_click_repairs_selected_cached_row_and_reaches_build_worker(self):
         invoked = []

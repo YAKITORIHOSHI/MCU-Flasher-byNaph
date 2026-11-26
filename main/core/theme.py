@@ -5,7 +5,8 @@ MCU Flasher by Naph — Modularized Architecture
 """
 from __future__ import annotations
 
-
+# A fresh installation is Frost White (Glass, frosted light) until a theme is chosen.
+DEFAULT_THEME = "light"
 
 
 class Theme:
@@ -179,17 +180,17 @@ class Theme:
     BTN_DANGER    = "#7a2828"
     BTN_DANGER_H  = "#a03030"
 
-    active_theme = "default"
+    active_theme = DEFAULT_THEME
 
     @classmethod
-    def apply_theme(cls, mode: str = "default") -> str:
-        mode_key = (mode or "default").lower().strip()
+    def apply_theme(cls, mode: str = DEFAULT_THEME) -> str:
+        mode_key = (mode or DEFAULT_THEME).lower().strip()
         if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
             mode_key = "solarized_dark"
         elif mode_key in ("light", "clean"):
             mode_key = "light"
         elif mode_key not in cls.PALETTES:
-            mode_key = "default"
+            mode_key = DEFAULT_THEME
         palette = cls.PALETTES[mode_key]
         for key, val in palette.items():
             setattr(cls, key, val)
@@ -197,16 +198,19 @@ class Theme:
         return mode_key
 
 
-Theme.apply_theme("default")
+Theme.apply_theme(DEFAULT_THEME)
 
 
 def _palette_key(theme_mode: str) -> str:
-    mode_key = (theme_mode or "default").lower().strip()
+    # No theme or an unknown one is the app's default (Frost White), never a guess at dark.
+    mode_key = str(theme_mode or DEFAULT_THEME).lower().strip()
     if mode_key in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
         return "solarized_dark"
     if mode_key in ("light", "clean"):
         return "light"
-    return mode_key if mode_key in Theme.PALETTES else "default"
+    if mode_key == "dark":
+        return "default"
+    return mode_key if mode_key in Theme.PALETTES else DEFAULT_THEME
 
 
 def get_palette(theme_mode: str = "default") -> dict[str, str]:
@@ -216,16 +220,34 @@ def get_palette(theme_mode: str = "default") -> dict[str, str]:
 
 # The hardest place for text on each glass surface, anywhere the scene can land: the brightest
 # point in a dark theme and the darkest in the light one. Inks are chosen against these, and
-# direct/verify_glass.py recomputes them from the real images and tints.
+# direct/verify_glass.py recomputes them from the real images and each theme's glass tint.
 _GLASS_WORST = {
-    "default": {"sheet": "#49627a", "reading": "#233345", "well": "#27384b"},
+    "default": {"sheet": "#455f7a", "reading": "#223245", "well": "#26374b"},
     "light": {"sheet": "#c4d6e5", "reading": "#edf2f7", "well": "#f0f5f8"},
-    "solarized_dark": {"sheet": "#35666d", "reading": "#12343b", "well": "#163a41"},
+    "solarized_dark": {"sheet": "#2f656b", "reading": "#10343a", "well": "#133940"},
 }
 
 
 def glass_worst(theme_mode: str = "default") -> dict[str, str]:
     return dict(_GLASS_WORST[_palette_key(theme_mode)])
+
+
+# Each theme's Liquid Glass. "tint" is the body of the glass, "spec" the light caught on its
+# top edge, "edge" its rim where no light falls, and "shadow" what it casts. The theme's own
+# accent (CYAN) is the light the glass bends back along its lower edge. Smoked blue is cool
+# sky glass, Frosted light is white frost held by a steel hairline (a white edge on white
+# would vanish), and Solarized is sea glass lit warm from above.
+_GLASS_MATERIAL = {
+    "default": {"tint": "#bcdcff", "spec": "#ffffff", "edge": "#d6e9ff", "shadow": "#00050c"},
+    "light": {"tint": "#ffffff", "spec": "#ffffff", "edge": "#5b7894", "shadow": "#1a3a5c"},
+    "solarized_dark": {"tint": "#a6efe4", "spec": "#fdf6e3", "edge": "#c4ece5", "shadow": "#00080b"},
+}
+
+
+def glass_material(theme_mode: str = "default") -> dict[str, str]:
+    """The theme's glass: tint, spec, edge, shadow and caustic (its accent)."""
+    key = _palette_key(theme_mode)
+    return {**_GLASS_MATERIAL[key], "caustic": Theme.PALETTES[key]["CYAN"]}
 
 
 def get_theme_mode() -> str:
@@ -247,8 +269,10 @@ def get_theme_settings() -> tuple:
 
 
 __all__ = [
+    "DEFAULT_THEME",
     "Theme",
     "get_palette",
+    "glass_material",
     "get_theme_mode",
     "set_theme_mode",
     "get_theme_settings",

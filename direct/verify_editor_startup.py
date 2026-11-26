@@ -53,8 +53,7 @@ FIXTURE = r"""
     get_recovery_buffers:async()=>({}),recovery_complete:async()=>true,
     set_active_file:async()=>true,mark_modified:async()=>true,
     get_ai_history_state:async()=>({canUndo:false,canRedo:false}),
-    get_ai_edit_reviews:async()=>[],get_pending_ai_review:async()=>null,
-    realtime_check_syntax:async()=> 'null'
+    get_ai_edit_reviews:async()=>[],get_pending_ai_review:async()=>null
   };
   if(new URLSearchParams(location.search).get('transport')!=='native') window.pywebview={api:fixtureApi};
   let loadReady;

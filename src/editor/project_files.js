@@ -142,7 +142,6 @@
     if (!current()) return true;
     revision = change.revision;
     window.syncModelLanguageForActiveTab?.();
-    window.refreshProjectSyntax?.();
     return true;
   }
 
@@ -211,7 +210,6 @@
     if (!current()) return false;
     revision = 0;
     window.syncModelLanguageForActiveTab?.();
-    window.refreshProjectSyntax?.();
     return true;
   }
 

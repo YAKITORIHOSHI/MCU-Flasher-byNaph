@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain unplug-safe serial ports, one row per board, the AI Assistant's agent list, reverts of AI edits, prompt-free Windows setup with winget, expandable notification and device cards, the structural syntax checker, Lite's remembered window, fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain unplug-safe serial ports, one row per board, the AI Assistant's agent list, reverts of AI edits, prompt-free Windows setup with winget, expandable notification and device cards, skills for every installed assistant, compile-only code checks, Lite's remembered window, fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -69,6 +69,22 @@ a window. That is the app's launch; assistant delegation keeps `agy-delegation`'
 `last_agent`/`remember_agent`. Verify `verify_ai_agents.py`, `verify_ubuntu_ai_panel.py`
 and `verify_assistant_startup.py`.
 
+**Hermes stays inside the app.** Its installer brings its own Python, Node.js, npm, pnpm, uv,
+ripgrep and ffmpeg plus caches, about 3 GB. `Agent.isolated` makes `ai_agents.isolation()` keep it
+in git-ignored `.ai-agents/<host_namespace>/hermes` on Linux and macOS: `data` is `HERMES_HOME`
+(program, tools, caches, settings, sign-ins), `home` stands in for HOME and the XDG folders
+while the installer runs (`installer_environment`), so its `~/.local/bin` launchers, shell
+profile lines and uv's own caches land there, and `tmp` holds temporary files. Only that copy
+counts (`candidates`); a `~/.hermes` elsewhere is never started. Sessions get `HERMES_HOME`,
+`HERMES_GATEWAY_LOCK_DIR` and the temporary folder, and lose the app's `PYTHONPYCACHEPREFIX`
+(`None` in `agent_environment` removes a variable). After its installer, `agent_setup` runs
+`hermes config set cli.expose_on_path false`, because `hermes update` would otherwise publish
+launchers in the real `~/.local/bin`. HOME stays the user's own in sessions, so borrowed logins
+(`~/.claude`, `~/.codex`) and the commands Hermes runs keep working. Windows keeps
+`%LOCALAPPDATA%\hermes`: Hermes's deepest files (about 290 characters below its home) already
+need long-path support there. Updates, releases, source copies and both cleaners leave
+`.ai-agents` alone.
+
 **Reverting AI edits.** `main/core/ai_revert.py` reads the saved sessions and plans;
 `AIReviewManager.plan_ai_revert`/`apply_ai_revert` write through the ordinary journal.
 AI Changes offers Revert edit and Revert session, also for earlier sessions, with a
@@ -95,10 +111,110 @@ the newest notification first. Helpers call `app_identity.claim_process` before 
 first window and `claim_application` after, so one icon stands for the app. The
 Windows terminal uses the shared header (New PowerShell, New CMD, Clear, End session).
 
-**Syntax.** `src/syntax_statements.py` follows scopes and judges only line ends where
-two operands meet; `src/syntax_checker.py` reads each conditional branch. Keep zero
-false warnings over valid library code; a typed file's results replace only its own
-rows in the list. Verify `verify_syntax_checker.py` and `verify_syntax_navigation.py`.
+**No live syntax checker.** Code is checked only by compiling; the Build Console shows
+each compiler error with its file and line. The old checker, its Syntax Check tab,
+Monaco markers and `realtime_check_*` bridge calls are gone: do not bring them back.
+Typing only sends the dirty state and recovery text (`update_editor_buffer`). Clean and
+the metadata hiders still remove or hide an old `.mcu_flash_syntax_errors.json`.
+Verify `node direct/verify_editor_resources.js` and `verify_editor_review_ui.py`.
+
+**Skills for every assistant.** `file_utils._install_sketch_skills` writes the sketch's
+skills (`sketch-workflow`, `mcu-sketch-target`, `serial-monitor-output`, from
+`_sketch_skills()`) for each agent found by files (`_installed_agent_ids`, cached 15 s):
+`.opencode/skills` always, `.claude/skills` for Claude (OpenCode reads it too),
+`.agents/skills` for Codex and Antigravity, and the isolated Hermes's own
+`skills/mcu-flasher`, because Hermes loads project skills only from trusted git checkouts.
+Skills of agents no longer found are retired only when they are ours (marker, or our name
+with `.mcu_flasher_build_cache`); a user's skill of the same name is never overwritten.
+No `CLAUDE.md`: Claude Code reads `AGENTS.md` when a project has none. The codebase
+itself never gets sketch skills; its tracked `.agents/skills` copies are refreshed from
+`_sketch_skills()` by hand. Windows starts each assistant through `dedicated_AI.py`,
+Ubuntu through `prepare_context`; both regenerate first. Verify `verify_ai_agents.py`.
+
+**AI Changes.** Group and session rows are never the selection: one click opens or
+closes them (`setExpandsOnDoubleClick(False)`), the previews keep the last file row
+(`_card`), and right-click offers **Revert session** (`_session_menu`, built separately so
+checks can choose from it). Titles name the coding CLI: `PromptInputTracker(agent=...)`
+writes `agent` to `ai_prompt.json`, `ai_review` keeps `promptAgents`, and a terminal names
+its CLI by executable (`assistant_process_agent`; Hermes runs as Python, so only the
+assistant pane names it). Verify `verify_ai_changes.py`, `verify_ai_revert.py` and
+`verify_prompt_sources.py`.
+
+**Assistant text size, serial colors, Frost White.** Settings › AI Assistant stores
+`shared.ai_assistant_scale` (75–200 %); Ubuntu applies it live
+(`ai_assistant_scale_changed`, `PosixAIPanel.assistant_font_size`), Windows when the
+assistant starts (`dedicated_AI._assistant_font_size`). The Serial Monitor paints the 16
+system colors from `ansi_sgr.DEVICE_PALETTE` (`styled_format(..., device=True)`), so
+normal/bright and black/white backgrounds stay distinct; the Build Console keeps the
+theme's semantic inks. `main.core.theme.DEFAULT_THEME` is Frost White (`"light"`) until a
+theme is saved, in the workspace, Settings' Reset and the Bootstrap, downloader,
+terminal and Windows assistant windows. Verify `verify_ansi_styles.py` and `verify_controls.py`.
+
+**Each theme's own glass and outlined buttons.** `main.core.theme.glass_material(mode)` gives a
+theme's `tint`, `spec` (caught light), `edge`, `shadow` and `caustic` (its CYAN). Sheets
+(`glass._sheet_for`/`_shadow_for`), `glass_tokens`, `liquid_button_sheet`, the editor page's
+`--sheet*`, `--btn-*` and `--ai-bar*` variables, `page_surface` and the agent list all draw
+from it: smoked blue, white frost, sea glass. A button's outline runs on every side
+(`button_rim`, `button_spec` on top, `button_floor` below); its caught light is the first
+stop of its gradient (`_liquid(..., spec)`), never the top border, because on Frosted Light a
+white top border on a white sheet vanished and read as something covering the button. The
+same applies to the page's `--btn-top`. A tint change moves `_GLASS_WORST`; let
+`verify_glass.py` tell you the new values. The assistant list draws each tool's icon from
+`src/assets/icons/agents/<id>.svg` (LobeHub icons, MIT; one-colour marks take the theme's
+ink) in a glass tile, falling back to the socketed chip when an icon is missing. Rows carry no
+tooltip (no hover card). The board's silkscreen reads "AI CLI"; its top-right `_InfoMark`
+(circled i) shows `disclaimer_text()` on hover and click: every listed tool and its owner,
+built from `AGENTS`, and that none was made by or belongs to MCU Flasher's developer. `AgentPicker` checks `ai_agents.internet_available()` on its worker
+after detection; offline, `AgentChooser.set_online(False)` replaces the list with a notice and
+"Try again", and the picker rechecks every 8 s. Verifiers that build an assistant panel patch
+`internet_available`, so no check touches the network. The project selector and Settings use
+the same tokens: primary actions are accent glass (`accent_*`, `TEXT_BRIGHT` ink), never
+`BTN_COMPILE` blocks; Settings buttons use `liquid_button_sheet` and its groups a lit sheet
+with `sheet_spec` on top.
+
+**Actual Board for every family.** ESP chips are read by esptool (`_probe_chip_info`, plus
+the USB bridge row). Every other board goes through `_probe_board_details` in both upload
+paths, which calls `main/core/chip_probe.board_report`: AVR `arduino`/`stk500v1` loaders
+(Optiboot) are asked over STK500v1 and `wiring` loaders (Mega) over STK500v2 for the
+signature and version, after the usual DTR/RTS reset, within 2.5 s, and are left running
+the sketch; the signature names the part and its memories (`AVR_PARTS`). Any port adds its
+USB bridge/device (`USB_DEVICES`) and serial number; other families show their definition's
+chip, clock and memory, marked "(board definition)". When an AVR loader does not answer,
+`UploadLog` builds the table from avrdude's `Device signature` line with the USB rows in
+`chip_extra`. Verify `verify_chip_probe.py` (simulated loaders; never a real port).
+
+**Tooltips.** Qt parents a tooltip to the hovered widget, so a panel's `QLabel` rule (often
+`background: transparent`) used to strip it to a bare black or white box. The app style's
+polish gives every `QTipLabel` its own `tooltip_sheet(theme)` (selector `QToolTip, QLabel`,
+which outranks both; Qt resets the sheet to `/* */` on each show and polishes again, so it
+compares contents) and a translucent background for its rounded corners. Verify
+`verify_tooltips.py`.
+
+**One default theme.** An unset, empty or unknown theme is `DEFAULT_THEME` (Frost White,
+`"light"`) everywhere: `get_theme_settings`, `_palette_key`, `_detect_system_theme`'s
+unknown result, Settings' combo and its Reset, and every `Theme.active_theme` fallback.
+Never write `or "default"` for a missing theme; only an explicit "dark" means Smoked Blue.
+A fresh profile's Settings must show the theme in use, or Save switches it
+(`verify_fresh_theme.py`).
+
+**Baud menus are the Arduino IDE's.** `ARDUINO_IDE_BAUD_RATES` in `main/core/constants.py`
+(300 … 2000000, as arduino/serial-monitor offers) is the only monitor list; the toolbar,
+Serial panel, Lite's `preferences::BAUD_RATES` and Lite's worker match it exactly
+(`verify_baud_rates.py`). Never add a rate to a baud menu. Upload speeds are a separate
+list capped by `MAX_UPLOAD_SPEED` (921600).
+
+**Bootstrap heals an interrupted board stage.** `src/modules/bootstrap_recovery.py` keeps a
+safe point (`<core>/.mcu-board-prep.json`: owner and each child by PID and creation time).
+Before the store lease, `stop_leftovers` ends a dead owner's children (identity and command-line
+checked); inside it `heal` removes `_tmp_installing*` and scratch, sets damaged tools/platforms
+aside in `.mcu-recovery/` (never metadata-less libraries), deletes `Boards/.extracting-*` and
+the readiness markers, and keeps `.part` downloads. A failed board-pack attempt heals with
+`force=True` and runs once more; `finish` clears it all after `finish_bootstrap`. Board cores
+unpack under `.extracting-<name>` and are renamed when complete; a legacy folder missing
+files of its archive (`_archive_tree_present`) is not certified, and an uncertifiable one
+gets a fresh verified copy beside it instead of stopping Bootstrap. Verify
+`verify_bootstrap_recovery.py`, `verify_bootstrap_arduino_sources.py` and
+`verify_bootstrap_interruption.py`.
 
 ## November 14: shared prepared resources and short portals
 
@@ -1248,28 +1364,11 @@ Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
   association is observed prompt context, not process-level file-write tracing.
   Verify `direct/verify_prompt_sources.py`, `direct/verify_ai_changes.py` and the
   offline review renderer with mocked PTYs and isolated journals under temp/.
-- Syntax Check double-clicks carry the exact canonical root file and full range
-  through `editor_goto_diagnostic`. Convert analyzer codepoint columns to Monaco
-  UTF-16, await exact tab/model activation and reveal the selected line at the top
-  even for wrapped/final lines. Reveal the existing hidden pane or raise its
-  detached host; preserve dirty models and tab order. Background project checks
-  overlay GUI-owned dirty snapshots and reject both changed snapshots and older
-  editor revisions. Verify with `direct/verify_syntax_navigation.py` and the real
-  offline renderer fixture `direct/verify_editor_review_ui.py`.
-  Keep the renderer's syntax mock aligned with the Qt bridge: return the string
-  `"null"` while diagnostics arrive separately. Fail renderer verification on
-  asynchronous JavaScript console warnings/errors as well as assertion failures.
-- Live C/C++ checks scan structure and probable terminators; do not claim full
-  compiler/type resolution. Ignore directive replacement brackets and known
-  inactive branches; inspect one unresolved conditional branch, leaving target
-  macro evaluation to Compile. Preserve literal token boundaries and codepoint
-  columns, reject unfinished raw literals, and accept macro/commented includes.
-  Read source snapshots once off GUI, bind caches to actual bytes, return fresh
-  diagnostic dictionaries, and report read failures without Clean. Debounce stale
-  project retries with one parented timer; bound project checks to 256 root files /
-  16 MiB characters, each source to 4 MiB characters, nesting to 1024 and structural
-  tokens to 65536. Bound diagnostics during collection, not after an unbounded
-  list is built. Verify `direct/verify_syntax_checker.py`, navigation and performance.
+- `navigateToSource` activates the exact tab/model, converts codepoint columns to
+  Monaco UTF-16 and can reveal a line at the top even for wrapped/final lines; Find All
+  and review navigation use it. Preserve dirty models and tab order. Verify with the
+  real offline renderer fixture `direct/verify_editor_review_ui.py`, which also fails on
+  asynchronous JavaScript console warnings/errors.
 - `.c` Monaco models use their own C tokenizer, keyword-version suggestions,
   standard headers, snippets and brace rules. Keep `.ino/.cpp/.h/.hpp` as C++.
   Ensure the first lazy C load cannot replace C rules with the shared C++ grammar;
@@ -1952,7 +2051,6 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
      - `icons.py`: Original theme-aware circuit-chip and action vectors without emoji font dependencies.
      - `setup_components.py`: Cached glass cards, vector glyphs, status chips and compact determinate progress rows.
      - `ai_panel.py`: Collapsible OpenCode AI assistant side panel.
-     - `syntax_panel.py`: Interactive C/C++ syntax diagnostics with exact source-range navigation.
      - `compat_panel.py`: Board compatibility matrix and GPIO pinout inspector.
      - `notif_panel.py`: Per-sketch notification log viewer.
      - `settings_dialog.py`: Preferences modal (themes, CPU jobs, auto-save, baud reset).
@@ -1967,7 +2065,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    **Theme and log readability**
    - Developer tickets use their own neobrutalist NeoCard/PortalDialog surfaces and original SVG vectors. Exactly five completed left-clicks on the toolbar brand and a brief pause open the portal; local tickets remain available and cloud synchronization checks Firebase directly, independently of package Offline Mode. Count each completed click once, including double-click sequences. Use portal inks checked against solid paper and accent fills; retain the same appearance, keyboard focus, masked access keys, drafts and filters through workspace theme changes. Center the compact login card, scroll short forms and pin actions. Report failed local-access settings writes without dropping entered values. Keep Firebase provider configuration fixed. Run `direct/verify_owner_tickets.py` with a mocked service and network; verify that every developer screen is free of glass primitives and gradients. Only `--render-dir temp/...` writes captures. Never instantiate the live service during verification.
    - Build and serial output, ANSI foregrounds, connection state and transient status-bar messages use semantic colors with readable contrast against the active theme. Recolor retained output after theme changes instead of leaving stale inline colors.
-   - Check rendered compatibility logs, syntax severity/status brushes and notification cards against their actual reading surfaces. Share terminal ANSI colors between Windows and POSIX and enforce xterm minimumContrastRatio=4.5 for truecolor/indexed CLI text. Verify with `direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`.
+   - Check rendered compatibility logs and notification cards against their actual reading surfaces. Share terminal ANSI colors between Windows and POSIX and enforce xterm minimumContrastRatio=4.5 for truecolor/indexed CLI text. Verify with `direct/verify_theme_readability.py` and `direct/verify_panel_readability.py`.
    - The workspace owns one theme signal connection and one propagation pass. Hosted panels opt out of direct theme subscriptions; standalone panels retain them. Status timers are window-owned, restart for the latest message and never clear a newer operation status. Failed notification clears preserve history; filters use bounded retained records and apply to live events. Refresh external history off the GUI thread on panel reveal, discard stale project results and preserve unpersisted live events. Report failed history writes without recursively persisting the warning. Notification replacement must be atomic; verify failure preservation with the isolated notification persistence/writes verifiers.
    - Keep Controls checkboxes at intrinsic width so Timestamps and Skip Compile remain a compact pair at wide sizes; let responsive reflow handle constrained widths.
    - Keep toolbar recovery available through the persistent `View > Toolbars` menu. Use each toolbar's `toggleViewAction()` so the menu stays synchronized with Qt's native toolbar context menu, and include `View > Show All Toolbars` so both bars can be recovered after hiding them. Verify both hidden and restored states in `direct/verify_runtime.py`.
@@ -2036,7 +2134,7 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - **Source tabs** use static glass borders, file icons, dirty dots, full-path tooltips, drag ordering and keyboard navigation (arrows/Home/End/Enter/Space). Preserve the offline bundle's models. `role=tab`, roving focus and `aria-selected` must follow the active model.
    - **Ctrl+Click / F12 Go-To-Definition** with cross-file symbol resolution (`findProjectSymbol()`, `parseSymbolDetails()`), including built-in Arduino function registry (`BUILTIN_ARDUINO`).
    - **Ctrl+Hover** floating definition card with function signature, parameters, and return type.
-   - **Realtime syntax checking** via `realtime_check_syntax()` → `src/syntax_checker.py` (C++ linting).
+   - **No live syntax checking**: compiling is the only code check; errors appear in the Build Console.
    - **AI Edit Highlights** — Bounded line diff with static Monaco decorations:
      - 🟢 Green added/replacement AFTER text and addition gutter markers.
      - 🔴 Red removed-original markers with bounded read-only previews; pure deletions do not tint surviving text.
@@ -2067,13 +2165,13 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - Build delivery queues evict ordinary chatter before diagnostics while keeping both character/entry bounds and visible omission notices. Coalesce only valid adjacent declared progress patterns, never compilation file events; preserve diagnostic barriers, cache semantic formats and update retained sizes incrementally. Use one bounded history, expiring FIFO. Drain PlatformIO build output and both optimized/native upload paths through a bounded reader queue so quiet dependency scans or bootloader handoffs can emit truthful silence updates and Stop can reach a cancellable process without waiting for another line. Native upload Stop stays available during scans and connection, then disables on the first erase/write indication; a failed write is never replayed or followed by an automatic reset. Share the upload scan-noise classifier across Windows and Ubuntu while preserving diagnostics, programmer output and PlatformIO outcomes. Do not claim a fixed SCons duration. Strip fragmented terminal controls with `main/core/console_text.py`; Clear resets pending escape state and history. Never replay build or upload operations.
    - Recognize PlatformIO status/banner records conservatively in `web_bridge.py`; suppress only exact routine boilerplate outside diagnostic context. Preserve every compiler file, compiler notes, source/carets, unknown custom-builder output and SCons failures. Test parser routing without importing the backend or executing builds using `direct/verify_build_log_routing.py`, Qt rendering/copy/follow with `direct/verify_build_console.py`, and queue/resource limits with `direct/verify_performance.py`.
    - Scope ESP connection and BOOT-hint rows to `_op_session_id` with explicit `progress_key` values. Finalize pending polling on every failure, exception and Stop; use compact terminal labels without a live bar. Keyed rows may update across intervening output, but completed diagnostics and generic regex barriers remain immutable. Preserve esptool's wrong-chip detail, show detected/selected chips and the matching-board action, omit upload-speed advice and never retry a confirmed target mismatch. Verify display/copy/theme/clear behavior with `direct/verify_build_console.py` and mocked child/status paths with `direct/verify_upload_workers.py`.
-   - Use queued QObject signals for syntax completion, not `QTimer.singleShot` callbacks created inside Python worker threads. Keep one latest pending editor revision and discard stale results. Use one parser on constrained PCs, two otherwise, with bounded revision/diagnostic caches. Send dirty state and the current recovery snapshot together for every edit; do not debounce recovery text. Syntax requests reuse the snapshot, with a full-source fallback for clean models. Invalidate queued/in-flight syntax generations immediately on edits. Use Monaco model/version identity for duplicate checks, a 600 ms typing debounce on constrained PCs (300 ms otherwise), and stop initialization polling once listeners are installed. Preserve table row objects and reading state for unchanged diagnostics. Verify the actual JavaScript scheduler with `direct/verify_editor_resources.js` and the queued/recovery lifecycle with `direct/verify_performance.py`.
+   - Send dirty state and the current recovery snapshot together for every edit (`update_editor_buffer`); do not debounce recovery text, and keep no editor polling timer once Monaco's listeners are installed. Verify with `node direct/verify_editor_resources.js` and the recovery lifecycle in `direct/verify_performance.py`.
    - External edit scans and settled review-journal writes run in one background worker, with coalesced filesystem wakeups and stale-project/manual-save rejection; Qt watcher/timer updates return through queued completion. Hardware-state persistence similarly serializes one active and one latest pending payload. Do not use a timestamp-only source cache at build/upload boundaries or restore copied source timestamps that can hide a changed same-size file from compiler deciders. On a changed staged-file timestamp collision, advance only that generated copy or fail rather than silently accepting stale objects. Verify with `direct/verify_slow_storage_flow.py`.
 
 5. **Runtime Guards & Crash Detection**
    - **`src/modules/private_python_guard.py`**: Windows private runtime / native Linux virtual-environment guard.
    - **`src/modules/platform_runtime.py`**: Host identification, native paths/locks and CPU startup guard. Fewer than four physical cores stops launch; use logical threads only when topology is unavailable. Unknown logical counts fail with a notice.
-   - **`src/modules/runtime_resources.py`**: Shared budgets for 4/6 physical cores, at most 6 logical threads or low RAM. Disable editor animation/minimap, reduce syntax cadence and terminal history. Reserve two logical threads for the interface; `main/core/build_resources.py` also caps compiler jobs at 2 on four physical cores and 4 on six, including 8/12-thread SMT CPUs. RAM/storage limits can reduce these further. Clamp saved compiler jobs to these budgets; favor responsiveness over maximum throughput.
+   - **`src/modules/runtime_resources.py`**: Shared budgets for 4/6 physical cores, at most 6 logical threads or low RAM. Disable editor animation/minimap and reduce terminal history. Reserve two logical threads for the interface; `main/core/build_resources.py` also caps compiler jobs at 2 on four physical cores and 4 on six, including 8/12-thread SMT CPUs. RAM/storage limits can reduce these further. Clamp saved compiler jobs to these budgets; favor responsiveness over maximum throughput.
    - **`src/modules/recovery.py`**: Bounded retry budgets for transient readers/renderers. Preserve dirty buffers and reject stale serial generations. Errors remain visible. Never retry flashing, erasing, resets or shell commands automatically.
    - **`src/modules/crash_detector.py`**: Session sentinel, unhandled exception recorder, and startup crash recovery marker engine.
 
@@ -2083,10 +2181,6 @@ The application compiles, flashes and monitors exact PlatformIO targets through 
    - `src/launcher.cs`: C# launcher source (compiles to `MCU_Flasher.exe`).
    - `direct/windows/run.vbs`: Windows bootstrap launcher that normally uses the current user token, hides the console, and requests targeted UAC only for the USB drivers, once per installer. The old VBS path forwards here; preserve ASCII/CRLF for Windows Script Host.
    - `direct/ubuntu/setup.py` and `run.sh`: Native venv setup/launch with no system pip writes; `run.sh --repair` explicitly repairs dependencies. Preserve LF shell line endings, project paths with spaces, and `--new-window` forwarding.
-
-7. **Realtime C/C++ Syntax Linter (`src/syntax_checker.py`)**
-   - Bounded literal/comment/preprocessor scanner and structural heuristics for root `.ino/.cpp/.c/.h/.hpp`, without executing a compiler.
-   - Follows scopes and conditional branches (`src/syntax_statements.py`) and reports delimiters, unfinished statements and stray labels with accurate ranges; target preprocessing, undeclared symbols/types and library resolution belong to Compile.
 
 8. **Database & Notification Store (`src/dbs/` & `.mcu_flasher_build_cache/`)**
    - **Per-Sketch Notification Store**: Notifications are persisted per-project inside `<sketch_dir>/.mcu_flasher_build_cache/dbs_notif.json`.
@@ -2141,7 +2235,6 @@ MCU Flasher by Naph/
 │   │   ├── icons.py                 # Theme-aware vector icons
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel
 │   │   ├── compat_panel.py          # Compatible boards viewer
-│   │   ├── syntax_panel.py          # Interactive AST syntax diagnostic tree
 │   │   ├── notif_panel.py           # Per-project notification viewer
 │   │   ├── detached_editor.py       # Independent popped-out editor window wrapper
 │   │   ├── settings_dialog.py       # Application preferences modal
@@ -2166,7 +2259,6 @@ MCU Flasher by Naph/
 │   ├── _python/                     # Private portable Python 3 runtime (hidden via attrib +h)
 │   ├── .platformio-mcu-gui/         # PlatformIO core store (junctioned to avoid MAX_PATH)
 │   ├── gui_config.json              # Persisted user settings (themes, baud rates, auto-save)
-│   ├── syntax_checker.py            # Standalone C++ syntax linter & AST analyzer
 │   ├── launcher.cpp                 # Native Windows C++ executable wrapper source
 │   ├── launcher.cs                  # Native Windows C# launcher source
 │   ├── resources.rc                 # Windows executable resource definition

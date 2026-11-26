@@ -302,6 +302,39 @@ class AIChangesChecks(unittest.TestCase):
         self.assertEqual(AIChangesPanel._prompt_title({"promptSource": "cli"}), "Unknown source")
         self.assertEqual(AIChangesPanel._prompt_title({"promptSource": "assistant", "promptSourceVersion": True}), "Unknown source")
 
+    def test_groups_name_the_coding_cli_that_made_the_edits(self):
+        import json
+        cache = self.root / ".mcu_flasher_build_cache"
+        cache.mkdir(exist_ok=True)
+        tracker = PromptInputTracker(self.root, source="assistant", agent="claude")
+        tracker.feed("Blink the onboard LED\r")
+        payload = json.loads((cache / "ai_prompt.json").read_text(encoding="utf-8"))
+        self.assertEqual((payload["source"], payload["agent"]), ("assistant", "claude"))
+        self.assertIsNone(PromptInputTracker(self.root, agent="not-an-agent").agent, "Only known agents are named")
+        claude = self.queue("Claude.ino", prompt={"id": "a-1", "prompt": "Blink", "source": "assistant",
+                                                  "sourceVersion": 1, "agent": "claude"})
+        codex = self.queue("Codex.cpp", prompt={"id": "c-1", "prompt": "Refactor", "source": "cli",
+                                                "sourceVersion": 1, "agent": "codex"})
+        unnamed = self.queue("Plain.h", prompt={"id": "p-1", "prompt": "Header", "source": "assistant", "sourceVersion": 1})
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(claude))["promptAgents"], ["claude"])
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(codex))["promptAgents"], ["codex"])
+        self.assertEqual(self.manager.consume_ai_edit_snapshot(str(unnamed))["promptAgents"], [])
+        with patch("main.core.config.get_monitor_font_size", return_value=11):
+            panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
+        self.addCleanup(panel.deleteLater)
+        titles = sorted(panel._tree.topLevelItem(i).text(0) for i in range(panel._tree.topLevelItemCount() - 1))
+        self.assertEqual(titles, ["Assistant", "Assistant (Claude)", "CLI (Codex)"])
+        title = AIChangesPanel._prompt_title
+        self.assertEqual(title({"promptSource": "mixed", "promptSourceVersion": 1, "promptAgents": ["codex", "claude"]}),
+                         "Mixed sources (Codex, Claude)")
+        self.assertEqual(title({"promptSource": "assistant", "promptSourceVersion": 1, "promptAgents": ["opencode"]}),
+                         "Assistant (OpenCode)")
+        self.assertEqual(title({"promptSource": "assistant", "promptAgents": ["claude"]}), "Unknown source",
+                         "An unversioned record names no source and no agent")
+        from src.modules.ai_prompt_context import AGENT_PROCESSES
+        from main.core.ai_agents import AGENTS
+        self.assertEqual(set(AGENT_PROCESSES.values()), {spec.id for spec in AGENTS})
+
     def test_watcher_keeps_first_change_context_when_another_prompt_arrives_during_settle(self):
         path = self.root / "Sensor.cpp"
         path.write_text("original", encoding="utf-8")

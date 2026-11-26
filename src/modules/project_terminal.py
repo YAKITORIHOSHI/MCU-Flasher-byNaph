@@ -95,7 +95,7 @@ def _resolve_terminal_theme() -> dict:
             },
         }
 
-    theme = "default"
+    theme = "light"     # Frost White until a theme is chosen.
     for cfg in (SCRIPT_DIR / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
         try:
             if cfg.exists():
@@ -104,7 +104,7 @@ def _resolve_terminal_theme() -> dict:
                 if shared.get("theme_follow_system", False):
                     theme = _detect_system_theme()
                     break
-                m = shared.get("theme_mode", "default")
+                m = shared.get("theme_mode", "light")
                 if m:
                     theme = m
                     break
@@ -1296,13 +1296,15 @@ class ProjectTerminalServer:
                         pty = session.pty if session.running else None
                     if pty:
                         try:
-                            from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_active
+                            from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_agent
                             tracker = getattr(session, "_prompt_tracker", None)
                             if tracker is None:
                                 tracker = session._prompt_tracker = PromptInputTracker(self.target_dir, source="cli")
                             active = getattr(session, "_assistant_input_active", False)
                             if "\r" in clean_data or "\n" in clean_data:
-                                active = session._assistant_input_active = assistant_process_active(getattr(pty, "pid", 0))
+                                # The terminal names the agent it runs by its executable.
+                                tracker.agent = assistant_process_agent(getattr(pty, "pid", 0))
+                                active = session._assistant_input_active = tracker.agent is not None
                             tracker.feed(clean_data, active=active)
                         except Exception:
                             pass

@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from main.qt.icons import ActionButton as QPushButton, IconLabel
 from main.qt.glass import GlassDialog
 from main.core.log_colors import glass_inks
-from main.core.theme import Theme
+from main.core.theme import DEFAULT_THEME, Theme
 from main.qt.log_follow import LogFollow, preserve_log_view
 
 # Support callable Theme.active_theme() and "dark" theme mode compatibility for test suites
@@ -38,12 +38,12 @@ class _ThemeStr(str):
         return str(self)
 
 if not callable(getattr(Theme, "active_theme", None)):
-    Theme.active_theme = _ThemeStr(getattr(Theme, "active_theme", "default"))
+    Theme.active_theme = _ThemeStr(getattr(Theme, "active_theme", None) or DEFAULT_THEME)
     _orig_apply_theme = Theme.apply_theme
 
     @classmethod
-    def _compat_apply_theme(cls, mode: str = "default") -> str:
-        mode_str = str(mode or "default").lower().strip()
+    def _compat_apply_theme(cls, mode: str = DEFAULT_THEME) -> str:
+        mode_str = str(mode or DEFAULT_THEME).lower().strip()
         palette_key = "default" if mode_str == "dark" else mode_str
         res = _orig_apply_theme(palette_key)
         final_mode = "dark" if mode_str == "dark" else res
@@ -52,10 +52,9 @@ if not callable(getattr(Theme, "active_theme", None)):
 
     Theme.apply_theme = _compat_apply_theme
 
-from main.core.constants import MAX_BAUD_RATE
+from main.core.constants import ARDUINO_IDE_BAUD_RATES
 
-_BAUD_RATES = [b for b in ["9600", "19200", "38400", "57600", "74880", "115200",
-               "230400", "460800", "512000", "921600"] if int(b) <= MAX_BAUD_RATE]
+_BAUD_RATES = [str(rate) for rate in ARDUINO_IDE_BAUD_RATES]
 _LINE_ENDINGS = [("None", "none"), ("\\n", "nl"), ("\\r", "cr"), ("\\r\\n", "both")]
 
 _SERIAL_CONTROLS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]")
@@ -476,7 +475,8 @@ class SerialOutputView(QPlainTextEdit):
         fmt.setForeground(QColor(self._tag_colors[key]))
         if style is not None:
             from main.qt.ansi_format import styled_format
-            fmt = styled_format(fmt, style, self._theme_name)
+            # Device output chooses its colors on purpose: paint the real 16-color palette.
+            fmt = styled_format(fmt, style, self._theme_name, device=True)
         # Truecolor gradients can name thousands of styles; keep the cache bounded.
         if len(self._serial_formats) >= 512:
             self._serial_formats.clear()
@@ -1557,7 +1557,7 @@ class SerialPanel(QWidget):
 
     def _apply_connection_color(self) -> None:
         from main.core.log_colors import glass_inks
-        colors = glass_inks(getattr(self, "_theme_name", "default"))
+        colors = glass_inks(getattr(self, "_theme_name", None) or Theme.active_theme)
         color = colors.get(getattr(self, "_connection_color_tag", "error"), colors["normal"])
         self.lbl_status.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600;")
 

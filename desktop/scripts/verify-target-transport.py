@@ -25,10 +25,10 @@ target_checks = [node for node in tree.body if isinstance(node, ast.FunctionDef)
 assert len(strict_patterns) == len(target_checks) == 1
 constant_tree = ast.parse((ROOT / "main/core/constants.py").read_text(encoding="utf-8"))
 constants = [node for node in constant_tree.body if isinstance(node, ast.Assign)
-             and any(isinstance(target, ast.Name) and target.id == "MAX_BAUD_RATE" for target in node.targets)]
+             and any(isinstance(target, ast.Name) and target.id == "MAX_UPLOAD_SPEED" for target in node.targets)]
 assert len(constants) == 1
-maximum_baud = ast.literal_eval(constants[0].value)
-namespace = dict(Mapping=dict, MAX_BAUD_RATE=maximum_baud, re=re)
+maximum_upload = ast.literal_eval(constants[0].value)
+namespace = dict(Mapping=dict, MAX_UPLOAD_SPEED=maximum_upload, re=re)
 exec(compile(ast.Module(body=board_patterns + functions, type_ignores=[]), str(source), "exec"), namespace)
 exec(compile(ast.Module(body=strict_patterns + target_checks, type_ignores=[]), str(source), "exec"), namespace)
 
@@ -137,6 +137,6 @@ print(json.dumps(dict(reference="main/core/target_profile.py", functions=NAMES, 
                           reason="Target must be an object" if field == "info" else
                           "Truthy non-string protocols are refused instead of formatting Python representations into INI")
                           for field, count in refusals.items()],
-                      maximumEspBaud=maximum_baud, platform=sys.platform, architecture=platform.machine(),
+                      maximumEspBaud=maximum_upload, platform=sys.platform, architecture=platform.machine(),
                       passed=True, hardwareAccess=False, productionImports=False,
                       fullTargetValidationQualified=False)))

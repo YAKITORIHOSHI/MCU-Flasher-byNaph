@@ -122,7 +122,7 @@ replies, Unicode, bracketed paste, hide/reveal, restart and process shutdown.
 Cloud operations used isolated service/configuration fixtures, never real accounts.
 
 The existing cloud Rename/Delete/Replace/copy actions, transparent Cloud surface,
-static downloader glass, compact review/history and Syntax Check reflow were
+static downloader glass and compact review/history reflow were
 validated. New native release admission covers launch, repair, bootstrap,
 maintenance, direct GUI/downloader/sample-editor entries and native dependency
 preparation. The obsolete old-Xft Fontconfig supplement was removed; the Qt ABI
@@ -554,7 +554,10 @@ with a visible notice. Closing a session clears pending input without replay.
 The **AI Assistant** pane (`main/qt/posix_ai_panel.py`) opens on a list of coding
 agents: Antigravity, Codex, Claude, Hermes and OpenCode (Built-in). Others already on
 the computer are marked **(Downloaded)**; **Download** gets another one for your
-account, from its maker, without administrator rights. The chosen agent runs in one
+account, from its maker, without administrator rights. Hermes is the exception: it
+installs whole into the app's own `.ai-agents/<os>-<cpu>/hermes` folder, with its own
+Python, Node.js, ffmpeg, caches, settings and sign-ins (about 3 GB), and nothing in
+`~/.hermes` or `~/.local/bin`; deleting that folder removes it. The chosen agent runs in one
 protected native PTY, and the button beside **Restart** returns to the list.
 Antigravity always starts as `agy --dangerously-skip-permissions`, so it acts without
 asking first.
@@ -601,14 +604,12 @@ installed CLI version commands; authenticated coding sessions are not run.
 
 Devices with 4 or 6 physical cores, or at most 6 logical CPU threads,
 automatically use shorter terminal
-scrollback, less editor animation, coalesced rendering and less frequent
-background syntax checks. Compilation reserves two CPU threads and respects
+scrollback, less editor animation and coalesced rendering. Compilation reserves two CPU threads and respects
 available RAM, including saved manual job counts. On four/six physical cores,
 compiler concurrency is capped at two/four jobs even with SMT; low available
 RAM or mechanical storage can reduce it further. The shared editor sends each
-dirty recovery snapshot once, reuses it for syntax checks, and debounces typing
-checks for 600 ms on constrained PCs. Unchanged diagnostic tables retain their
-rows and reading state. Fewer than four physical CPU
+dirty recovery snapshot once per edit; code is checked only by compiling, and the
+Build Console shows each error with its file and line. Fewer than four physical CPU
 cores prevents startup with a compatibility notice. If physical topology cannot
 be reported, the check falls back to logical threads. Logical CPU detection failure
 also stops startup. A desktop session shows a native dialog when one is available,

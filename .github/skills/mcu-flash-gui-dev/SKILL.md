@@ -101,7 +101,6 @@ The project provides a modern Windows desktop interface for compiling, flashing,
      - `serial_panel.py`: High-performance real-time serial monitor with line ending selector, baud rate dropdown, timestamp toggle, and quick send bar.
      - `terminal_panel.py`: Multi-session integrated terminal panel supporting PowerShell (`pwsh`) and CMD tabs.
      - `ai_panel.py`: Collapsible OpenCode AI assistant side panel.
-     - `syntax_panel.py`: Interactive AST syntax diagnostic tree with line jump navigation.
      - `compat_panel.py`: Board compatibility matrix and GPIO pinout inspector.
      - `notif_panel.py`: Per-sketch notification log viewer.
      - `settings_dialog.py`: Preferences modal (themes, CPU jobs, auto-save, baud reset).
@@ -124,7 +123,7 @@ The project provides a modern Windows desktop interface for compiling, flashing,
    - **Tab bar** with drag-and-drop reordering, dirty-dot indicators, and persistent tab order.
    - **Ctrl+Click / F12 Go-To-Definition** with cross-file symbol resolution (`findProjectSymbol()`, `parseSymbolDetails()`), including built-in Arduino function registry (`BUILTIN_ARDUINO`).
    - **Ctrl+Hover** floating definition card with function signature, parameters, and return type.
-   - **Realtime syntax checking** via `realtime_check_syntax()` → `src/syntax_checker.py` (C++ linting).
+   - **No live syntax checking**: compiling is the only code check; errors appear in the Build Console.
    - **AI Edit Diff & Glowing Highlights** — Line-level LCS diff with Monaco decorations:
      - 🟢 **Green glow** (pulsing CSS animation `greenGlowPulse`) + `+` gutter icon on added/changed lines.
      - 🔴 **Red glow** (pulsing CSS animation `redGlowPulse`) + `-` gutter icon on removed lines.
@@ -152,10 +151,6 @@ The project provides a modern Windows desktop interface for compiling, flashing,
    - `src/launcher.cpp`: Native C++ executable wrapper that initializes environment variables and launches silently on Windows without popping a console window.
    - `src/launcher.cs`: C# launcher source (compiles to `MCU_Flasher.exe`).
    - `direct/runThisOnWindows.vbs`: Windows bootstrap launcher that normally uses the current user token, hides the console, and requests targeted UAC only for machine-level setup that requires it.
-
-7. **Realtime C++ Syntax Linter (`src/syntax_checker.py`)**
-   - Lightweight C++ AST & regex engine for validating `.ino`, `.cpp`, and `.h` files without invoking full compiler runs.
-   - Parses missing semicolons, unmatched brackets/quotes, undeclared variables/functions, populating line-numbered diagnostics into the UI tree and Monaco markers.
 
 8. **Database & Notification Store (`src/dbs/` & `.mcu_flasher_build_cache/`)**
    - **Per-Sketch Notification Store**: Notifications are persisted per-project inside `<sketch_dir>/.mcu_flasher_build_cache/dbs_notif.json`.
@@ -190,7 +185,6 @@ MCU Flasher by Naph/
 │   │   ├── terminal_panel.py        # Embedded multi-session terminal panel (pwsh/cmd tabs)
 │   │   ├── ai_panel.py              # Collapsible OpenCode AI assistant panel
 │   │   ├── compat_panel.py          # Compatible boards viewer
-│   │   ├── syntax_panel.py          # Interactive AST syntax diagnostic tree
 │   │   ├── notif_panel.py           # Per-project notification viewer
 │   │   ├── detached_editor.py       # Independent popped-out editor window wrapper
 │   │   ├── settings_dialog.py       # Application preferences modal
@@ -213,7 +207,6 @@ MCU Flasher by Naph/
 │   ├── _python/                     # Private portable Python 3 runtime (hidden via attrib +h)
 │   ├── .platformio-mcu-gui/         # PlatformIO core store (junctioned to avoid MAX_PATH)
 │   ├── gui_config.json              # Persisted user settings (themes, baud rates, auto-save)
-│   ├── syntax_checker.py            # Standalone C++ syntax linter & AST analyzer
 │   ├── launcher.cpp                 # Native Windows C++ executable wrapper source
 │   ├── launcher.cs                  # Native Windows C# launcher source
 │   ├── resources.rc                 # Windows executable resource definition

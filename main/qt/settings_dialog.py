@@ -37,11 +37,13 @@ from main.qt.icons import ActionButton as QPushButton
 from main.core.constants import board_reset_capabilities
 from main.core.target_profile import target_problem
 from main.core.board_catalog import SUPPORTED_BOARDS
+from main.core.theme import DEFAULT_THEME
 from main.core.config import (
     _load_raw_config, _save_raw_config,
     get_theme_settings, _detect_system_theme,
     get_monitor_font_size, get_hide_build_console_warnings,
     get_autosave_settings, get_reset_on_baud_change, get_editor_auto_pairs,
+    AI_ASSISTANT_SCALES, get_ai_assistant_scale,
 )
 from main.core.toolchain import _resource_safe_worker_count, _system_reserved_cpu_count
 from main.qt.signals import signals
@@ -146,8 +148,9 @@ class SettingsDialog(GlassDialog):
                 border: none;
             }}
             QGroupBox {{
-                background-color: {group_bg};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {glass['glass_highlight']}, stop:1 {group_bg});
                 border: 1px solid {group_border};
+                border-top-color: {glass['sheet_spec']};
                 border-radius: 14px;
                 font-size: 11px;
                 font-weight: 600;
@@ -220,73 +223,14 @@ class SettingsDialog(GlassDialog):
             }}
         """)
 
-        if hasattr(self, "btn_reset"):
-            self.btn_reset.setStyleSheet(f"""
-                QPushButton {{
-                    background: {pal.get('BG_MID', '#2d3748')};
-                    color: {pal.get('TEXT_MUTED', '#a0aec0')};
-                    font-size: 11px;
-                    font-weight: 600;
-                    border-radius: 4px;
-                    border: 1px solid {pal.get('BORDER', '#2d3748')};
-                    padding: 0 12px;
-                }}
-                QPushButton:hover {{
-                    background: {pal.get('BTN_STOP', '#6e2020')};
-                    color: #ffffff;
-                    border-color: #e74c3c;
-                }}
-            """)
-        if hasattr(self, "btn_cancel"):
-            self.btn_cancel.setStyleSheet(f"""
-                QPushButton {{
-                    background: {pal.get('BTN_CLEAR', '#2d3748')};
-                    color: {pal.get('TEXT_BRIGHT', '#ffffff')};
-                    font-size: 11px;
-                    font-weight: 600;
-                    border-radius: 4px;
-                    border: 1px solid {pal.get('BORDER', '#2d3748')};
-                }}
-                QPushButton:hover {{ background: {pal.get('BTN_CLEAR_H', '#3a4a60')}; }}
-            """)
-        if hasattr(self, "btn_save"):
-            self.btn_save.setStyleSheet(f"""
-                QPushButton {{
-                    background: {pal.get('BTN_COMPILE', '#1a5c3a')};
-                    color: #ffffff;
-                    font-size: 11px;
-                    font-weight: 700;
-                    border-radius: 4px;
-                    border: 1px solid rgba(255,255,255,0.1);
-                }}
-                QPushButton:hover {{ background: {pal.get('BTN_COMPILE_H', '#216e46')}; }}
-            """)
-        if hasattr(self, "btn_hard_reset"):
-            self.btn_hard_reset.setStyleSheet(f"""
-                QPushButton {{
-                    background: {pal.get('BTN_STOP', '#6e2020')};
-                    color: #ffffff;
-                    font-weight: 700;
-                    font-size: 11px;
-                    border-radius: 4px;
-                    border: 1px solid rgba(255,255,255,0.1);
-                }}
-                QPushButton:hover {{ background: {pal.get('BTN_STOP_H', '#882828')}; }}
-                QPushButton:disabled {{ background: {pal.get('BG_MID', '#2d3748')}; color: {pal.get('TEXT_DIM', '#6b7280')}; }}
-            """)
-        if hasattr(self, "btn_soft_reset"):
-            self.btn_soft_reset.setStyleSheet(f"""
-                QPushButton {{
-                    background: {pal.get('BTN_UPLOAD', '#1e3a5f')};
-                    color: #ffffff;
-                    font-weight: 700;
-                    font-size: 11px;
-                    border-radius: 4px;
-                    border: 1px solid rgba(255,255,255,0.1);
-                }}
-                QPushButton:hover {{ background: {pal.get('BTN_UPLOAD_H', '#2a5080')}; }}
-                QPushButton:disabled {{ background: {pal.get('BG_MID', '#2d3748')}; color: {pal.get('TEXT_DIM', '#6b7280')}; }}
-            """)
+        # Every action is the theme's glass, as in the workspace: Save is accent glass, the
+        # device resets danger and accent glass, the rest clear glass.
+        from main.qt.theme import liquid_button_sheet
+        for name, role in (("btn_reset", "glass"), ("btn_cancel", "glass"), ("btn_save", "accent"),
+                           ("btn_hard_reset", "danger"), ("btn_soft_reset", "accent")):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setStyleSheet(liquid_button_sheet(mode, role, radius=11, font_size=11, padding="0 12px"))
 
     def _build_ui(self) -> None:
         outer_layout = QVBoxLayout(self)
@@ -405,7 +349,7 @@ class SettingsDialog(GlassDialog):
 
         cur_saved_theme, cur_follow_sys = get_theme_settings()
         self._last_manual_theme = "default" if cur_saved_theme == "dark" else cur_saved_theme
-        self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, "Glass (Smoked blue)"))
+        self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, self._theme_rev[DEFAULT_THEME]))
         self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         theme_row.addWidget(self.theme_combo, stretch=1)
         tv.addLayout(theme_row)
@@ -450,6 +394,30 @@ class SettingsDialog(GlassDialog):
         tv.addWidget(theme_note)
 
         layout.addWidget(theme_box)
+
+        # ── AI Assistant ─────────────────────────────────────────────────────
+        assistant_box = QGroupBox("AI Assistant")
+        av = QVBoxLayout(assistant_box)
+        av.setSpacing(10)
+        scale_row = QHBoxLayout()
+        scale_label = QLabel("Assistant text size:")
+        scale_label.setFixedWidth(158)
+        scale_row.addWidget(scale_label)
+        self.assistant_scale_combo = QComboBox()
+        self.assistant_scale_combo.setAccessibleName("Assistant text size")
+        for percent in AI_ASSISTANT_SCALES:
+            self.assistant_scale_combo.addItem(f"{percent}%" + (" (standard)" if percent == 100 else ""), userData=percent)
+        self.assistant_scale_combo.setCurrentIndex(max(0, self.assistant_scale_combo.findData(get_ai_assistant_scale())))
+        self.assistant_scale_combo.setToolTip("Sizes the coding assistant's text on its own, for large or high-resolution screens.")
+        scale_row.addWidget(self.assistant_scale_combo)
+        scale_row.addStretch()
+        av.addLayout(scale_row)
+        scale_note = QLabel("Scales the AI Assistant's text relative to the monitor font size. It applies right away "
+                            "on Linux and macOS, and when the assistant next starts on Windows.")
+        scale_note.setProperty("role", "dim")
+        scale_note.setWordWrap(True)
+        av.addWidget(scale_note)
+        layout.addWidget(assistant_box)
 
         # ── 3. File Editor ───────────────────────────────────────────────────
         editor_box = QGroupBox("File Editor")
@@ -612,58 +580,12 @@ class SettingsDialog(GlassDialog):
         )
         self.btn_hard_reset = QPushButton(hard_reset_label)
         self.btn_hard_reset.setFixedHeight(30)
-        self.btn_hard_reset.setStyleSheet("""
-            QPushButton:enabled {
-                background: #6e2020;
-                color: #ffffff;
-                font-weight: 700;
-                font-size: 11px;
-                border-radius: 4px;
-                border: 1px solid rgba(255,255,255,0.15);
-            }
-            QPushButton:enabled:hover {
-                background: #882828;
-                border: 1px solid #e74c3c;
-            }
-            QPushButton:enabled:pressed {
-                background: #501616;
-                border: 1px solid #e74c3c;
-            }
-            QPushButton:disabled {
-                background: #2d3748;
-                color: #6b7280;
-                border: 1px solid #1c2333;
-            }
-        """)
         self.btn_hard_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_hard_reset.clicked.connect(self._run_hard_reset)
         btn_row.addWidget(self.btn_hard_reset)
 
         self.btn_soft_reset = QPushButton("Soft Reset (Reset Flash)", icon_name="reload")
         self.btn_soft_reset.setFixedHeight(30)
-        self.btn_soft_reset.setStyleSheet("""
-            QPushButton:enabled {
-                background: #1e3a5f;
-                color: #ffffff;
-                font-weight: 700;
-                font-size: 11px;
-                border-radius: 4px;
-                border: 1px solid rgba(255,255,255,0.15);
-            }
-            QPushButton:enabled:hover {
-                background: #2a5080;
-                border: 1px solid #5ca4f0;
-            }
-            QPushButton:enabled:pressed {
-                background: #142842;
-                border: 1px solid #5ca4f0;
-            }
-            QPushButton:disabled {
-                background: #2d3748;
-                color: #6b7280;
-                border: 1px solid #1c2333;
-            }
-        """)
         self.btn_soft_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_soft_reset.clicked.connect(self._run_soft_reset)
         btn_row.addWidget(self.btn_soft_reset)
@@ -771,8 +693,9 @@ class SettingsDialog(GlassDialog):
 
         self.cb_theme_system.setChecked(False)
         self.theme_combo.setEnabled(True)
-        self.theme_combo.setCurrentText(self._theme_rev["default"])
+        self.theme_combo.setCurrentText(self._theme_rev[DEFAULT_THEME])
         self.size_combo.setCurrentIndex(0)
+        self.assistant_scale_combo.setCurrentIndex(self.assistant_scale_combo.findData(100))
 
         self.cb_autosave.setChecked(False)
         self.autosave_spin.setValue(1500)
@@ -784,7 +707,7 @@ class SettingsDialog(GlassDialog):
         self._save_and_apply()
     def _on_theme_combo_changed(self, index: int) -> None:
         if self.theme_combo.isEnabled():
-            chosen = self._theme_map.get(self.theme_combo.currentText(), "default")
+            chosen = self._theme_map.get(self.theme_combo.currentText(), DEFAULT_THEME)
             self._last_manual_theme = chosen
 
     def _on_theme_system_toggled(self, checked: bool) -> None:
@@ -795,12 +718,12 @@ class SettingsDialog(GlassDialog):
             self.theme_combo.setEnabled(False)
             detected = _detect_system_theme()
             self.theme_combo.blockSignals(True)
-            self.theme_combo.setCurrentText(self._theme_rev.get(detected, "Glass (Smoked blue)"))
+            self.theme_combo.setCurrentText(self._theme_rev.get(detected, self._theme_rev[DEFAULT_THEME]))
             self.theme_combo.blockSignals(False)
         else:
             self.theme_combo.setEnabled(True)
             self.theme_combo.blockSignals(True)
-            self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, self._theme_rev["default"]))
+            self.theme_combo.setCurrentText(self._theme_rev.get(self._last_manual_theme, self._theme_rev[DEFAULT_THEME]))
             self.theme_combo.blockSignals(False)
 
     def _reset_target(self, hard: bool = False):
@@ -979,7 +902,7 @@ class SettingsDialog(GlassDialog):
             saved_mode = self._last_manual_theme
             active_theme = _detect_system_theme()
         else:
-            chosen_theme = self._theme_map.get(self.theme_combo.currentText(), "default")
+            chosen_theme = self._theme_map.get(self.theme_combo.currentText(), DEFAULT_THEME)
             saved_mode = chosen_theme
             active_theme = chosen_theme
             self._last_manual_theme = chosen_theme
@@ -995,6 +918,11 @@ class SettingsDialog(GlassDialog):
         wanted = (self._auto_here if size_choice == "auto" and self._auto_here is not None
                   else effective_scale(size_choice))
         self._interface_restart_pending = restart_can_apply() and abs(wanted - started_scale()) > 1e-6
+
+        # 6. AI Assistant text size
+        new_scale = self.assistant_scale_combo.currentData() or 100
+        self._assistant_scale_change = new_scale if new_scale != get_ai_assistant_scale() else None
+        data["shared"]["ai_assistant_scale"] = new_scale
 
         # Preserve legacy editor_mode data; the Qt workspace uses offline Monaco
         # with an automatic resource profile and has no alternative engine.
@@ -1073,6 +1001,7 @@ class SettingsDialog(GlassDialog):
             f"• CPU Multithreading: {cpu_key}\n"
             f"• Continuous Panel Resize: {g_accel}\n"
             f"• Monitor & Terminal Font: {new_font_size} pt\n"
+            f"• AI Assistant Text: {self.assistant_scale_combo.currentData() or 100}%\n"
             f"• Console Warnings: {warn_str}\n"
             f"• Theme Mode: {theme_str}\n"
             f"• Auto-Save: {autosave_str}\n"
@@ -1105,6 +1034,9 @@ class SettingsDialog(GlassDialog):
         # each one re-lays out or restyles every open panel.
         if font_changed:
             signals.font_size_changed.emit(new_font_size)
+        if getattr(self, "_assistant_scale_change", None):
+            signals.ai_assistant_scale_changed.emit(self._assistant_scale_change)
+            self._assistant_scale_change = None
         if theme_changed:
             signals.theme_changed.emit(active_theme)
 

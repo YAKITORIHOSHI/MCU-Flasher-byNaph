@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 import sys
 sys.path.insert(0, str(ROOT))
 from src.modules.application_sources import MANIFEST as SOURCE_MANIFEST, manifest_bytes
-EXCLUDED = {'.git', '.venv-linux', '.venv-macos', '.venv', 'env', '_python', '.ubuntu-tools', '.macos-tools',
+EXCLUDED = {'.git', '.venv-linux', '.venv-macos', '.venv', 'env', '_python', '.ubuntu-tools', '.macos-tools', '.ai-agents',
             '.mcu_flasher_build_cache', '.mcu_ai_edits', '.pio', '.vscode',
             '.clangd', '.opencode', 'temp', 'logs', 'test', 'tests', '__pycache__'}
 STATE_NAMES = {'.mcu_gui_config.json', 'gui_config.json', 'dbs_notif.json',

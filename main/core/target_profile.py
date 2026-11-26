@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Mapping
-from main.core.constants import MAX_BAUD_RATE
+from main.core.constants import MAX_UPLOAD_SPEED
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BOARD_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,159}$")
@@ -100,7 +100,7 @@ def serial_upload_speed(info: Mapping, requested_speed: str = "") -> str:
     text = str(value or "").strip()
     if not text.isascii() or not text.isdigit() or len(text) > 10 or int(text) <= 0:
         return ""
-    return str(min(int(text), MAX_BAUD_RATE) if is_esp else int(text))
+    return str(min(int(text), MAX_UPLOAD_SPEED) if is_esp else int(text))
 
 
 def upload_configuration(info: Mapping, requested_speed: str = "") -> str:

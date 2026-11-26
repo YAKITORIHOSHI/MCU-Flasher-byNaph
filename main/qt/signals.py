@@ -195,10 +195,6 @@ class MCUSignals(QObject):
     project_files_updated = Signal(dict)
     cloud_project_updated = Signal(dict)
 
-    # ── Syntax Diagnostics ───────────────────────────────────────────────────
-    # Payload: list[diagnostic dicts]
-    syntax_errors = Signal(list)
-
     # ── Notifications ────────────────────────────────────────────────────────
     # Payload: {"title": str, "message": str, "type": str}
     #   type: "info" | "success" | "warning" | "error"
@@ -214,8 +210,6 @@ class MCUSignals(QObject):
     editor_load_file = Signal(str)
     # Request editor to navigate to a specific file and line
     editor_goto_line = Signal(str, int)
-    # Exact syntax source range; Python checker columns use Unicode code points.
-    editor_goto_diagnostic = Signal(dict)
     # Editor reports content changed (file_path)
     editor_content_changed = Signal(str)
     # Request editor theme change
@@ -237,6 +231,7 @@ class MCUSignals(QObject):
     # ── Display / Settings Signals ───────────────────────────────────────────
     font_size_changed = Signal(int)
     editor_font_size_changed = Signal(int)
+    ai_assistant_scale_changed = Signal(int)   # Percent of the monitor font
     theme_changed = Signal(str)
     hide_warnings_changed = Signal(bool)
     autosave_settings_changed = Signal(bool, int)

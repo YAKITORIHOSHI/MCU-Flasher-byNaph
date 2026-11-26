@@ -8,11 +8,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import shlex
 import shutil
 import sys
 
+from main.core.compiled_cache import host_namespace
 from src.modules.platform_runtime import app_data_dir
 from src.modules.ubuntu_architecture import MACH_O_MAGICS
+
+APP_ROOT = Path(__file__).resolve().parents[2]
+# Agents this app downloads itself, inside its own folder, one subfolder per OS and CPU.
+AGENTS_FOLDER = ".ai-agents"
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,18 @@ class Agent:
     native: bool = False            # Only a native program counts, never a script of that name
     executables: tuple = ()
     markers: tuple = field(default=(), compare=False)   # Text that tells it from another program of that name
+    # Kept whole inside this app's folder (see isolation()); a copy elsewhere never counts.
+    isolated: bool = False
+    launcher: str = ""              # An isolated agent's program, relative to its own home
+
+
+@dataclass(frozen=True)
+class Isolation:
+    """Where an isolated agent keeps what its installer would spread across the home folder."""
+    root: Path                      # The agent's whole folder
+    data: Path                      # Its own home: program, tools, caches, settings and sign-ins
+    home: Path                      # Stands in for the account's home while its installer runs
+    temp: Path                      # Temporary files of the installer and of its sessions
 
 
 AGENTS = (
@@ -50,7 +68,9 @@ AGENTS = (
           arguments=("--dangerously-skip-permissions",), native=True, executables=("agy",)),
     Agent("codex", "Codex", "OpenAI", "Signs in with ChatGPT or an API key", executables=("codex",)),
     Agent("claude", "Claude", "Anthropic", "Signs in with Claude or an API key", executables=("claude",)),
+    # Hermes brings its own Python, Node.js, ffmpeg and caches, about 3 GB in all.
     Agent("hermes", "Hermes", "Nous Research", "Works with the model provider you choose",
+          isolated=True, launcher="hermes-agent/.hermes/bin/hermes",
           executables=("hermes",), markers=("hermes-agent", "hermes_cli", "hermes_agent", ".hermes", "hermes\\bin", "hermes/bin")),
     Agent("opencode", "OpenCode", "Open source", "Comes with MCU Flasher", builtin=True, inline=False,
           takes_project=True, executables=("opencode",)),
@@ -65,12 +85,35 @@ def agent(agent_id) -> Agent:
 
 
 def agents_root() -> Path:
-    """Where this app keeps agents it downloaded itself; other installs stay where they are."""
-    return app_data_dir() / "agents"
+    """Where this app keeps agents it downloaded itself; other installs stay where they are.
+
+    Linux and macOS keep them in this app's own folder. Windows keeps its per-user data
+    folder: an agent's deepest files already approach the 260-character path limit there.
+    """
+    if sys.platform == "win32":
+        return app_data_dir() / "agents"
+    return APP_ROOT / AGENTS_FOLDER / host_namespace()
 
 
 def agent_prefix(agent_id: str) -> Path:
     return agents_root() / agent(agent_id).id
+
+
+def isolation(agent_id: str) -> Isolation | None:
+    """An isolated agent's folders, or None where it installs where its maker puts it."""
+    spec = agent(agent_id)
+    if not spec.isolated or sys.platform == "win32":
+        return None
+    root = agent_prefix(spec.id)
+    return Isolation(root=root, data=root / "data", home=root / "home", temp=root / "tmp")
+
+
+def _isolated_variables(agent_id: str, place: Isolation) -> dict[str, str]:
+    if agent_id == "hermes":
+        # Hermes keeps one gateway per account under ~/.local/state; this copy keeps its own.
+        return {"HERMES_HOME": str(place.data),
+                "HERMES_GATEWAY_LOCK_DIR": str(place.home / ".local/state/hermes/gateway-locks")}
+    return {}
 
 
 def node_directory() -> Path | None:
@@ -133,6 +176,35 @@ def _is_this(spec: Agent, path: Path) -> bool:
     return head[:2] != b"MZ" and head[:4] != b"\x7fELF" and any(marker.encode() in head.lower() for marker in spec.markers)
 
 
+def _starts_inside(path: Path, place: Isolation) -> bool:
+    """Whether an isolated agent's launcher starts a program inside its own folder.
+
+    Its installer writes absolute paths, so after this app's folder moves the launcher still
+    names the old place; it then counts as missing, and downloading again repairs it in place.
+    A launcher without an ``exec`` line is not judged.
+    """
+    try:
+        with path.open("rb") as stream:
+            text = stream.read(16384).decode("utf-8", "replace")
+    except OSError:
+        return False
+    line = next((line for line in text.splitlines() if line.startswith("exec ")), None)
+    if line is None:
+        return True
+    try:
+        words = shlex.shlex(line[5:], posix=True)
+        words.whitespace_split = True
+        program = Path(words.get_token() or "")
+    except ValueError:
+        return True
+    if not program.is_absolute():
+        return True         # A command found through PATH or built when it runs is not judged.
+    try:
+        return program.is_file() and program.resolve().is_relative_to(place.data.resolve())
+    except (OSError, RuntimeError):
+        return False
+
+
 def _usable_posix(path: Path) -> str | None:
     from main.platforms.ubuntu_opencode import _native_executable
     return _native_executable(path)
@@ -154,6 +226,10 @@ def _usable_windows(path: Path) -> str | None:
 def candidates(agent_id: str) -> list[Path]:
     """Every place this agent could be, the app's own download first."""
     spec, found = agent(agent_id), []
+    place = isolation(agent_id)
+    if place is not None:
+        # Only its own copy: one elsewhere keeps another home that is not this app's to start.
+        return [place.data / spec.launcher]
     prefix = agent_prefix(agent_id)
     windows = sys.platform == "win32"
     for name in spec.executables:
@@ -184,14 +260,46 @@ def find_agent(agent_id: str) -> str | None:
             from main.platforms.ubuntu_opencode import find_opencode_cli
         return find_opencode_cli()
     usable = _usable_windows if sys.platform == "win32" else _usable_posix
+    place = isolation(spec.id)
     for path in candidates(spec.id):
         try:
             found = usable(path)
         except OSError:
             found = None
-        if found and _is_this(spec, Path(found)):
+        if found and _is_this(spec, Path(found)) and (place is None or _starts_inside(Path(found), place)):
             return found
     return None
+
+
+def internet_available(timeout: float = 2.0) -> bool:
+    """Whether this computer reaches the internet: every assistant works through its maker's
+    servers, so without it the list has nothing to offer. Never call from the GUI thread."""
+    import socket
+    import threading
+    import urllib.request
+    reached = threading.Event()
+
+    def connect(host):
+        try:
+            socket.create_connection((host, 443), timeout=timeout).close()
+            reached.set()
+        except OSError:
+            pass
+
+    def fetch(url):
+        # Honours a configured proxy, for networks that only allow web traffic through one.
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                if response.status in (200, 204):
+                    reached.set()
+        except Exception:
+            pass
+    probes = [threading.Thread(target=connect, args=(host,), daemon=True)
+              for host in ("1.1.1.1", "8.8.8.8", "github.com")]
+    probes.append(threading.Thread(target=fetch, args=("http://clients3.google.com/generate_204",), daemon=True))
+    for probe in probes:
+        probe.start()
+    return reached.wait(timeout + .5)
 
 
 def installed_agents() -> dict[str, str | None]:
@@ -207,13 +315,27 @@ def agent_argv(agent_id: str, executable, project) -> list[str]:
     return [executable, *spec.arguments, *([os.path.abspath(project)] if spec.takes_project else [])]
 
 
-def agent_environment(agent_id: str, base=None) -> dict[str, str]:
-    """Additions to a session's environment; the app's own Node.js only for its own npm agents."""
+def agent_environment(agent_id: str, base=None) -> dict[str, str | None]:
+    """Changes to a session's environment, where None removes a variable.
+
+    The app's own Node.js reaches only its own npm agents. An isolated agent gets its own home,
+    temporary folder and gateway locks, and none of the app's bytecode folder, which is outside.
+    """
     base = os.environ if base is None else base
-    additions = {"OPENCODE_DISABLE_AUTOUPDATE": "1"} if agent(agent_id).id == "opencode" else {}
+    spec = agent(agent_id)
+    additions: dict[str, str | None] = {"OPENCODE_DISABLE_AUTOUPDATE": "1"} if spec.id == "opencode" else {}
+    place = isolation(spec.id)
+    if place is not None:
+        additions.update(_isolated_variables(spec.id, place))
+        additions["PYTHONPYCACHEPREFIX"] = None
+        try:
+            place.temp.mkdir(parents=True, exist_ok=True)
+            additions.update(dict.fromkeys(("TMPDIR", "TMP", "TEMP"), str(place.temp)))
+        except OSError:
+            pass            # The inherited temporary folder still works.
     folders = []
     node = node_directory()
-    if node is not None and agent_prefix(agent_id).is_dir():
+    if node is not None and place is None and agent_prefix(agent_id).is_dir():
         folders.append(str(node))
     if sys.platform != "win32":
         local = str(Path.home() / ".local/bin")
@@ -222,6 +344,27 @@ def agent_environment(agent_id: str, base=None) -> dict[str, str]:
     if folders:
         additions["PATH"] = os.pathsep.join([*folders, base.get("PATH") or os.defpath])
     return additions
+
+
+def installer_environment(agent_id: str, base=None) -> dict[str, str | None]:
+    """A session's changes plus a stand-in home folder for the maker's installer.
+
+    Installers write commands to ~/.local/bin, PATH lines to shell profiles and caches under
+    ~/.cache; with HOME and the XDG folders inside the agent's folder, all of that stays there.
+    """
+    additions = agent_environment(agent_id, base)
+    place = isolation(agent_id)
+    if place is not None:
+        home = place.home
+        additions.update({"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
+                          "XDG_CACHE_HOME": str(home / ".cache"), "XDG_DATA_HOME": str(home / ".local/share"),
+                          "XDG_STATE_HOME": str(home / ".local/state")})
+    return additions
+
+
+def without_removed(environment: dict) -> dict[str, str]:
+    """Apply agent_environment's None removals to a complete environment."""
+    return {key: value for key, value in environment.items() if value is not None}
 
 
 def install_plan(agent_id: str) -> InstallPlan | None:
@@ -247,12 +390,15 @@ def install_plan(agent_id: str) -> InstallPlan | None:
                            url=f"https://claude.ai/install.{suffix}", shell=shell)
     if agent_id == "hermes":
         # The browser and computer-use tools are large and play no part in editing sketches.
+        place = isolation(agent_id)
+        inside = () if place is None else ("--hermes-home", str(place.data))
         return InstallPlan("script", "hermes-agent.nousresearch.com (Nous Research's installer)",
                            "irm https://hermes-agent.nousresearch.com/install.ps1 | iex" if windows else
-                           "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+                           "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash" +
+                           (f" -s -- --hermes-home {shlex.quote(str(place.data))}" if place else ""),
                            url=f"https://hermes-agent.nousresearch.com/install.{suffix}", shell=shell,
                            arguments=("-NonInteractive", "-SkipBrowser", "-SkipComputerUse") if windows else
-                           ("--non-interactive", "--skip-browser", "--skip-computer-use"))
+                           ("--non-interactive", "--skip-browser", "--skip-computer-use", *inside))
     return None
 
 

@@ -330,7 +330,7 @@ def _detect_system_theme() -> str:
 
 
 def _resolve_ai_theme() -> dict:
-    theme = "default"
+    theme = "light"     # Frost White until a theme is chosen.
     repo_root = Path(__file__).resolve().parent.parent
     for cfg in (
         repo_root / "src" / "gui_config.json",
@@ -344,7 +344,7 @@ def _resolve_ai_theme() -> dict:
                 if shared.get("theme_follow_system", False):
                     theme = _detect_system_theme()
                     break
-                m = shared.get("theme_mode", "default")
+                m = shared.get("theme_mode", "light")
                 if m:
                     theme = m
                     break
@@ -500,7 +500,7 @@ HTML_CONTENT_TEMPLATE = r"""<!DOCTYPE html>
                 term = new Terminal({
                     cursorBlink: true,
                     cursorStyle: 'block',
-                    fontSize: 14,
+                    fontSize: __FONT_SIZE__,
                     fontFamily: 'Consolas, "Courier New", monospace',
                     minimumContrastRatio: 4.5,
                     overviewRulerWidth: 0,
@@ -670,7 +670,21 @@ def get_ai_html(agent_name: str = "OpenCode", inline: bool = False) -> str:
         .replace("__THEME_FG__", t["fg"])
         .replace("__THEME_CURSOR__", t["cursor"])
         .replace("__THEME_SELECTION__", t["selection"])
+        .replace("__FONT_SIZE__", str(_assistant_font_size()))
     )
+
+
+def _assistant_font_size(base=14) -> int:
+    """The page's text size: Settings › AI Assistant › Assistant text size, read at start."""
+    repo_root = Path(__file__).resolve().parent.parent
+    for cfg in (repo_root / "src" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
+        try:
+            if cfg.exists():
+                percent = int(json.loads(cfg.read_text(encoding="utf-8")).get("shared", {}).get("ai_assistant_scale", 100))
+                return max(6, min(96, round(base * max(50, min(300, percent)) / 100)))
+        except Exception:
+            continue
+    return base
 
 
 # Private OSC telling the assistant page a session is ending; xterm never displays it.
@@ -747,7 +761,8 @@ class TerminalServer:
         input_line = [""]
         input_escape = [False]
         from src.modules.ai_prompt_context import PromptInputTracker
-        prompt_tracker = PromptInputTracker(target_dir, source="assistant")
+        prompt_tracker = PromptInputTracker(target_dir, source="assistant",
+                                            agent=self.agent.id if self.agent is not None else "opencode")
 
         exit_commands = {"/exit"} if self.agent is None or self.agent.id == "opencode" else {"/exit", "/quit"}
 
@@ -1145,6 +1160,13 @@ def run_standalone_ai(target_directory=None, agent_id="opencode"):
 
     _pre_hide_console_for_conpty()
     target_dir = os.path.abspath(target_directory) if target_directory else os.getcwd()
+    # The chosen agent may have been downloaded moments ago: give the sketch its skills
+    # where that agent reads them before it starts (Ubuntu does this in prepare_context).
+    try:
+        from main.core.file_utils import ensure_hidden_read_first_md
+        ensure_hidden_read_first_md(target_dir)
+    except Exception:
+        pass
     # Remove a stale marker from an earlier process. The new process publishes
     # a fresh marker after WebView/PTY readiness, preventing old timestamps from
     # racing the main GUI's loading overlay.

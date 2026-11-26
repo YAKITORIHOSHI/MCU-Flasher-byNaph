@@ -1143,7 +1143,15 @@ class CloudUIChecks(unittest.TestCase):
                 viewport = panel._scroll.viewport()
                 content = panel._scroll.widget()
                 account_center = panel._account_card.mapTo(content, QPoint()).y() + panel._account_card.height() / 2
-                self.assertLessEqual(abs(account_center - viewport.height() / 2), 2)
+                if content.height() <= viewport.height():
+                    self.assertLessEqual(abs(account_center - viewport.height() / 2), 2)
+                else:
+                    # A form taller than the view (larger fonts at 200%, as on Windows) cannot be
+                    # centred: it scrolls, and every field stays reachable.
+                    self.assertGreater(panel._scroll.verticalScrollBar().maximum(), 0)
+                    self.assertGreaterEqual(panel._account_card.mapTo(content, QPoint()).y(), 0)
+                    self.assertLessEqual(panel._account_card.mapTo(content, QPoint()).y()
+                                         + panel._account_card.height(), content.height())
                 self.assertTrue(panel._account_summary.wordWrap())
                 self.assertTrue(dialog.grab().save(str(self.output / f"selector-cloud-{'register' if register else 'sign-in'}.png")))
 

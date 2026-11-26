@@ -26,7 +26,6 @@ from main.qt.log_colors import contrast_ratio
 from main.qt.notif_panel import NotifPanel
 from main.qt.posix_terminal_panel import PosixTerminalPanel
 from main.qt.serial_panel import SerialPanel
-from main.qt.syntax_panel import SyntaxPanel
 from main.qt.terminal_panel import TerminalPanel
 from main.qt.theme import build_stylesheet, get_palette, glass_tokens
 
@@ -74,8 +73,6 @@ class PanelReadabilityChecks(unittest.TestCase):
         self.assertEqual(self.callback_errors, [], "An asynchronous Qt callback failed")
 
     def widget(self, instance):
-        if isinstance(instance, SyntaxPanel):
-            instance._bg_timer.stop()
         self.addCleanup(instance.deleteLater)
         if isinstance(instance, NotifPanel):
             # The initial zero-delay read emits a queued completion. Drain both
@@ -209,30 +206,6 @@ class PanelReadabilityChecks(unittest.TestCase):
             self.assertEqual(panel.search_input.text(), "")
             panel.apply_theme(MODES[cycle % len(MODES)])
             panel.set_content(entries)
-
-    def test_syntax_severity_and_status_recolor_without_losing_selected_rows(self):
-        panel = self.widget(SyntaxPanel())
-        panel.set_font_size(14)
-        panel.set_diagnostics([{"file": "demo.ino", "line": 1, "severity": severity, "message": "Readable fixture"}
-                               for severity in ("error", "warning", "note")])
-        panel._table.selectRow(1)
-        for mode in MODES:
-            pal = get_palette(mode)
-            panel.apply_theme(mode)
-            for row in range(3):
-                self.assert_readable(panel._table.item(row, 2).foreground().color().name(), glass_worst(mode)["reading"])
-            self.assertEqual(panel._table.currentRow(), 1)
-            self.assertEqual({item.row() for item in panel._table.selectedItems()}, {1})
-            self.assertEqual(panel._table.font().pointSize(), 14)
-            self.assertEqual(panel._lbl_status.text(), "1 err, 1 warn")
-            # The status sits straight on the sheet, the table in the smoked well below it.
-            self.assertIn(panel._header_colors["error"], panel._lbl_status.styleSheet())
-            panel.set_diagnostics([])
-            self.assertIn(panel._header_colors["success"], panel._lbl_status.styleSheet())
-            self.assert_readable(panel._header_colors["success"], glass_worst(mode)["sheet"])
-            panel.set_diagnostics([{"file": "demo.ino", "line": 1, "severity": severity, "message": "Readable fixture"}
-                                   for severity in ("error", "warning", "note")])
-            panel._table.selectRow(1)
 
     def test_notification_cards_recolor_existing_records_without_database_reload(self):
         records = [{"level": kind, "title": f"{kind} retained title", "message": f"{kind} retained message", "time": "12:34:56"}
@@ -594,9 +567,9 @@ class PanelReadabilityChecks(unittest.TestCase):
                 self.connected = []
             def connect(self, handler):
                 self.connected.append(handler)
-        for cls in (CompatPanel, SyntaxPanel, NotifPanel, TerminalPanel, PosixTerminalPanel):
-            bus = SimpleNamespace(**{name: Signal() for name in ("theme_changed", "font_size_changed", "compat_devices_updated", "syntax_errors", "notification", "project_updated")})
-            probe = SimpleNamespace(**{name: (lambda *args: None) for name in ("apply_theme", "set_font_size", "_on_compat_updated", "_on_syntax_diagnostics", "_on_live_notification", "_on_project_updated")})
+        for cls in (CompatPanel, NotifPanel, TerminalPanel, PosixTerminalPanel):
+            bus = SimpleNamespace(**{name: Signal() for name in ("theme_changed", "font_size_changed", "compat_devices_updated", "notification", "project_updated")})
+            probe = SimpleNamespace(**{name: (lambda *args: None) for name in ("apply_theme", "set_font_size", "_on_compat_updated", "_on_live_notification", "_on_project_updated")})
             cls.connect_signals(probe, bus, connect_theme=False)
             self.assertEqual(bus.theme_changed.connected, [])
             cls.connect_signals(probe, bus)

@@ -3,13 +3,43 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QColor
+import shiboken6
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QRadioButton, QSizePolicy, QSplitter, QVBoxLayout, QWidget)
 
 from main.qt.ai_changes_panel import AIChangesPanel, CodePreview
 from main.qt.glass import GlassDialog
 from main.qt.icons import ActionButton
+
+
+class _GuiRelay(QObject):
+    """One permanent GUI-thread object that workers hand results to.
+
+    A worker emitting on the dialog itself could race the dialog's deletion on the GUI
+    thread (an access violation on Windows). This object is never deleted, and it delivers
+    each result on the GUI thread only while the dialog still exists.
+    """
+
+    deliver = Signal(object, object)
+
+    def __init__(self):
+        super().__init__()
+        self.deliver.connect(self._deliver, Qt.ConnectionType.QueuedConnection)
+
+    @staticmethod
+    def _deliver(callback, result):
+        callback(result)
+
+
+_RELAY: _GuiRelay | None = None
+
+
+def _gui_relay() -> _GuiRelay:
+    global _RELAY
+    if _RELAY is None:
+        _RELAY = _GuiRelay()  # First made by a dialog, so it lives on the GUI thread.
+    return _RELAY
 
 
 class AIRevertDialog(GlassDialog):
@@ -25,6 +55,7 @@ class AIRevertDialog(GlassDialog):
         self._plans = {}
         self._token = 0
         self._busy = False
+        self._relay = _gui_relay()
         self.setWindowTitle("Revert AI edit")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         layout = QVBoxLayout(self)
@@ -124,15 +155,19 @@ class AIRevertDialog(GlassDialog):
             view.apply_theme(palette)
 
     def _run(self, work, done, *token):
+        def arrive(result):
+            # On the GUI thread. The dialog may have closed first; a plan writes nothing.
+            if shiboken6.isValid(self):
+                done.emit(*token, result)
+
+        relay = self._relay
+
         def task():
             try:
                 result = work()
             except Exception as exc:
                 result = {"success": False, "error": str(exc) or type(exc).__name__}
-            try:
-                done.emit(*token, result)
-            except RuntimeError:
-                pass        # The dialog closed first; a plan writes nothing.
+            relay.deliver.emit(arrive, result)
         try:
             threading.Thread(target=task, name="MCU_AIRevert", daemon=True).start()
         except RuntimeError as exc:

@@ -421,7 +421,8 @@ class ReceiptChecks(unittest.TestCase):
             bundle.writestr("vendor-core/platform.txt", self.platform.read_bytes())
         names = {"_write_bootstrap_board_source_receipt", "_verified_bootstrap_board_receipt",
                  "_adopt_existing_bootstrap_board_source", "_archive_source_pairs",
-                 "_normalize_sha256", "_arduino_avr_release_from_index", "_existing_bootstrap_board_source"}
+                 "_normalize_sha256", "_arduino_avr_release_from_index", "_existing_bootstrap_board_source",
+                 "_archive_tree_present"}
         source = ast.parse((ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig"))
         selected = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names]
         self.assertEqual({node.name for node in selected}, names)
@@ -532,10 +533,11 @@ class ReceiptChecks(unittest.TestCase):
                 index_url=worker._BUILTIN_INDEXES[("arduino", "avr")]))
         self.assertEqual(visited, [bad / "boards.txt", self.boards])
 
-    def test_unverified_sources_are_retained_and_no_family_sources_allow_fresh_preparation(self):
+    def test_unverified_sources_are_retained_and_a_fresh_copy_is_prepared(self):
+        # Refusing here stopped every later Bootstrap at the board stage for good.
         before = self.boards.read_bytes(), self.platform.read_bytes()
         with patch.dict(self.namespace, {"_adopt_existing_bootstrap_board_source": lambda *_a, **_k: False}):
-            self.assertFalse(self.namespace["_existing_bootstrap_board_source"](
+            self.assertIsNone(self.namespace["_existing_bootstrap_board_source"](
                 self.root, package="arduino", architecture="avr",
                 index_url=worker._BUILTIN_INDEXES[("arduino", "avr")]))
             self.assertIsNone(self.namespace["_existing_bootstrap_board_source"](
@@ -543,6 +545,17 @@ class ReceiptChecks(unittest.TestCase):
                 index_url=worker._BUILTIN_INDEXES[("esp32", "esp32")]))
         self.assertEqual((self.boards.read_bytes(), self.platform.read_bytes()), before)
         self.assertFalse((self.source / worker.RECEIPT).exists())
+
+    def test_a_core_whose_unpacking_was_stopped_is_not_certified(self):
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("vendor-core/cores/arduino/main.cpp", "int main() {}\n")
+        self.release.update(size=self.archive.stat().st_size, sha256=hashlib.sha256(self.archive.read_bytes()).hexdigest())
+        self.assertFalse(self.adopt())
+        self.assertFalse((self.source / worker.RECEIPT).exists())
+        (self.source / "cores/arduino").mkdir(parents=True)
+        (self.source / "cores/arduino/main.cpp").write_text("int main() {}\n", encoding="utf-8")
+        self.assertTrue(self.adopt())
+        self.assertTrue((self.source / worker.RECEIPT).exists())
 
 
 if __name__ == "__main__":

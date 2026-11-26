@@ -52,3 +52,6 @@ The `.mcu_flasher_build_cache/project_state.json` file contains a `hardware` blo
 - **Libraries**: Use standard Arduino libraries matching the architecture (e.g. `Adafruit_NeoPixel`, `FastLED`, `WiFi`, `BluetoothSerial`, `Wire`, `SPI`).
 - **Pin Assignments**: Verify GPIO pin compatibility with the current board before assigning pins.
 - **File Boundary**: Firmware edits stay strictly in root sketch files (`*.ino`, `*.cpp`, `*.c`, `*.h`, `*.hpp`, `NOTE.txt`) relative to the active project. Never touch `.mcu_flasher_build_cache/`, `.pio/`, or other cache/toolchain folders.
+
+---
+*Generated automatically by MCU Flash GUI for this sketch's coding assistants; it is rewritten when the sketch opens.*

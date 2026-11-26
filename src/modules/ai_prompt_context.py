@@ -9,23 +9,40 @@ from pathlib import Path
 from uuid import uuid4
 
 
-def assistant_process_active(pid):
-    """Identify a running assistant by its executable; never inspect arguments."""
+# Executable names of the coding agents, as main.core.ai_agents names them.
+AGENT_PROCESSES = {"codex": "codex", "agy": "antigravity", "opencode": "opencode", "claude": "claude", "hermes": "hermes"}
+
+
+def assistant_process_agent(pid):
+    """The coding agent running in a terminal, by its executable name, or None.
+
+    Never inspects arguments. Hermes runs as Python, so a terminal cannot name it.
+    """
     try:
         import psutil
         process = psutil.Process(int(pid))
-        names = {Path(child.name()).stem.casefold() for child in [process, *process.children(recursive=True)]}
-        return bool(names & {"codex", "agy", "opencode", "claude", "hermes"})
+        for child in [process, *process.children(recursive=True)]:
+            agent = AGENT_PROCESSES.get(Path(child.name()).stem.casefold())
+            if agent:
+                return agent
     except Exception:
-        return False
+        pass
+    return None
+
+
+def assistant_process_active(pid):
+    """Identify a running assistant by its executable; never inspect arguments."""
+    return assistant_process_agent(pid) is not None
 
 
 class PromptInputTracker:
-    def __init__(self, project, *, source="cli"):
+    def __init__(self, project, *, source="cli", agent=None):
         if source not in {"cli", "assistant"}:
             raise ValueError("Prompt source must be cli or assistant")
         self.project = Path(project)
         self.source = source
+        # Which coding agent received the prompt ("claude", ...), when known.
+        self.agent = agent if agent in AGENT_PROCESSES.values() else None
         self.line = ""
         self.escape = ""
         self.paste = False
@@ -79,6 +96,8 @@ class PromptInputTracker:
         try:
             payload = {"id": uuid4().hex, "prompt": prompt[:500], "time": time.time(),
                        "source": self.source, "sourceVersion": 1}
+            if self.agent in AGENT_PROCESSES.values():
+                payload["agent"] = self.agent
             temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             from main.core.file_utils import ensure_file_writable
             ensure_file_writable(target)

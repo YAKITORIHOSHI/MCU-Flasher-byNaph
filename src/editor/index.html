@@ -85,17 +85,21 @@
     :root, :root.theme-default, body.theme-default {
       --scene: url('../assets/glass/default.png');
       --frost: url('../assets/glass/default-frosted.png');
-      --sheet: linear-gradient(rgba(255, 255, 255, 0.063), rgba(255, 255, 255, 0.039));
-      --sheet-rim: rgba(255, 255, 255, 0.2);
+      /* Smoked blue glass: sky-tinted sheets, white caught light, teal light returning below. */
+      --sheet: linear-gradient(rgba(188, 220, 255, 0.063), rgba(188, 220, 255, 0.039));
+      --sheet-rim: rgba(214, 233, 255, 0.2);
       --sheet-light: rgba(255, 255, 255, 0.22);
-      --sheet-bevel: rgba(255, 255, 255, 0.08);
+      --sheet-bevel: rgba(188, 220, 255, 0.08);
       --reading: rgba(16, 27, 42, 0.667);
       --popover: rgba(16, 27, 42, 0.84);
-      --ai-bar: rgba(16, 27, 42, 0.6);
-      --btn-spec: rgba(255, 255, 255, 0.18);
+      --ai-bar: linear-gradient(rgba(36, 62, 92, 0.62), rgba(16, 27, 42, 0.66));
+      --ai-bar-rim: rgba(214, 233, 255, 0.24);
+      --ai-bar-shadow: rgba(0, 5, 12, 0.46);
+      --btn-spec: rgba(188, 220, 255, 0.18);
       --btn-lit: rgba(255, 255, 255, 0.34);
-      --btn-floor: rgba(255, 255, 255, 0.1);
-      --btn-drop: rgba(0, 0, 0, 0.3);
+      --btn-top: rgba(255, 255, 255, 0.52);
+      --btn-floor: rgba(128, 217, 206, 0.26);
+      --btn-drop: rgba(0, 5, 12, 0.3);
       --reading-rim: rgba(255, 255, 255, 0.133);
       --handle: rgba(246, 251, 255, 0.29);
       --chip: #f6fbff;
@@ -138,17 +142,22 @@
     :root.theme-light, body.theme-light {
       --scene: url('../assets/glass/light.png');
       --frost: url('../assets/glass/light-frosted.png');
+      /* Frost: white glass held by a steel hairline (white on white is no edge) with its
+         caught light inside the top and a faint blue caustic below. */
       --sheet: linear-gradient(rgba(255, 255, 255, 0.518), rgba(255, 255, 255, 0.361));
-      --sheet-rim: rgba(255, 255, 255, 0.72);
+      --sheet-rim: rgba(91, 120, 148, 0.3);
       --sheet-light: rgba(255, 255, 255, 0.78);
       --sheet-bevel: rgba(255, 255, 255, 0.3);
       --reading: rgba(255, 255, 255, 0.69);
       --popover: rgba(255, 255, 255, 0.88);
-      --ai-bar: rgba(255, 255, 255, 0.72);
+      --ai-bar: linear-gradient(rgba(255, 255, 255, 0.86), rgba(244, 249, 255, 0.74));
+      --ai-bar-rim: rgba(91, 120, 148, 0.42);
+      --ai-bar-shadow: rgba(26, 58, 92, 0.22);
       --btn-spec: rgba(255, 255, 255, 0.92);
       --btn-lit: rgba(255, 255, 255, 0.98);
-      --btn-floor: rgba(255, 255, 255, 0.66);
-      --btn-drop: rgba(31, 60, 90, 0.16);
+      --btn-top: rgba(91, 120, 148, 0.5);
+      --btn-floor: rgba(9, 105, 218, 0.14);
+      --btn-drop: rgba(26, 58, 92, 0.16);
       --reading-rim: rgba(255, 255, 255, 0.824);
       --handle: rgba(31, 35, 40, 0.345);
       --chip: #0969da;
@@ -191,17 +200,21 @@
     :root.theme-solarized-dark, body.theme-solarized-dark {
       --scene: url('../assets/glass/solarized_dark.png');
       --frost: url('../assets/glass/solarized_dark-frosted.png');
-      --sheet: linear-gradient(rgba(255, 255, 255, 0.063), rgba(255, 255, 255, 0.039));
-      --sheet-rim: rgba(255, 255, 255, 0.2);
-      --sheet-light: rgba(255, 255, 255, 0.22);
-      --sheet-bevel: rgba(255, 255, 255, 0.08);
+      /* Sea glass: teal-tinted sheets lit warm from above, cyan light returning below. */
+      --sheet: linear-gradient(rgba(166, 239, 228, 0.063), rgba(166, 239, 228, 0.039));
+      --sheet-rim: rgba(196, 236, 229, 0.2);
+      --sheet-light: rgba(253, 246, 227, 0.22);
+      --sheet-bevel: rgba(166, 239, 228, 0.08);
       --reading: rgba(0, 27, 34, 0.667);
       --popover: rgba(0, 27, 34, 0.84);
-      --ai-bar: rgba(0, 27, 34, 0.64);
-      --btn-spec: rgba(255, 255, 255, 0.15);
-      --btn-lit: rgba(255, 255, 255, 0.28);
-      --btn-floor: rgba(255, 255, 255, 0.08);
-      --btn-drop: rgba(0, 0, 0, 0.3);
+      --ai-bar: linear-gradient(rgba(8, 64, 74, 0.62), rgba(0, 27, 34, 0.68));
+      --ai-bar-rim: rgba(196, 236, 229, 0.24);
+      --ai-bar-shadow: rgba(0, 8, 11, 0.48);
+      --btn-spec: rgba(166, 239, 228, 0.15);
+      --btn-lit: rgba(253, 246, 227, 0.28);
+      --btn-top: rgba(253, 246, 227, 0.46);
+      --btn-floor: rgba(42, 161, 152, 0.3);
+      --btn-drop: rgba(0, 8, 11, 0.3);
       --reading-rim: rgba(255, 255, 255, 0.133);
       --handle: rgba(255, 255, 255, 0.29);
       --chip: #ffffff;
@@ -1112,11 +1125,11 @@
         linear-gradient(180deg, var(--sheet-light), transparent 42%),
         radial-gradient(120% 90% at 50% 130%, var(--btn-floor), transparent 70%),
         var(--ai-bar);
-      border: 1px solid var(--reading-rim);
-      border-top-color: var(--btn-lit);
+      border: 1px solid var(--ai-bar-rim);
+      border-top-color: var(--btn-top);
       border-radius: 20px;
       padding: 6px 8px;
-      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34), inset 0 1px 0 var(--btn-lit), inset 0 -1px 0 var(--btn-floor);
+      box-shadow: 0 14px 34px var(--ai-bar-shadow), inset 0 1px 0 var(--btn-lit), inset 0 -1px 0 var(--btn-floor);
       -webkit-backdrop-filter: blur(26px) saturate(1.5);
       backdrop-filter: blur(26px) saturate(1.5);
       font-family: 'Montserrat', 'Segoe UI', sans-serif;
@@ -1266,7 +1279,7 @@
         var(--btn-body);
       color: var(--text);
       border: 1px solid var(--btn-rim);
-      border-top-color: var(--btn-lit);
+      border-top-color: var(--btn-top);
       border-radius: 14px;
       padding: 4px 10px;
       cursor: pointer;
@@ -2627,99 +2640,6 @@
         return true;
       };
 
-      window.setEditorMarkers = function (errorsJsonStr) {
-        if (!window.editorInstance) return;
-        const model = window.editorInstance.getModel();
-        if (!model) return;
-        try {
-          const errors = JSON.parse(errorsJsonStr);
-          const activePath = window.projectPathKey(document.querySelector('#tab-bar .tab.active')?._filePath || '');
-          const markers = errors.filter(err => {
-            const file = window.projectPathKey(err.file || '');
-            const basename = activePath.split('/').pop();
-            const relative = /^[a-z]:\//i.test(activePath) || activePath.startsWith('//') ? file.toLowerCase() : file;
-            return !file || file === activePath || (!file.includes('/') && relative === basename);
-          }).map(err => {
-            const range = window.normalizeEditorLocation(model, {
-              line: err.line, column: err.col, endLine: err.endLine,
-              endColumn: err.endCol, columnEncoding: err.columnEncoding || 'codepoint'
-            });
-            return {
-              severity: String(err.severity).toLowerCase().includes('err') ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
-              message: err.message,
-              ...range
-            };
-          });
-          monaco.editor.setModelMarkers(model, "owner_python_syntax", markers);
-        } catch (e) {
-          console.error(e);
-        }
-      };
-
-      let lastCheckedModel = null;
-      let lastCheckedVersion = -1;
-      let lastCheckedPath = "";
-      let syntaxCheckTimeout = null;
-
-      function runMonacoSyntaxCheck() {
-        if (!window.editorInstance || !window.pywebview || !window.pywebview.api || !window.pywebview.api.realtime_check_syntax) {
-          return;
-        }
-        const model = window.editorInstance.getModel();
-        if (!model) return;
-
-        const activeTab = document.querySelector('.tab.active');
-        const filePath = activeTab ? activeTab._filePath : "";
-        if (!filePath) return;
-
-        if (!/\.(ino|cpp|c|h|hpp)$/i.test(filePath)) {
-          window.setEditorMarkers("[]");
-          return;
-        }
-
-        const version = model.getVersionId();
-        if (model === lastCheckedModel && version === lastCheckedVersion && filePath === lastCheckedPath) return;
-        lastCheckedModel = model;
-        lastCheckedVersion = version;
-        lastCheckedPath = filePath;
-        const api = window.pywebview.api;
-        const isCurrent = () => !model.isDisposed() && model === window.editorInstance.getModel() && model.getVersionId() === version;
-        const failed = err => {
-          if (isCurrent()) lastCheckedVersion = -1;
-          console.error(err);
-        };
-        const checkSource = () => {
-          if (!isCurrent()) return;
-          api.realtime_check_syntax(filePath, model.getValue()).then(errorsJsonStr => {
-            if (errorsJsonStr && errorsJsonStr !== "null" && isCurrent()) {
-              window.setEditorMarkers(errorsJsonStr);
-            }
-          }).catch(failed);
-        };
-        if (api.realtime_check_buffer) {
-          // Edits already sent the current text for crash recovery. A clean
-          // model falls back to one full transfer on its first syntax check.
-          api.realtime_check_buffer(filePath).then(handled => {
-            if (!handled) checkSource();
-          }).catch(failed);
-        } else {
-          checkSource();
-        }
-      }
-
-      function scheduleSyntaxCheck() {
-        if (syntaxCheckTimeout) {
-          clearTimeout(syntaxCheckTimeout);
-        }
-        syntaxCheckTimeout = setTimeout(runMonacoSyntaxCheck, window.__mcuResourceConstrained ? 600 : 300);
-      }
-
-      window.refreshProjectSyntax = function () {
-        lastCheckedModel = null;
-        lastCheckedVersion = -1;
-        scheduleSyntaxCheck();
-      };
-
       function syncModelLanguageForActiveTab() {
         if (!window.editorInstance || typeof monaco === 'undefined' || !monaco.editor) return;
         const activeTab = document.querySelector('#tab-bar .tab.active');
@@ -2761,9 +2681,10 @@
 
       window.syncModelLanguageForActiveTab = syncModelLanguageForActiveTab;
 
-      function checkMonacoSyntaxRealtime() {
+      // Compiling is the only code check; edits only carry dirty state and recovery text.
+      function installEditorListeners() {
         if (!window.editorInstance) {
-          setTimeout(checkMonacoSyntaxRealtime, 1000);
+          setTimeout(installEditorListeners, 1000);
           return;
         }
         window.setEditorFontSize?.(window.__mcuEditorFontSize, false);
@@ -2772,12 +2693,11 @@
         // its first file without keeping a polling timer alive.
         syncModelLanguageForActiveTab();
 
-        if (!window.editorInstance._syntax_listener_added) {
-          window.editorInstance._syntax_listener_added = true;
+        if (!window.editorInstance._buffer_listener_added) {
+          window.editorInstance._buffer_listener_added = true;
 
           window.editorInstance.onDidChangeModelContent(() => {
             if (window._applyingAiReviewModelUpdate) return;
-            scheduleSyntaxCheck();
             if (window.pywebview && window.pywebview.api) {
               const api = window.pywebview.api;
               const activeTab = document.querySelector('.tab.active');
@@ -2799,13 +2719,8 @@
           });
 
           window.editorInstance.onDidChangeModel(() => {
-            lastCheckedModel = null; // Force recheck on tab switch
-            lastCheckedVersion = -1;
             syncModelLanguageForActiveTab();
-            scheduleSyntaxCheck();
           });
-
-          scheduleSyntaxCheck();
         }
 
         // Model/content listeners take over once Monaco is ready; no idle poll.
@@ -2819,7 +2734,7 @@
       }
 
       // Start polling for editor instance initialization
-      setTimeout(checkMonacoSyntaxRealtime, 1000);
+      setTimeout(installEditorListeners, 1000);
     })();
 
     // ── AI Edit Diff & Glowing Text Highlight Engine ──────────────────────

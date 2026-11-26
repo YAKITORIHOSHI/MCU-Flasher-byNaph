@@ -95,6 +95,7 @@ class OpenCodeSession(QObject):
         child.extra_environment = agent_environment(self.agent.id)
         child.assistant_active = True
         child.prompt_source = "assistant"
+        child.prompt_agent = self.agent.id
         self._child = child
         child.resize(*self._dimensions)
         child.output.connect(lambda data: self._forward_output(child, generation, data))
@@ -206,10 +207,11 @@ class PosixAIPanel(QWidget):
 
     def __init__(self, backend=None, parent=None):
         super().__init__(parent)
-        from main.core.config import get_monitor_font_size
+        from main.core.config import get_ai_assistant_scale, get_monitor_font_size
         self._backend = backend
         self._theme = Theme.active_theme
         self._font_size = get_monitor_font_size()
+        self._scale = get_ai_assistant_scale()     # Settings › AI Assistant, in percent
         self._requested = False
         self._closing = False
         self._project_dir = ""
@@ -226,6 +228,7 @@ class PosixAIPanel(QWidget):
         # Window-owned theme propagation remains the only theme subscription.
         from main.qt.signals import signals
         signals.font_size_changed.connect(self.set_font_size)
+        signals.ai_assistant_scale_changed.connect(self.set_assistant_scale)
         self.apply_theme(self._theme)
 
     @property
@@ -511,7 +514,11 @@ class PosixAIPanel(QWidget):
             self._backdrop.forget()
             self._view.page().runJavaScript(
                 f"window.configureOpenCode?.({json.dumps(glass_terminal_colors(self._theme))}, "
-                f"{self._font_size}, {performance_profile().terminal_scrollback})")
+                f"{self.assistant_font_size()}, {performance_profile().terminal_scrollback})")
+
+    def assistant_font_size(self):
+        """The monitor font scaled by Settings › AI Assistant › Assistant text size."""
+        return max(6, min(96, round(self._font_size * self._scale / 100)))
 
     def _apply_surfaces(self):
         palette = get_palette(self._theme)
@@ -533,6 +540,12 @@ class PosixAIPanel(QWidget):
     def set_font_size(self, size):
         self._font_size = max(6, min(48, int(size)))
         self._configure_view()
+
+    @Slot(int)
+    def set_assistant_scale(self, percent):
+        self._scale = max(50, min(300, int(percent)))
+        self._configure_view()
+        self._fit_timer.start()
 
     def _discard_view(self):
         self._launch_generation += 1

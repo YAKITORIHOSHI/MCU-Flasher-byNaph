@@ -139,7 +139,6 @@ FIXTURE = r"""
     mark_modified: () => true,
     snapshot_buffer: () => true,
     on_editor_content_change: () => true,
-    realtime_check_syntax: () => 'null',  // Qt queues diagnostics separately from the string reply.
     save_tab_order: () => true,
     set_cursor_position: () => true,
     set_active_file: () => true,
@@ -406,24 +405,23 @@ class EditorReviewChecks(unittest.TestCase):
                 if CAPTURES and zoom == .75:
                     self.assertTrue(self.view.grab().save(str(CAPTURES / 'editor-lower-scale-filled.png')))
 
-    def test_realtime_syntax_reply_uses_queued_diagnostic_contract(self):
-        self.assertEqual(self.async_js(r"""
-          const f = window.__reviewFixture;
-          return await window.pywebview.api.realtime_check_syntax(f.helperPath, 'void helper() {}');
-        """), 'null')
+    def test_typing_sends_its_buffer_and_asks_for_no_code_check(self):
+        until(lambda: self.js("!!(window.editorInstance && window.editorInstance._buffer_listener_added)"))
         self.js(r"""(() => {
           const f = window.__reviewFixture;
           f.calls.length = 0;
           window.editorInstance.getModel().applyEdits([
-            {range:new monaco.Range(1,1,1,1),text:'// delayed syntax fixture\n'}
+            {range:new monaco.Range(1,1,1,1),text:'// typed fixture\n'}
           ]);
           return true;
         })()""")
-        until(lambda: self.js("window.__reviewFixture.calls.some(c => c.method === 'realtime_check_syntax')"))
-        self.async_js('await new Promise(resolve => setTimeout(resolve,100));return true;')
+        until(lambda: self.js("window.__reviewFixture.calls.some(c => c.method === 'mark_modified' || c.method === 'update_editor_buffer')"))
+        self.async_js('await new Promise(resolve => setTimeout(resolve,700));return true;')
+        methods = self.js("window.__reviewFixture.calls.map(c => c.method)")
+        self.assertFalse([method for method in methods if 'syntax' in method or method.startswith('realtime_check')], methods)
         self.assertFalse(self.page.console_issues)
 
-    def test_diagnostics_activate_exact_model_preserve_dirty_buffers_and_reveal_top(self):
+    def test_navigation_activates_exact_model_preserves_dirty_buffers_and_reveals_top(self):
         result = self.async_js(r"""
           const f = window.__reviewFixture, editor = window.editorInstance;
           const helper = f.models.get(window.projectPathKey(f.helperPath));
@@ -452,19 +450,6 @@ class EditorReviewChecks(unittest.TestCase):
         self.assertLessEqual(result['y'], 6, result)  # A small reading inset still anchors at the top.
         self.assertTrue(all(value != 'none' for value in result['dirty']))
         self.assertEqual(result['calls'], [])
-        markers = self.js(r"""(() => {
-          const f=window.__reviewFixture;
-          window.setEditorMarkers(JSON.stringify([
-            {file:f.mainPath,line:75,col:5,endLine:75,endCol:11,severity:'error',message:'fixture target'},
-            {file:f.helperPath,line:1,col:1,severity:'warning',message:'belongs to another file'}
-          ]));
-          return monaco.editor.getModelMarkers({resource:window.editorInstance.getModel().uri})
-            .filter(marker => marker.message.startsWith('fixture') || marker.message.startsWith('belongs'));
-        })()""")
-        self.assertEqual(len(markers), 1, markers)
-        self.assertEqual(markers[0]['startLineNumber'], 75, markers)
-        self.assertEqual(markers[0]['startColumn'], 6, markers)
-        self.assertEqual(markers[0]['endColumn'], 12, markers)
         final = self.async_js(r"""
           const f=window.__reviewFixture, editor=window.editorInstance;
           const ok=await window.navigateToSource({path:f.mainPath,line:120,column:1,reveal:'top'});

@@ -39,14 +39,14 @@ from PySide6.QtWidgets import (
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants (mirror main.core.constants defaults)
 # ─────────────────────────────────────────────────────────────────────────────
-from main.core.constants import MAX_BAUD_RATE
+from main.core.constants import ARDUINO_IDE_BAUD_RATES, MAX_UPLOAD_SPEED
 from main.core.theme import Theme
 from main.qt.icons import ActionButton as QPushButton, icon
 
 DEFAULT_BAUD          = 115200
 DEFAULT_UPLOAD_SPEED  = 460800
-VALID_BAUD_RATES      = [b for b in [9600, 19200, 38400, 57600, 74880, 115200, 230400, 460800, 512000, 921600] if b <= MAX_BAUD_RATE]
-UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if s <= MAX_BAUD_RATE]
+VALID_BAUD_RATES      = list(ARDUINO_IDE_BAUD_RATES)
+UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if s <= MAX_UPLOAD_SPEED]
 
 
 from main.qt.icons import IconLabel as QLabel
@@ -2200,7 +2200,7 @@ class ControlsBar(QWidget):
             from main.core.theme import Theme
             self.btn_detach_editor.setText("Attach Editor")
             self.btn_detach_editor.setStyleSheet(liquid_button_sheet(
-                getattr(Theme, "active_theme", "default") or "default", "accent", radius=11,
+                Theme.active_theme, "accent", radius=11,
                 selector="QPushButton#btn-detach-editor", font_size=10.5, padding="2px 6px"))
         else:
             self.btn_detach_editor.setText("Detach Editor")

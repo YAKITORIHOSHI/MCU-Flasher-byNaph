@@ -10,7 +10,9 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import shlex
+import stat
 import sys
 import tarfile
 import tempfile
@@ -29,7 +31,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from main.core import ai_agents
+from main.core import ai_agents, compiled_cache
 from main.core.log_colors import contrast_ratio
 from main.core.theme import glass_worst
 from main.qt.agent_chooser import AgentChooser, BUILTIN_TEXT, DOWNLOADED_TEXT
@@ -39,6 +41,7 @@ from src.modules import agent_setup
 APP = QApplication.instance() or QApplication([])
 from main.qt.theme import register_fonts
 register_fonts()
+REAL_AGENTS_ROOT = ai_agents.agents_root
 
 
 def until(condition, message, seconds=8):
@@ -60,7 +63,7 @@ class Fixture(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
         self.data = self.root / "data"
-        for target, value in (("app_data_dir", lambda: self.data), ("_posix_directories", lambda: [self.home / ".local/bin"])):
+        for target, value in (("agents_root", lambda: self.data / "agents"), ("_posix_directories", lambda: [self.home / ".local/bin"])):
             stub = patch.object(ai_agents, target, value)
             stub.start()
             self.addCleanup(stub.stop)
@@ -119,20 +122,88 @@ class DetectionChecks(Fixture):
             self.assertIsNone(ai_agents.find_agent("antigravity"))
 
     def test_another_program_of_the_same_name_is_not_the_agent(self):
-        self.program(self.root / "path/hermes", "#!/bin/sh\n# a JavaScript engine\n")
         self.program(self.root / "path/agy", "#!/usr/bin/env bash\n# opens the Antigravity editor\n")
-        self.assertIsNone(ai_agents.find_agent("hermes"))
         self.assertIsNone(ai_agents.find_agent("antigravity"))
-        self.program(self.home / ".local/bin/hermes", '#!/bin/sh\nexec "$HOME/.hermes/hermes-agent/run" "$@"\n')
-        self.assertEqual(ai_agents.find_agent("hermes"), str(self.home / ".local/bin/hermes"))
         native = self.home / ".local/bin/agy"
+        native.parent.mkdir(parents=True)
         native.write_bytes(Path(sys.executable).resolve().read_bytes()[:4096])
         native.chmod(0o755)
         self.assertEqual(ai_agents.find_agent("antigravity"), str(native), "The native CLI counts; the editor's script does not")
-        link = self.data / "agents/hermes/bin/hermes"
+        self.program(self.root / "path/codex")
+        link = self.data / "agents/codex/bin/codex"
         link.parent.mkdir(parents=True)
-        link.symlink_to(self.home / ".local/bin/hermes")
-        self.assertEqual(ai_agents.find_agent("hermes"), str(link), "The app's own download comes first")
+        link.symlink_to(self.root / "path/codex")
+        self.assertEqual(ai_agents.find_agent("codex"), str(link), "The app's own download comes first")
+
+    def test_hermes_counts_only_inside_this_app(self):
+        place = ai_agents.isolation("hermes")
+        self.assertEqual(place.root, self.data / "agents/hermes")
+        self.assertEqual((place.data, place.home, place.temp), (place.root / "data", place.root / "home", place.root / "tmp"))
+        # Its maker's default install, on PATH and in ~/.local/bin, belongs to another home.
+        self.program(self.root / "path/hermes", '#!/bin/sh\nexec "$HOME/.hermes/hermes-agent/run" "$@"\n')
+        self.program(self.home / ".local/bin/hermes", '#!/bin/sh\nexec "$HOME/.hermes/hermes-agent/run" "$@"\n')
+        self.program(self.home / ".hermes/hermes-agent/.hermes/bin/hermes")
+        self.assertIsNone(ai_agents.find_agent("hermes"))
+        self.assertEqual(ai_agents.candidates("hermes"), [place.data / "hermes-agent/.hermes/bin/hermes"])
+        launcher = self.program(place.data / "hermes-agent/.hermes/bin/hermes")
+        self.assertEqual(ai_agents.find_agent("hermes"), str(launcher))
+        interpreter = self.program(place.data / "tools/python-3.14/bin/python3")
+        launcher.write_text(f"#!/bin/sh\nexec {shlex.quote(str(interpreter))} -I -c 'import sys\nsys.exit(0)'\n", encoding="utf-8")
+        self.assertIn("'", launcher.read_text(encoding="utf-8").splitlines()[1].split(" -I")[0], "The fixture path needs quoting")
+        self.assertEqual(ai_agents.find_agent("hermes"), str(launcher))
+        launcher.write_text("#!/bin/sh\nexec /home/someone/.hermes/tools/python-3.14/bin/python3 -I -c 'import sys'\n", encoding="utf-8")
+        self.assertIsNone(ai_agents.find_agent("hermes"), "A launcher still naming the folder's old place counts as missing")
+        launcher.write_bytes(b"MZ copied from Windows")
+        self.assertIsNone(ai_agents.find_agent("hermes"))
+
+    def test_the_folder_is_in_this_app_per_os_and_cpu_except_on_windows(self):
+        with patch.object(ai_agents, "agents_root", REAL_AGENTS_ROOT):
+            root = ai_agents.agents_root()
+            self.assertEqual(root.parent, ai_agents.APP_ROOT / ".ai-agents")
+            self.assertEqual(root.name, compiled_cache.host_namespace())
+            with patch.object(ai_agents.sys, "platform", "win32"), \
+                    patch.object(ai_agents, "app_data_dir", return_value=self.root / "AppData"):
+                self.assertEqual(ai_agents.agents_root(), self.root / "AppData/agents")
+                self.assertIsNone(ai_agents.isolation("hermes"), "Windows keeps Hermes where its maker puts it")
+                self.assertNotIn("--hermes-home", ai_agents.install_plan("hermes").arguments)
+        self.assertIsNone(ai_agents.isolation("claude"))
+        self.assertTrue(ai_agents.agent("hermes").isolated)
+        self.assertEqual([spec.id for spec in ai_agents.AGENTS if spec.isolated], ["hermes"])
+
+    def test_sessions_get_its_own_home_and_none_of_the_apps_bytecode_folder(self):
+        place = ai_agents.isolation("hermes")
+        for version in ("v26.13.1",):
+            self.program(self.data / f"agents/node/{version}/bin/node")
+        base = {"PATH": "/usr/bin", "HOME": str(self.home), "PYTHONPYCACHEPREFIX": str(self.root / "app-cache")}
+        changes = ai_agents.agent_environment("hermes", base)
+        self.assertEqual(changes["HERMES_HOME"], str(place.data))
+        self.assertEqual(changes["HERMES_GATEWAY_LOCK_DIR"], str(place.home / ".local/state/hermes/gateway-locks"))
+        self.assertEqual({changes[name] for name in ("TMPDIR", "TMP", "TEMP")}, {str(place.temp)})
+        self.assertTrue(place.temp.is_dir())
+        self.assertIsNone(changes["PYTHONPYCACHEPREFIX"])
+        self.assertNotIn("HOME", changes, "Sessions keep the user's home: borrowed logins and their commands use it")
+        self.assertNotIn(str(self.data / "agents/node"), changes.get("PATH", ""), "Hermes brings its own Node.js")
+        session = ai_agents.without_removed({**base, **changes})
+        self.assertNotIn("PYTHONPYCACHEPREFIX", session)
+        self.assertEqual(session["HOME"], str(self.home))
+        for agent_id in ("claude", "codex", "antigravity", "opencode"):
+            other = ai_agents.agent_environment(agent_id, base)
+            self.assertFalse({"HERMES_HOME", "PYTHONPYCACHEPREFIX", "TMPDIR", "HOME"} & set(other), agent_id)
+
+    def test_its_installer_gets_a_stand_in_home_inside_its_folder(self):
+        place = ai_agents.isolation("hermes")
+        changes = ai_agents.installer_environment("hermes", {"PATH": "/usr/bin"})
+        self.assertEqual(changes["HOME"], str(place.home))
+        self.assertEqual({name: changes[name] for name in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME")},
+                         {"XDG_CONFIG_HOME": str(place.home / ".config"), "XDG_CACHE_HOME": str(place.home / ".cache"),
+                          "XDG_DATA_HOME": str(place.home / ".local/share"), "XDG_STATE_HOME": str(place.home / ".local/state")})
+        self.assertEqual(changes["HERMES_HOME"], str(place.data))
+        self.assertNotIn("HOME", ai_agents.installer_environment("claude", {"PATH": "/usr/bin"}))
+        plan = ai_agents.install_plan("hermes")
+        self.assertEqual(plan.arguments[-2:], ("--hermes-home", str(place.data)))
+        self.assertIn("--skip-browser", plan.arguments)
+        self.assertIn("bash -s -- --hermes-home", plan.command)
+        self.assertIn(str(place.data), plan.command.replace("'", ""))
 
     def test_windows_programs_and_unfinished_files_do_not_count(self):
         self.program(self.home / ".local/bin/claude", "MZ copied from Windows")
@@ -217,6 +288,61 @@ class DownloadChecks(Fixture):
         self.assertIn("Installing fixture", lines)
         with patch.object(agent_setup, "fetch_script", side_effect=AssertionError("Already here")):
             self.assertEqual(agent_setup.install("claude"), str(target))
+
+    def hermes_installer(self, launcher_text):
+        """A stand-in for Nous Research's installer that writes where the real one does."""
+        prepared = self.program(self.root / "prepared-launcher", launcher_text)
+        record = self.root / "installer.env"
+        script = ("#!/bin/bash\n"
+                  f"{{ echo \"args: $*\"; env; }} > '{record}'\n"
+                  'mkdir -p "$HOME/.local/bin" "$XDG_CACHE_HOME/uv" "$HERMES_HOME/hermes-agent/.hermes/bin"\n'
+                  'printf \'#!/bin/sh\\nexec "%s" "$@"\\n\' "$HERMES_HOME/hermes-agent/.hermes/bin/hermes" > "$HOME/.local/bin/hermes"\n'
+                  'printf \'\\n# Hermes Agent command\\nexport PATH="$HOME/.local/bin:$PATH"\\n\' >> "$HOME/.bashrc"\n'
+                  ': > "$XDG_CACHE_HOME/uv/CACHEDIR.TAG"\n'
+                  'mktemp "$TMPDIR/hermes-uv.XXXXXX" > /dev/null\n'
+                  f"cp '{prepared}' \"$HERMES_HOME/hermes-agent/.hermes/bin/hermes\"\n"
+                  "echo 'Hermes Agent install complete'\n" + "# padding\n" * 10).encode()
+        return script, record
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX shells")
+    def test_hermes_installs_whole_inside_its_folder_and_never_in_the_home_folder(self):
+        place = ai_agents.isolation("hermes")
+        calls = self.root / "launcher.calls"
+        script, record = self.hermes_installer(f"#!/bin/sh\n{{ echo \"$*\"; echo \"HOME=$HOME\"; }} >> '{calls}'\n")
+        lines, before = [], set(Path(tempfile.gettempdir()).glob("mcu-agent-*"))
+        with patch.dict(os.environ, {"PATH": os.defpath, "PYTHONPYCACHEPREFIX": str(self.root / "app-cache"),
+                                     "TMPDIR": str(self.root / "system-tmp")}):
+            (self.root / "system-tmp").mkdir()
+            found = agent_setup.install("hermes", on_line=lines.append, fetch=lambda *_a, **_k: script)
+        launcher = place.data / "hermes-agent/.hermes/bin/hermes"
+        self.assertEqual(found, str(launcher))
+        seen = record.read_text(encoding="utf-8")
+        self.assertIn(f"args: --non-interactive --skip-browser --skip-computer-use --hermes-home {place.data}\n", seen)
+        environment = dict(line.split("=", 1) for line in seen.splitlines()[1:] if "=" in line)
+        self.assertEqual({name: environment[name] for name in ("HOME", "HERMES_HOME", "TMPDIR", "XDG_CACHE_HOME", "XDG_DATA_HOME")},
+                         {"HOME": str(place.home), "HERMES_HOME": str(place.data), "TMPDIR": str(place.temp),
+                          "XDG_CACHE_HOME": str(place.home / ".cache"), "XDG_DATA_HOME": str(place.home / ".local/share")})
+        self.assertNotIn("PYTHONPYCACHEPREFIX", environment)
+        self.assertEqual(sorted(path.name for path in self.home.iterdir()), [], "Nothing may land in the user's home folder")
+        self.assertEqual(list((self.root / "system-tmp").iterdir()), [])
+        self.assertTrue((place.home / ".local/bin/hermes").is_file())
+        self.assertIn("Hermes Agent command", (place.home / ".bashrc").read_text(encoding="utf-8"))
+        self.assertEqual(calls.read_text(encoding="utf-8").splitlines(),
+                         ["config set cli.expose_on_path false", f"HOME={place.home}"])
+        self.assertIn("Keeping Hermes inside MCU Flasher's folder…", lines)
+        self.assertFalse(any(place.temp.glob("mcu-agent-*")), "The installer script is removed")
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("mcu-agent-*")), before)
+        for folder in (place.root, place.data, place.home, place.temp):
+            self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700, folder)
+        with patch.object(agent_setup, "fetch_script", side_effect=AssertionError("Already here")):
+            self.assertEqual(agent_setup.install("hermes"), str(launcher))
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX shells")
+    def test_hermes_that_cannot_be_kept_off_path_is_reported(self):
+        script, _record = self.hermes_installer("#!/bin/sh\necho 'Error: config.yaml is locked'\nexit 4\n")
+        with patch.dict(os.environ, {"PATH": os.defpath}):
+            with self.assertRaisesRegex(agent_setup.AgentSetupError, r"kept out of ~/.local/bin \(exit 4\)\. Error: config.yaml is locked"):
+                agent_setup.install("hermes", fetch=lambda *_a, **_k: script)
 
     @unittest.skipIf(sys.platform == "win32", "POSIX shells")
     def test_failures_say_why_and_leave_no_script_behind(self):
@@ -376,6 +502,57 @@ class ChooserChecks(unittest.TestCase):
                         lit = image.pixelColor(round(x * ratio), round(y * ratio)).rgb() == accent.rgb()
                         self.assertEqual(lit, row.spec.id == agent_id, (mode, agent_id, row.spec.id))
 
+    def test_the_info_mark_states_who_owns_each_assistant(self):
+        from PySide6.QtWidgets import QToolTip
+        from main.qt.agent_chooser import disclaimer_text
+        widget = self.chooser()
+        info = widget.package.info
+        self.assertTrue(info.isVisible())
+        self.assertEqual(info.accessibleName(), "About these assistants")
+        text = disclaimer_text()
+        self.assertEqual(info.toolTip(), text, "hovering shows the disclaimer")
+        self.assertIn("were not created by, and do not belong to, the developer of MCU Flasher", text)
+        self.assertIn("rightful owner", text)
+        for spec in ai_agents.AGENTS:
+            self.assertIn(f"<b>{spec.name}</b>", text)
+        for owner in ("Google", "OpenAI", "Anthropic", "Nous Research", "open-source authors"):
+            self.assertIn(owner, text)
+        body = widget.package.body_rect()
+        self.assertTrue(body.contains(info.geometry().toRectF()), "the mark sits on the board")
+        for row in widget.package.rows:
+            self.assertFalse(info.geometry().intersects(row.geometry()), row.spec.id)
+        info.click()
+        self.assertTrue(QToolTip.isVisible(), "clicking shows it too")
+        self.assertIn("Disclaimer", QToolTip.text())
+        QToolTip.hideText()
+
+    def test_rows_show_no_hover_card(self):
+        widget = self.chooser()
+        for row in widget.package.rows:
+            self.assertEqual(row.toolTip(), "", row.spec.id)
+            self.assertIn(row.spec.maker, row.accessibleDescription())
+
+    def test_every_agent_shows_its_own_icon_in_the_theme_ink(self):
+        from main.qt import agent_chooser
+        for spec in ai_agents.AGENTS:
+            data = (ROOT / "src/assets/icons/agents" / f"{spec.id}.svg").read_bytes()
+            # Plain artwork: no script and nothing fetched from anywhere.
+            self.assertNotIn(b"<script", data.lower(), spec.id)
+            self.assertNotRegex(data, rb'(?:href|src)\s*=\s*"(?!#)', spec.id)
+            for ink in ("#ff123456", "#ff0969da"):
+                image = agent_chooser.agent_icon(spec.id, 20, 2.0, ink)
+                self.assertIsNotNone(image, spec.id)
+                self.assertEqual(image.width(), 40, spec.id)
+                inked = [image.pixelColor(x, y) for x in range(0, 40, 2) for y in range(0, 40, 2)
+                         if image.pixelColor(x, y).alpha() > 200]
+                self.assertGreater(len(inked), 20, f"{spec.id} draws a visible mark")
+                if b"currentColor" in data:
+                    want = QColor("#" + ink[3:])
+                    # One level of rounding where an edge pixel is premultiplied.
+                    self.assertTrue(all(max(abs(color.red() - want.red()), abs(color.green() - want.green()),
+                                            abs(color.blue() - want.blue())) <= 3 for color in inked), spec.id)
+        self.assertIsNone(agent_chooser.agent_icon("no-such-agent", 20, 1.0, "#ff000000"))
+
     def test_start_download_and_cancel_are_only_requests(self):
         widget = self.chooser()
         started, wanted, cancelled = [], [], []
@@ -388,7 +565,8 @@ class ChooserChecks(unittest.TestCase):
         widget.select("hermes")
         self.assertEqual(widget.primary.text(), "Download Hermes")
         self.assertIn("nousresearch", widget.detail.text().replace("​", ""))
-        self.assertIn("for this account only", widget.detail.text())
+        self.assertIn("for this account only" if sys.platform == "win32" else "into MCU Flasher's own folder",
+                      widget.detail.text().replace("​", ""))
         widget.primary.click()
         self.assertEqual((started, wanted), (["claude"], ["hermes"]))
         widget.show_progress("hermes", "Downloading…")
@@ -428,6 +606,24 @@ class PickerChecks(unittest.TestCase):
         stub = patch.object(ai_agents, "installed_agents", side_effect=lambda: dict(self.found))
         stub.start()
         self.addCleanup(stub.stop)
+        self.online = True
+        network = patch.object(ai_agents, "internet_available", side_effect=lambda *a, **k: self.online)
+        network.start()
+        self.addCleanup(network.stop)
+
+    def test_offline_the_list_gives_way_to_a_notice_that_brings_it_back(self):
+        self.online = False
+        self.picker.refresh()
+        until(lambda: not self.widget.online, "offline notice")
+        self.assertTrue(self.widget._offline_view.isVisibleTo(self.widget))
+        self.assertFalse(self.widget._list_view.isVisibleTo(self.widget))
+        self.assertTrue(self.picker._recheck.isActive(), "it keeps checking by itself")
+        self.online = True
+        self.widget.retry_button.click()
+        self.assertFalse(self.widget.retry_button.isEnabled())
+        until(lambda: self.widget.online, "list returns")
+        self.assertTrue(self.widget._list_view.isVisibleTo(self.widget))
+        self.assertFalse(self.widget._offline_view.isVisibleTo(self.widget))
 
     def test_detection_and_downloads_stay_off_the_gui_thread(self):
         threads = []
@@ -493,6 +689,121 @@ class PickerChecks(unittest.TestCase):
             self.picker.close()
             self.assertTrue(seen.wait(5))
         APP.processEvents()
+
+
+@unittest.skipIf(sys.platform == "win32", "POSIX PTY")
+class SessionEnvironmentChecks(unittest.TestCase):
+    def test_none_removes_a_variable_from_the_session(self):
+        from main.platforms import ubuntu_pty_process
+        from main.qt.posix_terminal_panel import PtySession
+        seen = {}
+
+        def spawn(command, *, cwd, env, dimensions):
+            seen.update(env)
+            raise OSError("the fixture stops before a process starts")
+        session = PtySession(str(ROOT), ["/bin/true"])
+        self.addCleanup(session.deleteLater)
+        session.extra_environment = {"PYTHONPYCACHEPREFIX": None, "HERMES_HOME": "/fixture/data"}
+        with patch.dict(os.environ, {"PYTHONPYCACHEPREFIX": "/fixture/app-cache"}), \
+                patch.object(ubuntu_pty_process.NativePtyProcess, "spawn", side_effect=spawn):
+            self.assertFalse(session.start())
+        self.assertEqual(seen["HERMES_HOME"], "/fixture/data")
+        self.assertNotIn("PYTHONPYCACHEPREFIX", seen)
+
+
+class SketchSkillChecks(Fixture):
+    NAMES = ("sketch-workflow", "mcu-sketch-target", "serial-monitor-output")
+
+    def generate(self, sketch, installed):
+        from main.core import file_utils
+        with patch.object(file_utils, "_installed_agent_ids", return_value=frozenset(installed)):
+            file_utils.ensure_hidden_read_first_md(sketch)
+
+    def sketch(self):
+        sketch = self.root / "Blink Sketch"
+        sketch.mkdir()
+        (sketch / "Blink Sketch.ino").write_text("void setup() {}\nvoid loop() {}\n", encoding="utf-8")
+        return sketch
+
+    def skills(self, folder):
+        base = folder / "skills"
+        return sorted(path.parent.name for path in base.glob("*/SKILL.md")) if base.is_dir() else []
+
+    def test_each_installed_agent_gets_the_skills_where_it_reads_them(self):
+        sketch = self.sketch()
+        self.generate(sketch, {"opencode", "codex", "claude"})
+        for folder in (".opencode", ".claude", ".agents"):
+            self.assertEqual(self.skills(sketch / folder), sorted(self.NAMES), folder)
+        self.assertIn("AGENTS.md", {path.name for path in sketch.iterdir()})
+        self.assertFalse((sketch / "CLAUDE.md").exists(), "Claude reads AGENTS.md when a project has no CLAUDE.md")
+        serial = (sketch / ".claude/skills/serial-monitor-output/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(serial.startswith("---\nname: serial-monitor-output\ndescription: "))
+        for text in ("90-97", "40-47, 100-107", "ansiSet(Print &out, uint8_t fg, uint8_t bg)", "31250", "2000000"):
+            self.assertIn(text, serial)
+        self.assertNotIn("512000", serial, "the monitor offers only the Arduino IDE's rates")
+        workflow = (sketch / ".agents/skills/sketch-workflow/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Build Console", workflow)
+        self.assertNotIn("Syntax", workflow)
+
+    def test_only_installed_agents_keep_skills_and_user_files_stay(self):
+        sketch = self.sketch()
+        self.generate(sketch, {"opencode", "codex", "claude", "antigravity"})
+        own = sketch / ".claude/settings.local.json"
+        own.write_text("{}", encoding="utf-8")
+        mine = sketch / ".agents/skills/sketch-workflow/SKILL.md"
+        mine.write_text("---\nname: sketch-workflow\ndescription: My own.\n---\nMine.\n", encoding="utf-8")
+        self.generate(sketch, {"opencode"})
+        self.assertEqual(self.skills(sketch / ".opencode"), sorted(self.NAMES), "OpenCode is built in")
+        self.assertEqual(self.skills(sketch / ".claude"), [], "Claude is gone, so are its skills")
+        self.assertTrue(own.is_file(), "Claude's own settings are not this app's to remove")
+        self.assertEqual(self.skills(sketch / ".agents"), ["sketch-workflow"], "A user's skill of that name stays")
+        self.assertIn("Mine.", mine.read_text(encoding="utf-8"))
+        self.generate(sketch, {"opencode", "codex"})
+        self.assertIn("Mine.", mine.read_text(encoding="utf-8"), "and is never overwritten")
+        self.assertEqual(self.skills(sketch / ".agents"), sorted(self.NAMES))
+
+    @unittest.skipIf(sys.platform == "win32", "Hermes is isolated on Linux and macOS")
+    def test_isolated_hermes_gets_them_in_its_own_home(self):
+        sketch = self.sketch()
+        place = ai_agents.isolation("hermes")
+        place.data.mkdir(parents=True)
+        self.generate(sketch, {"opencode", "hermes"})
+        found = sorted(path.parent.name for path in (place.data / "skills/mcu-flasher").glob("*/SKILL.md"))
+        self.assertEqual(found, sorted(self.NAMES))
+        self.assertFalse((sketch / ".hermes").exists() or (sketch / ".agents").exists())
+
+    def test_the_application_codebase_is_never_given_sketch_skills(self):
+        from main.core import file_utils
+        with patch.object(file_utils, "is_application_codebase_dir", return_value=True), \
+                patch.object(file_utils, "_install_sketch_skills", side_effect=AssertionError("not in the codebase")):
+            file_utils.ensure_hidden_read_first_md(self.sketch())
+
+    def test_installed_agents_are_found_by_files_and_cached(self):
+        from main.core import file_utils
+        file_utils._installed_agents_cache = (0.0, frozenset())
+        self.addCleanup(setattr, file_utils, "_installed_agents_cache", (0.0, frozenset()))
+        with patch.object(ai_agents, "find_agent", side_effect=lambda agent_id: "/x" if agent_id == "claude" else None) as find:
+            self.assertEqual(file_utils._installed_agent_ids(), {"opencode", "claude"})
+            self.assertEqual(file_utils._installed_agent_ids(), {"opencode", "claude"})
+        self.assertEqual(find.call_count, 4, "Four downloadable agents, checked once within the cache window")
+        file_utils.forget_installed_agents()
+        with patch.object(ai_agents, "find_agent", side_effect=lambda agent_id: "/x" if agent_id in ("claude", "codex") else None):
+            self.assertEqual(file_utils._installed_agent_ids(), {"opencode", "claude", "codex"},
+                             "A finished download is seen at once, not after the cache window")
+
+
+class ContainmentChecks(unittest.TestCase):
+    def test_the_agents_folder_is_never_shipped_replaced_or_cleaned(self):
+        from src.modules import app_update, application_sources
+        inside = ".ai-agents/ubuntu-x86_64/hermes/data/.env"
+        self.assertTrue(app_update._preserve_local_path(PurePosixPath(inside)), "Updates keep it")
+        self.assertFalse(application_sources.is_application_source(inside), "Releases and Bootstrap copies leave it out")
+        for name, text in (("direct/build_release.py", "'.ai-agents'"), ("cleaner/ubuntu/maintenance.py", '".ai-agents"'),
+                           ("cleaner/windows/maintenance.ps1", "'.ai-agents'")):
+            self.assertIn(text, (ROOT / name).read_text(encoding="utf-8"), name)
+        ignore = ROOT / ".gitignore"
+        if ignore.is_file():
+            self.assertIn("/.ai-agents/", ignore.read_text(encoding="utf-8").splitlines())
 
 
 class PreferenceChecks(unittest.TestCase):

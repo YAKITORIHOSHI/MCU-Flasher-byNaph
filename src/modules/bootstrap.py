@@ -1243,7 +1243,7 @@ def _resolve_bootstrap_theme() -> tuple[dict, str]:
             "T_MAGENTA": "#d33682",
         }
     }
-    mode = "default"
+    mode = "light"      # Frost White until a theme is chosen.
     for cfg in (SCRIPT_DIR / "src" / "gui_config.json", SCRIPT_DIR / "src" / "dbs" / "gui_config.json", Path.home() / ".mcu_gui_config.json"):
         try:
             if cfg.exists():
@@ -1252,7 +1252,7 @@ def _resolve_bootstrap_theme() -> tuple[dict, str]:
                 if shared.get("theme_follow_system", False):
                     mode = _detect_system_theme()
                     break
-                m = shared.get("theme_mode") or data.get("theme_mode", "default")
+                m = shared.get("theme_mode") or data.get("theme_mode", "light")
                 if m in ("solarized", "solarize", "solarized_dark", "solarize_dark", "solarized-dark"):
                     m = "solarized_dark"
                 elif m in ("light", "clean"):
@@ -6002,7 +6002,11 @@ def _existing_bootstrap_board_source(source_root, *, package, architecture, inde
     source_root = Path(source_root)
     if not source_root.is_dir():
         return None
-    files = sorted(source_root.glob("**/boards.txt"), key=lambda path: str(path).casefold())
+    from src.modules.bootstrap_recovery import RECOVERY, STAGING_PREFIX
+    files = sorted((path for path in source_root.glob("**/boards.txt")
+                    if not any(part.startswith(STAGING_PREFIX) or part == RECOVERY
+                               for part in path.relative_to(source_root).parts)),
+                   key=lambda path: str(path).casefold())
     # Receipt identity, rather than a folder label, authorizes existing cores.
     # A damaged/custom folder must not hide a verified source later in the tree.
     for path in files:
@@ -6025,9 +6029,11 @@ def _existing_bootstrap_board_source(source_root, *, package, architecture, inde
                 return True
         except Exception as exc:
             warn(f"Existing {package}:{architecture} source verification failed; its files were retained: {exc}")
-    warn(f"Existing {package}:{architecture} board sources could not be certified; their files were retained. "
-         "Download the exact official core in Board Downloader or restore verified source metadata.")
-    return False
+    # Unverifiable folders (an unpacking that was stopped, or edited files) are kept as they
+    # are, and Bootstrap heals by preparing a fresh verified copy beside them.
+    warn(f"Existing {package}:{architecture} board sources could not be certified; their files were retained "
+         "and a fresh verified copy will be prepared.")
+    return None
 
 
 _ARDUINO_AVR_RELEASE = {
@@ -6106,6 +6112,53 @@ def _archive_source_pairs(archive):
     return list(pairs.values())
 
 
+def _archive_tree_present(archive, boards_file) -> bool:
+    """Whether every file of the archive's core beside this boards.txt is there at full size.
+
+    An earlier Bootstrap stopped while unpacking leaves boards.txt and platform.txt but not
+    the rest; such a folder must not be certified as the official core.
+    """
+    import tarfile
+    import zipfile
+    boards_file = Path(boards_file)
+    wanted = _file_sha256(boards_file)
+    folder = boards_file.parent
+
+    def members():
+        if zipfile.is_zipfile(archive):
+            with zipfile.ZipFile(archive) as bundle:
+                for entry in bundle.infolist():
+                    if not entry.is_dir():
+                        yield entry.filename.replace("\\", "/"), entry.file_size, (lambda e=entry, b=bundle: b.read(e))
+        else:
+            with tarfile.open(archive, "r:*") as bundle:
+                for entry in bundle:
+                    if entry.isfile():
+                        yield (entry.name.replace("\\", "/"), entry.size,
+                               (lambda e=entry, b=bundle: b.extractfile(e).read()))
+
+    entries = list((name, size) for name, size, _read in members())
+    prefixes = []
+    for name, size, read in members():
+        if name.split("/")[-1] == "boards.txt" and hashlib.sha256(read()).hexdigest() == wanted:
+            prefixes.append(name[:-len("boards.txt")])
+    for prefix in prefixes:
+        complete = True
+        for name, size in entries:
+            if not name.startswith(prefix):
+                continue
+            relative = name[len(prefix):]
+            if not relative or ".." in relative.split("/"):
+                continue
+            candidate = folder / relative
+            if not candidate.is_file() or candidate.stat().st_size != size:
+                complete = False
+                break
+        if complete:
+            return True
+    return False
+
+
 def _adopt_existing_bootstrap_board_source(boards_file, *, package, architecture, index_url):
     """Verify a legacy folder against its exact official archive, retaining files."""
     boards_file = Path(boards_file)
@@ -6138,6 +6191,10 @@ def _adopt_existing_bootstrap_board_source(boards_file, *, package, architecture
         expected = {"boards.txt": _file_sha256(boards_file), "platform.txt": _file_sha256(platform_file)}
         if expected not in _archive_source_pairs(archive):
             warn("Existing Arduino core bytes do not match its exact official package; the folder was retained.")
+            return False
+        if not _archive_tree_present(archive, boards_file):
+            warn(f"{boards_file.parent.name} is missing files of its official package (unpacking was "
+                 "interrupted); it was retained and a complete copy will be prepared.")
             return False
         _write_bootstrap_board_source_receipt(boards_file.parent, package=package,
             architecture=architecture, version=release["version_base"], index_url=index_url,
@@ -6258,11 +6315,21 @@ def _load_esp32_mirror_release(version: str) -> dict | None:
     return _esp32_release_from_index(data, target_version=version)
 
 def _extract_board_archive_folder_only(archive_path: Path, folder_path: Path) -> bool:
-    """Extract one board archive into a folder and remove the archive afterward."""
+    """Extract one board archive into a folder and remove the archive afterward.
+
+    It is unpacked under a staging name and renamed only when complete, so a Bootstrap
+    stopped part-way never leaves a half core where a finished one belongs; the next start
+    removes the staging folder (bootstrap_recovery.clean_staging) and unpacks again.
+    """
     import tarfile
     import zipfile
+    from src.modules.bootstrap_recovery import STAGING_PREFIX
 
+    final_path = Path(folder_path)
+    folder_path = final_path.with_name(STAGING_PREFIX + final_path.name)
     try:
+        if final_path.exists():
+            safe_rmtree(final_path)
         if folder_path.exists():
             safe_rmtree(folder_path)
         folder_path.mkdir(parents=True, exist_ok=True)
@@ -6302,14 +6369,18 @@ def _extract_board_archive_folder_only(archive_path: Path, folder_path: Path) ->
         except Exception:
             pass
 
+        if not any(folder_path.rglob("boards.txt")):
+            safe_rmtree(folder_path)
+            return False
+        os.replace(folder_path, final_path)
         try:
             archive_path.unlink(missing_ok=True)
         except OSError:
             pass
-
-        return any(folder_path.rglob("boards.txt"))
+        return True
     except Exception as exc:
         warn(f"Failed to extract {archive_path.name}: {exc}")
+        safe_rmtree(folder_path)
         return False
 
 
@@ -6489,23 +6560,9 @@ def ensure_arduino_avr_board() -> bool:
         archive_sha256 = _file_sha256(filepath)
         status("Extracting Arduino AVR Boards...")
         folder_path = _bootstrap_board_destination(dest_dir, "avr-1.8.6")
-        folder_path.mkdir(parents=True, exist_ok=True)
-
-        import tarfile
-        with tarfile.open(str(filepath), 'r:bz2') as tar_ref:
-            tar_ref.extractall(str(folder_path))
-
-        # Self-heal / flatten double nesting if present
-        try:
-            subdirs = [p for p in folder_path.iterdir() if p.is_dir()]
-            files = [p for p in folder_path.iterdir() if p.is_file()]
-            if len(subdirs) == 1 and len(files) == 0:
-                nested = subdirs[0]
-                for item in nested.iterdir():
-                    shutil.move(str(item), str(folder_path))
-                nested.rmdir()
-        except Exception:
-            pass
+        if not _extract_board_archive_folder_only(filepath, folder_path):
+            warn("Arduino AVR Boards archive was downloaded, but boards.txt could not be verified after extraction.")
+            return False
 
         _write_bootstrap_board_source_receipt(folder_path, package="arduino", architecture="avr",
             version=release["version_base"], index_url=ARDUINO_BOARD_INDEX_URL,
@@ -10935,6 +10992,24 @@ def _bootstrap_tool_store_lease(gui, core):
                                root=getattr(gui, "_package_event_root", None))
 
 
+def _heal_board_preparation(gui, core, boards_dir, *, force=False) -> list[str]:
+    """Return board preparation to its last safe point when it was stopped part-way."""
+    from src.modules import bootstrap_recovery
+    try:
+        actions = bootstrap_recovery.heal(core, boards_dir, force=force)
+    except Exception:
+        _record_bootstrap_exception("Healing an interrupted board preparation failed")
+        return []
+    if actions and not force:
+        gui.root.after(0, lambda: gui.log_warn(
+            "The last board preparation was stopped before it finished. "
+            "Returning to the last safe point and continuing where it left off."))
+    for action in actions:
+        _record_bootstrap_log("INFO", f"Board preparation recovery: {action}")
+        gui.root.after(0, lambda action=action: gui.log_dim(f"  • {action}"))
+    return actions
+
+
 def _run_setup_in_thread(gui: BootstrapGUI):
     """
     Runs all dependency checks on a background thread so the setup window
@@ -11192,7 +11267,19 @@ def _run_setup_in_thread(gui: BootstrapGUI):
 
         offline_core = Path(os.environ.get("PLATFORMIO_CORE_DIR") or _get_safe_platformio_core_dir(SCRIPT_DIR))
         from src.modules.platformio_locks import package_locks
+        from src.modules import bootstrap_recovery
+        boards_dir = _get_board_download_dir() / "Boards"
+        # A preparation ended from Task Manager leaves its board-pack child running with the
+        # tool store held; stop it first, or the lease below would wait on it forever.
+        try:
+            for name in bootstrap_recovery.stop_leftovers(offline_core):
+                gui.root.after(0, lambda name=name: gui.log_warn(
+                    f"Stopped {name} left running by an interrupted Bootstrap."))
+        except Exception:
+            _record_bootstrap_exception("Stopping an interrupted preparation failed")
         with _bootstrap_tool_store_lease(gui, offline_core), package_locks():
+            _heal_board_preparation(gui, offline_core, boards_dir)
+            bootstrap_recovery.begin(offline_core)
             # Original source declarations may need Arduino's own compiler.
             gui.root.after(0, lambda: gui.log_section("Checking Arduino-CLI"))
             if not ensure_arduino_cli():
@@ -11256,34 +11343,47 @@ def _run_setup_in_thread(gui: BootstrapGUI):
                 if offline_packages_ready:
                     command += ["--coverage-only"]
                 gui.root.after(0, lambda: gui.log_section("Preparing configured board/library packs"))
-                bootstrap_env = clean_bootstrap_environment()
-                bootstrap_env["PYTHONUNBUFFERED"] = "1"
-                gui._offline_setup_done.clear()
-                if getattr(gui, "_closed", False):
-                    gui._offline_setup_done.set()
-                    return
-                child_options = {"env": bootstrap_env, "stdout": subprocess.PIPE,
-                                 "stderr": subprocess.STDOUT, "text": True,
-                                 "encoding": "utf-8", "errors": "replace"}
-                if sys.platform == "win32":
-                    child_options["creationflags"] = subprocess.CREATE_NO_WINDOW
-                else:
-                    child_options["start_new_session"] = True
-                try:
-                    process = subprocess.Popen(command, **child_options)
-                except Exception:
-                    gui._offline_setup_done.set()
-                    raise
-                child_code = _stream_offline_setup_output(gui, process)
-                if getattr(gui, "_closed", False):
-                    return
-                if child_code or not ready(offline_core, offline_plan if offline_plan_path else None):
+                # One automatic retry: a failed or stalled attempt is returned to the last safe
+                # point (its half-installed packages removed, finished ones kept, downloads
+                # resumable) and run again before Bootstrap reports a failure.
+                for attempt in (1, 2):
+                    bootstrap_env = clean_bootstrap_environment()
+                    bootstrap_env["PYTHONUNBUFFERED"] = "1"
+                    gui._offline_setup_done.clear()
+                    if getattr(gui, "_closed", False):
+                        gui._offline_setup_done.set()
+                        return
+                    child_options = {"env": bootstrap_env, "stdout": subprocess.PIPE,
+                                     "stderr": subprocess.STDOUT, "text": True,
+                                     "encoding": "utf-8", "errors": "replace"}
+                    if sys.platform == "win32":
+                        child_options["creationflags"] = subprocess.CREATE_NO_WINDOW
+                    else:
+                        child_options["start_new_session"] = True
+                    try:
+                        process = subprocess.Popen(command, **child_options)
+                    except Exception:
+                        gui._offline_setup_done.set()
+                        raise
+                    bootstrap_recovery.add_child(offline_core, process.pid, "offline_bootstrap.py")
+                    child_code = _stream_offline_setup_output(gui, process)
+                    if getattr(gui, "_closed", False):
+                        return
+                    if not child_code and ready(offline_core, offline_plan if offline_plan_path else None):
+                        break
+                    if attempt == 1:
+                        gui.root.after(0, lambda: gui.log_warn(
+                            "Board preparation did not finish. Returning to the last safe point and trying again…"))
+                        _heal_board_preparation(gui, offline_core, boards_dir, force=True)
+                        command = [part for part in command if part != "--coverage-only"]
+                        continue
                     _fail_and_exit("Board/library packs", "Bootstrap preparation is incomplete. The workspace will not download missing dependencies.")
                     return
             if getattr(gui, "_closed", False):
                 return
             from src.modules.offline_mode import finish_bootstrap
             finish_bootstrap(offline_core)
+            bootstrap_recovery.finish(offline_core)
 
         # ── CP210x Driver ─────────────────────────────────────────────
         gui.root.after(0, lambda: gui.log_section("Checking CP210x Driver"))

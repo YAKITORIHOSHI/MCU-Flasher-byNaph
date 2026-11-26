@@ -19,16 +19,23 @@ see the [README](README.md).
   ESP8266 and other installed targets. Unchanged sketches reuse their last
   build, and every upload writes the complete firmware image set (on ESP32:
   bootloader, partition table and application). The console lists Libraries,
-  Target Board, Compile Time, Actual Board (what the connected chip reports) and
-  Upload Time, with one-line progress for flashing and repeat full builds.
+  Target Board, Compile Time, Actual Board and Upload Time, with one-line
+  progress for flashing and repeat full builds. Actual Board shows what the
+  connected board reports for every family: ESP chips their model, features,
+  flash, crystal and MAC; AVR boards (Uno, Nano, Mega and others) their chip by
+  signature, its flash, SRAM and EEPROM, and the bootloader version; any USB board
+  its bridge or USB chip and serial number, with the board's clock and memory.
 - **Serial Monitor.** Opening, reconnecting and closing never reset the board, and
   a board that is unplugged and plugged back in is picked up again.
-  The baud rate follows the sketch's `Serial.begin()`, with timestamps, pause,
-  copy and send. After an upload the boot log appears from its first line, and
-  runs of unreadable bytes are summarized.
-- **Editor.** An offline Monaco editor with source tabs, live syntax checks that
-  follow blocks and conditional code, bracket pairing, auto-save, Ctrl+Click / F12 into sketch and library headers,
-  and project-wide search. Save and Auto-Save support writable SMB/network
+  The baud menu is the Arduino IDE's (300 to 2000000), and the rate follows the
+  sketch's `Serial.begin()`, with timestamps, pause,
+  copy and send. Firmware can color its output with the full 16-color ANSI
+  palette, text and backgrounds, normal and bright. After an upload the boot log
+  appears from its first line, and runs of unreadable bytes are summarized.
+- **Editor.** An offline Monaco editor with source tabs, bracket pairing,
+  auto-save, Ctrl+Click / F12 into sketch and library headers and project-wide
+  search. Code is checked by compiling: the Build Console shows each error with
+  its file and line. Save and Auto-Save support writable SMB/network
   folders whose permissions are managed by the share. With Auto-Save on, edits
   save themselves; a Ghost Sketch offers only Save, which chooses its folder.
 - **Projects.** Local sketches, new-project templates, temporary Ghost Sketches
@@ -37,10 +44,16 @@ see the [README](README.md).
   preserving the temporary original and refusing occupied destinations.
 - **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
   and the coding assistant you choose: OpenCode (built in), Claude, Codex,
-  Antigravity or Hermes, downloaded only when you ask for it. Its file edits are
-  highlighted for you to accept or reject, and an edit or a whole session can be
-  reverted later. Beside its status, one button returns to the list and **Restart**
-  opens a fresh session.
+  Antigravity or Hermes, downloaded only when you ask for it. The list shows only
+  while the computer is online and returns by itself when it reconnects; its ⓘ
+  states that each tool belongs to its own maker, not to MCU Flasher. On Linux and macOS,
+  Hermes and the tools it brings (about 3 GB) stay inside the app's `.ai-agents`
+  folder. Each assistant on the computer gets the sketch's instructions and skills
+  where it reads them, and Settings sizes the assistant's text. Its file edits are
+  highlighted for you to accept or reject; AI Changes groups them by prompt and
+  names the assistant that made them, and an edit or a whole session can be
+  reverted later. Beside its status, one button returns to the list and
+  **Restart** opens a fresh session.
 - **Notifications and devices.** Both are cards with a short line and details on
   request.
 - **Boards and libraries.** Browse, download and prepare board packages and
@@ -58,9 +71,16 @@ see the [README](README.md).
   Windows, in its own setup window. Any other board's compiler and uploader
   download the first time you compile for it. Windows components come from winget
   where it offers them, and a normal start asks for no permission. A repair launch
-  rebuilds anything missing.
-- **Interface.** Liquid Glass surfaces (specular rims and edge lensing) and
-  capsule actions in Glass Dark, Frosted Light and Solarized Dark themes, an
+  rebuilds anything missing. If setup is ended part-way (for example from Task
+  Manager), the next start stops what it left running, returns the boards and tools
+  to the last safe point and continues, resuming partial downloads; a failed board
+  step is retried once the same way.
+- **Interface.** Liquid Glass in each theme's own material: white frost held by a
+  steel edge in Frosted Light (the default), smoked blue glass in Glass Dark and teal
+  sea glass in Solarized Dark, with caught light along the top of every sheet and
+  button and the theme's accent along the bottom. The AI review bar and the editor
+  follow the same glass, as do the project selector and Settings, and the assistant
+  list shows each tool's own icon. Tooltips are the theme's glass too. Also an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
   including half-screen tiling.
 - **MCU Flasher Lite.** A separate lightweight workbench for Ubuntu and Windows

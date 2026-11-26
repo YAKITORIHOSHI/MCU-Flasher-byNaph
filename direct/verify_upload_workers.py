@@ -190,6 +190,7 @@ class UploadWorkerChecks(unittest.TestCase):
         b._unmap_unc_after_build = Mock()
         b._print_info_box = Mock()
         b._probe_chip_info = Mock(return_value=False)
+        b._probe_board_details = Mock(return_value=False)  # Never a real port from a fixture.
         b._get_jobs = Mock(return_value=2)
         cache = self.root / "fixture-cache"
         cache.mkdir(exist_ok=True)

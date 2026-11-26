@@ -111,7 +111,6 @@ class GhostWorkflowChecks(unittest.TestCase):
         self.stack.enter_context(patch("src.dbs.dbs_create.add_notification", return_value={"id": "fixture"}))
         self.stack.enter_context(patch("src.dbs.dbs_create.queue_notification", return_value={"id": "fixture"}))
         self.stack.enter_context(patch("src.modules.ubuntu_download_manager.quit_if_last_workspace"))
-        self.stack.enter_context(patch("src.syntax_checker.analyze_cpp_syntax", return_value=[]))
         for target in ("main.qt.responsive.work_area", "main.qt.main_window.work_area"):
             self.stack.enter_context(patch(target, return_value=WorkArea(0, 0, 1440, 960)))
         for target in ("main.core.ai_review.AIReviewManager", "main.core.ai_review.AIEditWatcher"):
@@ -137,8 +136,11 @@ class GhostWorkflowChecks(unittest.TestCase):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.pump()
-            if condition():
-                return
+            try:
+                if condition():
+                    return
+            except PermissionError:
+                pass  # Windows refuses even a stat of a folder while its deletion is pending.
             QTest.qWait(15)
         self.fail("Timed out: " + label)
 
