@@ -41,6 +41,16 @@ REQUIRED_RUNTIME = ('python.exe', 'pythonw.exe', 'python3.dll', 'python314.dll',
                     'Lib/ensurepip/__init__.py', 'Lib/venv/__init__.py',
                     'Lib/site-packages/PySide6/QtWidgets.pyd')
 BUNDLED_REVISION = 'src/dbs/source_revision.json'
+
+
+def debug_only_runtime_file(name: str) -> bool:
+    """Files only a debugger or a debug build of Qt reads: never loaded by the shipped app.
+
+    ``.pdb`` holds debug symbols. Release QtWebEngine loads ``*.pak`` and
+    ``v8_context_snapshot.bin``; their ``.debug`` twins belong to debug Qt builds.
+    """
+    lowered = name.lower()
+    return lowered.endswith(('.pdb', '.debug.pak', '.debug.bin'))
 REQUIRED_LAUNCHERS = ('LAUNCHER/WINDOWS.exe', 'LAUNCHER/UBUNTU', 'LAUNCHER/UBUNTU_ARM64',
                       'LAUNCHER/MacOS.command', 'LAUNCHER/FEDORA', 'LAUNCHER/FEDORA_ARM64',
                       'LAUNCHER/LINUX_MINT', 'LAUNCHER/README.md')
@@ -144,6 +154,8 @@ def windows_runtime_files():
         for name in sorted(directories):
             plain_path(Path(folder) / name)
         for name in sorted(names):
+            if debug_only_runtime_file(name):
+                continue
             path = Path(folder) / name
             attributes = plain_path(path)
             if not stat.S_ISREG(attributes.st_mode):

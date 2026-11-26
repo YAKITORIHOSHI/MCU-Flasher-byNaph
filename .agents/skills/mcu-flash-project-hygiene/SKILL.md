@@ -383,6 +383,9 @@ Packaged Windows releases require the complete `src/_python/` private Python
 distribution and its installed packages. Preserve it during fresh release
 preparation; do not classify it with disposable `env` / `.venv-linux` or omit it
 just because Git ignores it. Windows must not depend on system/PATH Python.
+The ZIP leaves out only debug-only files (`*.pdb`, `*.debug.pak`, `*.debug.bin`,
+about 224 MB), which the release Qt and Python never load (`debug_only_runtime_file`);
+the checkout keeps them.
 Use `direct/build_release.py` after committing release sources. It combines
 committed defaults, verified materialized LFS installers and the local private
 Windows runtime, then verifies every archived file. The committed `.gitattributes`

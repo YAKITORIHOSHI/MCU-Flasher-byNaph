@@ -277,6 +277,27 @@ class ReleaseArchiveChecks(unittest.TestCase):
                 self.build()
         self.assertFalse(self.output.exists())
 
+    def test_debug_only_runtime_files_stay_out_of_the_release(self):
+        debug = ('python314.pdb', 'DLLs/libcrypto-3.pdb',
+                 'Lib/site-packages/PySide6/resources/qtwebengine_devtools_resources.debug.pak',
+                 'Lib/site-packages/PySide6/resources/v8_context_snapshot.debug.bin')
+        kept = ('Lib/site-packages/PySide6/resources/qtwebengine_devtools_resources.pak',
+                'Lib/site-packages/PySide6/resources/v8_context_snapshot.bin')
+        for name in debug + kept:
+            path = self.project / 'src/_python' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'runtime fixture ' + name.encode())
+        manifest = self.build()
+        with zipfile.ZipFile(self.output) as bundle:
+            names = set(bundle.namelist())
+        for name in debug:
+            self.assertNotIn('src/_python/' + name, names)
+        for name in kept:
+            self.assertIn('src/_python/' + name, names, "release Qt loads these")
+        self.assertEqual(manifest['windows_private_runtime_files'], len(self.runtime) + len(kept))
+        for name in debug:
+            self.assertTrue((self.project / 'src/_python' / name).exists(), "the checkout keeps its own copy")
+
     def test_incomplete_runtime_refuses_publication(self):
         (self.project / 'src/_python' / build_release.REQUIRED_RUNTIME[-1]).unlink()
         with self.assertRaisesRegex(RuntimeError, 'Incomplete private Windows runtime'):
