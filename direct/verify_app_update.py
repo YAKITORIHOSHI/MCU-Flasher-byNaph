@@ -30,9 +30,10 @@ from src.modules import app_update
 
 
 class UpdatePolicyChecks(unittest.TestCase):
-    def test_skip_updates_covers_source_updates_without_disabling_required_repairs(self):
+    def test_source_updates_stay_on_unless_the_environment_turns_them_off(self):
         self.assertTrue(app_update.automatic_updates_enabled({}, environ={}))
-        self.assertFalse(app_update.automatic_updates_enabled({"skip_updates": True}, environ={}))
+        # A Skip Updates choice an older version saved no longer stops them.
+        self.assertTrue(app_update.automatic_updates_enabled({"skip_updates": True}, environ={}))
         self.assertTrue(app_update.automatic_updates_enabled({"skip_updates": False}, environ={}))
         self.assertFalse(app_update.automatic_updates_enabled({}, environ={"MCU_FLASH_GUI_SKIP_UPDATES": "true"}))
         self.assertFalse(app_update.automatic_updates_enabled({}, environ={"MCU_FLASHER_DISABLE_APP_UPDATE": "1"}))

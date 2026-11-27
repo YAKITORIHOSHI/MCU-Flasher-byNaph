@@ -760,7 +760,7 @@ class TerminalServer:
         page_reports_ready = [False]
         input_line = [""]
         input_escape = [False]
-        from src.modules.ai_prompt_context import PromptInputTracker
+        from src.modules.ai_prompt_context import PromptInputTracker, run_identity
         prompt_tracker = PromptInputTracker(target_dir, source="assistant",
                                             agent=self.agent.id if self.agent is not None else "opencode")
 
@@ -917,6 +917,12 @@ class TerminalServer:
                 elif self.pty and msg.get('type') == 'input':
                     input_data = msg.get('data', '')
                     try:
+                        if "\r" in input_data or "\n" in input_data:
+                            # The loop starts the agent again after it ends: each run
+                            # is a session of its own in AI Changes.
+                            with self._pty_lock:
+                                current_pty = self.pty
+                            prompt_tracker.follow_run(run_identity(getattr(current_pty, "pid", 0)))
                         prompt_tracker.feed(input_data)
                     except Exception:
                         pass
@@ -925,6 +931,8 @@ class TerminalServer:
                         # supervisor above observes its termination and starts
                         # the next session in the same container.
                         notify_container_restart()
+                        # Its edits from then on belong to that next session.
+                        prompt_tracker.new_session()
                     with self._pty_lock:
                         current_pty = self.pty
                     if current_pty:

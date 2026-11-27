@@ -83,8 +83,8 @@ class WindowChecks(unittest.TestCase):
         self.assertEqual(self.window.prog_bar.value(), 40)
         self.assertIn("Downloading 15 changed files", self.window.status_lbl.toolTip())
         self.assertEqual(self.window.sub_lbl.text(), "Updating from GitHub")
-        # Updates are always on: the window offers no Skip Updates choice.
-        self.assertTrue(self.window.skip_cb.isHidden())
+        # Updates are always on: the window has no Skip Updates box at all.
+        self.assertFalse(hasattr(self.window, "skip_cb"))
         self.assertTrue(self.window.cancellable)
         self.render("update-in-progress")
 
@@ -107,6 +107,27 @@ class WindowChecks(unittest.TestCase):
                 self.assertIn("Python packages", self.window.summary_edit.toPlainText())
                 self.assertEqual(self.window.prog_bar.value(), 25)
                 self.assertEqual(self.window.status_lbl.toolTip(), "Python packages…")
+
+    def test_the_native_window_is_never_recreated_after_it_appears(self):
+        # Dropping a stay-on-top flag after show used to hide, destroy and recreate the
+        # window a second in, which Linux desktops drew as a blinking black frame.
+        from PySide6.QtCore import QEvent, QObject, Qt
+
+        seen = []
+
+        class Watch(QObject):
+            def eventFilter(self, _obj, event):
+                if event.type() in (QEvent.Type.WinIdChange, QEvent.Type.Hide):
+                    seen.append(event.type())
+                return False
+
+        watch = Watch()
+        self.window.installEventFilter(watch)
+        self.feed(("log", "Python packages", "section"), ("progress", 30.0), seconds=1.5, end=False)
+        self.window.removeEventFilter(watch)
+        self.assertEqual(seen, [])
+        self.assertTrue(self.window.isVisible())
+        self.assertFalse(self.window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
 
     def test_setup_cannot_be_closed_until_it_finishes(self):
         self.feed(("log", "Python packages", "section"), end=False)

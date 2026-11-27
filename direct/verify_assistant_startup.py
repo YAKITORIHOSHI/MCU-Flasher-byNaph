@@ -645,7 +645,7 @@ class WindowsPanelChecks(unittest.TestCase):
             with patch.object(panel, "_check_internet", return_value=True), \
                  patch.object(panel, "_sync_project_hardware_state"), \
                  patch("src.modules.private_python_guard.get_private_python_exe", return_value="C:/fixture/pythonw.exe"):
-                panel._chooser.primary.click()
+                panel._chooser.row("codex").click()     # One click on the agent starts it.
             command = spawn.call_args.args[0]
         panel._embed_poll_timer.stop()
         self.assertEqual(command[0], "C:/fixture/pythonw.exe")

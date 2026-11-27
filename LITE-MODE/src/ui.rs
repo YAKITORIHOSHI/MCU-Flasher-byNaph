@@ -307,6 +307,7 @@ pub fn app_icon() -> egui::IconData {
 const PROJECT_DIALOG: &str = "Open sketch";
 const RESOURCES_DIALOG: &str = "Resources";
 const BOARD_DIALOG: &str = "Choose your board";
+const SPEED_DIALOG: &str = "Upload speed";
 const PROJECT_PATH: &str = "lite-project-path";
 /// Open sketch and Resources share one roomy size, bounded by the workspace.
 const DIALOG_SIZE: Vec2 = egui::vec2(1040.0, 640.0);
@@ -766,6 +767,11 @@ pub struct LiteApp {
     port: String,
     baud: u32,
     speed: u32,
+    /// The board's own upload speed when it is not chosen here (0: its USB or
+    /// programmer recipe); None for ESP serial boards and before a board is chosen.
+    fixed_speed: Option<u32>,
+    /// Asking before the uncommon upload speed: the speed kept if the answer is no.
+    speed_question: Option<u32>,
     connected: bool,
     serial_tab: bool,
     build_log: Log,
@@ -821,6 +827,8 @@ pub struct LiteApp {
     baud_geometry: Option<egui::Rect>,
     #[cfg(test)]
     speed_geometry: Option<egui::Rect>,
+    #[cfg(test)]
+    speed_dialog_geometry: Option<(egui::Rect, egui::Rect)>,
     #[cfg(test)]
     resource_columns: Option<(egui::Rect, egui::Rect)>,
 }
@@ -977,6 +985,8 @@ impl LiteApp {
             port: String::new(),
             baud: 115200,
             speed: 460800,
+            fixed_speed: None,
+            speed_question: None,
             connected: false,
             serial_tab: false,
             build_log: Log::default(),
@@ -1036,6 +1046,8 @@ impl LiteApp {
             baud_geometry: None,
             #[cfg(test)]
             speed_geometry: None,
+            #[cfg(test)]
+            speed_dialog_geometry: None,
             #[cfg(test)]
             resource_columns: None,
         };
@@ -1294,6 +1306,7 @@ impl LiteApp {
             (self.project_dialog, PROJECT_DIALOG),
             (self.resources_open, RESOURCES_DIALOG),
             (self.board_dialog, BOARD_DIALOG),
+            (self.speed_question.is_some(), SPEED_DIALOG),
         ];
         let Some(top) = open
             .iter()
@@ -1316,8 +1329,11 @@ impl LiteApp {
         let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(top));
         ctx.move_to_top(layer);
         ctx.memory_mut(|memory| memory.set_modal_layer(layer));
-        // The board picker handles its own Escape and Enter keys.
-        if top != BOARD_DIALOG && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // The board picker and the speed question handle their own Escape and Enter keys.
+        if top != BOARD_DIALOG
+            && top != SPEED_DIALOG
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             if top == RESOURCES_DIALOG && self.installed.escape_find(ctx) {
                 return;
             }
@@ -1390,6 +1406,9 @@ impl LiteApp {
                 self.developer_open = data["developer_access"].as_bool().unwrap_or(false);
                 self.baud = data["baud"].as_u64().unwrap_or(self.baud as u64) as u32;
                 self.speed = data["upload_speed"].as_u64().unwrap_or(self.speed as u64) as u32;
+                self.fixed_speed = data["fixed_upload_speed"]
+                    .as_u64()
+                    .map(|speed| speed as u32);
                 self.starting = data["starting"].as_bool().unwrap_or(false);
                 if !self.busy {
                     self.phase = "Ready".into();
@@ -2290,23 +2309,50 @@ impl LiteApp {
                 ui.add_space(6.0);
                 caption(ui, "Upload speed");
                 let old = self.speed;
-                let speed = egui::ComboBox::from_id_salt("speed")
-                    .width(ui.available_width())
-                    .selected_text(self.speed.to_string())
-                    .show_ui(ui, |ui| {
-                        for rate in preferences::UPLOAD_SPEEDS {
-                            ui.selectable_value(&mut self.speed, rate, rate.to_string());
-                        }
-                    });
+                let fixed = self.fixed_speed;
+                // Only ESP boards upload at a chosen speed; every other board keeps its
+                // own bootloader's rate (Arduino UNO: 115200), shown here but not offered.
+                let shown = match fixed {
+                    Some(0) => "Auto".to_owned(),
+                    Some(speed) => speed.to_string(),
+                    None => self.speed.to_string(),
+                };
+                let hover = match fixed {
+                    Some(0) => {
+                        "Uses this board's USB or programmer recipe; no upload speed to choose"
+                            .to_owned()
+                    }
+                    Some(speed) => format!("Fixed by this board's bootloader: {speed} baud"),
+                    None => "Serial speed used to upload firmware to this ESP board".to_owned(),
+                };
+                let speed = ui
+                    .add_enabled_ui(fixed.is_none(), |ui| {
+                        egui::ComboBox::from_id_salt("speed")
+                            .width(ui.available_width())
+                            .selected_text(shown)
+                            .show_ui(ui, |ui| {
+                                for rate in preferences::UPLOAD_SPEEDS {
+                                    ui.selectable_value(&mut self.speed, rate, rate.to_string());
+                                }
+                            })
+                    })
+                    .inner;
                 #[cfg(test)]
                 {
                     self.speed_geometry = Some(speed.response.rect);
                 }
                 speed
                     .response
-                    .on_hover_text("Serial speed used to upload firmware");
+                    .on_hover_text(&hover)
+                    .on_disabled_hover_text(&hover);
                 if self.speed != old {
-                    self.send(json!({"cmd": "upload_speed", "value": self.speed}));
+                    if self.speed == preferences::UNCOMMON_UPLOAD_SPEED {
+                        // Ask first; the speed in use stays until the answer is yes.
+                        self.speed_question = Some(old);
+                        self.speed = old;
+                    } else {
+                        self.send(json!({"cmd": "upload_speed", "value": self.speed}));
+                    }
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -3084,6 +3130,87 @@ impl LiteApp {
         if self.board_dialog {
             self.board_picker(ctx);
         }
+        if self.speed_question.is_some() {
+            self.speed_question(ctx);
+        }
+    }
+
+    /// Asked before uploads use the uncommon speed: it works, but not with every
+    /// USB adapter or cable, so the user decides.
+    fn speed_question(&mut self, ctx: &egui::Context) {
+        let Some(kept) = self.speed_question else {
+            return;
+        };
+        let uncommon = preferences::UNCOMMON_UPLOAD_SPEED;
+        let (mut answer, mut open) = (None, true);
+        #[cfg(test)]
+        let mut use_rect = egui::Rect::NOTHING;
+        let window = picker_window(ctx, SPEED_DIALOG, egui::vec2(420.0, 170.0), 150.0)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(RichText::new(format!("Use {uncommon} baud for uploads?")).strong());
+                ui.add_space(4.0);
+                ui.label(format!(
+                    "{uncommon} baud is an uncommon upload speed, and uploads at it might be \
+                     unstable on some boards, USB adapters or cables. If an upload fails, \
+                     choose a lower speed such as 921600 and upload again."
+                ));
+                ui.add_space(10.0);
+                let keep_label = format!("Keep {kept}");
+                let use_label = format!("Use {uncommon}");
+                let spacing = ui.spacing().item_spacing.x;
+                let width = ((ui.available_width() - spacing) / 2.0).clamp(96.0, 150.0);
+                let stacked = ui.available_width() < 2.0 * 96.0 + spacing;
+                action_row(ui, stacked, 36.0, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        let accept =
+                            button(ui, &use_label, "", Tone::Primary, egui::vec2(width, 36.0));
+                        #[cfg(test)]
+                        {
+                            use_rect = accept.rect;
+                        }
+                        if accept.clicked() {
+                            answer = Some(true);
+                        }
+                        if button(
+                            ui,
+                            &keep_label,
+                            "",
+                            Tone::Secondary,
+                            egui::vec2(width, 36.0),
+                        )
+                        .clicked()
+                        {
+                            answer = Some(false);
+                        }
+                    });
+                });
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    answer = Some(false);
+                }
+            });
+        #[cfg(test)]
+        {
+            self.speed_dialog_geometry = window.map(|window| (window.response.rect, use_rect));
+        }
+        #[cfg(not(test))]
+        let _ = window;
+        if !open {
+            answer = Some(false);
+        }
+        match answer {
+            Some(true) => {
+                self.speed_question = None;
+                self.speed = uncommon;
+                self.send(json!({"cmd": "upload_speed", "value": uncommon}));
+            }
+            Some(false) => {
+                self.speed_question = None;
+                self.speed = kept;
+            }
+            None => (),
+        }
     }
 }
 
@@ -3710,6 +3837,86 @@ mod verification {
                 assert!(speed.width() > card.width() * 0.75, "{speed:?} in {card:?}");
             }
         }
+    }
+
+    #[test]
+    fn the_uncommon_upload_speed_asks_first_and_other_boards_keep_their_own() {
+        let ctx = egui::Context::default();
+        let mut app = LiteApp::with_context(&ctx, true);
+        app.ready = true;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(660.0, 520.0));
+        let frame = |app: &mut LiteApp, events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.update_ui(ctx, None),
+            );
+        };
+        let state = |app: &mut LiteApp, fixed: Value| {
+            app.event(Event {
+                event: "state".into(),
+                data: json!({"upload_speed": 921600, "fixed_upload_speed": fixed}),
+            });
+        };
+        state(&mut app, Value::Null);
+        assert_eq!((app.speed, app.fixed_speed), (921600, None));
+        for answer_yes in [false, true] {
+            app.speed_question = Some(921600);
+            let sent = app.next_id;
+            for _ in 0..3 {
+                frame(&mut app, Vec::new());
+            }
+            let (dialog, accept) = app.speed_dialog_geometry.expect("The question is shown");
+            assert!(
+                screen.contains_rect(dialog) && dialog.contains_rect(accept),
+                "{dialog:?}"
+            );
+            assert!(
+                !ctx.memory(|m| m.allows_interaction(egui::LayerId::background())),
+                "The workspace behind the question must not take input"
+            );
+            assert_eq!(app.next_id, sent, "Nothing is sent before the answer");
+            if answer_yes {
+                let pos = accept.center();
+                for pressed in [true, false] {
+                    frame(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+                assert_eq!((app.speed_question, app.speed), (None, 2000000));
+                assert_eq!(app.next_id, sent + 1, "The chosen speed goes to the worker");
+            } else {
+                let escape = egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                };
+                frame(&mut app, vec![escape]);
+                assert_eq!(
+                    (app.speed_question, app.speed, app.next_id),
+                    (None, 921600, sent)
+                );
+            }
+        }
+        // A board with its own bootloader rate (Arduino UNO) shows it and offers no choice.
+        state(&mut app, json!(115200));
+        assert_eq!(app.fixed_speed, Some(115200));
+        state(&mut app, json!(0));
+        assert_eq!(app.fixed_speed, Some(0));
     }
 
     #[test]

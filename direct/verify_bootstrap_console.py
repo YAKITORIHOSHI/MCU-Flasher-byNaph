@@ -49,7 +49,7 @@ def fixture(mode="default", has_qt=False, *, preimport_qt=False, stream=None):
     namespace = dict(globals(), HAS_PYSIDE6_BOOTSTRAP=has_qt, _BOOTSTRAP_THEME_MODE=mode,
                      SCRIPT_DIR=ROOT, _BOOTSTRAP_QT_IMPORT_ERROR="",
                      _resolve_bootstrap_theme=lambda: (palette, mode),
-                     _T_PALETTE=palette, DEFAULT_SKIP_UPDATES=True, BOOTSTRAP_CLOSE_DELAY_S=0,
+                     _T_PALETTE=palette, BOOTSTRAP_CLOSE_DELAY_S=0,
                      load_bootstrap_config=Mock(return_value={"other": "kept"}),
                      save_bootstrap_config=Mock(return_value=True),
                      _record_bootstrap_log=Mock(), _record_bootstrap_exception=Mock())

@@ -327,6 +327,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_board_search.py --no-finalize
           .venv-linux/bin/python -B direct/verify_board_labels.py
           .venv-linux/bin/python -B direct/verify_windows_components.py
+          .venv-linux/bin/python -B direct/verify_start_menu.py
           .venv-linux/bin/python -B direct/verify_projects.py
       - name: Linux cloud and developer integration
         if: runner.os == 'Linux'
@@ -337,6 +338,7 @@ jobs:
           .venv-linux/bin/python -B direct/verify_ai_changes.py
           .venv-linux/bin/python -B direct/verify_ai_revert.py
           .venv-linux/bin/python -B direct/verify_ai_agents.py
+          .venv-linux/bin/python -B direct/verify_agent_maintenance.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_service.py
           .venv-linux/bin/python -B direct/verify_cloud_sketch_ui.py
           .venv-linux/bin/python -B direct/verify_owner_ticket_service.py
@@ -507,7 +509,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force temp/audit/windows-qualification | Out-Null
-          foreach ($check in 'verify_windows_board_setup', 'verify_windows_components', 'verify_windows_build_paths', 'verify_windows_maintenance', 'verify_platformio_board_compat', 'verify_release_sources') {
+          foreach ($check in 'verify_windows_board_setup', 'verify_windows_components', 'verify_start_menu', 'verify_windows_build_paths', 'verify_windows_maintenance', 'verify_platformio_board_compat', 'verify_release_sources') {
             $log = "temp/audit/windows-qualification/$check.log"
             & env/Scripts/python.exe -B -W error "direct/$check.py" *> $log
             $code = $LASTEXITCODE

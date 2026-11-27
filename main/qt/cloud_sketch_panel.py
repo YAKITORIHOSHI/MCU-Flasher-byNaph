@@ -1494,32 +1494,46 @@ class CloudSketchPanel(QWidget):
     def apply_theme(self, mode=None):
         from main.qt.theme import get_palette
         from main.core.theme import Theme
-        from src.modules.ui_palette import readable_foreground, setup_text_palette
+        from src.modules.ui_palette import setup_text_palette
         original = get_palette(mode or Theme.active_theme)
         adjusted = setup_text_palette({"T_" + key: value for key, value in original.items()}, glass=True)
         pal = self._palette = dict(original)
         pal.update({key[2:]: value for key, value in adjusted.items() if key.startswith("T_")})
         for card in self._cards:
             card.set_palette(original)
-        primary = readable_foreground(pal["BTN_COMPILE"])
-        from main.qt.theme import glass_tokens
+        from main.qt.theme import glass_tokens, liquid_button_sheet
+        mode = mode or Theme.active_theme
         glass = glass_tokens(mode)
+        # Liquid Glass like the rest of the project selector: every action is the theme's
+        # glass with its outline, caught light and floor; the primary one is accent glass
+        # with the theme's bright text, never a solid block.
+        primary = pal["TEXT_BRIGHT"]
         self.setStyleSheet(f"""
             QWidget#cloud-sketch-panel {{ background: transparent; }}
             QWidget#cloud-content, QScrollArea {{ background: transparent; }}
             QLabel {{ color: {pal['TEXT']}; background: transparent; font-size: 12px; }}
             QLabel#cloud-heading {{ font-size: 15px; font-weight: 700; color: {pal['TEXT_BRIGHT']}; }}
             QLabel#cloud-secondary {{ color: {pal['TEXT_DIM']}; font-size: 11px; }}
-            QLineEdit, QComboBox {{ color: {pal['TEXT_BRIGHT']}; background: {glass['well']}; border: 1px solid {glass['rim']}; border-radius: 10px; padding: 7px; }}
+            QLineEdit, QComboBox {{
+                color: {pal['TEXT_BRIGHT']}; background: {glass['well']}; border: 1px solid {glass['rim']};
+                border-radius: 10px; padding: 7px 9px; font-size: 12px;
+                selection-background-color: {glass['selection']}; selection-color: {pal['TEXT_BRIGHT']};
+            }}
             QLineEdit:focus, QComboBox:focus, QListWidget:focus {{ border-color: {pal['CYAN']}; }}
+            QComboBox QAbstractItemView {{ background: {pal['BG_MID']}; color: {pal['TEXT']};
+                selection-background-color: {pal['BG_HOVER']}; selection-color: {pal['TEXT_BRIGHT']}; }}
             QCheckBox {{ color: {pal['TEXT']}; background: transparent; font-size: 12px; }}
-            QListWidget {{ color: {pal['TEXT']}; background: {glass['reading']}; border: 1px solid {glass['reading_rim']}; border-radius: 10px; }}
-            QListWidget::item {{ padding: 7px; }}
-            QListWidget::item:selected {{ background: {glass['selection']}; color: {pal['TEXT_BRIGHT']}; }}
-            QPushButton {{ color: {pal['TEXT_BRIGHT']}; background: {glass['button']}; border: 1px solid {glass['button_rim']}; border-radius: 10px; padding: 7px 10px; font-size: 12px; font-weight: 600; }}
-            QPushButton:hover {{ background: {glass['button_hover']}; border-color: {pal['BORDER_LIT']}; }}
-            QPushButton[cloudPrimary="true"]:enabled {{ background: {pal['BTN_COMPILE']}; color: {primary}; border-color: {pal['BORDER_LIT']}; }}
-            QPushButton:disabled {{ color: {glass['disabled_ink']}; background: {glass['button_disabled']}; }}
+            QListWidget {{ color: {pal['TEXT']}; background: {glass['reading']}; border: 1px solid {glass['reading_rim']};
+                border-radius: 10px; padding: 4px; font-size: 12px; outline: none; }}
+            QListWidget::item {{ padding: 7px 9px; border: 1px solid transparent; border-radius: 7px; }}
+            QListWidget::item:hover {{ background: {glass['hover']}; }}
+            QListWidget::item:selected {{ background: {glass['selection']}; color: {pal['TEXT_BRIGHT']};
+                border-color: {pal['BORDER_LIT']}; }}
+        """ + liquid_button_sheet(mode, "glass", radius=11, padding="7px 12px")
+            + liquid_button_sheet(mode, "accent", radius=11, padding="7px 12px",
+                                  selector='QPushButton[cloudPrimary="true"]') + f"""
+            QPushButton {{ min-height: 18px; }}
+            QPushButton:focus {{ border: 2px solid {pal['CYAN']}; padding: 6px 11px; }}
         """)
         for field in self.findChildren(QLineEdit):
             field.setMinimumHeight(max(32, field.fontMetrics().height() + 18))

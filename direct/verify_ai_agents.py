@@ -26,8 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
+from PySide6.QtGui import QColor, QContextMenuEvent, QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -456,7 +456,10 @@ class ChooserChecks(unittest.TestCase):
         shown = {row.spec.id: [text for text, _font, _ink in row.suffixes()] for row in widget.package.rows}
         self.assertEqual(shown, {"antigravity": [], "codex": [DOWNLOADED_TEXT], "claude": [DOWNLOADED_TEXT], "hermes": [],
                                  "opencode": [BUILTIN_TEXT]}, "Setup provides the built-in agent: only the others can be downloaded")
-        self.assertEqual(widget.row("opencode").accessibleName(), "OpenCode (Built-in)")
+        # With no Start button the row itself is the action, and says so.
+        self.assertEqual(widget.row("opencode").accessibleName(), "Start OpenCode (Built-in)")
+        self.assertEqual(widget.row("claude").accessibleName(), "Start Claude (Downloaded)")
+        self.assertEqual(widget.row("hermes").accessibleName(), "Hermes, not downloaded")
         self.assertEqual((BUILTIN_TEXT, DOWNLOADED_TEXT), ("(Built-in)", "(Downloaded)"))
         _text, font, ink = widget.row("codex").suffixes()[0]
         self.assertTrue(font.italic())
@@ -502,29 +505,94 @@ class ChooserChecks(unittest.TestCase):
                         lit = image.pixelColor(round(x * ratio), round(y * ratio)).rgb() == accent.rgb()
                         self.assertEqual(lit, row.spec.id == agent_id, (mode, agent_id, row.spec.id))
 
-    def test_the_info_mark_states_who_owns_each_assistant(self):
-        from PySide6.QtWidgets import QToolTip
+    def test_the_info_mark_opens_a_disclaimer_over_the_list(self):
         from main.qt.agent_chooser import disclaimer_text
+        from main.qt.log_colors import themed_log_colors
         widget = self.chooser()
         info = widget.package.info
         self.assertTrue(info.isVisible())
         self.assertEqual(info.accessibleName(), "About these assistants")
+        self.assertEqual(info.toolTip(), "", "No hover card: a click opens the disclaimer")
         text = disclaimer_text()
-        self.assertEqual(info.toolTip(), text, "hovering shows the disclaimer")
-        self.assertIn("were not created by, and do not belong to, the developer of MCU Flasher", text)
+        # Its purpose in bold: whose tools these are, and what MCU Flasher does with them.
+        for line in ("The AI command-line tools on this list were not created by, and do not belong to, "
+                     "the developer of MCU Flasher.",
+                     "MCU Flasher only downloads them from their makers when you ask, and starts them for you.",
+                     "You use each one under its owner's own terms, with your own account."):
+            self.assertIn(f"<b>{line}</b>", text)
         self.assertIn("rightful owner", text)
         for spec in ai_agents.AGENTS:
             self.assertIn(f"<b>{spec.name}</b>", text)
         for owner in ("Google", "OpenAI", "Anthropic", "Nous Research", "open-source authors"):
             self.assertIn(owner, text)
-        body = widget.package.body_rect()
-        self.assertTrue(body.contains(info.geometry().toRectF()), "the mark sits on the board")
+        # Room around the mark: on the board, clear of its rim, edge and first row.
+        body, mark = widget.package.body_rect(), info.geometry()
+        self.assertTrue(body.contains(mark.toRectF()), "the mark sits on the board")
+        self.assertGreaterEqual(mark.top() - body.top(), 8)
+        self.assertGreaterEqual(widget.package.rows[0].geometry().top() - mark.bottom() - 1, 8)
+        self.assertGreaterEqual(body.right() - mark.right(), 12)
+        self.assertGreaterEqual(mark.width(), 24)
         for row in widget.package.rows:
-            self.assertFalse(info.geometry().intersects(row.geometry()), row.spec.id)
-        info.click()
-        self.assertTrue(QToolTip.isVisible(), "clicking shows it too")
-        self.assertIn("Disclaimer", QToolTip.text())
-        QToolTip.hideText()
+            self.assertFalse(mark.intersects(row.geometry()), row.spec.id)
+        # A click opens it over the whole list, under a red heading, with its close mark focused.
+        disclaimer = widget.disclaimer
+        started = []
+        widget.start_requested.connect(started.append)
+        self.assertFalse(disclaimer.isVisible())
+        QTest.mouseClick(info, Qt.MouseButton.LeftButton)
+        self.assertTrue(disclaimer.isVisible())
+        self.assertEqual(disclaimer.geometry(), widget.rect())
+        sheet = disclaimer.sheet.geometry()
+        self.assertTrue(widget.rect().contains(sheet))
+        self.assertEqual(disclaimer.heading.text(), "Disclaimer")
+        self.assertIn(f"color: {themed_log_colors('default')['error']}", disclaimer.heading.styleSheet())
+        self.assertIn("Antigravity", disclaimer.text.text())
+        self.assertTrue(disclaimer.close_mark.hasFocus())
+        APP.processEvents()
+        self.assertFalse(disclaimer.scroll.verticalScrollBar().isVisible(), "at this size it all fits")
+        # Clicks on the sheet keep it; Escape, its close mark or the veil put it away.
+        QTest.mouseClick(disclaimer, Qt.MouseButton.LeftButton, pos=sheet.center())
+        self.assertTrue(disclaimer.isVisible())
+        QTest.keyClick(disclaimer.close_mark, Qt.Key.Key_Escape)
+        self.assertFalse(disclaimer.isVisible())
+        QTest.mouseClick(info, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(disclaimer, Qt.MouseButton.LeftButton, pos=QPoint(sheet.left() - 4, sheet.bottom() + 4))
+        self.assertFalse(disclaimer.isVisible())
+        QTest.mouseClick(info, Qt.MouseButton.LeftButton)
+        disclaimer.close_mark.click()
+        self.assertFalse(disclaimer.isVisible())
+        # Tab stays on the sheet, so the keyboard cannot reach a row under it; Enter closes it.
+        QTest.mouseClick(info, Qt.MouseButton.LeftButton)
+        for _ in range(3):
+            QTest.keyClick(APP.focusWidget(), Qt.Key.Key_Tab)
+            self.assertIs(APP.focusWidget(), disclaimer.close_mark)
+        QTest.keyClick(disclaimer.close_mark, Qt.Key.Key_Return)
+        self.assertFalse(disclaimer.isVisible())
+        # Leaving the list puts it away.
+        QTest.mouseClick(info, Qt.MouseButton.LeftButton)
+        widget.hide()
+        self.assertFalse(disclaimer.isVisible())
+        widget.show()
+        APP.processEvents()
+        self.assertFalse(disclaimer.isVisible(), "it does not come back by itself")
+        self.assertEqual(started, [], "nothing under it was chosen")
+        # A small pane keeps the sheet inside it and scrolls the text instead, by wheel or keys.
+        small = self.chooser(240, 300)
+        small.show_disclaimer()
+        APP.processEvents()
+        self.assertTrue(small.rect().contains(small.disclaimer.sheet.geometry()))
+        bar = small.disclaimer.scroll.verticalScrollBar()
+        self.assertGreater(bar.maximum(), 0)
+        QTest.keyClick(small.disclaimer.close_mark, Qt.Key.Key_End)
+        self.assertEqual(bar.value(), bar.maximum())
+        QTest.keyClick(small.disclaimer.close_mark, Qt.Key.Key_Up)
+        self.assertLess(bar.value(), bar.maximum())
+        QTest.keyClick(small.disclaimer.close_mark, Qt.Key.Key_Home)
+        self.assertEqual(bar.value(), 0)
+        self.assertTrue(small.disclaimer.isVisible())
+        small.resize(420, 620)
+        APP.processEvents()
+        self.assertEqual(small.disclaimer.geometry(), small.rect(), "it follows the pane")
 
     def test_rows_show_no_hover_card(self):
         widget = self.chooser()
@@ -553,47 +621,206 @@ class ChooserChecks(unittest.TestCase):
                                             abs(color.blue() - want.blue())) <= 3 for color in inked), spec.id)
         self.assertIsNone(agent_chooser.agent_icon("no-such-agent", 20, 1.0, "#ff000000"))
 
-    def test_start_download_and_cancel_are_only_requests(self):
+    def test_a_click_starts_and_only_the_download_button_downloads(self):
         widget = self.chooser()
         started, wanted, cancelled = [], [], []
         widget.start_requested.connect(started.append)
         widget.download_requested.connect(wanted.append)
         widget.cancel_requested.connect(lambda: cancelled.append(True))
+        self.assertFalse(widget.download_button.isVisible(), "no Start button: an agent that is here is its own")
         widget.select("claude")
-        self.assertEqual(widget.primary.text(), "Start Claude")
-        widget.primary.click()
-        widget.select("hermes")
-        self.assertEqual(widget.primary.text(), "Download Hermes")
+        self.assertEqual(started, [], "lighting the last choice starts nothing")
+        widget.row("claude").click()
+        self.assertEqual((widget.selected, started), ("claude", ["claude"]))
+        widget.row("hermes").click()
+        self.assertEqual(widget.selected, "hermes")
+        self.assertEqual((started, wanted), (["claude"], []), "one not here yet only shows its download")
+        self.assertTrue(widget.download_button.isVisible())
+        self.assertEqual((widget.download_button.text(), widget.download_button.accessibleName()),
+                         ("Download Hermes", "Download Hermes"))
         self.assertIn("nousresearch", widget.detail.text().replace("​", ""))
         self.assertIn("for this account only" if sys.platform == "win32" else "into MCU Flasher's own folder",
                       widget.detail.text().replace("​", ""))
-        widget.primary.click()
+        widget.row("hermes").click()
+        self.assertEqual(wanted, [], "not even when it is chosen again")
+        widget.download_button.click()
         self.assertEqual((started, wanted), (["claude"], ["hermes"]))
         widget.show_progress("hermes", "Downloading…")
         self.assertTrue(widget.cancel_button.isVisible())
-        self.assertFalse(widget.primary.isVisible() or widget.row("codex").isEnabled())
+        self.assertFalse(widget.download_button.isVisible() or widget.row("codex").isEnabled())
+        widget.row("codex").click()
+        self.assertEqual(started, ["claude"], "nothing starts while a download runs")
         widget.cancel_button.click()
         self.assertEqual(cancelled, [True])
         widget.show_message("It failed", error=True)
-        self.assertTrue(widget.primary.isVisible())
+        self.assertTrue(widget.download_button.isVisible(), "it can be downloaded again")
         self.assertEqual(widget.detail.text(), "It failed")
+        widget.set_installed({"codex": "x", "claude": "x", "opencode": "x"})
+        self.assertEqual(widget.detail.text(), "It failed", "the owner's next look at the files keeps the message")
         widget.select("opencode")
         widget.set_installed({})
         self.assertIn("--repair", widget.detail.text().replace("​", ""))
-        self.assertEqual(widget.primary.text(), "Start OpenCode", "Setup, not this list, provides the built-in assistant")
+        self.assertFalse(widget.download_button.isVisible(), "Setup, not this list, provides the built-in assistant")
+        widget.row("opencode").click()
+        self.assertEqual(started, ["claude", "opencode"])
+        narrow = self.chooser(240, 420)
+        narrow.select("hermes")
+        self.assertEqual((narrow.download_button.text(), narrow.download_button.accessibleName()),
+                         ("Download", "Download Hermes"))
 
-    def test_mouse_and_keyboard_choose_and_start(self):
+    def test_a_right_click_offers_uninstall_only_for_what_can_go(self):
+        widget = self.chooser()
+        asked, started = [], []
+        widget.uninstall_requested.connect(asked.append)
+        widget.start_requested.connect(started.append)
+        menu = widget.row_menu(widget.row("claude"))
+        self.addCleanup(menu.deleteLater)
+        self.assertEqual([(action.text(), action.isEnabled()) for action in menu.actions()], [("Uninstall Claude…", True)])
+        menu.actions()[0].trigger()
+        self.assertEqual((asked, started, widget.selected), (["claude"], [], "opencode"), "it chooses nothing")
+        builtin = widget.row_menu(widget.row("opencode"))
+        self.addCleanup(builtin.deleteLater)
+        self.assertEqual([(action.text(), action.isEnabled()) for action in builtin.actions()],
+                         [("OpenCode comes with MCU Flasher", False)])
+        self.assertIsNone(widget.row_menu(widget.row("hermes")), "Nothing to uninstall")
+        unchecked = AgentChooser()
+        self.addCleanup(unchecked.deleteLater)
+        self.assertIsNone(unchecked.row_menu(unchecked.row("claude")), "Not before the files are checked")
+        # A right-click or the Menu key asks for that row's menu; it chooses and starts nothing.
+        widget.package.menu_requested.disconnect(widget._show_row_menu)
+        rows = []
+        widget.package.menu_requested.connect(lambda row, position: rows.append((row.spec.id, position)))
+        codex = widget.row("codex")
+        QApplication.sendEvent(codex, QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(30, 20),
+                                                        codex.mapToGlobal(QPoint(30, 20))))
+        QApplication.sendEvent(codex, QContextMenuEvent(QContextMenuEvent.Reason.Keyboard, QPoint(0, 0)))
+        self.assertEqual(rows, [("codex", codex.mapToGlobal(QPoint(30, 20))),
+                                ("codex", codex.mapToGlobal(codex.rect().center()))])
+        self.assertEqual((widget.selected, started), ("opencode", []))
+        widget.package.menu_requested.connect(widget._show_row_menu)
+        widget._show_row_menu(widget.row("claude"), widget.mapToGlobal(QPoint(40, 40)))
+        popup = QApplication.activePopupWidget()
+        self.assertIsNotNone(popup)
+        self.assertEqual([action.text() for action in popup.actions()], ["Uninstall Claude…"])
+        popup.close()
+        APP.processEvents()
+        # While work is under way the menu stays, without its action; an uninstall has no Cancel.
+        widget.show_progress("codex", "Uninstalling Codex…", cancellable=False)
+        self.assertTrue(widget.cancel_button.isHidden(), "an uninstall is never cut short")
+        busy = widget.row_menu(widget.row("claude"))
+        self.addCleanup(busy.deleteLater)
+        self.assertFalse(busy.actions()[0].isEnabled())
+        widget.show_progress("codex", "Downloading…")
+        self.assertFalse(widget.cancel_button.isHidden())
+        widget.show_message("")
+        self.assertTrue(widget.cancel_button.isHidden())
+
+    def test_one_left_click_enter_or_space_starts_and_arrows_and_tab_only_move(self):
         widget = self.chooser()
         started = []
         widget.start_requested.connect(started.append)
-        row = widget.row("codex")
-        QTest.mouseClick(row, Qt.MouseButton.LeftButton, pos=QPoint(30, 20))
-        self.assertEqual(widget.selected, "codex")
-        QTest.keyClick(row, Qt.Key.Key_Down)
+        point = QPoint(30, 20)
+        codex = widget.row("codex")
+        for button in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+            QTest.mouseClick(codex, button, pos=point)
+        self.assertEqual((widget.selected, started), ("opencode", []), "only the left button chooses")
+        QTest.mousePress(codex, Qt.MouseButton.LeftButton, pos=point)
+        QTest.mouseRelease(codex, Qt.MouseButton.LeftButton, pos=QPoint(30, codex.height() + 30))
+        self.assertEqual((widget.selected, started), ("opencode", []), "dragged off before the release: no choice")
+        QTest.mouseClick(codex, Qt.MouseButton.LeftButton, pos=point)
+        self.assertEqual((widget.selected, started), ("codex", ["codex"]))
+        QTest.keyClick(codex, Qt.Key.Key_Down)
         self.assertEqual(widget.selected, "claude")
+        self.assertTrue(widget.row("claude").hasFocus())
+        QTest.keyClick(widget.row("claude"), Qt.Key.Key_Up)
+        QTest.keyClick(widget.row("codex"), Qt.Key.Key_Down)
+        self.assertEqual((widget.selected, started), ("claude", ["codex"]), "arrows move the choice without making it")
+        QApplication.sendEvent(widget.row("claude"), QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return,
+                                                               Qt.KeyboardModifier.NoModifier, "\r", True))
+        self.assertEqual(started, ["codex"], "a held key repeats nothing")
         QTest.keyClick(widget.row("claude"), Qt.Key.Key_Return)
-        QTest.mouseDClick(widget.row("opencode"), Qt.MouseButton.LeftButton, pos=QPoint(30, 20))
-        self.assertEqual(started, ["claude", "opencode"])
+        self.assertEqual(started, ["codex", "claude"])
+        QTest.keyClick(widget.row("claude"), Qt.Key.Key_Tab)
+        self.assertTrue(widget.row("hermes").hasFocus(), "each row is its own Tab stop")
+        QTest.keyClick(widget.row("hermes"), Qt.Key.Key_Tab)
+        self.assertTrue(widget.row("opencode").hasFocus())
+        QTest.keyClick(widget.row("opencode"), Qt.Key.Key_Backtab)
+        self.assertTrue(widget.row("hermes").hasFocus())
+        self.assertEqual(widget.selected, "claude", "Tab moves focus, not the choice")
+        QTest.keyClick(widget.row("hermes"), Qt.Key.Key_Space)
+        self.assertEqual((widget.selected, started), ("hermes", ["codex", "claude"]), "Space only shows its download")
+        QTest.keyClick(widget.row("hermes"), Qt.Key.Key_Tab)
+        self.assertTrue(widget.row("opencode").hasFocus())
+        QTest.keyClick(widget.row("opencode"), Qt.Key.Key_Space)
+        self.assertEqual(started, ["codex", "claude", "opencode"])
+
+    def test_a_double_click_makes_one_choice(self):
+        widget = self.chooser()
+        started, wanted, cancelled = [], [], []
+        widget.start_requested.connect(started.append)
+        widget.download_requested.connect(lambda agent_id: (wanted.append(agent_id),
+                                                            widget.show_progress(agent_id, "Downloading…")))
+        widget.cancel_requested.connect(lambda: cancelled.append(True))
+        point = QPoint(10, 10)
+
+        def double_click(first, second=None):
+            # What Qt delivers: a click, then the double click and its release to whatever is
+            # under the pointer by then.
+            second = second or first
+            QTest.mousePress(first, Qt.MouseButton.LeftButton, pos=point)
+            QTest.mouseRelease(first, Qt.MouseButton.LeftButton, pos=point)
+            QTest.mouseDClick(second, Qt.MouseButton.LeftButton, pos=point)
+            QTest.mouseRelease(second, Qt.MouseButton.LeftButton, pos=point)
+
+        def settle():
+            QTest.qWait(APP.styleHints().mouseDoubleClickInterval() + 50)
+        double_click(widget.row("claude"))
+        self.assertEqual(started, ["claude"])
+        QTest.mouseClick(widget.row("codex"), Qt.MouseButton.LeftButton, pos=point)
+        self.assertEqual((widget.selected, started), ("claude", ["claude"]),
+                         "a second click straight after, even one too far off to be a double click, chooses nothing")
+        settle()
+        double_click(widget.row("hermes"), widget.row("opencode"))
+        self.assertEqual((widget.selected, started, wanted), ("hermes", ["claude"], []),
+                         "not on the row the list moved under the pointer either")
+        settle()
+        double_click(widget.download_button, widget.cancel_button)
+        self.assertEqual((wanted, cancelled), (["hermes"], []), "Cancel takes Download's place; one press is not both")
+        self.assertTrue(widget.cancel_button.isVisible())
+        widget.show_message("")
+        QTest.mouseClick(widget.row("claude"), Qt.MouseButton.LeftButton, pos=point)
+        widget.select("codex")
+        QTest.mouseClick(widget.row("codex"), Qt.MouseButton.LeftButton, pos=point)
+        self.assertEqual(started, ["claude", "claude", "codex"], "offering the list again ends the pause at once")
+
+    def test_a_choice_made_before_the_files_are_checked_waits_for_them(self):
+        def unchecked():
+            widget = AgentChooser()
+            widget.resize(420, 620)
+            widget.show()
+            self.addCleanup(widget.deleteLater)
+            self.addCleanup(widget.close)
+            started, wanted = [], []
+            widget.start_requested.connect(started.append)
+            widget.download_requested.connect(wanted.append)
+            return widget, started, wanted
+        for found, expected, offered in (({"claude": "x"}, ["claude"], False), ({}, [], True)):
+            widget, started, wanted = unchecked()
+            widget.row("claude").click()
+            self.assertEqual(started, [], "whether it is here is not known yet")
+            widget.set_installed(found)
+            self.assertEqual((started, wanted), (expected, []), found)
+            self.assertEqual((widget.selected, widget.download_button.isVisible()), ("claude", offered), found)
+            widget.set_installed(found)
+            self.assertEqual(started, expected, "a later look starts nothing again")
+        widget, started, _wanted = unchecked()
+        widget.row("claude").click()
+        QTest.keyClick(widget.row("claude"), Qt.Key.Key_Down)
+        widget.set_installed({"claude": "x", "hermes": "x"})
+        self.assertEqual(started, [], "moving on drops the waiting choice")
+        widget, started, _wanted = unchecked()
+        widget.row("opencode").click()
+        self.assertEqual(started, ["opencode"], "Setup provides the built-in one, so it never waits")
 
 
 class PickerChecks(unittest.TestCase):
@@ -644,15 +871,18 @@ class PickerChecks(unittest.TestCase):
             return "x"
         self.picker.downloaded.connect(done.append)
         with patch.object(agent_setup, "install", side_effect=install):
-            self.widget.select("claude")
-            self.widget.primary.click()
+            self.widget.row("claude").click()
+            self.assertFalse(self.picker.downloading, "choosing it only shows its download")
+            self.widget.download_button.click()
             until(lambda: self.widget.detail.text() == "Downloading the fixture…", "progress")
             self.picker.download("codex")       # One at a time.
             self.assertTrue(self.picker.downloading)
             release.set()
             until(lambda: done == ["claude"], "finished")
         self.assertTrue(self.widget.row("claude").installed)
-        self.assertEqual(self.widget.primary.text(), "Start Claude")
+        self.assertEqual(self.widget.detail.text(), "Claude is downloaded. Click it to start.")
+        self.assertTrue(self.widget.download_button.isHidden(), "nothing is left to press but the row")
+        self.assertEqual(self.widget.row("claude").accessibleName(), "Start Claude (Downloaded)")
         self.assertNotIn(threading.main_thread(), threads)
 
     def test_failure_names_the_makers_command_and_cancel_does_not(self):
@@ -675,6 +905,95 @@ class PickerChecks(unittest.TestCase):
             until(lambda: not self.picker.downloading, "cancelled")
         self.assertEqual(self.widget.detail.text(), "The download was cancelled.")
         self.assertFalse(self.widget.detail.property("failed"))
+
+    def removal_fixture(self):
+        from src.modules import agent_removal
+        self.found = {"opencode": "x", "claude": "x"}
+        self.picker.refresh()
+        until(lambda: self.widget._checked_files and self.widget.row("claude").installed, "detection")
+        return agent_removal, agent_removal.RemovalPlan("claude", "Claude", (Path("/fixture/bin/claude"),),
+                                                        kept=(Path("/fixture/.claude"),), size=2_500_000)
+
+    def detail(self):
+        return self.widget.detail.text().replace("\u200b", "")
+
+    def test_uninstall_asks_first_and_removes_off_the_gui_thread(self):
+        removal, plan = self.removal_fixture()
+        threads, removed, asked, done = [], [], [], []
+
+        def planned(agent_id):
+            threads.append(threading.current_thread())
+            return plan
+
+        def remove(given):
+            threads.append(threading.current_thread())
+            removed.append(given)
+            self.found.pop("claude", None)
+        self.picker.removed.connect(done.append)
+        with patch.object(removal, "plan", side_effect=planned), patch.object(removal, "running", return_value=[]), \
+                patch.object(removal, "remove", side_effect=remove):
+            with patch.object(self.picker, "_ask_removal", side_effect=lambda given: asked.append(given) or False):
+                self.widget.uninstall_requested.emit("claude")
+                self.assertTrue(self.picker.removing)
+                self.assertTrue(self.widget.cancel_button.isHidden())
+                until(lambda: not self.picker.removing, "declined")
+            self.assertEqual((asked, removed, done), ([plan], [], []))
+            self.assertTrue(self.widget.row("claude").installed)
+            self.assertNotIn("Claude", self.detail())
+            with patch.object(self.picker, "_ask_removal", return_value=True):
+                self.widget.uninstall_requested.emit("claude")
+                until(lambda: done == ["claude"], "uninstalled")
+        self.assertEqual(removed, [plan])
+        self.assertFalse(self.widget.row("claude").installed)
+        self.assertEqual(self.detail(), "Claude is uninstalled. Its settings and sign-ins are kept.")
+        self.assertFalse(self.widget.detail.property("failed"))
+        self.assertNotIn(threading.main_thread(), threads)
+        until(lambda: not self.widget.row("claude").installed and not self.picker.removing, "rescanned")
+        self.assertEqual(self.detail(), "Claude is uninstalled. Its settings and sign-ins are kept.", "the rescan keeps it")
+
+    def test_uninstall_says_why_it_did_nothing(self):
+        removal, plan = self.removal_fixture()
+        manual = removal.RemovalPlan("claude", "Claude", manual="Claude was installed with npm. Run: npm uninstall -g x")
+        cases = ((dict(plan=Mock(return_value=plan), running=Mock(return_value=["claude (process 7)"])),
+                  "Claude is running (claude (process 7)). Close it, then uninstall it again.", True),
+                 (dict(plan=Mock(return_value=manual)), manual.manual, False),
+                 (dict(plan=Mock(side_effect=removal.RemovalError("Claude is not installed for this account."))),
+                  "Claude is not installed for this account.", True),
+                 (dict(plan=Mock(return_value=plan), running=Mock(return_value=[]),
+                       remove=Mock(side_effect=removal.RemovalError("Claude was not completely uninstalled."))),
+                  "Claude was not completely uninstalled.", True))
+        for patches, message, failed in cases:
+            with patch.multiple(removal, **patches), patch.object(self.picker, "_ask_removal", return_value=True) as ask:
+                self.widget.uninstall_requested.emit("claude")
+                until(lambda: not self.picker.removing, message)
+            with self.subTest(message=message):
+                self.assertEqual(self.detail(), message)
+                self.assertEqual(bool(self.widget.detail.property("failed")), failed)
+                self.assertEqual(ask.called, "remove" in patches, "only a plan with something to remove is asked about")
+                self.assertTrue(self.widget.row("claude").installed)
+
+    def test_the_uninstall_question_names_what_goes_and_defaults_to_cancel(self):
+        _removal, plan = self.removal_fixture()
+        seen = []
+
+        def answer(label):
+            box = self.picker._removal_prompt
+            if box is None:
+                QTimer.singleShot(10, lambda: answer(label))
+                return
+            seen.append((box.windowTitle(), box.text(), box.informativeText(), box.defaultButton().text(),
+                         box.escapeButton().text()))
+            next(button for button in box.buttons() if button.text() == label).click()
+        for label, expected in (("Cancel", False), ("Uninstall", True)):
+            QTimer.singleShot(0, lambda label=label: answer(label))
+            self.assertEqual(self.picker._ask_removal(plan), expected)
+        title, text, details, default, escape = seen[0]
+        self.assertEqual((title, text, default, escape),
+                         ("Uninstall Claude", "Uninstall Claude from this computer?", "Cancel", "Cancel"))
+        self.assertIn("/fixture/bin/claude", details)
+        self.assertIn("about 2 MB", details)
+        self.assertIn("stay in /fixture/.claude", details)
+        self.assertIsNone(self.picker._removal_prompt)
 
     def test_closing_the_owner_ends_the_download(self):
         seen = threading.Event()

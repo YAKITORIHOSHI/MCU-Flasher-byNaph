@@ -70,7 +70,7 @@ def definitions(root):
                  _BOOTSTRAP_LOG_FILE=root / "failed-download.log",
                  _BOOTSTRAP_LOG_LOCK=threading.Lock(), _T_PALETTE=palette,
                  _BOOTSTRAP_THEME_MODE="default", _resolve_bootstrap_theme=lambda: (palette, "default"),
-                 DEFAULT_SKIP_UPDATES=True, BOOTSTRAP_CLOSE_DELAY_S=5.0,
+                 BOOTSTRAP_CLOSE_DELAY_S=5.0,
                  HAS_PYSIDE6_BOOTSTRAP=True, _gui=None)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), scope)
     return scope

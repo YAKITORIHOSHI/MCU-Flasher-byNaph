@@ -108,6 +108,91 @@ def isolation(agent_id: str) -> Isolation | None:
     return Isolation(root=root, data=root / "data", home=root / "home", temp=root / "tmp")
 
 
+# The longest socket path connect() accepts, without its closing NUL: sun_path is
+# 108 bytes on Linux and 104 on macOS and the BSDs.
+_SUN_PATH_BYTES = 107 if sys.platform.startswith("linux") else 103
+
+
+def _socket_answers(path: Path) -> bool | None:
+    """Whether something listens on a Unix socket too long to name directly; None if unknown.
+
+    Linux reaches it through the folder's descriptor (/proc/self/fd/N/name), which is short.
+    """
+    import socket
+    try:
+        folder = os.open(path.parent, os.O_PATH | os.O_DIRECTORY)    # Linux only
+    except (AttributeError, OSError):
+        return None
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.5)
+            probe.connect(f"/proc/self/fd/{folder}/{path.name}")
+        return True
+    except (ConnectionRefusedError, FileNotFoundError):
+        return False
+    except OSError:
+        return None
+    finally:
+        os.close(folder)
+
+
+def clear_unreachable_control(agent_id: str) -> list[Path]:
+    """Remove an isolated agent's gateway files that no client can ever use; returns them.
+
+    Hermes's gateway listens on ``<home>/gateway.sock`` only when that path is short enough
+    for a socket; otherwise it listens in a short temporary folder that ``gateway.sock.path``
+    names. A socket file at a longer path, carried along when the folder was moved, zipped or
+    copied from a shorter place, cannot be reached, and Hermes then refuses to start with
+    "Gateway inaccessible: invalid_control_peer" instead of starting a gateway of its own.
+    A pointer naming a socket that no longer exists stops it the same way. Neither can belong
+    to a running gateway, so both go; anything else is Hermes's own to judge.
+    """
+    import stat
+    # Windows gateways listen on named pipes (\\.\pipe\hermes-gateway-<hash>): no file there
+    # can stand in their way.
+    if sys.platform == "win32" or agent(agent_id).id != "hermes":
+        return []
+    place = isolation(agent_id)
+    if place is None:
+        return []
+    removed = []
+
+    def owned(path: Path, kind) -> bool:
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return False
+        return kind(info.st_mode) and info.st_uid == os.getuid()
+
+    direct = place.data / "gateway.sock"
+    if (owned(direct, stat.S_ISSOCK) and len(os.fsencode(str(direct))) > _SUN_PATH_BYTES
+            and _socket_answers(direct) is not True):
+        try:
+            direct.unlink()
+            removed.append(direct)
+        except OSError:
+            pass
+    pointer = place.data / "gateway.sock.path"
+    if owned(pointer, stat.S_ISREG):
+        try:
+            with pointer.open("rb") as stream:
+                text = stream.read(4097)
+        except OSError:
+            text = None             # Unreadable now: leave it to Hermes.
+        if text is not None:
+            try:
+                target = Path(text.decode("utf-8").strip()) if len(text) <= 4096 else None
+            except UnicodeDecodeError:
+                target = None
+            if target is None or not target.is_absolute() or not owned(target, stat.S_ISSOCK):
+                try:
+                    pointer.unlink()
+                    removed.append(pointer)
+                except OSError:
+                    pass
+    return removed
+
+
 def _isolated_variables(agent_id: str, place: Isolation) -> dict[str, str]:
     if agent_id == "hermes":
         # Hermes keeps one gateway per account under ~/.local/state; this copy keeps its own.
@@ -328,6 +413,8 @@ def agent_environment(agent_id: str, base=None) -> dict[str, str | None]:
     if place is not None:
         additions.update(_isolated_variables(spec.id, place))
         additions["PYTHONPYCACHEPREFIX"] = None
+        # Every start and Retry passes here: leftovers no gateway can use must not block it.
+        clear_unreachable_control(spec.id)
         try:
             place.temp.mkdir(parents=True, exist_ok=True)
             additions.update(dict.fromkeys(("TMPDIR", "TMP", "TEMP"), str(place.temp)))

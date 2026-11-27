@@ -234,7 +234,7 @@ import serial.tools.list_ports
 import psutil
 
 from main.core.constants import (
-    is_application_codebase_dir, MAX_BAUD_RATE, MAX_UPLOAD_SPEED, VALID_BAUD_RATES, DEFAULT_UPLOAD_SPEED,
+    is_application_codebase_dir, MAX_BAUD_RATE, VALID_BAUD_RATES, DEFAULT_UPLOAD_SPEED, esp_upload_speed,
     SCRIPT_DIR, board_reset_capabilities, default_monitor_baud,
 )
 from main.core.config import (
@@ -510,11 +510,8 @@ class MCUWebBackendAPI:
         frameworks_config = config.get("board_frameworks")
         self._board_frameworks = dict(frameworks_config) if isinstance(frameworks_config, dict) else {}
         self.current_port = ""
-        try:
-            raw_upload = int(config.get("upload_speed", DEFAULT_UPLOAD_SPEED))
-            self.upload_speed = str(min(raw_upload, MAX_UPLOAD_SPEED))
-        except Exception:
-            self.upload_speed = str(DEFAULT_UPLOAD_SPEED)
+        # Only a listed ESP speed; an older release's 512000 returns to the default.
+        self.upload_speed = esp_upload_speed(config.get("upload_speed", DEFAULT_UPLOAD_SPEED))
         self.skip_compile = False
         self.timestamp_enabled: bool = bool(config.get("timestamp_enabled", False))
         self.clear_console_on_action: bool = bool(config.get("clear_console_on_action", True))
@@ -1363,14 +1360,10 @@ class MCUWebBackendAPI:
         return self.is_compile_or_upload_active()
 
     def set_upload_speed(self, speed: str | int) -> None:
-        """Set the upload baud rate, capped at MAX_UPLOAD_SPEED (921600)."""
+        """Set the ESP upload speed: one of ESP_UPLOAD_SPEEDS, or nothing changes."""
         if self.is_upload_phase_active():
             return
-        try:
-            val = int(speed)
-            self.upload_speed = str(min(val, MAX_UPLOAD_SPEED))
-        except (ValueError, TypeError):
-            self.upload_speed = str(speed)
+        self.upload_speed = esp_upload_speed(speed, self.upload_speed)
 
     def set_skip_compile(self, skip: bool) -> None:
         """Set whether upload should reuse cached build without compiling."""
@@ -8743,7 +8736,7 @@ class MCUWebBackendAPI:
                     else:
                         self.emit("console:log", {"text": "", "newline": True})
                         self.emit("console:log", {"text": f"  Fast upload failed: {fast_error}", "tag": "error", "newline": True})
-                        if failure_kind != "target" and str(upload_speed) in ("921600", "512000"):
+                        if failure_kind != "target" and str(upload_speed).isdigit() and int(upload_speed) > 460800:
                             self.emit("console:log", {
                                 "text": f"  High upload speed ({upload_speed} baud) may exceed hardware limits for this USB bridge or cable. Try selecting 460800 or 115200 baud in the toolbar.",
                                 "tag": "warning",

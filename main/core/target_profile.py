@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Mapping
-from main.core.constants import MAX_UPLOAD_SPEED
+from main.core.constants import ESP_UPLOAD_SPEEDS
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _BOARD_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,159}$")
@@ -92,6 +92,7 @@ def serial_upload_speed(info: Mapping, requested_speed: str = "") -> str:
 
     CLI recipes and nonserial programmers own their transport configuration.
     An empty result means no known serial baud; callers must not invent one.
+    An ESP request is always one of ESP_UPLOAD_SPEEDS: the fastest one not above it.
     """
     if info.get("backend") == "arduino-cli" or not requires_upload_port(info):
         return ""
@@ -100,7 +101,11 @@ def serial_upload_speed(info: Mapping, requested_speed: str = "") -> str:
     text = str(value or "").strip()
     if not text.isascii() or not text.isdigit() or len(text) > 10 or int(text) <= 0:
         return ""
-    return str(min(int(text), MAX_UPLOAD_SPEED) if is_esp else int(text))
+    if not is_esp:
+        return str(int(text))
+    # The menu only offers listed speeds; anything else (an old setting) never reaches esptool.
+    requested = int(text)
+    return str(max((speed for speed in ESP_UPLOAD_SPEEDS if speed <= requested), default=ESP_UPLOAD_SPEEDS[0]))
 
 
 def upload_configuration(info: Mapping, requested_speed: str = "") -> str:

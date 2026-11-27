@@ -6,9 +6,13 @@
     "upload_configuration",
     "upload_target_ready"
   ],
-  "cases": 13039,
-  "equivalentComparisons": 51993,
-  "structuredRefusalComparisons": 163,
+  "cases": 15244,
+  "equivalentComparisons": 60768,
+  "structuredRefusalComparisons": 208,
+  "boardIdentityFunction": "valid_platformio_board_id",
+  "boardIdentityComparisons": 15244,
+  "explicitBoardIdentityCases": 423,
+  "pythonStrictIdentifierComparisons": 16,
   "validationDifferences": [
     {
       "field": "info",
@@ -17,11 +21,19 @@
     },
     {
       "field": "upload_protocol",
-      "comparisons": 99,
+      "comparisons": 144,
       "reason": "Truthy non-string protocols are refused instead of formatting Python representations into INI"
     }
   ],
-  "maximumEspBaud": 921600,
+  "maximumEspBaud": 2000000,
+  "espUploadSpeeds": [
+    115200,
+    230400,
+    460800,
+    921600,
+    1500000,
+    2000000
+  ],
   "platform": "linux",
   "architecture": "x86_64",
   "passed": true,

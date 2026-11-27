@@ -39,14 +39,14 @@ from PySide6.QtWidgets import (
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants (mirror main.core.constants defaults)
 # ─────────────────────────────────────────────────────────────────────────────
-from main.core.constants import ARDUINO_IDE_BAUD_RATES, MAX_UPLOAD_SPEED
+from main.core.constants import ESP_UPLOAD_SPEEDS, MONITOR_BAUD_RATES
 from main.core.theme import Theme
 from main.qt.icons import ActionButton as QPushButton, icon
 
 DEFAULT_BAUD          = 115200
 DEFAULT_UPLOAD_SPEED  = 460800
-VALID_BAUD_RATES      = list(ARDUINO_IDE_BAUD_RATES)
-UPLOAD_SPEEDS         = [s for s in [115200, 230400, 460800, 512000, 921600] if s <= MAX_UPLOAD_SPEED]
+VALID_BAUD_RATES      = list(MONITOR_BAUD_RATES)
+UPLOAD_SPEEDS         = list(ESP_UPLOAD_SPEEDS)
 
 
 from main.qt.icons import IconLabel as QLabel
@@ -1971,19 +1971,25 @@ class ControlsBar(QWidget):
             self.upload_speed_combo.setToolTip("Upload speed is locked while compiling or uploading firmware.")
             return
 
+        from main.core.constants import DEFAULT_UPLOAD_SPEED, ESP_UPLOAD_SPEEDS, esp_upload_speed
+
+        def offer(items):
+            # Exactly these entries: a board's fixed rate must not stay behind in the ESP list.
+            if [self.upload_speed_combo.itemText(i) for i in range(self.upload_speed_combo.count())] != items:
+                self.upload_speed_combo.clear()
+                self.upload_speed_combo.addItems(items)
+
         previous = self.upload_speed_combo.blockSignals(True)
         if fam in {"espressif32", "espressif8266"} and requires_upload_port(b_info):
             self.upload_speed_combo.setEnabled(True)
             self.upload_speed_combo.setToolTip("Serial upload speed for this ESP board.")
-            pref_spd = str(getattr(self._backend, "upload_speed", "") or "460800") if self._backend else "460800"
-            if self.upload_speed_combo.findText(pref_spd) >= 0:
-                self.upload_speed_combo.setCurrentText(pref_spd)
-            else:
-                self.upload_speed_combo.setCurrentText("460800")
+            offer([str(speed) for speed in ESP_UPLOAD_SPEEDS])
+            self.upload_speed_combo.setCurrentText(
+                esp_upload_speed(getattr(self._backend, "upload_speed", "") if self._backend else "",
+                                 DEFAULT_UPLOAD_SPEED))
         else:
             speed = serial_upload_speed(b_info) or "Auto"
-            if self.upload_speed_combo.findText(speed) < 0:
-                self.upload_speed_combo.addItem(speed)
+            offer([speed])
             self.upload_speed_combo.setCurrentText(speed)
             self.upload_speed_combo.setEnabled(False)
             self.upload_speed_combo.setToolTip(
@@ -2071,8 +2077,39 @@ class ControlsBar(QWidget):
     def _on_upload_speed_changed(self, speed: str) -> None:
         if getattr(self, "_upload_phase_locked", False):
             return
-        if self._backend and speed:
-            self._backend.set_upload_speed(speed)
+        if not self._backend or not speed:
+            return
+        from main.core.constants import DEFAULT_UPLOAD_SPEED, UNCOMMON_UPLOAD_SPEED, esp_upload_speed
+        kept = esp_upload_speed(getattr(self._backend, "upload_speed", ""), DEFAULT_UPLOAD_SPEED)
+        if speed == str(UNCOMMON_UPLOAD_SPEED) and kept != speed and not self._confirm_uncommon_upload_speed(speed, kept):
+            # Stay on the speed in use; nothing reached the backend.
+            previous = self.upload_speed_combo.blockSignals(True)
+            self.upload_speed_combo.setCurrentText(kept)
+            self.upload_speed_combo.blockSignals(previous)
+            return
+        self._backend.set_upload_speed(speed)
+
+    def _confirm_uncommon_upload_speed(self, speed: str, kept: str) -> bool:
+        """Ask before an uncommon upload speed is used: it works, but not with every bridge."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(self.window())
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Upload speed")
+        box.setText(f"Use {speed} baud for uploads?")
+        box.setInformativeText(
+            f"{speed} baud is an uncommon upload speed, and uploads at it might be unstable on "
+            f"some boards, USB adapters or cables. If an upload fails, choose a lower speed "
+            f"such as 921600 and upload again.")
+        use = box.addButton(f"Use {speed}", QMessageBox.ButtonRole.AcceptRole)
+        keep = box.addButton(f"Keep {kept}", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.setEscapeButton(keep)
+        self._speed_prompt = box  # Checks find the open question here.
+        try:
+            box.exec()
+        finally:
+            self._speed_prompt = None
+        return box.clickedButton() is use
 
     def _on_timestamp_changed(self, state: int) -> None:
         enabled = bool(state)

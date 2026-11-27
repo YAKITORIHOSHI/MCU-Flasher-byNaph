@@ -60,7 +60,7 @@ def bootstrap_fixture(mode="default", cores=4):
                      load_bootstrap_config=Mock(return_value={"other": "preserved"}),
                      save_bootstrap_config=Mock(return_value=True),
                      _record_bootstrap_exception=Mock())
-    gui = SimpleNamespace(_status_text="Verifying the private runtime…", _skip_updates=True,
+    gui = SimpleNamespace(_status_text="Verifying the private runtime…",
                           _signals=BootstrapDispatcher(), _start_time=time.time(),
                           _closed=False, _spinning=True)
     context = SimpleNamespace(root=ROOT, palette=palette,
@@ -225,20 +225,16 @@ class ControlChecks(unittest.TestCase):
                 self.assertTrue(self.save.call_args.args[0]["shared"]["autosave_enabled"])
                 dialog.close()
 
-    def test_updates_never_ask_and_skip_survives_failed_persistence(self):
+    def test_updates_never_ask_and_cannot_be_skipped(self):
+        from PySide6.QtWidgets import QCheckBox
         dialog, gui, namespace = bootstrap_fixture()
         self.own(dialog)
-        namespace["save_bootstrap_config"].return_value = False
-        dialog.skip_cb.setChecked(False)
-        self.assertFalse(gui._skip_updates)
         dialog.show()
-        # Updates install without a question; Skip Updates is the only control.
+        # Updates always install by themselves: no question, and no Skip Updates box to stop them.
         self.assertFalse(hasattr(dialog, "ask_update"))
-        self.assertIn("automatically", dialog.skip_cb.toolTip())
-        dialog.skip_cb.setChecked(True)
-        self.assertTrue(gui._skip_updates)
-        self.assertTrue(dialog.skip_cb.isChecked())
-        self.assertIn("not saved for next launch", dialog.log_edit.toPlainText())
+        self.assertFalse(hasattr(dialog, "skip_cb"))
+        self.assertEqual([box.text() for box in dialog.findChildren(QCheckBox)], ["Auto-Scroll"])
+        namespace["save_bootstrap_config"].assert_not_called()
 
     def test_combo_lists_drop_from_their_field_with_theme_rows(self):
         """Lists opened over their combo, and a bare container sheet cleared their fill."""
@@ -717,6 +713,78 @@ class ControlChecks(unittest.TestCase):
                 self.assertEqual(controls.upload_speed_combo.isEnabled(), enabled)
         self.backend.set_upload_speed.assert_not_called()
         self.backend.set_baud_rate.assert_not_called()
+
+    def test_esp_boards_list_the_six_upload_speeds_and_others_only_their_own(self):
+        from main.core import board_catalog
+        from main.core.constants import ESP_UPLOAD_SPEEDS
+        rows = {"Arduino Uno": {"platform": "atmelavr", "board": "uno", "framework": "arduino", "upload_speed": 115200},
+                "ESP": self.info}
+        window = self.own(QMainWindow())
+        controls = ControlsBar(self.backend, window)
+        combo = controls.upload_speed_combo
+        esp = [str(speed) for speed in ESP_UPLOAD_SPEEDS]
+
+        def items():
+            return [combo.itemText(i) for i in range(combo.count())]
+
+        self.backend.set_upload_speed = Mock()
+        with patch.object(board_catalog, "SUPPORTED_BOARDS", rows):
+            # 512000 and the slow rates were offered by an older release.
+            for older in ("512000", "57600", "", "Auto"):
+                self.backend.upload_speed = older
+                controls._update_hardware_defaults_for_board("ESP", update_monitor=False)
+                self.assertEqual((items(), combo.currentText(), combo.isEnabled()), (esp, "460800", True))
+            controls._update_hardware_defaults_for_board("Arduino Uno", update_monitor=False)
+            self.assertEqual((items(), combo.currentText(), combo.isEnabled()), (["115200"], "115200", False))
+            self.backend.upload_speed = "1500000"
+            controls._update_hardware_defaults_for_board("ESP", update_monitor=False)
+            self.assertEqual((items(), combo.currentText()), (esp, "1500000"))
+        self.backend.set_upload_speed.assert_not_called()
+        widest = max(combo.fontMetrics().horizontalAdvance(text) for text in esp)
+        self.assertGreaterEqual(controls._get_adaptive_upload_speed_width(), widest + 40,
+                                "Seven digits fit beside the padding and the arrow")
+
+    def test_two_megabaud_uploads_ask_first_in_plain_words(self):
+        from main.core import board_catalog
+        window = self.own(QMainWindow())
+        controls = ControlsBar(self.backend, window)
+        combo = controls.upload_speed_combo
+        self.backend.upload_speed = "921600"
+        self.backend.set_upload_speed = Mock(
+            side_effect=lambda value: setattr(self.backend, "upload_speed", str(value)))
+        with patch.object(board_catalog, "SUPPORTED_BOARDS", {"ESP": self.info}):
+            controls._update_hardware_defaults_for_board("ESP", update_monitor=False)
+        questions = []
+
+        def answer(choice):
+            def respond():
+                box = getattr(controls, "_speed_prompt", None)
+                if box is None or not box.isVisible():
+                    QTimer.singleShot(10, respond)
+                    return
+                questions.append(f"{box.text()} {box.informativeText()}")
+                next(button for button in box.buttons() if button.text().startswith(choice)).click()
+            QTimer.singleShot(0, respond)
+
+        answer("Keep 921600")
+        combo.setCurrentText("2000000")
+        self.assertEqual(combo.currentText(), "921600", "No: the speed in use stays")
+        self.backend.set_upload_speed.assert_not_called()
+        answer("Use 2000000")
+        combo.setCurrentText("2000000")
+        self.assertEqual(combo.currentText(), "2000000")
+        self.backend.set_upload_speed.assert_called_once_with("2000000")
+        # Already chosen: another ESP board keeps it without asking again.
+        with patch.object(board_catalog, "SUPPORTED_BOARDS", {"ESP": self.info}):
+            controls._update_hardware_defaults_for_board("ESP", update_monitor=False)
+        self.assertEqual((combo.currentText(), len(questions)), ("2000000", 2))
+        combo.setCurrentText("1500000")
+        self.assertEqual((self.backend.upload_speed, len(questions)), ("1500000", 2), "1500000 asks nothing")
+        text = " ".join(questions).lower()
+        self.assertIn("uncommon", text)
+        self.assertIn("might be unstable", text)
+        for word in ("danger", "damage", "brick", "harm", "risk"):
+            self.assertNotIn(word, text)
 
     def test_action_gating_updates_from_signals_and_after_busy_phase(self):
         from main.qt.signals import MCUSignals
@@ -1226,6 +1294,126 @@ class ControlChecks(unittest.TestCase):
         self.assertEqual(view.firstVisibleBlock().text(), visible)
         self.assertLess(bar.value(), bar.maximum())
 
+    def test_a_following_log_keeps_the_end_when_its_width_changes(self):
+        # A new width rewraps the lines, and Qt then moves the scrollbar itself to keep the top
+        # line in place. That is not the reader scrolling: a following view stays at the end.
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QAbstractSlider
+        from main.qt.log_follow import LogFollow
+        view = self.own(QPlainTextEdit())
+        view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        view.resize(520, 220)
+        view.show()
+        follow = LogFollow(view, resume_on_release=True)
+        bar = view.verticalScrollBar()
+        # Lines of different lengths take more rows at every narrower width.
+        line = "Setup line {} wraps onto more rows as the window narrows:" + " detail" * 9
+        for number in range(60):
+            with follow.update():
+                view.appendPlainText(line.format(number) + " more" * (number % 7) * 6)
+        QTest.qWait(20)
+        self.assertEqual(bar.value(), bar.maximum())
+
+        def last_line_shown():
+            block = view.document().lastBlock()
+            bottom = view.blockBoundingGeometry(block).translated(view.contentOffset()).bottom()
+            return bottom <= view.viewport().height() + 0.5
+
+        for width in (380, 300, 460, 340, 520):
+            view.resize(width, 220)
+            QTest.qWait(20)
+            self.assertEqual(bar.value(), bar.maximum(), width)
+            self.assertFalse(follow.user_scrolled_up, width)
+            self.assertTrue(last_line_shown(), width)
+            with follow.update():
+                view.appendPlainText(f"Output after resizing to {width}")
+            QTest.qWait(20)
+            self.assertEqual(bar.value(), bar.maximum(), width)
+            self.assertTrue(last_line_shown(), width)
+        # A reader who scrolled up stays on their line through the same changes.
+        for _ in range(3):
+            bar.triggerAction(QAbstractSlider.SliderAction.SliderPageStepSub)
+        self.assertTrue(follow.user_scrolled_up)
+        visible = view.firstVisibleBlock().text()
+        view.resize(360, 220)
+        QTest.qWait(20)
+        with follow.update():
+            view.appendPlainText("Output while reading earlier lines")
+        QTest.qWait(20)
+        self.assertEqual(view.firstVisibleBlock().text(), visible)
+        self.assertLess(bar.value(), bar.maximum())
+        # Scrolling back to the end follows again.
+        bar.triggerAction(QAbstractSlider.SliderAction.SliderToMaximum)
+        QTest.qWait(20)
+        self.assertFalse(follow.user_scrolled_up)
+        view.resize(500, 220)
+        QTest.qWait(20)
+        self.assertEqual(bar.value(), bar.maximum())
+
+    def test_bootstrap_keeps_the_last_line_in_reach(self):
+        # Through window resizes, with Auto-Scroll on and off, in both views.
+        from PySide6.QtCore import QPoint, QPointF
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtTest import QTest
+        dialog, _, _ = bootstrap_fixture()
+        self.own(dialog)
+        dialog.resize(720, 520)
+        dialog.show()
+        QTest.qWait(30)
+
+        def feed(first, count):
+            for step in range(first, first + count):
+                dialog._on_log(f"[{step}/9] Preparing stage {step}", "section")
+                for line in range(4):
+                    # Lines of different lengths take more rows at every narrower width.
+                    dialog._on_log(f"Line {step}.{line}: a setup line that wraps onto more rows as the window "
+                                   f"narrows, with a progress bar ▰▰▰▱▱ at step {step}" + " detail" * (8 * line + 4),
+                                   ("ok", "normal", "dim", "warn")[line])
+                QTest.qWait(1)
+
+        def last_line_shown(view):
+            block = view.document().lastBlock()
+            while block.isValid() and not block.text().strip():
+                block = block.previous()
+            bottom = view.blockBoundingGeometry(block).translated(view.contentOffset()).bottom()
+            return bottom <= view.viewport().height() + 0.5
+
+        def wheel_to_end(view):
+            point = QPointF(40, 40)
+            bar = view.verticalScrollBar()
+            for _ in range(300):
+                before = bar.value()
+                APP.sendEvent(view.viewport(), QWheelEvent(
+                    point, view.viewport().mapToGlobal(point), QPoint(), QPoint(0, -120), Qt.MouseButton.NoButton,
+                    Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False))
+                APP.processEvents()
+                if bar.value() == before == bar.maximum():
+                    break
+
+        for details in (False, True):
+            dialog._set_details_expanded(details)
+            dialog.auto_scroll_cb.setChecked(True)
+            view = dialog.log_edit if details else dialog.summary_edit
+            feed(1, 4)
+            for width, height in ((520, 500), (680, 460), (460, 520), (720, 520)):
+                dialog.resize(width, height)
+                QTest.qWait(30)
+                feed(5, 1)
+                QTest.qWait(30)
+                self.assertTrue(last_line_shown(view), (details, width))
+            # Off: output stays below the reader until they scroll, and the end is always reachable.
+            dialog.auto_scroll_cb.setChecked(False)
+            feed(6, 3)
+            dialog._on_log("The very last line", "ok")
+            QTest.qWait(30)
+            self.assertFalse(last_line_shown(view), details)
+            dialog.resize(600, 500)
+            QTest.qWait(30)
+            wheel_to_end(view)
+            QTest.qWait(30)
+            self.assertTrue(last_line_shown(view), details)
+            self.assertIn("The very last line", view.toPlainText())
+
     def test_bootstrap_whole_failed_step_after_trim_and_progress_updates(self):
         for mode in Theme.PALETTES:
             dialog, _, _ = bootstrap_fixture(mode)
@@ -1285,27 +1473,15 @@ class ControlChecks(unittest.TestCase):
         self.assertEqual(output.getvalue(), "Earlier output\n\033[91mActual failure\033[0m\n"
                          "\033[91mLater failure output\033[0m\nNext step\n")
 
-    def test_bootstrap_hidden_window_stays_hidden_and_skip_persists(self):
+    def test_bootstrap_hidden_window_stays_hidden(self):
         dialog, gui, namespace = bootstrap_fixture()
         self.own(dialog)
         dialog.hide()
         dialog._unset_topmost()
         self.assertFalse(dialog.isVisible())
-        dialog.skip_cb.setChecked(False)
-        self.assertFalse(gui._skip_updates)
-        namespace["save_bootstrap_config"].assert_called_once_with({"other": "preserved", "skip_updates": False})
         self.assertFalse(dialog._spinner_timer.isActive())
         dialog._on_close()
         self.assertFalse(dialog._clock_timer.isActive())
-
-    def test_bootstrap_skip_write_failure_keeps_explicit_choice_for_current_run(self):
-        dialog, gui, namespace = bootstrap_fixture(cores=6)
-        self.own(dialog)
-        namespace["save_bootstrap_config"].return_value = False
-        dialog.skip_cb.setChecked(False)
-        self.assertFalse(dialog.skip_cb.isChecked())
-        self.assertFalse(gui._skip_updates)
-        self.assertIn("was not saved", dialog.log_edit.toPlainText())
 
     def test_bootstrap_config_failure_preserves_existing_json(self):
         source = ROOT / "src/modules/bootstrap.py"
@@ -1318,10 +1494,10 @@ class ControlChecks(unittest.TestCase):
             namespace = dict(globals(), BOOTSTRAP_CONFIG_FILE=config_file)
             exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
             save = namespace["save_bootstrap_config"]
-            self.assertTrue(save({"skip_updates": True}))
+            self.assertTrue(save({"offline_enabled": True}))
             before = config_file.read_bytes()
             with patch("os.replace", side_effect=OSError("Read-only filesystem")):
-                self.assertFalse(save({"skip_updates": False}))
+                self.assertFalse(save({"offline_enabled": False}))
             self.assertEqual(config_file.read_bytes(), before)
             self.assertEqual(list(Path(temporary).glob("*.tmp")), [])
 

@@ -319,6 +319,7 @@ def build(output, report_dir):
                 if item.filename.startswith('LAUNCHER/'):
                     launcher_entries[item.filename] = bundle.read(item), (item.external_attr >> 16) & 0o777
             validate_launcher_entries(launcher_entries)
+            # Updates are always on; the key stays false for older Bootstraps that still read it.
             if json.loads(bundle.read('src/dbs/bootstrap_config.json')) != {'skip_updates': False}:
                 raise RuntimeError('The committed Bootstrap defaults are not fresh.')
             if json.loads(bundle.read(BUNDLED_REVISION)).get('commit') != commit:

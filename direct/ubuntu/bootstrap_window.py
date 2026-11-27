@@ -130,14 +130,12 @@ def build_window(subtitle: str):
                 self._on_close()
 
     state = SimpleNamespace(_start_time=time.time(), _status_text="Starting…", _overall_progress=0.0,
-                            _skip_updates=False, _closed=False, _signals=BootstrapDispatcher())
+                            _closed=False, _signals=BootstrapDispatcher())
     palette, mode = resolve_theme()
     context = SimpleNamespace(root=ROOT, palette=palette, resolve_theme=lambda: (palette, mode),
                               load_config=load_config, save_config=save_config,
                               record_exception=record_exception)
     window = UbuntuBootstrapDialog(state, context)
-    # Updates are always on: there is no choice to make in this window.
-    window.skip_cb.hide()
     window.set_subtitle(subtitle)
     return window, state
 

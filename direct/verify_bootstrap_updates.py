@@ -272,7 +272,7 @@ class UpdateChecks(unittest.TestCase):
         return namespace, reachable, checks, summary
 
     def test_gui_update_stage_is_top_level_once_for_enabled_skipped_and_offline(self):
-        for skip, online, expected in (("Skip Updates enabled", False, "skipped"),
+        for skip, online, expected in (("MCU_FLASH_GUI_SKIP_UPDATES is enabled", False, "skipped"),
                                        (None, False, "offline"), (None, True, "up_to_date")):
             with self.subTest(result=expected):
                 callbacks = []
@@ -298,7 +298,7 @@ class UpdateChecks(unittest.TestCase):
                 namespace["_pip_upgrade"].assert_not_called()
 
     def test_console_update_stage_has_one_heading_even_when_skipped(self):
-        namespace, reachable, checks, _summary = self.update_stage_fixture(None, skip="Skip Updates enabled")
+        namespace, reachable, checks, _summary = self.update_stage_fixture(None, skip="MCU_FLASH_GUI_SKIP_UPDATES is enabled")
         self.assertEqual(namespace["run_update_checks"](), "skipped")
         namespace["section"].assert_called_once_with("Checking for updates")
         reachable.assert_not_called()
@@ -308,7 +308,7 @@ class UpdateChecks(unittest.TestCase):
         namespace, _, checks, _ = self.update_stage_fixture(None, online=True)
         skipped, release, started = threading.Event(), threading.Event(), threading.Event()
         self.addCleanup(release.set)
-        namespace["_update_check_skip_reason"] = lambda: "live checkbox" if skipped.is_set() else None
+        namespace["_update_check_skip_reason"] = lambda: "MCU_FLASH_GUI_SKIP_UPDATES is enabled" if skipped.is_set() else None
 
         def slow_check():
             started.set()
@@ -337,11 +337,11 @@ class UpdateChecks(unittest.TestCase):
         namespace["_pip_upgrade"].assert_called_once_with("websockets")
         namespace["ok"].assert_called_once_with("websockets upgraded and verified at 17.2")
 
-    def test_skip_chosen_during_installs_stops_the_remaining_ones(self):
+    def test_a_skip_found_during_installs_stops_the_remaining_ones(self):
         gui = SimpleNamespace(log_section=Mock(), root=SimpleNamespace(after=Mock()))
         namespace, _, _, summary = self.update_stage_fixture(gui, online=True)
         skipped = [False]
-        namespace["_update_check_skip_reason"] = lambda: "live checkbox" if skipped[0] else None
+        namespace["_update_check_skip_reason"] = lambda: "MCU_FLASH_GUI_SKIP_UPDATES is enabled" if skipped[0] else None
         summary.return_value = [{"name": "websockets", "installed": "17.1", "latest": "17.2"},
                                 {"name": "psutil", "installed": "7.0", "latest": "7.1"}]
         namespace["_pip_installed_version"] = Mock(return_value=None)
@@ -354,13 +354,24 @@ class UpdateChecks(unittest.TestCase):
         self.assertEqual(namespace["run_update_checks"](), "skipped")
         namespace["_pip_upgrade"].assert_called_once_with("websockets")
 
-    def test_updates_default_on_and_no_view_can_ask_first(self):
+    def test_updates_are_always_on_and_no_view_can_ask_first(self):
         bootstrap = (ROOT / "src/modules/bootstrap.py").read_text(encoding="utf-8-sig")
         view = (ROOT / "src/modules/bootstrap_qt.py").read_text(encoding="utf-8-sig")
-        self.assertIn("DEFAULT_SKIP_UPDATES = False", bootstrap)
         for source in (bootstrap, view):
             self.assertNotIn("Would you like to install them now?", source)
             self.assertNotIn("def ask_update", source)
+            self.assertNotIn("Skip Updates", source, "nothing offers to turn updates off")
+        # Only the environment, for offline deployments, skips them; an old saved choice does not.
+        tree = ast.parse(bootstrap)
+        [node] = [node for node in tree.body
+                  if isinstance(node, ast.FunctionDef) and node.name == "_update_check_skip_reason"]
+        namespace = {"os": os}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "bootstrap.py", "exec"), namespace)
+        reason = namespace["_update_check_skip_reason"]
+        with patch.dict(os.environ, {"MCU_FLASH_GUI_SKIP_UPDATES": ""}):
+            self.assertIsNone(reason(SimpleNamespace(_skip_updates=True)))
+        with patch.dict(os.environ, {"MCU_FLASH_GUI_SKIP_UPDATES": "1"}):
+            self.assertEqual(reason(), "MCU_FLASH_GUI_SKIP_UPDATES is enabled")
 
     def test_update_target_display_expands_alias_without_changing_installer_target(self):
         namespace, _reachable, checks, _summary = self.update_stage_fixture(None, online=False)

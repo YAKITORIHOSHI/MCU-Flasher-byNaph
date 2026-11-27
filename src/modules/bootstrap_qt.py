@@ -124,12 +124,16 @@ class BootstrapDialog(GlassDialog):
 
         self.setWindowIcon(icon("brand"))
 
-        # Initial 1-second topmost elevation
-        try:
-            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            QTimer.singleShot(1000, self._unset_topmost)
-        except Exception:
-            pass
+        # Windows only: a launch from a console can open setup behind it, so it starts on
+        # top for one second. Elsewhere, changing that flag on a shown window destroys and
+        # recreates its native window, which Linux desktops draw as a black frame blinking
+        # around it; Wayland cannot keep a window on top anyway.
+        if sys.platform == "win32":
+            try:
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+                QTimer.singleShot(1000, self._unset_topmost)
+            except Exception:
+                pass
 
         # Checkbox checkmark icons (dynamic multi-user discovery)
         icons_dir = self._context.root / "src" / "assets" / "icons"
@@ -482,12 +486,7 @@ class BootstrapDialog(GlassDialog):
         footer_layout.addWidget(self.overall_row)
         options_row = QHBoxLayout()
         options_row.setSpacing(12)
-        self.skip_cb = QCheckBox("Skip Updates", footer)
-        self.skip_cb.setChecked(bool(gui._skip_updates))
-        self.skip_cb.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.skip_cb.setToolTip("Updates install automatically. Check this to skip them; missing or broken required dependencies are still repaired.")
-        self.skip_cb.toggled.connect(self._on_skip_toggled)
-        options_row.addWidget(self.skip_cb)
+        # Updates always install by themselves, so there is nothing to skip here.
         self.auto_scroll_cb = QCheckBox("Auto-Scroll", footer)
         self.auto_scroll_cb.setChecked(True)
         self.auto_scroll_cb.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -697,16 +696,6 @@ class BootstrapDialog(GlassDialog):
 
     def _tick_spinner(self):
         pass  # Status is a static vector; actual progress drives its state.
-
-    def _on_skip_toggled(self, checked: bool):
-        self._gui._skip_updates = checked
-        try:
-            c = self._context.load_config()
-            c["skip_updates"] = checked
-            if not self._context.save_config(c):
-                raise OSError("Configuration is not writable")
-        except (OSError, TypeError, ValueError) as error:
-            self._on_log(f"Skip Updates applies for this run but was not saved for next launch: {error}.", "warn")
 
     def _on_autoscroll_toggled(self, checked: bool):
         self._follow.set_enabled(checked)

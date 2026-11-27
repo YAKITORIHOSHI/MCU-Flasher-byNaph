@@ -216,11 +216,16 @@ class AIChangesChecks(unittest.TestCase):
         self.queue("Unknown.h")
         with patch("main.core.config.get_monitor_font_size", return_value=11):
             panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
-        groups = [panel._tree.topLevelItem(i) for i in range(panel._tree.topLevelItemCount())]
-        self.assertEqual([item.text(0) for item in groups].count("CLI"), 1)
-        self.assertEqual([item.text(0) for item in groups].count("Assistant"), 1)
-        self.assertEqual([item.text(0) for item in groups].count("Unknown source"), 2)
+        # None of these prompts came from an assistant session of this app.
+        other = panel._tree.topLevelItem(0)
+        self.assertEqual(other.text(0), "Other changes")
+        groups = [other.child(i) for i in range(other.childCount())]
+        sources = [item.toolTip(0).splitlines()[0] for item in groups]
+        self.assertEqual(sources.count("Source: CLI"), 1)
+        self.assertEqual(sources.count("Source: Assistant"), 1)
+        self.assertEqual(sources.count("Source: Unknown source"), 2)
         self.assertTrue(any("Fix the sensor setup" in item.toolTip(0) for item in groups))
+        self.assertIn("Fix the sensor setup", [item.text(0) for item in groups], "A prompt row shows its prompt")
         records = self.manager.get_ai_changes()
         self.assertEqual(next(item for item in records if item["groupId"] == "cli-1")["prompt"], known["prompt"])
         output = ROOT / "temp/audit/ai-source-checks"
@@ -322,8 +327,23 @@ class AIChangesChecks(unittest.TestCase):
         with patch("main.core.config.get_monitor_font_size", return_value=11):
             panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
         self.addCleanup(panel.deleteLater)
-        titles = sorted(panel._tree.topLevelItem(i).text(0) for i in range(panel._tree.topLevelItemCount() - 1))
-        self.assertEqual(titles, ["Assistant", "Assistant (Claude)", "CLI (Codex)"])
+        other = panel._tree.topLevelItem(0)
+        sources = sorted(other.child(i).toolTip(0).splitlines()[0] for i in range(other.childCount()))
+        self.assertEqual(sources, ["Source: Assistant", "Source: Assistant (Claude)", "Source: CLI (Codex)"])
+        # A session heading names the coding CLI that ran it, and where.
+        from main.qt.ai_changes_panel import session_title
+        started = "2026-11-27T06:02:00+00:00"
+        local = __import__("datetime").datetime.fromisoformat(started).astimezone()
+        when = local.strftime("%H:%M") if local.date() == __import__("datetime").date.today() else local.strftime("%b %d, %H:%M")
+        for record, heading in (
+                ({"sessionId": "s", "sessionStarted": started, "sessionSource": "assistant", "sessionAgent": "claude"},
+                 f"Claude session · {when}"),
+                ({"sessionId": "s", "sessionStarted": started, "sessionSource": "cli", "sessionAgent": "codex"},
+                 f"Codex terminal session · {when}"),
+                ({"sessionId": "s", "sessionSource": "assistant"}, "Assistant session"),
+                ({"sessionId": "s", "sessionSource": "cli", "sessionStarted": "not a time"}, "Terminal session"),
+                ({"sessionAgent": "claude"}, "Other changes")):
+            self.assertEqual(session_title(record), heading)
         title = AIChangesPanel._prompt_title
         self.assertEqual(title({"promptSource": "mixed", "promptSourceVersion": 1, "promptAgents": ["codex", "claude"]}),
                          "Mixed sources (Codex, Claude)")
@@ -368,6 +388,108 @@ class AIChangesChecks(unittest.TestCase):
         self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["promptSource"], "mixed")
         self.assertEqual(self.manager.consume_ai_edit_snapshot(str(path))["prompt"],
                          "Edit sensor from terminal\n\nUpdate sensor from assistant")
+
+    def test_each_assistant_session_is_a_section_of_its_own(self):
+        import json
+        cache = self.root / ".mcu_flasher_build_cache"
+        cache.mkdir(exist_ok=True)
+
+        def prompt(tracker, text):
+            tracker.feed(text + "\r")
+            return json.loads((cache / "ai_prompt.json").read_text(encoding="utf-8"))
+
+        claude = PromptInputTracker(self.root, source="assistant", agent="claude")
+        blink = prompt(claude, "Blink the onboard LED")
+        serial = prompt(claude, "Print the LED state")
+        self.assertEqual(blink["session"], serial["session"], "One run of an agent is one session")
+        self.assertIsInstance(blink["sessionStarted"], float)
+        for command in ("/new", "/clear", "/reset", "/resume 3f2a", "/NEW"):
+            before = claude.session
+            claude.feed(command + "\r")
+            self.assertNotEqual(claude.session, before, command)
+        for line, active in (("/help", True), ("/compact", True), ("/new", False), ("/newer", True)):
+            before = claude.session
+            claude.feed(line + "\r", active=active)
+            self.assertEqual(claude.session, before, line)
+        self.assertEqual(json.loads((cache / "ai_prompt.json").read_text(encoding="utf-8"))["id"], serial["id"],
+                         "A command is never a prompt")
+        button = prompt(claude, "Add a button")
+        restarted = PromptInputTracker(self.root, source="assistant", agent="claude")
+        sensor = prompt(restarted, "Read the sensor")
+        self.assertEqual(len({blink["session"], button["session"], sensor["session"]}), 3)
+        # A terminal: each run of an agent is a session, and overflow keeps the session.
+        terminal = PromptInputTracker(self.root)
+        terminal.follow("codex", (41, 1.0))
+        first = terminal.session
+        terminal.follow("codex", (41, 1.0))
+        terminal.reset()
+        self.assertEqual(terminal.session, first)
+        terminal.follow("codex", (42, 9.0))
+        self.assertNotEqual(terminal.session, first)
+        self.assertEqual(terminal.agent, "codex")
+
+        for name, context in (("Blink.ino", blink), ("led.h", serial), ("button.cpp", button), ("sensor.cpp", sensor)):
+            self.queue(name, prompt=context)
+        self.queue("Blink.ino", before="new\n", after="newer\n", prompt=sensor)
+        self.queue("outside.txt")
+        records = self.manager.get_ai_changes()
+        self.assertEqual([record.get("sessionId") for record in records],
+                         [blink["session"]] * 2 + [button["session"]] + [sensor["session"]] * 2 + [None])
+        self.assertEqual((records[0]["sessionAgent"], records[0]["sessionSource"]), ("claude", "assistant"))
+        self.assertTrue(records[0]["sessionStarted"].endswith("+00:00"))
+        self.assertEqual(records[4]["groupPrompt"], "Read the sensor", "A row names its own prompt")
+        reopened = self.reopen()
+        self.assertEqual([record.get("sessionId") for record in reopened.get_ai_changes()],
+                         [record.get("sessionId") for record in records], "Sessions survive a restart")
+
+        with patch("main.core.config.get_monitor_font_size", return_value=11):
+            panel = AIChangesPanel(SimpleNamespace(ai_review_manager=self.manager))
+        self.addCleanup(panel.deleteLater)
+        sections = [panel._tree.topLevelItem(i) for i in range(panel._tree.topLevelItemCount() - 1)]
+        self.assertEqual(sections[0].text(0), "Other changes")
+        self.assertEqual(panel._tree.topLevelItem(len(sections)).text(0), "Earlier sessions")
+        self.assertEqual([section.childCount() for section in sections], [1, 1, 1, 2])
+        self.assertEqual([sections[1].child(i).text(0) for i in range(2) if i < sections[1].childCount()],
+                         ["Read the sensor"])
+        self.assertEqual([sections[3].child(i).text(0) for i in range(2)], ["Print the LED state", "Blink the onboard LED"])
+        self.assertTrue(all(section.font(0).bold() for section in sections))
+        self.assertTrue(all(section.text(0).startswith("Claude session · ") for section in sections[1:]))
+        self.assertEqual(len({section.text(0) for section in sections}), 4, "Every section has a heading of its own")
+        self.assertIn("2 prompts · 2 edits", sections[3].toolTip(0))
+        for row, label in ((sections[3], "Revert session (2 edits)…"), (sections[3].child(0), "Revert prompt (1 edit)…"),
+                           (sections[1], "Revert session (2 edits)…"), (sections[3].child(0).child(0), "Revert edit…")):
+            menu = panel._session_menu(row)
+            self.addCleanup(menu.deleteLater)
+            self.assertEqual([action.text() for action in menu.actions()], [label])
+        ids, title = panel._revert_targets(sections[3])
+        self.assertEqual(set(ids), {records[0]["id"], records[1]["id"]})
+        self.assertIn("Claude session", title)
+        self.assertEqual(panel._revert_targets(sections[3].child(1)),
+                         ([records[0]["id"]], "Revert 1 AI edit from the prompt “Blink the onboard LED”"))
+        panel.resize(900, 420)
+        panel.show()
+        APP.processEvents()
+        output = ROOT / "temp/audit/ai-changes"
+        output.mkdir(parents=True, exist_ok=True)
+        self.assertTrue(panel.grab().save(str(output / "sessions.png")))
+        panel.close()
+
+    def test_session_fields_are_checked_and_merges_keep_the_first_session(self):
+        from main.core.ai_review import _context_session, _merge_prompt_context
+        good = {"session": "a1-B_2", "sessionStarted": 1795000000.5, "source": "cli", "sourceVersion": 1, "agent": "codex"}
+        self.assertEqual(_context_session(good), {"sessionId": "a1-B_2", "sessionStarted": "2026-11-18T11:06:40+00:00",
+                                                  "sessionSource": "cli", "sessionAgent": "codex"})
+        for session in ("", "../x", "a" * 65, "x y", 7, None, ["a"]):
+            self.assertEqual(_context_session(dict(good, session=session)), {}, session)
+        for started in (True, -1, 0, float("nan"), float("inf"), 1e300, "1795000000"):
+            self.assertNotIn("sessionStarted", _context_session(dict(good, sessionStarted=started)), started)
+        self.assertNotIn("sessionAgent", _context_session(dict(good, agent="not-an-agent")))
+        merged = _merge_prompt_context(dict(good, id="first", prompt="First"),
+                                       {"id": "second", "prompt": "Second", "session": "other", "source": "assistant",
+                                        "sourceVersion": 1, "sessionStarted": 1.0})
+        self.assertEqual((merged["id"], merged["session"], merged["sessionAgent"], merged["sessionSource"]),
+                         ("first", "a1-B_2", "codex", "cli"))
+        self.assertEqual(_context_session(merged)["sessionStarted"], "2026-11-18T11:06:40+00:00")
 
     def test_new_watcher_does_not_attribute_edits_to_a_prior_session_prompt(self):
         path = self.root / "Sensor.cpp"
@@ -510,8 +632,10 @@ class AIChangesChecks(unittest.TestCase):
                     panel.show()
                     APP.processEvents()
                     self.assertEqual(panel._tree.columnCount(), 2)
-                    group = panel._tree.topLevelItem(0)
-                    self.assertEqual(group.text(0), "CLI")
+                    section = panel._tree.topLevelItem(0)
+                    self.assertEqual((section.text(0), section.childCount()), ("Other changes", 1))
+                    group = section.child(0)
+                    self.assertEqual(group.text(0), "Update controller and header")
                     self.assertEqual(group.childCount(), 3)
                     for index in range(group.childCount()):
                         card = group.child(index)
@@ -522,11 +646,11 @@ class AIChangesChecks(unittest.TestCase):
                         self.assertIn(record["path"], card.toolTip(0))
                         self.assertIn(timestamp, card.toolTip(0))
                         self.assertEqual(card.text(1), record["status"].capitalize())
-                        self.assertGreaterEqual(panel._tree.columnWidth(0) - panel._tree.indentation() * 2,
+                        self.assertGreaterEqual(panel._tree.columnWidth(0) - panel._tree.indentation() * 3,
                                                 panel._tree.fontMetrics().horizontalAdvance(timestamp))
                         self.assertGreaterEqual(panel._tree.visualItemRect(card).height(),
                                                 panel._tree.fontMetrics().height() * 2)
-                    first_column_space = panel._tree.columnWidth(0) - panel._tree.indentation() * 2
+                    first_column_space = panel._tree.columnWidth(0) - panel._tree.indentation() * 3
                     self.assertGreater(first_column_space, panel._tree.fontMetrics().horizontalAdvance("Header.h"))
                     self.assertTrue(panel.grab().save(str(output / f"{mode}-files-{width}.png")))
             card = group.child(0)

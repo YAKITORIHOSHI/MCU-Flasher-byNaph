@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: "Maintain the assistant's chip-style agent list, expandable notification and device cards, glass AI review bars, two-column Lite Resources, fitted Lite pickers, aligned ticket filters and count tiles, automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
+description: "Maintain the assistant's chip-style agent list and its disclaimer panel, expandable notification and device cards, glass AI review bars, two-column Lite Resources, fitted Lite pickers, aligned ticket filters and count tiles, automatic Lite board targets, readable Auto-Save fields, safe glass-page lifetimes, installed Lite resources, native sample viewing and readable short ticket dashboards. Maintain modal Lite dialogs with compact action rows, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher glass workspaces, popovers and menus, round close marks for terminals and notices, short snapshot entrance motion and compact tab reveal, paper Developer Access dropdowns, in-button save spinners and stable badge layouts, responsive editor/terminal surfaces, quiet Assistant loading without counters and dedicated ticket creation forms."
 license: Complete terms in LICENSE.txt
 ---
 
@@ -9,7 +9,13 @@ license: Complete terms in LICENSE.txt
 The assistant list (`main/qt/agent_chooser.py`) is drawn as a chip with one lead per
 agent: names without "CLI", `(Built-in)` beside OpenCode and an italic green
 `(Downloaded)` beside the other agents found on the computer. It is still until a choice
-changes. Notification and device cards (`main/qt/card_browser.py`) keep one
+changes; one click on a row starts that agent, and right-click offers Uninstall. The top
+strip (44 px) holds pin 1, the "AI CLI" silkscreen and a 24 px circled i with even room
+around it. The i opens the disclaimer, never a hover card: a near-solid sheet of the theme's
+surface over a veil that covers the whole list, with a red "Disclaimer" heading (the theme's
+readable error ink), the purpose lines in bold and a round close mark that turns red under the
+pointer. The project selector's Cloud section uses the same liquid glass as Settings: glass
+inputs, rimmed list rows and liquid buttons with an accent primary. Notification and device cards (`main/qt/card_browser.py`) keep one
 selectable document with painted glass sheets and an arrow per card. The AI review
 bar uses frosted capsules (`--ai-bar`, `--btn-*`) without blur on constrained PCs.
 

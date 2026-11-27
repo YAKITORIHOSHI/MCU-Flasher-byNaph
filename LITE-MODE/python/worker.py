@@ -28,11 +28,11 @@ BUILD_SOURCE_EXTENSIONS = {".ino", ".cpp", ".c"}
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 SOURCE_REFRESH_SECONDS = 2.0
 MAX_FRAME = 256 * 1024
-# The rates Lite's menus offer, as listed in src/preferences.rs.
-# Exactly the Arduino IDE Serial Monitor's rates, as in main.core.constants.
+# The rates Lite's menus offer, as listed in src/preferences.rs and main.core.constants:
+# the Arduino IDE Serial Monitor's rates plus 1500000, and the ESP upload speeds.
 MONITOR_RATES = frozenset({300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880,
-                           115200, 230400, 250000, 460800, 500000, 921600, 1000000, 2000000})
-UPLOAD_RATES = frozenset({9600, 19200, 57600, 115200, 230400, 460800, 512000, 921600})
+                           115200, 230400, 250000, 460800, 500000, 921600, 1000000, 1500000, 2000000})
+UPLOAD_RATES = frozenset({115200, 230400, 460800, 921600, 1500000, 2000000})
 
 
 def window_speeds(state):
@@ -55,6 +55,24 @@ def upload_speed_value(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def fixed_upload_speed(info):
+    """What Upload speed shows when this board's speed is not the window's to choose.
+
+    None: no board yet, or an ESP serial board, whose speed is chosen from the menu.
+    0: the board uploads through its own USB or programmer recipe, with no serial speed.
+    Otherwise the rate its bootloader uses (Arduino UNO: 115200), exactly as uploads use it.
+    """
+    from main.core.target_profile import requires_upload_port, serial_upload_speed
+    if not info:
+        return None
+    platform = str(info.get("platform") or "").lower()
+    if (platform in {"espressif32", "espressif8266"} and info.get("backend") != "arduino-cli"
+            and requires_upload_port(info)):
+        return None
+    speed = serial_upload_speed(info)
+    return int(speed) if speed else 0
 
 
 def developer_launch_options():
@@ -594,7 +612,9 @@ class Worker:
         self.output.send("state", {
             "busy": self.busy(), "board": self.api.current_board,
             "port": self.api.current_port, "baud": self.api.current_baud,
-            "upload_speed": upload_speed_value(self.api.upload_speed), "starting": self.starting_up(),
+            "upload_speed": upload_speed_value(self.api.upload_speed),
+            "fixed_upload_speed": fixed_upload_speed(self.api._resolve_board_info()),
+            "starting": self.starting_up(),
             "monitor": self.api.serial_running, "phase": self.api.active_operation or "idle",
             "stop": self.stop_state(),
             "developer_access": self.developer_process is not None and self.developer_process.poll() is None,

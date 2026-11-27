@@ -1,6 +1,6 @@
 ---
 name: mcu-flash-gui-dev
-description: "Maintain unplug-safe serial ports, one row per board, the AI Assistant's agent list, reverts of AI edits, prompt-free Windows setup with winget, expandable notification and device cards, skills for every installed assistant, compile-only code checks, Lite's remembered window, fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
+description: "Maintain unplug-safe serial ports, one row per board, the AI Assistant's agent list (one-click start, Uninstall, disclaimer panel), per-session AI Changes and reverts of AI edits, the Windows Start menu entry, logs that keep following through resizes, prompt-free Windows setup with winget, expandable notification and device cards, skills for every installed assistant, compile-only code checks, Lite's remembered window, fitted Lite pickers, owned folder browsing, validated sketch routing, aligned ticket dashboards, SMB-safe saves and release packaging, automatic Lite board targets, readable Auto-Save fields, safe renderer lifetimes, legacy-console Bootstrap and one shared main/Lite tool store, conservative duplicate cleanup, compact progress, Bootstrap preparation, installed resources, native sample viewing and laptop Developer Access. Maintain multi-window Lite with serial ports shared safely with the main app, modal Lite dialogs, responsive Lite controls, visible Stop, native Windows Developer Access and modeless portals alongside MCU Flasher's shipping PySide6 GUI, native keyboard ownership, overload/include/library navigation, glass popovers and menus with snapshot entrance motion, compact tab reveal, pairing and atomic saves, Developer Access draft creation and cross-device ticket deletion, persistent Ubuntu setup, forward-only source updates, complete nobuild uploads with monitor-captured restarts, passive serial monitoring, clickable self-closing terminals, GUI-thread stall profiling, session-scoped AI review, restartable interface size, incremental source updates with visible progress, installed-file reuse and one update at a time, Ubuntu's Bootstrap window on first runs too, quick Bootstrap with first-compile board tools, updates without questions, toolbar group spacing and platform verification."
 ---
 
 # MCU Flash GUI Development & Maintenance Skill
@@ -87,7 +87,7 @@ need long-path support there. Updates, releases, source copies and both cleaners
 
 **Reverting AI edits.** `main/core/ai_revert.py` reads the saved sessions and plans;
 `AIReviewManager.plan_ai_revert`/`apply_ai_revert` write through the ordinary journal.
-AI Changes offers Revert edit and Revert session, also for earlier sessions, with a
+AI Changes offers Revert edit, Revert prompt and Revert session, also for earlier sessions, with a
 preview (`ai_revert_dialog.py`) that names what cannot be undone because it changed
 since. The history stays in the sketch, hidden on every host (`hide_ai_history`), and
 fixtures never touch a real one. Verify `verify_ai_revert.py`.
@@ -131,10 +131,17 @@ itself never gets sketch skills; its tracked `.agents/skills` copies are refresh
 `_sketch_skills()` by hand. Windows starts each assistant through `dedicated_AI.py`,
 Ubuntu through `prepare_context`; both regenerate first. Verify `verify_ai_agents.py`.
 
-**AI Changes.** Group and session rows are never the selection: one click opens or
+**AI Changes.** Each AI session is its own bold section (Session → prompt → file), with
+"Other changes" and "Earlier sessions" after it. `PromptInputTracker` starts a new session
+on `/new`, `/clear`, `/reset` or `/resume`, on a restart, when `follow()` sees another
+process and, on Windows, when `follow_run(run_identity(pid))` sees a new child of the cmd
+loop, or on `/exit`; it writes `session`/`sessionStarted` to `ai_prompt.json`. `ai_review`
+stores `sessionId`, `sessionStarted`, `sessionSource`, `sessionAgent` and `groupPrompt` on
+each record, and the backups carry them as `AI-Session*` headers (`parse_edit_header`).
+Group and session rows are never the selection: one click opens or
 closes them (`setExpandsOnDoubleClick(False)`), the previews keep the last file row
-(`_card`), and right-click offers **Revert session** (`_session_menu`, built separately so
-checks can choose from it). Titles name the coding CLI: `PromptInputTracker(agent=...)`
+(`_card`), and right-click offers **Revert session** or **Revert prompt** (`_session_menu`,
+built separately so checks can choose from it). Titles name the coding CLI: `PromptInputTracker(agent=...)`
 writes `agent` to `ai_prompt.json`, `ai_review` keeps `promptAgents`, and a terminal names
 its CLI by executable (`assistant_process_agent`; Hermes runs as Python, so only the
 assistant pane names it). Verify `verify_ai_changes.py`, `verify_ai_revert.py` and
@@ -162,15 +169,33 @@ same applies to the page's `--btn-top`. A tint change moves `_GLASS_WORST`; let
 `verify_glass.py` tell you the new values. The assistant list draws each tool's icon from
 `src/assets/icons/agents/<id>.svg` (LobeHub icons, MIT; one-colour marks take the theme's
 ink) in a glass tile, falling back to the socketed chip when an icon is missing. Rows carry no
-tooltip (no hover card). The board's silkscreen reads "AI CLI"; its top-right `_InfoMark`
-(circled i) shows `disclaimer_text()` on hover and click: every listed tool and its owner,
-built from `AGENTS`, and that none was made by or belongs to MCU Flasher's developer. `AgentPicker` checks `ai_agents.internet_available()` on its worker
+tooltip (no hover card); one click on a row starts that agent (`start_requested`, no Start
+button), and right-click (`row_menu`) offers **Uninstall** for a found, non-built-in agent:
+`AgentPicker.uninstall` plans on a worker with `src/modules/agent_removal.py`, which removes
+only layouts it recognizes, owned by the user and inside home, the agents folder or
+LOCALAPPDATA, refuses while any process runs from them, keeps settings and sign-ins
+(`~/.claude`, `~/.codex`) and explains npm/Homebrew installs instead; the question defaults to
+Cancel. The board's silkscreen reads "AI CLI" in a 44 px top strip (`_HEADER`) with the 24 px
+circled i (`_InfoMark`) centred in it. A click opens `_Disclaimer`, a sheet over a veil that
+covers the whole list: a red "Disclaimer" heading (`themed_log_colors(mode)["error"]`) and
+`disclaimer_text()` with its purpose lines in bold, every listed tool and its owner built from
+`AGENTS`. Its close mark, Escape, Enter or a click on the veil puts it away; Tab stays on the
+sheet, the arrows and page keys scroll its text, and hiding the list closes it. `AgentPicker` checks `ai_agents.internet_available()` on its worker
 after detection; offline, `AgentChooser.set_online(False)` replaces the list with a notice and
 "Try again", and the picker rechecks every 8 s. Verifiers that build an assistant panel patch
 `internet_available`, so no check touches the network. The project selector and Settings use
 the same tokens: primary actions are accent glass (`accent_*`, `TEXT_BRIGHT` ink), never
 `BTN_COMPILE` blocks; Settings buttons use `liquid_button_sheet` and its groups a lit sheet
-with `sheet_spec` on top.
+with `sheet_spec` on top. The project selector's Cloud section (`cloud_sketch_panel.py`) is the
+same liquid glass: glass inputs with selection colours, a list with hover and selected rims,
+`liquid_button_sheet(mode, "glass", radius=11)` buttons and an accent `cloudPrimary` button.
+
+**Start menu (Windows).** After the update checks, Setup runs `src/modules/start_menu.py` in
+a child process (`python -I start_menu.py LINK TARGET ICON WORKDIR`, standard library only)
+to write "MCU Flasher by Naph.lnk" to the user's Programs folder (FOLDERID_Programs), aimed at
+`LAUNCHER/WINDOWS.exe` with `src/assets/mcu_icon.ico` and the app's AppUserModelID, so
+Windows Search finds it. It is written beside as `.partial` and replaced in place; a failure is
+a warning, never a stop. Verify `verify_start_menu.py`.
 
 **Actual Board for every family.** ESP chips are read by esptool (`_probe_chip_info`, plus
 the USB bridge row). Every other board goes through `_probe_board_details` in both upload
@@ -197,11 +222,22 @@ Never write `or "default"` for a missing theme; only an explicit "dark" means Sm
 A fresh profile's Settings must show the theme in use, or Save switches it
 (`verify_fresh_theme.py`).
 
-**Baud menus are the Arduino IDE's.** `ARDUINO_IDE_BAUD_RATES` in `main/core/constants.py`
-(300 … 2000000, as arduino/serial-monitor offers) is the only monitor list; the toolbar,
-Serial panel, Lite's `preferences::BAUD_RATES` and Lite's worker match it exactly
-(`verify_baud_rates.py`). Never add a rate to a baud menu. Upload speeds are a separate
-list capped by `MAX_UPLOAD_SPEED` (921600).
+**Baud menus are the Arduino IDE's.** `MONITOR_BAUD_RATES` in `main/core/constants.py` is
+`ARDUINO_IDE_BAUD_RATES` (300 … 2000000, as arduino/serial-monitor offers) plus 1500000, the
+one rate the user chose to add; the toolbar, Serial panel, Lite's `preferences::BAUD_RATES`
+and Lite's worker match it exactly (`verify_baud_rates.py`). Never add any other rate, or a
+rate to one menu alone. ESP upload speeds are the separate `ESP_UPLOAD_SPEEDS` (115200,
+230400, 460800, 921600, 1500000, 2000000, capped by `MAX_UPLOAD_SPEED`); choosing
+`UNCOMMON_UPLOAD_SPEED` (2000000) asks first, calmly, and No keeps the previous speed. Boards
+such as the Arduino UNO keep their own upload speed. Main and Lite behave alike.
+
+**Following logs keep the end through resizes.** `LogFollow` (`main/qt/log_follow.py`) treats a
+viewport resize of a following view as Qt's own move: a new width rewraps the text and Qt keeps
+the top line, which once stopped Bootstrap's summary (and any wrapped log) short of its last
+lines as if Auto-Scroll were off. `_keep_end_through_resize` holds the follow until it settles at
+the end; reader input (`actionTriggered`, wheel, keys, a held bar) ends the hold. Verify
+`verify_controls.py` (`test_a_following_log_keeps_the_end_when_its_width_changes`,
+`test_bootstrap_keeps_the_last_line_in_reach`).
 
 **Bootstrap heals an interrupted board stage.** `src/modules/bootstrap_recovery.py` keeps a
 safe point (`<core>/.mcu-board-prep.json`: owner and each child by PID and creation time).
@@ -412,13 +448,15 @@ for a full clone. `_exclusive_update` (flock/msvcrt on `update.lock` in the stat
 folder) serializes `apply_source_update`; a waiting launch reports it, then
 returns `strategy="already-installed"` when the record names the candidate.
 
-Windows: `DEFAULT_SKIP_UPDATES = False`; `run_update_checks()` installs what it
-finds without `ask_update` (removed from `BootstrapGUI` and `BootstrapDialog`) or
-the restart message box. Skip Updates remains the opt-out, rechecked before each
-install. Verify bootstrap_updates and controls.
+Windows: updates are always on. `run_update_checks()` installs what it finds
+without `ask_update` (removed from `BootstrapGUI` and `BootstrapDialog`) or the
+restart message box, and Bootstrap has no Skip Updates box; a saved
+`skip_updates` from an older version is ignored. Only `MCU_FLASH_GUI_SKIP_UPDATES=1`
+(offline deployments) skips them, rechecked before each install. Verify
+bootstrap_updates and controls.
 
 Ubuntu window: `direct/ubuntu/bootstrap_window.py` runs `BootstrapDialog` on the
-private runtime (Skip Updates hidden) and displays JSON lines from the launcher:
+private runtime and displays JSON lines from the launcher:
 the dispatcher names plus `finish`, `cancellable`, `subtitle`. Closing works
 while cancellable (a download: the client sees the exit as Cancel after
 `STARTUP_FAILURE_SECONDS`) or after finish; a failure stays open; success closes
@@ -738,10 +776,9 @@ and preserve source buffers/history. Unsupported targets or ambiguous types use
 conservative candidates; never guess a compiler context or install on navigation. Verify
 `verify_library_samples` and `verify_package_browser`.
 Update questions remain topmost until dismissed (including native Windows
-fallback). Skip Updates covers optional source/component updates; recheck live
-choice during probes, after prompts and before each optional install. Keep the
-current-run choice after preference-write failure and report next-launch limits.
-Required repair is independent. Verify `verify_bootstrap_updates`,
+fallback). Optional source/component updates always install; only
+`MCU_FLASH_GUI_SKIP_UPDATES` skips them, rechecked during probes and before each
+optional install. Required repair is independent. Verify `verify_bootstrap_updates`,
 `verify_app_update` and native prompt ownership in `verify_controls`.
 Keep terminal loader/empty frame selectors scoped to their object names.
 The outer horizontal splitter uses explicit compact column minima and ignores

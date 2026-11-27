@@ -25,8 +25,9 @@ uses the same build tools, boards and libraries. To open and use it, see the
 - **Monitors.** Separate Build and Serial monitors with Follow, Copy and Clear.
   Connecting never resets the board. The Serial monitor holds its baud rate; the
   Connection panel holds the port, upload speed and send controls. The baud menu
-  is the Arduino IDE's (300 to 2000000); upload speeds run up to 921600,
-  including 512000.
+  is the Arduino IDE's (300 to 2000000) plus 1500000. ESP boards upload at
+  115200 to 2000000, and 2000000 asks first because some adapters cannot keep
+  up; other boards, such as the Arduino UNO, keep their own upload speed.
 - **Shared tools.** Lite and the main app use one package store, so boards and
   libraries prepared in either are available in both.
 - **Resources.** Lists installed boards and libraries with their example

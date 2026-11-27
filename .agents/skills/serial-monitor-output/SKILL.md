@@ -5,7 +5,7 @@ description: "How MCU Flasher's Serial Monitor shows a sketch's Serial output: t
 
 # Serial Monitor output
 
-- **Baud**: after an upload the monitor follows the sketch's `Serial.begin(rate)`. Keep one literal rate in a root source (for example `Serial.begin(115200);`). The monitor offers exactly the Arduino IDE's rates: 300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880, 115200, 230400, 250000, 460800, 500000, 921600, 1000000 and 2000000; use one of them.
+- **Baud**: after an upload the monitor follows the sketch's `Serial.begin(rate)`. Keep one literal rate in a root source (for example `Serial.begin(115200);`). The monitor offers the Arduino IDE's rates and 1500000: 300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880, 115200, 230400, 250000, 460800, 500000, 921600, 1000000, 1500000 and 2000000; use one of them.
 - **Input**: the Send bar adds the line ending the user picked (none, newline, carriage return or both). Read with `Serial.readStringUntil('\n')` and `trim()` the result.
 - **Timestamps** are added by the monitor when the user turns them on; do not print your own unless asked.
 - **Clearing**: `\033[2J` clears the monitor's view when that option is on.

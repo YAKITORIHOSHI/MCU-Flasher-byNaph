@@ -12,7 +12,10 @@ and `verify_ai_agents` (files and fake installers; never a real download or sign
 `internet_available` is patched), plus `verify_bootstrap_recovery` (a disposable store under
 `temp/`: interrupted preparations, leftover children, staged board cores),
 `verify_chip_probe` (simulated Optiboot and STK500v2 loaders, never a real port),
-`verify_tooltips` and `verify_baud_rates`. Settings fixtures patch every getter the
+`verify_tooltips` and `verify_baud_rates`, `verify_agent_maintenance` (a fake HOME and agents
+folder; uninstall plans and removal, never the real installs) and `verify_start_menu` (the
+child-process call everywhere; real shortcuts in a temporary folder on Windows only, never the
+account's Start menu). Settings fixtures patch every getter the
 dialog reads (`get_ai_assistant_scale` too): the user's own settings must not decide a
 result. A check inside a timer that answers a modal prompt clicks it in `finally`, or a
 failure hangs the verifier instead of failing it.
@@ -165,7 +168,10 @@ checks assert unchanged status text over time and retained slow-start help.
 - `verify_app_update.py` `IncrementalSourceChecks` cover installed-file reuse,
   never-installed paths and the one-update lock with real Git and a local bare
   server; `verify_bootstrap_updates.py` and `verify_controls.py` check that no
-  view asks before installing updates.
+  view asks before installing updates and that nothing offers to skip them (only
+  `MCU_FLASH_GUI_SKIP_UPDATES` does). `verify_controls.py` also checks that a following
+  log keeps its last line in view through width changes, and that with Auto-Scroll off
+  the last Bootstrap line stays reachable.
 
 ## Upload, restart, monitor, ticket and terminal gates
 

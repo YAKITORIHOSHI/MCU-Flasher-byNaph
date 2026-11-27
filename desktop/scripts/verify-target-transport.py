@@ -24,11 +24,19 @@ strict_patterns = [node for node in tree.body if isinstance(node, ast.Assign)
 target_checks = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "target_problem"]
 assert len(strict_patterns) == len(target_checks) == 1
 constant_tree = ast.parse((ROOT / "main/core/constants.py").read_text(encoding="utf-8"))
-constants = [node for node in constant_tree.body if isinstance(node, ast.Assign)
-             and any(isinstance(target, ast.Name) and target.id == "MAX_UPLOAD_SPEED" for target in node.targets)]
-assert len(constants) == 1
-maximum_upload = ast.literal_eval(constants[0].value)
-namespace = dict(Mapping=dict, MAX_UPLOAD_SPEED=maximum_upload, re=re)
+
+
+def constant(name):
+    found = [node for node in constant_tree.body if isinstance(node, ast.Assign)
+             and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)]
+    assert len(found) == 1, name
+    return ast.literal_eval(found[0].value)
+
+
+maximum_upload = constant("MAX_UPLOAD_SPEED")
+esp_upload_speeds = constant("ESP_UPLOAD_SPEEDS")
+assert max(esp_upload_speeds) == maximum_upload
+namespace = dict(Mapping=dict, ESP_UPLOAD_SPEEDS=esp_upload_speeds, re=re)
 exec(compile(ast.Module(body=board_patterns + functions, type_ignores=[]), str(source), "exec"), namespace)
 exec(compile(ast.Module(body=strict_patterns + target_checks, type_ignores=[]), str(source), "exec"), namespace)
 
@@ -53,6 +61,7 @@ protocols = ["stlink", "jlink", "cmsis-dap", "dfu", "picotool", "mbed", "uf2", "
 platforms = ["espressif32", "espressif8266", "atmelavr", "raspberrypi", "ststm32", "", None,
              "ESPRESSIF32", "espressif32 "]
 values = ["", None, False, True, 0, 1, -1, 115200, 921600, 3000000, 9999999999, 10000000000,
+          57600, 512000, 999999, 1500000, 2000000, "2000001",
           115200.0, " 0921601 ", "\x1c115200\x1f", "١١٥٢٠٠", "１２３", "1e6", "00000000001",
           [], [115200], {}, {"value":115200}]
 cases = []
@@ -137,6 +146,7 @@ print(json.dumps(dict(reference="main/core/target_profile.py", functions=NAMES, 
                           reason="Target must be an object" if field == "info" else
                           "Truthy non-string protocols are refused instead of formatting Python representations into INI")
                           for field, count in refusals.items()],
-                      maximumEspBaud=maximum_upload, platform=sys.platform, architecture=platform.machine(),
+                      maximumEspBaud=maximum_upload, espUploadSpeeds=list(esp_upload_speeds),
+                      platform=sys.platform, architecture=platform.machine(),
                       passed=True, hardwareAccess=False, productionImports=False,
                       fullTargetValidationQualified=False)))

@@ -16,7 +16,9 @@ the reference codebase, optimized for PySide6 Qt:
 """
 from __future__ import annotations
 
+import math
 import os
+import re
 import sys
 import time
 import json
@@ -274,6 +276,35 @@ def _context_agents(context: dict | None) -> set[str]:
     return {value for value in values if value in _AGENT_IDS}
 
 
+_SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _context_session(context: dict | None) -> dict:
+    """The assistant session a prompt context came from, as record fields; {} for none.
+
+    A session is one run of a coding agent, from its start, a restart or a /new or
+    /clear to the next: AI Changes shows each in its own section.
+    """
+    context = context or {}
+    session = context.get("session")
+    if not isinstance(session, str) or not _SESSION_ID.fullmatch(session):
+        return {}
+    fields = {"sessionId": session}
+    started = context.get("sessionStarted")
+    if isinstance(started, (int, float)) and not isinstance(started, bool) and math.isfinite(started) and started > 0:
+        try:
+            fields["sessionStarted"] = datetime.fromtimestamp(started, timezone.utc).isoformat(timespec="seconds")
+        except (OverflowError, OSError, ValueError):
+            pass
+    source = context.get("sessionSource", context.get("source"))
+    if source in ("cli", "assistant"):
+        fields["sessionSource"] = source
+    agent = context.get("sessionAgent", context.get("agent"))
+    if agent in _AGENT_IDS:
+        fields["sessionAgent"] = agent
+    return fields
+
+
 def _merge_prompt_context(first: dict | None, latest: dict | None) -> dict | None:
     if first == latest:
         return first
@@ -285,9 +316,18 @@ def _merge_prompt_context(first: dict | None, latest: dict | None) -> dict | Non
     prompts = list(dict.fromkeys(str((context or {}).get("prompt", ""))
                                  for context in (first, latest)))
     source = "external" if "external" in sources else "mixed" if len(sources) > 1 else next(iter(sources), "external")
-    return {"id": (first or latest or {}).get("id", ""),
-            "prompt": "\n\n".join(prompt for prompt in prompts if prompt)[:2000],
-            "sourceVersion": 1, "source": source, "sources": sorted(sources), "agents": sorted(agents)}
+    merged = {"id": (first or latest or {}).get("id", ""),
+              "prompt": "\n\n".join(prompt for prompt in prompts if prompt)[:2000],
+              "sourceVersion": 1, "source": source, "sources": sorted(sources), "agents": sorted(agents)}
+    # The group keeps the first prompt's id, so it keeps that prompt's session too.
+    session = _context_session(first or latest)
+    if session:
+        merged.update(session=session["sessionId"], sessionSource=session.get("sessionSource"),
+                      sessionAgent=session.get("sessionAgent"))
+        started = (first or latest or {}).get("sessionStarted")
+        if started is not None:
+            merged["sessionStarted"] = started
+    return merged
 
 
 class AIReviewManager:
@@ -775,6 +815,12 @@ class AIReviewManager:
         payload.update(groupId=group, prompt=title or "Assistant changes", promptSourceVersion=1,
                        promptSources=sorted(sources), promptSource=("external" if "external" in sources else
                            "mixed" if len(sources) > 1 else prompt_source), promptAgents=sorted(agents))
+        # Its section in AI Changes: the assistant session that sent the prompt, if any,
+        # and its row: that prompt alone, while the review keeps every prompt behind the file.
+        for field in ("sessionId", "sessionStarted", "sessionSource", "sessionAgent"):
+            payload.pop(field, None)
+        payload.update(_context_session(context))
+        payload["groupPrompt"] = str(context.get("prompt", ""))[:2000] or title or "Assistant changes"
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         record = dict(payload, id=record_id, groupId=group, prompt=title or "Assistant changes",
                       timestamp=existing.get("timestamp", stamp) if existing else stamp,

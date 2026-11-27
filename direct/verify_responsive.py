@@ -1085,7 +1085,7 @@ class QtResponsiveChecks(ControlChecks):
                 setup._on_update_block("package_progress", "  – Unpacking 60%\n")
                 setup._on_progress(60)
                 pump()
-                for field in (setup.timer_lbl, setup.status_lbl, setup.skip_cb, setup.auto_scroll_cb, setup.pct_lbl, setup.prog_bar):
+                for field in (setup.timer_lbl, setup.status_lbl, setup.auto_scroll_cb, setup.pct_lbl, setup.prog_bar):
                     self.contained(field, setup)
                 self.assertGreater(setup.summary_edit.height(), 40)
                 self.contained(setup.details_btn, setup)
@@ -1146,7 +1146,7 @@ class QtResponsiveChecks(ControlChecks):
                         view = setup.log_edit if details else setup.summary_edit
                         self.assertGreaterEqual(view.viewport().height(), view.fontMetrics().lineSpacing() * 2)
                         for field in (setup.title_lbl, setup.timer_chip, setup.details_btn, setup.status_lbl,
-                                      setup.pct_lbl, setup.prog_bar, setup.skip_cb, setup.auto_scroll_cb, view):
+                                      setup.pct_lbl, setup.prog_bar, setup.auto_scroll_cb, view):
                             self.contained(field, setup)
                         for row in setup.package_rows:
                             if row.isVisible():

@@ -25,9 +25,11 @@ see the [README](README.md).
   flash, crystal and MAC; AVR boards (Uno, Nano, Mega and others) their chip by
   signature, its flash, SRAM and EEPROM, and the bootloader version; any USB board
   its bridge or USB chip and serial number, with the board's clock and memory.
+  ESP boards upload at 115200 to 2000000 (2000000 asks first, since some USB
+  adapters cannot keep up); other boards, such as the Uno, keep their own speed.
 - **Serial Monitor.** Opening, reconnecting and closing never reset the board, and
   a board that is unplugged and plugged back in is picked up again.
-  The baud menu is the Arduino IDE's (300 to 2000000), and the rate follows the
+  The baud menu is the Arduino IDE's (300 to 2000000) plus 1500000, and the rate follows the
   sketch's `Serial.begin()`, with timestamps, pause,
   copy and send. Firmware can color its output with the full 16-color ANSI
   palette, text and backgrounds, normal and bright. After an upload the boot log
@@ -44,15 +46,17 @@ see the [README](README.md).
   preserving the temporary original and refusing occupied destinations.
 - **Terminals and AI assistant.** PowerShell and CMD on Windows, Bash on Linux,
   and the coding assistant you choose: OpenCode (built in), Claude, Codex,
-  Antigravity or Hermes, downloaded only when you ask for it. The list shows only
-  while the computer is online and returns by itself when it reconnects; its ⓘ
-  states that each tool belongs to its own maker, not to MCU Flasher. On Linux and macOS,
+  Antigravity or Hermes, downloaded only when you ask for it. One click on a tool
+  starts it, and right-click offers to uninstall a downloaded one, keeping its
+  settings and sign-ins. The list shows only while the computer is online and
+  returns by itself when it reconnects; its ⓘ opens a disclaimer stating that each
+  tool belongs to its own maker, not to MCU Flasher. On Linux and macOS,
   Hermes and the tools it brings (about 3 GB) stay inside the app's `.ai-agents`
   folder. Each assistant on the computer gets the sketch's instructions and skills
   where it reads them, and Settings sizes the assistant's text. Its file edits are
-  highlighted for you to accept or reject; AI Changes groups them by prompt and
-  names the assistant that made them, and an edit or a whole session can be
-  reverted later. Beside its status, one button returns to the list and
+  highlighted for you to accept or reject; AI Changes gives each assistant session
+  its own section, groups its edits by prompt and names the assistant that made
+  them, and an edit, a prompt or a whole session can be reverted later. Beside its status, one button returns to the list and
   **Restart** opens a fresh session.
 - **Notifications and devices.** Both are cards with a short line and details on
   request.
@@ -68,7 +72,8 @@ see the [README](README.md).
 - **Setup and repair.** The first launch prepares a private Python runtime, the
   required packages, the board list and the default boards' tools (Arduino
   Uno, NodeMCU and ESP32 Dev Module), plus the CP210x and CH34x USB drivers on
-  Windows, in its own setup window. Any other board's compiler and uploader
+  Windows, in its own setup window, and adds MCU Flasher to the Windows Start menu
+  so Windows Search finds it. Any other board's compiler and uploader
   download the first time you compile for it. Windows components come from winget
   where it offers them, and a normal start asks for no permission. A repair launch
   rebuilds anything missing. If setup is ended part-way (for example from Task
@@ -79,7 +84,8 @@ see the [README](README.md).
   steel edge in Frosted Light (the default), smoked blue glass in Glass Dark and teal
   sea glass in Solarized Dark, with caught light along the top of every sheet and
   button and the theme's accent along the bottom. The AI review bar and the editor
-  follow the same glass, as do the project selector and Settings, and the assistant
+  follow the same glass, as do the project selector with its Cloud sketches and
+  Settings, and the assistant
   list shows each tool's own icon. Tooltips are the theme's glass too. Also an
   automatic interface size, and layouts that fit monitors from 800×600 to 8K,
   including half-screen tiling.

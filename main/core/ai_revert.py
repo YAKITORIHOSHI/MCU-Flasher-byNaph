@@ -102,7 +102,10 @@ def parse_edit_header(text: str) -> dict:
     return {"reviewId": fields.get("Review-ID", ""), "path": fields.get("File", ""), "project": fields.get("Project", ""),
             "status": fields.get("Status", "pending"), "timestamp": fields.get("Created", ""),
             "updatedAt": fields.get("Updated", ""), "beforeExists": fields.get("Before-Exists", "True") != "False",
-            "afterExists": fields.get("After-Exists", "True") != "False"}
+            "afterExists": fields.get("After-Exists", "True") != "False",
+            # The assistant session that made the edit; empty in records saved before sessions.
+            "sessionId": fields.get("AI-Session", ""), "sessionStarted": fields.get("AI-Session-Started", ""),
+            "sessionSource": fields.get("AI-Session-Source", ""), "sessionAgent": fields.get("AI-Agent", "")}
 
 
 def project_path(record: dict, project: Path) -> Path | None:

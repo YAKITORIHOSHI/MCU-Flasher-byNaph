@@ -52,9 +52,9 @@ if not callable(getattr(Theme, "active_theme", None)):
 
     Theme.apply_theme = _compat_apply_theme
 
-from main.core.constants import ARDUINO_IDE_BAUD_RATES
+from main.core.constants import MONITOR_BAUD_RATES
 
-_BAUD_RATES = [str(rate) for rate in ARDUINO_IDE_BAUD_RATES]
+_BAUD_RATES = [str(rate) for rate in MONITOR_BAUD_RATES]
 _LINE_ENDINGS = [("None", "none"), ("\\n", "nl"), ("\\r", "cr"), ("\\r\\n", "both")]
 
 _SERIAL_CONTROLS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff]")

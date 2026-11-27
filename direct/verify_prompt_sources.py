@@ -103,6 +103,73 @@ class PromptSourceChecks(unittest.TestCase):
         self.assertEqual(self.payload()["sourceVersion"], 1)
         self.assertEqual(self.payload()["prompt"], PROMPT)
 
+    def test_each_run_of_an_agent_is_a_session_of_its_own(self):
+        import subprocess
+        from src.modules.ai_prompt_context import assistant_process, run_identity
+        tracker = PromptInputTracker(self.root, source="assistant", agent="claude")
+        first = tracker.session
+        for identity in (None, (10, 1.0), (10, 1.0), None):
+            tracker.follow_run(identity)
+            self.assertEqual(tracker.session, first, identity)
+        tracker.follow_run((11, 2.0))
+        self.assertNotEqual(tracker.session, first)
+        self.assertEqual(tracker.agent, "claude", "The assistant keeps the agent it started")
+        self.assertEqual((run_identity(0), run_identity(-4), assistant_process(0)), (None, None, (None, None)))
+
+        def identity_of(script):
+            # A shell that runs one program, as the Windows assistant's loop does.
+            shell = subprocess.Popen(["sh", "-c", script], stdin=subprocess.DEVNULL)
+            self.addCleanup(shell.wait)
+            self.addCleanup(shell.kill)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    import psutil
+                    if psutil.Process(shell.pid).children():
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.02)
+            return run_identity(shell.pid)
+
+        program = identity_of("sleep 30 & wait")
+        self.assertIsNotNone(program)
+        self.assertEqual(len(program), 2)
+        self.assertIsNone(identity_of("timeout 30 sleep 30 & wait"), "The loop's own pause is not a run")
+
+        # The Windows assistant: its loop starts the agent again after it ends.
+        tree = ast.parse((ROOT / "src/modules/dedicated_AI.py").read_text(encoding="utf-8-sig"))
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "TerminalServer")
+        pty = SimpleNamespace(pid=4321, write=Mock(), close=Mock())
+        scope = dict(os=os, json=json, time=time, asyncio=asyncio, Path=Path, threading=threading,
+                     PtyProcess=SimpleNamespace(spawn=Mock(return_value=pty)))
+        exec(compile(ast.Module(body=[cls], type_ignores=[]), "<dedicated-session-fixture>", "exec"), scope)
+        server = scope["TerminalServer"](target_dir=str(self.root), command="fixture-opencode")
+        sessions = []
+        runs = iter([(70, 1.0), (70, 1.0), (71, 5.0)])
+
+        class Recorder(FixtureSocket):
+            async def __aiter__(inner):
+                for message in inner.messages:
+                    yield json.dumps(message, ensure_ascii=False)
+                    if (self.cache / "ai_prompt.json").exists():
+                        sessions.append(self.payload()["session"])
+
+        socket = Recorder(dict(type="input", data="Blink the LED\r"), dict(type="input", data="Faster please\r"),
+                          dict(type="input", data="Print the state\r"))
+        with patch.object(threading, "Thread"), \
+                patch("src.modules.ai_prompt_context.run_identity", side_effect=lambda pid: next(runs)) as probe:
+            asyncio.run(server.ws_handler(socket))
+        self.assertEqual({call.args for call in probe.call_args_list}, {(4321,)})
+        self.assertEqual(len(sessions), 3)
+        self.assertEqual(sessions[0], sessions[1], "One run keeps its session")
+        self.assertNotEqual(sessions[1], sessions[2], "The next run is another session")
+        socket = Recorder(dict(type="input", data="/exit\r"))
+        before = self.payload()["session"]
+        with patch.object(threading, "Thread"), patch("src.modules.ai_prompt_context.run_identity", return_value=None):
+            asyncio.run(server.ws_handler(socket))
+        self.assertEqual(self.payload()["session"], before, "/exit itself is never a prompt")
+
     def terminal(self):
         server = project_terminal.ProjectTerminalServer(8765, str(self.root), str(self.root))
         shell = project_terminal.ShellSession(server, "fixture", "pwsh")
@@ -114,7 +181,8 @@ class PromptSourceChecks(unittest.TestCase):
     def send_terminal(self, server, data):
         socket = FixtureSocket(dict(type="input", shell="fixture", data=data))
         # The terminal runs Codex: its executable names the agent.
-        with patch("src.modules.ai_prompt_context.assistant_process_agent", return_value="codex"):
+        # Its process ID tells one run of it from the next.
+        with patch("src.modules.ai_prompt_context.assistant_process", side_effect=lambda pid: ("codex", (pid, 1.0))):
             asyncio.run(server.websocket_handler(socket))
 
     def test_windows_project_terminal_cli_restart_discards_partial_old_prompt(self):
@@ -158,7 +226,7 @@ class PromptSourceChecks(unittest.TestCase):
                 finished.set()
 
             with patch.object(PromptInputTracker, "_publish", publish), \
-                    patch("src.modules.ai_prompt_context.assistant_process_agent", side_effect=AssertionError("Explicit active context needs no scan")):
+                    patch("src.modules.ai_prompt_context.assistant_process", side_effect=AssertionError("Explicit active context needs no scan")):
                 observer.feed(INPUT, 17)
                 self.assertTrue(finished.wait(2), "Observation did not publish after overflow")
                 payload = self.payload()

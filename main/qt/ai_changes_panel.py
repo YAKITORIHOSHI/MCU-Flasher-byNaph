@@ -101,14 +101,63 @@ class CodePreview(QPlainTextEdit):
         self._number_area.update()
 
 
-_EDIT, _SESSION = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1
+# A file row's edit id; a heading's edit ids, newest first; what a heading stands for.
+_EDIT, _SESSION, _KIND = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1, Qt.ItemDataRole.UserRole + 2
 _GROUP_TIP = "Click to show or hide its files. Right-click to revert the whole session."
+_SESSION_TIP = "Click to show or hide its prompts. Right-click to revert the whole session."
+_PROMPT_TIP = "Click to show or hide its files. Right-click to revert this prompt's edits."
+_OTHER_TIP = ("Edits made while no assistant session of MCU Flasher was sending prompts, such as edits "
+              "by an assistant or editor outside it, or edits saved before sessions were recorded.")
 
 
 def _heading(item):
     """A group, session or notice row: it opens and closes but is never the selection."""
     item.setFlags(Qt.ItemFlag.ItemIsEnabled)
     return item
+
+
+def _section(item):
+    """A top-level section heading (a session, or Earlier sessions), in bold."""
+    font = item.font(0)
+    font.setBold(True)
+    item.setFont(0, font)
+    return _heading(item)
+
+
+def _local(stamp, pattern):
+    """An ISO time as this computer's local time, or "" when there is none."""
+    try:
+        return datetime.fromisoformat(str(stamp)).astimezone().strftime(pattern)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
+
+
+def session_title(record, *, seconds=False):
+    """The heading of a record's assistant session: which agent ran it, where, and when.
+
+    The time alone for today's sessions, so the narrow history column keeps it visible;
+    ``seconds`` tells apart two sessions started in the same minute.
+    """
+    if not record.get("sessionId"):
+        return "Other changes"
+    from main.core.ai_agents import AGENTS
+    name = next((spec.name for spec in AGENTS if spec.id == record.get("sessionAgent")), "")
+    terminal = record.get("sessionSource") == "cli"
+    label = (f"{name} terminal session" if terminal else f"{name} session") if name else (
+        "Terminal session" if terminal else "Assistant session")
+    clock = "%H:%M:%S" if seconds else "%H:%M"
+    today = datetime.now().astimezone().strftime("%Y-%m-%d")
+    day = _local(record.get("sessionStarted"), "%Y-%m-%d")
+    started = _local(record.get("sessionStarted"), clock if day == today else f"%b %d, {clock}")
+    return f"{label} · {started}" if started else label
+
+
+def prompt_line(record):
+    """A prompt row's text: the first line of its own prompt, shortened for one row."""
+    prompt = record.get("groupPrompt") or record.get("prompt", "")
+    text = next((line.strip() for line in str(prompt).splitlines() if line.strip()), "")
+    text = text or "Assistant changes"
+    return text if len(text) <= 120 else text[:119].rstrip() + "…"
 
 
 class AIChangesPanel(QWidget):
@@ -260,10 +309,10 @@ class AIChangesPanel(QWidget):
             self._project, self._archive, self._archive_edits = project, None, {}
             self._archive_token += 1
         signature = tuple((item.get("id"), item.get("updatedAt"), item.get("status"), item.get("statusNote"),
-                           item.get("groupId"), item.get("prompt")) for item in records)
+                           item.get("groupId"), item.get("prompt"), item.get("sessionId")) for item in records)
         signature = (project, signature)
         if signature == self._records_signature and self._tree.topLevelItemCount() == len(
-                {item.get("groupId", "") for item in records}) + bool(self._archive_item()):
+                {item.get("sessionId", "") for item in records}) + bool(self._archive_item()):
             # Same cards: keep the tree, its scroll position and selection.
             self._records = {item["id"]: item for item in records}
             self._select(self._current_card())
@@ -275,17 +324,31 @@ class AIChangesPanel(QWidget):
         self._card = None
         self._tree.clear()
         self._records = {item["id"]: item for item in records}
-        groups = {}
+        # Each assistant session is a section of its own, newest first: the prompts it was
+        # sent, and under each prompt the files it edited.
+        sessions, groups = {}, {}
         target = None
         for record in reversed(list(self._records.values())):
-            group_id = record.get("groupId", "")
-            if group_id not in groups:
-                group = _heading(QTreeWidgetItem([self._prompt_title(record), ""]))
-                group.setToolTip(0, f"Source: {self._prompt_title(record)}\n{record.get('prompt', '')}\n\n{_GROUP_TIP}")
-                self._tree.addTopLevelItem(group)
+            session_id = record.get("sessionId", "")
+            session = sessions.get(session_id)
+            if session is None:
+                session = _section(QTreeWidgetItem([session_title(record), ""]))
+                session.setData(0, _KIND, "session")
+                self._tree.addTopLevelItem(session)
+                session.setFirstColumnSpanned(True)
+                session.setExpanded(True)
+                sessions[session_id] = session
+            group_key = (session_id, record.get("groupId", ""))
+            group = groups.get(group_key)
+            if group is None:
+                group = _heading(QTreeWidgetItem([prompt_line(record), ""]))
+                group.setData(0, _KIND, "prompt")
+                group.setToolTip(0, f"Source: {self._prompt_title(record)}\n"
+                                    f"{record.get('groupPrompt') or record.get('prompt', '')}\n\n{_PROMPT_TIP}")
+                session.addChild(group)
                 group.setFirstColumnSpanned(True)
                 group.setExpanded(True)
-                groups[group_id] = group
+                groups[group_key] = group
             try:
                 edited = datetime.fromisoformat(record["timestamp"]).astimezone().strftime("%b %d, %Y %H:%M:%S")
             except (ValueError, KeyError):
@@ -298,10 +361,35 @@ class AIChangesPanel(QWidget):
                 tooltip += f"\n{record['statusNote']}"
             card.setToolTip(0, tooltip)
             card.setToolTip(1, tooltip)
-            groups[group_id].addChild(card)
-            groups[group_id].setData(0, _SESSION, (groups[group_id].data(0, _SESSION) or []) + [record["id"]])
+            group.addChild(card)
+            for heading in (group, session):
+                heading.setData(0, _SESSION, (heading.data(0, _SESSION) or []) + [record["id"]])
             if record["id"] == selected or target is None:
                 target = card
+        titles = [session.text(0) for session in sessions.values()]
+        for session_id, session in sessions.items():
+            first = self._records[session.data(0, _SESSION)[-1]]
+            if session_id and titles.count(session.text(0)) > 1:
+                session.setText(0, session_title(first, seconds=True))
+        # Sessions started within the same second still need headings of their own:
+        # number them from the oldest, which is listed last.
+        seen = {}
+        for session_id, session in reversed(list(sessions.items())):
+            title = session.text(0)
+            seen[title] = seen.get(title, 0) + 1
+            if session_id and seen[title] > 1:
+                session.setText(0, f"{title} ({seen[title]})")
+        for session_id, session in sessions.items():
+            edits, prompts = len(session.data(0, _SESSION) or ()), session.childCount()
+            first = self._records[session.data(0, _SESSION)[-1]]
+            counts = (f"{prompts} prompt{'s' if prompts != 1 else ''} · "
+                      f"{edits} edit{'s' if edits != 1 else ''}")
+            if session_id:
+                started = _local(first.get("sessionStarted"), "%b %d, %Y %H:%M:%S")
+                detail = f"{self._prompt_title(first)}\nStarted: {started}" if started else self._prompt_title(first)
+                session.setToolTip(0, f"{detail}\n{counts}\n\n{_SESSION_TIP}")
+            else:
+                session.setToolTip(0, f"{_OTHER_TIP}\n{counts}\n\n{_SESSION_TIP}")
         if callable(getattr(manager, "list_ai_sessions", None)):
             self._add_archive_item(archive_open)
         self._tree.blockSignals(False)
@@ -336,7 +424,9 @@ class AIChangesPanel(QWidget):
         from main.qt.combo_popup import GlassMenu
         menu = GlassMenu(self._tree)
         count = len(ids)
-        label = "Revert edit…" if item.data(0, _EDIT) else f"Revert session ({count} edit{'s' if count != 1 else ''})…"
+        edits = f"{count} edit{'s' if count != 1 else ''}"
+        label = ("Revert edit…" if item.data(0, _EDIT) else f"Revert prompt ({edits})…"
+                 if item.data(0, _KIND) == "prompt" else f"Revert session ({edits})…")
         action = menu.addAction(label)
         action.setEnabled(not self._busy and callable(getattr(self._backend, "revert_ai_edits", None)))
         # Keep the ids, not the row: a refresh may rebuild the tree while the menu is open.
@@ -356,7 +446,7 @@ class AIChangesPanel(QWidget):
         return last if last is not None and last.data(0, _SESSION) == "archive" else None
 
     def _add_archive_item(self, expanded=False):
-        item = _heading(QTreeWidgetItem(["Earlier sessions", ""]))
+        item = _section(QTreeWidgetItem(["Earlier sessions", ""]))
         item.setToolTip(0, "AI edits kept by earlier sessions of this sketch, stored hidden inside it. Click to show or hide them.")
         item.setData(0, _SESSION, "archive")
         item.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
@@ -408,26 +498,48 @@ class AIChangesPanel(QWidget):
                 date = datetime(year, month, day).strftime("%b %d, %Y")
             except ValueError:
                 date = session["id"].split("/")[0]
-            count = len(session["edits"])
-            node = _heading(QTreeWidgetItem([f"{date} · Session {session['session']} ({count} edit{'s' if count != 1 else ''})", ""]))
-            node.setToolTip(0, _GROUP_TIP)
-            node.setData(0, _SESSION, [edit["id"] for edit in session["edits"] if edit.get("available")])
-            item.addChild(node)
-            node.setFirstColumnSpanned(True)
+            # One saved folder holds one run of MCU Flasher. Its edits made by an assistant
+            # session are listed as that session; older records, saved before sessions were
+            # recorded, as the run.
+            parts = {}
             for edit in session["edits"]:
-                try:
-                    edited = datetime.fromisoformat(edit["timestamp"]).astimezone().strftime("%b %d, %Y %H:%M:%S")
-                except (ValueError, KeyError):
-                    edited = str(edit.get("timestamp", ""))
-                decision = str(edit.get("status") or "pending").replace("-applied", "").capitalize()
-                child = QTreeWidgetItem([f"{Path(edit['path']).name}\n{edited}", decision])
-                child.setData(0, _EDIT, edit["id"])
-                tooltip = f"{edit['path']}\nEdited: {edited}\nDecision: {decision}"
-                if not edit.get("available"):
-                    tooltip += "\nThis file is not a source of this sketch."
-                for column in (0, 1):
-                    child.setToolTip(column, tooltip)
-                node.addChild(child)
+                parts.setdefault(edit.get("sessionId") or "", []).append(edit)
+            for session_id, edits in parts.items():
+                self._add_archived_session(item, date, session, session_id, edits)
+
+    def _add_archived_session(self, item, date, folder, session_id, edits):
+        count = len(edits)
+        counts = f"({count} edit{'s' if count != 1 else ''})"
+        if session_id:
+            first = edits[-1]           # Newest first: the last is the session's first edit.
+            title = session_title({"sessionId": session_id, "sessionStarted": first.get("sessionStarted"),
+                                   "sessionSource": first.get("sessionSource"),
+                                   "sessionAgent": first.get("sessionAgent")})
+            if not _local(first.get("sessionStarted"), "%H:%M"):
+                title = f"{date} · {title}"
+            text = f"{title} {counts}"
+        else:
+            text = f"{date} · Session {folder['session']} {counts}"
+        node = _heading(QTreeWidgetItem([text, ""]))
+        node.setToolTip(0, _GROUP_TIP)
+        node.setData(0, _KIND, "session")
+        node.setData(0, _SESSION, [edit["id"] for edit in edits if edit.get("available")])
+        item.addChild(node)
+        node.setFirstColumnSpanned(True)
+        for edit in edits:
+            try:
+                edited = datetime.fromisoformat(edit["timestamp"]).astimezone().strftime("%b %d, %Y %H:%M:%S")
+            except (ValueError, KeyError):
+                edited = str(edit.get("timestamp", ""))
+            decision = str(edit.get("status") or "pending").replace("-applied", "").capitalize()
+            child = QTreeWidgetItem([f"{Path(edit['path']).name}\n{edited}", decision])
+            child.setData(0, _EDIT, edit["id"])
+            tooltip = f"{edit['path']}\nEdited: {edited}\nDecision: {decision}"
+            if not edit.get("available"):
+                tooltip += "\nThis file is not a source of this sketch."
+            for column in (0, 1):
+                child.setToolTip(column, tooltip)
+            node.addChild(child)
 
     def _read_archived_edit(self, edit_id):
         manager = getattr(self._backend, "ai_review_manager", None)
@@ -462,7 +574,8 @@ class AIChangesPanel(QWidget):
         ids = item.data(0, _SESSION)
         if not isinstance(ids, list) or not ids:
             return [], ""
-        return ids, f"Revert {len(ids)} AI edit{'s' if len(ids) != 1 else ''} from {item.text(0)}"
+        source = f"the prompt “{item.text(0)}”" if item.data(0, _KIND) == "prompt" else item.text(0)
+        return ids, f"Revert {len(ids)} AI edit{'s' if len(ids) != 1 else ''} from {source}"
 
     def _revert_selected(self):
         self._open_revert(*self._revert_targets())
@@ -646,7 +759,7 @@ class AIChangesPanel(QWidget):
         metrics = self._tree.fontMetrics()
         self._tree.setMinimumWidth(0 if compact else (
             metrics.horizontalAdvance("Sep 30, 2000 23:59:59") + metrics.horizontalAdvance("Accepted")
-            + self._tree.indentation() * 2 + 32))
+            + self._tree.indentation() * 3 + 32))   # File rows sit under a session and a prompt.
         row_minimum = self._tree.header().sizeHint().height() + metrics.height() * 2 + self._tree.frameWidth() * 2
         stacked = compact and height >= 240
         short_history = compact and not stacked

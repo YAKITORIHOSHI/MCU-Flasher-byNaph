@@ -129,8 +129,8 @@ version before opening, without asking.
 - Updates wait until every MCU Flasher window is closed.
 - Sketches, settings, build caches and private runtimes are never replaced, and
   a failed update keeps the current version.
-- To turn updates off, choose **Skip Updates** in the Windows Bootstrap window
-  or set `MCU_FLASH_GUI_SKIP_UPDATES=1`.
+- Updates are always on. Offline machines can set `MCU_FLASH_GUI_SKIP_UPDATES=1`
+  to skip the check.
 - An update refreshes the application files only. For a newer Windows runtime,
   download the latest release ZIP.
 

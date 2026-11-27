@@ -31,6 +31,8 @@ class LogFollow(QObject):
         self._text_hold = False
         self._text_hold_following = False
         self._depth = 0
+        # Set from a viewport resize until the view is back at the end: see _keep_end_through_resize.
+        self._keeping_end = False
         self._content_revision = 0
         self._plain = isinstance(view, QPlainTextEdit)
         self._pending_scroll = None
@@ -49,6 +51,8 @@ class LogFollow(QObject):
         self._bar = bar
         bar.valueChanged.connect(self._on_value_changed)
         bar.rangeChanged.connect(self._on_range_changed)
+        # A wheel, key, arrow or track click on the bar is the reader scrolling, never Qt's own move.
+        bar.actionTriggered.connect(self._on_reader_action)
         bar.sliderPressed.connect(self._press)
         bar.sliderReleased.connect(self._release)
         view.selectionChanged.connect(self._selection_changed)
@@ -100,9 +104,34 @@ class LogFollow(QObject):
         return bar.value() == bar.maximum()
 
     def _on_value_changed(self, _value):
+        if self._depth:
+            return
+        if self._keeping_end and not self.scrollbar_held and not self._bar.isSliderDown():
+            # Qt moved the view while rewrapping for a new width; nobody scrolled.
+            self._follow_soon()
+            return
+        self._cancel_settle()
+        self.user_scrolled_up = not self._at_bottom()
+
+    def _on_reader_action(self, _action):
         if not self._depth:
-            self._cancel_settle()
-            self.user_scrolled_up = not self._at_bottom()
+            self._keeping_end = False
+
+    def _keep_end_through_resize(self):
+        """A new viewport width rewraps the text, and Qt then moves the scrollbar itself to keep
+        the top line in place. That is not the reader scrolling: a view that was following stays
+        at the end instead of stopping there, with its last lines out of sight."""
+        if (self.enabled and not self.user_scrolled_up and not self._depth
+                and not self.scrollbar_held and not self._bar.isSliderDown()):
+            self._keeping_end = True
+            self._follow_soon()
+
+    def _follow_soon(self):
+        """Return to the end once Qt has settled the new layout."""
+        if self._pending_scroll is None:
+            self._pending_scroll = self._capture(False, follow_output=False)
+        self._pending_scroll["following"] = True
+        self._settle_timer.start(0)
 
     def _on_content_changed(self, _position, removed, added):
         # QTextDocument.revision() also advances for empty edit blocks. Only
@@ -125,6 +154,7 @@ class LogFollow(QObject):
         return self._plain and self.view.lineWrapMode() != QPlainTextEdit.LineWrapMode.NoWrap
 
     def _cancel_settle(self):
+        self._keeping_end = False
         self._settle_timer.stop()
         self._retire_scroll_states(self._pending_scroll, self._resize_state)
         self._pending_scroll = None
@@ -148,16 +178,16 @@ class LogFollow(QObject):
         if self._depth or self.scrollbar_held or self._bar.isSliderDown():
             return
         if self._pending_scroll is None and self.enabled and not self.user_scrolled_up:
-            self._pending_scroll = self._capture(False, follow_output=False)
             # The reader was following before this range grew. The old maximum
             # is no longer the bottom, so capture's new-range check cannot decide.
-            self._pending_scroll["following"] = True
-        if self._pending_scroll is not None:
+            self._follow_soon()
+        elif self._pending_scroll is not None:
             self._settle_timer.start(0)
 
     def _settle_scroll(self):
         state = self._pending_scroll
         self._pending_scroll = None
+        self._keeping_end = False
         if state is None or not isValid(self.view) or self.scrollbar_held or self._bar.isSliderDown():
             return
         self._depth += 1
@@ -212,6 +242,9 @@ class LogFollow(QObject):
         if not isValid(self.view):
             return False
         kind = event.type()
+        if obj is self.view.viewport() and kind == QEvent.Type.Resize:
+            # Runs before the view's own resize handling, which rewraps and moves the scrollbar.
+            self._keep_end_through_resize()
         if (self.scrollbar_held
                 and kind in (QEvent.Type.ChildRemoved, QEvent.Type.ChildPolished,
                              QEvent.Type.ParentChange)):
@@ -272,9 +305,12 @@ class LogFollow(QObject):
         view = self.view
         bar = view.verticalScrollBar()
         wrapped = self._wrapped()
+        # A return to the end still pending (after a resize or a new range) is following too:
+        # output arriving before it settles must not anchor the view where Qt left it.
+        pending_follow = self._pending_scroll is not None and self._pending_scroll.get("following")
         following = (self.enabled and not self.scrollbar_held and not bar.isSliderDown()
                      and ((self.hold_to_pause and follow_output)
-                          or (not self.user_scrolled_up and (wrapped or self._at_bottom()))))
+                          or (not self.user_scrolled_up and (wrapped or self._at_bottom() or pending_follow))))
         # Appending output already adjusts the widget's active text cursor and
         # selection. Keep only rebuild coordinates as plain values; retaining
         # two extra QTextCursor objects for every output batch makes Qt's native

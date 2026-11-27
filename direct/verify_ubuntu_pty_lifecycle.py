@@ -137,7 +137,7 @@ class UbuntuPtyLifecycleChecks(unittest.TestCase):
             finished.set()
 
         with patch("src.modules.ai_prompt_context.PromptInputTracker._publish", publish), \
-                patch("src.modules.ai_prompt_context.assistant_process_agent", side_effect=AssertionError("Dedicated CLI needs no process scan")):
+                patch("src.modules.ai_prompt_context.assistant_process", side_effect=AssertionError("Dedicated CLI needs no process scan")):
             observer = PromptObserver(self.root, active=True)
             self.addCleanup(observer.close)
             begin = time.monotonic()
@@ -157,8 +157,8 @@ class UbuntuPtyLifecycleChecks(unittest.TestCase):
         owner = threading.get_ident()
         def detect(pid):
             seen.append((threading.get_ident(), pid))
-            return "claude"
-        with patch("src.modules.ai_prompt_context.assistant_process_agent", side_effect=detect), \
+            return "claude", (pid, 1.0)
+        with patch("src.modules.ai_prompt_context.assistant_process", side_effect=detect), \
                 patch("src.modules.ai_prompt_context.PromptInputTracker._publish", side_effect=lambda *_: finished.set()):
             observer = PromptObserver(self.root)
             self.addCleanup(observer.close)

@@ -1296,14 +1296,15 @@ class ProjectTerminalServer:
                         pty = session.pty if session.running else None
                     if pty:
                         try:
-                            from src.modules.ai_prompt_context import PromptInputTracker, assistant_process_agent
+                            from src.modules.ai_prompt_context import PromptInputTracker, assistant_process
                             tracker = getattr(session, "_prompt_tracker", None)
                             if tracker is None:
                                 tracker = session._prompt_tracker = PromptInputTracker(self.target_dir, source="cli")
                             active = getattr(session, "_assistant_input_active", False)
                             if "\r" in clean_data or "\n" in clean_data:
-                                # The terminal names the agent it runs by its executable.
-                                tracker.agent = assistant_process_agent(getattr(pty, "pid", 0))
+                                # The terminal names the agent it runs by its executable;
+                                # each run of an agent is a session of its own.
+                                tracker.follow(*assistant_process(getattr(pty, "pid", 0)))
                                 active = session._assistant_input_active = tracker.agent is not None
                             tracker.feed(clean_data, active=active)
                         except Exception:

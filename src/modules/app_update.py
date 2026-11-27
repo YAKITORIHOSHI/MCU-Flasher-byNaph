@@ -278,7 +278,8 @@ def update_branch(config: object | None = None, *, environ: dict[str, str] | Non
 
 
 def automatic_updates_enabled(config: object | None = None, *, environ: dict[str, str] | None = None) -> bool:
-    """Honor both Skip Updates and the dedicated source-update opt-out."""
+    """Source updates install by themselves; only the environment's opt-outs and a policy
+    other than "auto" stop them. A ``skip_updates`` value an older version saved is ignored."""
     env = os.environ if environ is None else environ
     if str(env.get("MCU_FLASHER_DISABLE_APP_UPDATE", "")).strip().casefold() in {"1", "true", "yes"}:
         return False
@@ -286,7 +287,7 @@ def automatic_updates_enabled(config: object | None = None, *, environ: dict[str
         return False
     if not isinstance(config, dict):
         return True
-    return config.get("skip_updates") is not True and str(config.get("app_update_policy", "auto")).strip().casefold() in {"", "auto"}
+    return str(config.get("app_update_policy", "auto")).strip().casefold() in {"", "auto"}
 
 
 def _installation_root(root: Path | str) -> Path:
@@ -1034,7 +1035,7 @@ def _stop_git(process: subprocess.Popen) -> None:
 
 
 class _Cancelled(ApplicationUpdateError):
-    """The person or a Skip Updates choice stopped the download; never retried."""
+    """The person stopped the download, or updates are off for this run; never retried."""
 
 
 class _NetworkFailure(ApplicationUpdateError):

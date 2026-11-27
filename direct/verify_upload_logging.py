@@ -61,7 +61,13 @@ class UploadPresentationChecks(unittest.TestCase):
         for info, requested, expected in (
             (UNO, "460800", "115200"), (dict(UNO, upload_speed=57600), "921600", "57600"),
             (dict(UNO, platform="espressif32"), "460800", "460800"),
+            # ESP: only listed speeds reach esptool, the fastest one not above the request.
             (dict(UNO, platform="espressif8266"), "999999", "921600"),
+            (dict(UNO, platform="espressif32"), "1500000", "1500000"),
+            (dict(UNO, platform="espressif32"), "2000000", "2000000"),
+            (dict(UNO, platform="espressif32"), "3000000", "2000000"),
+            (dict(UNO, platform="espressif8266"), "512000", "460800"),
+            (dict(UNO, platform="espressif8266"), "57600", "115200"),
             (dict(UNO, require_upload_port=False, upload_protocol="stlink"), "460800", ""),
             (dict(UNO, backend="arduino-cli"), "460800", ""),
             (dict(UNO, upload_speed=None), "460800", ""),

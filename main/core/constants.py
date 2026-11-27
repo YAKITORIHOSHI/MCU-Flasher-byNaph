@@ -81,16 +81,38 @@ DEFAULT_UPLOAD_SPEED = 460800
 ESP8266_MONITOR_BAUD = 115200
 ESP32_MONITOR_BAUD = 115200
 AVR_MONITOR_BAUD = 9600
-# Exactly the Arduino IDE Serial Monitor's rates (arduino/serial-monitor). Every baud menu
-# in MCU Flasher and Lite offers these and only these; never add a rate to one menu alone.
+# The Arduino IDE Serial Monitor's rates (arduino/serial-monitor).
 ARDUINO_IDE_BAUD_RATES = (
     300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880,
     115200, 230400, 250000, 460800, 500000, 921600, 1000000, 2000000,
 )
+# Every baud menu in MCU Flasher and Lite offers these and only these: the IDE's rates
+# plus 1500000 between its two highest. Never add a rate to one menu alone.
+MONITOR_BAUD_RATES = (
+    300, 600, 750, 1200, 2400, 4800, 9600, 19200, 31250, 38400, 57600, 74880,
+    115200, 230400, 250000, 460800, 500000, 921600, 1000000, 1500000, 2000000,
+)
 MAX_BAUD_RATE = 2000000  # The list's highest rate; a literal, as the native fixtures read it.
-# Upload speeds stop lower: esptool and the USB bridges are not driven past this.
-MAX_UPLOAD_SPEED = 921600
-VALID_BAUD_RATES = set(ARDUINO_IDE_BAUD_RATES)
+VALID_BAUD_RATES = set(MONITOR_BAUD_RATES)
+# ESP serial upload speeds (esptool), the only boards whose upload speed can be chosen:
+# every other board uploads at its own bootloader's rate (Uno: 115200).
+ESP_UPLOAD_SPEEDS = (115200, 230400, 460800, 921600, 1500000, 2000000)
+# Offered, but uncommon: choosing it asks first, since some USB bridges and cables
+# cannot keep up with it.
+UNCOMMON_UPLOAD_SPEED = 2000000
+MAX_UPLOAD_SPEED = 2000000  # The list's highest speed; a literal, as the native fixtures read it.
+
+
+def esp_upload_speed(value: object, fallback: object = DEFAULT_UPLOAD_SPEED) -> str:
+    """One of ESP_UPLOAD_SPEEDS for a saved or requested value, else ``fallback``.
+
+    An older release offered 512000 and smaller rates; none of them stays selected
+    behind a menu that no longer shows it.
+    """
+    text = str(value).strip() if isinstance(value, (int, str)) and not isinstance(value, bool) else ""
+    if text.isascii() and text.isdigit() and len(text) <= 10 and int(text) in ESP_UPLOAD_SPEEDS:
+        return str(int(text))
+    return str(fallback)
 
 
 

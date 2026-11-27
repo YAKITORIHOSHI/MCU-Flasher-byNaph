@@ -2,6 +2,7 @@
 """Verify reverting one AI edit or a whole session, with owned sketches and journals."""
 from __future__ import annotations
 
+from datetime import datetime
 import os
 from pathlib import Path
 import sys
@@ -103,12 +104,17 @@ class Fixture(unittest.TestCase):
         self.addCleanup(manager.shutdown)
         return manager
 
-    def edit(self, name="Blink.ino", before=OLD, after=NEW, prompt="p", *, accept=True, manager=None, **exists):
+    def edit(self, name="Blink.ino", before=OLD, after=NEW, prompt="p", *, accept=True, manager=None, session=None,
+             **exists):
         manager = manager or self.manager
         path = self.root / name
         if exists.get("after_exists", True):
             path.write_text(after, encoding="utf-8", newline="")
-        manager.queue_ai_edit_snapshot(path, before, after, prompt_context={"id": prompt, "prompt": prompt}, **exists)
+        context = {"id": prompt, "prompt": prompt}
+        if session:
+            context.update(session=session, sessionStarted=1795000000.0 + len(session), source="assistant",
+                           sourceVersion=1, agent="claude")
+        manager.queue_ai_edit_snapshot(path, before, after, prompt_context=context, **exists)
         if accept:
             self.assertTrue(manager.accept_ai_edit(str(path))["success"])
         return path, manager.get_ai_changes()[-1]["id"]
@@ -254,6 +260,25 @@ class ManagerChecks(Fixture):
             ai_revert.read_edit(root, "archive:1-1-26/session1/edit1.txt")
         self.assertFalse([item for item in self.manager.list_ai_sessions() if item["id"] == "1-1-26/session1"])
 
+    def test_saved_edits_keep_their_assistant_session(self):
+        self.edit("A.ino", prompt="one", session="s1")
+        self.edit("B.cpp", "int a;\n", "int b;\n", prompt="two", session="s2")
+        self.edit("C.h", "int c;\n", "int d;\n", prompt="three")
+        self.manager.shutdown()
+        self.manager = self.open()
+        [saved] = self.manager.list_ai_sessions()
+        found = {Path(edit["path"]).name: (edit["sessionId"], edit["sessionAgent"], edit["sessionSource"])
+                 for edit in saved["edits"]}
+        self.assertEqual(found, {"A.ino": ("s1", "claude", "assistant"), "B.cpp": ("s2", "claude", "assistant"),
+                                 "C.h": ("", "", "")})
+        started = next(edit["sessionStarted"] for edit in saved["edits"] if edit["sessionId"] == "s1")
+        self.assertEqual(datetime.fromisoformat(started).timestamp(), 1795000002.0)
+        # A value with a line break cannot start a header of its own.
+        store = self.manager._ai_backup_store
+        text = store._format_record({"reviewId": "r", "path": "x.ino", "aiSession": store._header_text("a\nStatus: rejected")})
+        self.assertEqual(ai_revert.parse_edit_header(text)["status"], "pending")
+        self.assertEqual(ai_revert.parse_edit_header(text)["sessionId"], "a Status: rejected")
+
     def test_record_text_round_trips_exactly(self):
         store = self.manager._ai_backup_store
         before = "line\r\n<<< BEFORE CONTENT >>>\n\n"
@@ -324,6 +349,27 @@ class PanelChecks(BridgeChecks):
         self.addCleanup(panel.close)
         return panel
 
+    def test_saved_assistant_sessions_are_listed_as_sessions(self):
+        self.edit("A.ino", prompt="one", session="s1")
+        self.edit("B.cpp", "int a;\n", "int b;\n", prompt="two", session="s2")
+        self.edit("C.h", "int c;\n", "int d;\n", prompt="three")
+        self.manager.shutdown()
+        self.manager = self.open()
+        panel = self.panel(self.backend())
+        archive = panel._archive_item()
+        archive.setExpanded(True)
+        until(lambda: panel._archive is not None, "saved sessions")
+        rows = [archive.child(i) for i in range(archive.childCount())]
+        texts = [row.text(0) for row in rows]
+        self.assertEqual(len(rows), 3, texts)
+        self.assertEqual(sum(text.startswith("Claude session · ") for text in texts), 2, texts)
+        self.assertTrue(any(" · Session " in text and text.endswith("(1 edit)") for text in texts), texts)
+        for row in rows:
+            self.assertEqual(row.childCount(), 1)
+            menu = panel._session_menu(row)
+            self.addCleanup(delete_on_gui_thread, menu)
+            self.assertEqual([action.text() for action in menu.actions()], ["Revert session (1 edit)…"])
+
     def test_edit_session_and_saved_session_can_each_be_chosen(self):
         self.edit(prompt="one")
         self.manager.shutdown()
@@ -333,7 +379,15 @@ class PanelChecks(BridgeChecks):
         self.assertEqual(panel._revert.text(), "Revert edit")
         self.assertTrue(panel._revert.isEnabled())
         self.assertEqual(panel._revert_targets()[1], "Revert this AI edit in Other.cpp")
-        group = panel._tree.topLevelItem(0)
+        # Neither edit came from an assistant session of the app: one section, two prompts.
+        section = panel._tree.topLevelItem(0)
+        self.assertEqual((section.text(0), section.childCount()), ("Other changes", 2))
+        section_menu = panel._session_menu(section)
+        self.addCleanup(delete_on_gui_thread, section_menu)
+        self.assertEqual([action.text() for action in section_menu.actions()], ["Revert session (2 edits)…"])
+        group = section.child(0)
+        self.assertEqual(group.text(0), "two")
+        self.assertFalse(section.flags() & Qt.ItemFlag.ItemIsSelectable, "A section row is never the selection")
         self.assertFalse(group.flags() & Qt.ItemFlag.ItemIsSelectable, "A group row is never the selection")
         shown, chosen = panel._after.toPlainText(), panel._selected_id()
         panel._tree.setCurrentItem(group)
@@ -346,7 +400,7 @@ class PanelChecks(BridgeChecks):
         self.assertTrue(group.isExpanded(), "and the next opens it")
         menu = panel._session_menu(group)
         self.addCleanup(delete_on_gui_thread, menu)
-        self.assertEqual([action.text() for action in menu.actions()], ["Revert session (1 edit)…"])
+        self.assertEqual([action.text() for action in menu.actions()], ["Revert prompt (1 edit)…"])
         opened = []
         with patch.object(panel, "_open_revert", side_effect=lambda ids, title: opened.append((ids, title))):
             menu.actions()[0].trigger()

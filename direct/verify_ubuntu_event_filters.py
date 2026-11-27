@@ -318,11 +318,12 @@ class UbuntuEventFilterChecks(unittest.TestCase):
     def test_long_output_clear_and_deferred_document_destruction_do_not_corrupt_heap(self):
         # This exact sequence used to release retained QTextCursor objects from
         # a scrollbar signal while Qt's finishEdit was still using them. The
-        # next syntax completion exposed the resulting native heap corruption.
+        # next document work exposed the resulting native heap corruption; the
+        # retained-anchor check is that work now that syntax checks only compile.
         result = subprocess.run([
             sys.executable, "-B", str(ROOT / "direct/verify_performance.py"), "--no-finalize",
             "PerformanceChecks.test_streaming_display_memory_and_no_newline",
-            "PerformanceChecks.test_syntax_completion_is_on_gui_thread_and_can_repeat",
+            "PerformanceChecks.test_log_follow_retained_anchor_selection_and_eviction",
         ], cwd=ROOT, env=os.environ.copy(), text=True, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout)

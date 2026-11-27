@@ -144,9 +144,10 @@ These pure calculations do not establish those missing host policies.
 `main/core/target_profile.py`: whether a port is required, serial upload baud,
 minimal upload configuration, and interface readiness. It retains all existing
 programmer protocols, explicit manifest overrides, dynamic board identities,
-non-ESP board defaults and the ESP request cap of 921600. Arduino CLI and native
+non-ESP board defaults and the ESP upload speeds: a request becomes the fastest
+listed speed not above it (115200 to 2000000). Arduino CLI and native
 programmer paths do not acquire an invented serial baud. The comparison harness
-covers 13,039 cases, including explicit structural refusals for non-object target
+covers 15,244 cases, including explicit structural refusals for non-object target
 inputs and truthy non-string INI protocol values. Those refusals differ from
 Python's object representations intentionally and remain a compatibility boundary.
 

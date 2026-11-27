@@ -8,7 +8,20 @@ use serde_json::{Map, Value};
 use std::fmt;
 
 /// Existing application policy, main/core/constants.py::MAX_UPLOAD_SPEED.
-pub const MAX_BAUD_RATE: u64 = 921_600;
+pub const MAX_BAUD_RATE: u64 = 2_000_000;
+
+/// main/core/constants.py::ESP_UPLOAD_SPEEDS: the only speeds an ESP upload uses.
+pub const ESP_UPLOAD_SPEEDS: [u64; 6] = [115_200, 230_400, 460_800, 921_600, 1_500_000, 2_000_000];
+
+/// The fastest listed ESP upload speed not above the request (the slowest below them all).
+fn esp_upload_speed(requested: u64) -> u64 {
+    ESP_UPLOAD_SPEEDS
+        .iter()
+        .copied()
+        .filter(|speed| *speed <= requested)
+        .max()
+        .unwrap_or(ESP_UPLOAD_SPEEDS[0])
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TargetTransportError {
@@ -95,7 +108,7 @@ pub fn serial_upload_speed(
         fields.get("upload_speed").unwrap_or(&Value::Null)
     };
     Ok(match baud_value(value) {
-        Some(speed) => (if esp { speed.min(MAX_BAUD_RATE) } else { speed }).to_string(),
+        Some(speed) => (if esp { esp_upload_speed(speed) } else { speed }).to_string(),
         None => String::new(),
     })
 }
@@ -298,13 +311,26 @@ mod tests {
             json!({"platform":"espressif32","upload_speed":115200,"upload_protocol":"esptool"});
         assert_eq!(
             serial_upload_speed(&esp, &json!(3_000_000)).unwrap(),
-            "921600"
+            "2000000"
         );
         assert_eq!(
             upload_configuration(&esp, &json!(3_000_000)).unwrap(),
-            "upload_protocol = esptool\nupload_speed = 921600\n"
+            "upload_protocol = esptool\nupload_speed = 2000000\n"
         );
         assert_eq!(serial_upload_speed(&esp, &json!("")).unwrap(), "");
+        // Only listed speeds reach esptool: the fastest one not above the request.
+        for (requested, expected) in [
+            (999_999, "921600"),
+            (1_500_000, "1500000"),
+            (512_000, "460800"),
+            (57_600, "115200"),
+        ] {
+            assert_eq!(
+                serial_upload_speed(&esp, &json!(requested)).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(*ESP_UPLOAD_SPEEDS.last().unwrap(), MAX_BAUD_RATE);
         let cli = json!({"platform":"espressif32","backend":"arduino-cli"});
         assert_eq!(serial_upload_speed(&cli, &json!(115200)).unwrap(), "");
         let usb = json!({"platform":"espressif32","upload_protocol":"dfu"});
@@ -315,8 +341,8 @@ mod tests {
     fn python_numeric_text_and_boolean_identity_boundaries_are_retained() {
         let esp = json!({"platform":"ESPRESSIF32","upload_protocol":"esptool"});
         assert_eq!(
-            serial_upload_speed(&esp, &json!("\u{1c}0921601\u{1f}")).unwrap(),
-            "921600"
+            serial_upload_speed(&esp, &json!("\u{1c}02000001\u{1f}")).unwrap(),
+            "2000000"
         );
         assert_eq!(
             upload_configuration(&esp, &json!(115200)).unwrap(),

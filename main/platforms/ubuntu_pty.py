@@ -8,8 +8,6 @@ class PromptObserver:
     def __init__(self, project, *, active=None, source="cli", agent=None):
         from src.modules.ai_prompt_context import PromptInputTracker
         self._tracker = PromptInputTracker(project, source=source, agent=agent)
-        self._source = source
-        self._agent = agent
         self._active = active
         self._known_active = False
         self._condition = threading.Condition()
@@ -38,7 +36,7 @@ class PromptObserver:
             self._condition.notify()
 
     def _run(self):
-        from src.modules.ai_prompt_context import assistant_process_agent, PromptInputTracker
+        from src.modules.ai_prompt_context import assistant_process
         while True:
             with self._condition:
                 self._condition.wait_for(lambda: self._closed or self._pending)
@@ -47,14 +45,15 @@ class PromptObserver:
                 data, pid, size = self._pending.popleft()
                 self._bytes -= size
                 if self._reset:
-                    self._tracker = PromptInputTracker(self._tracker.project, source=self._source, agent=self._agent)
+                    self._tracker.reset()
                     self._reset = False
             try:
                 active = self._active
                 if active is None:
                     if "\r" in data or "\n" in data:
-                        # A terminal names the agent it runs by its executable.
-                        self._tracker.agent = assistant_process_agent(pid)
+                        # A terminal names the agent it runs by its executable; each
+                        # run of an agent is a session of its own.
+                        self._tracker.follow(*assistant_process(pid))
                         self._known_active = self._tracker.agent is not None
                     active = self._known_active
                 if not self._closed:

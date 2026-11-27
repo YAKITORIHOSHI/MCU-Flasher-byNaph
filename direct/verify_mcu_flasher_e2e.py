@@ -804,13 +804,11 @@ class TestTier2_R5_Bootstrap_Packaging_Boundaries(BaseE2ETestCase):
         res = check_for_update(ROOT, timeout=0.1, opener=failing_opener)
         self.assertIn(res.status, ("unavailable", "skipped"))
 
-    def test_r5_boundary_skip_updates_config_honored(self):
-        """skip_updates=True suppresses update checks."""
-        from src.modules.app_update import update_skip_reason
-        mock_cfg = {"skip_updates": True}
-        with patch("src.modules.app_update._read_json", return_value=mock_cfg):
-            reason = update_skip_reason(ROOT)
-            self.assertIsNotNone(reason)
+    def test_r5_boundary_saved_skip_updates_is_ignored(self):
+        """Updates are always on: an old saved skip_updates no longer stops them; the environment can."""
+        from src.modules.app_update import automatic_updates_enabled
+        self.assertTrue(automatic_updates_enabled({"skip_updates": True}, environ={}))
+        self.assertFalse(automatic_updates_enabled({}, environ={"MCU_FLASH_GUI_SKIP_UPDATES": "1"}))
 
     def test_r5_boundary_release_packaging_excludes_git_and_temp(self):
         """build_release EXCLUDED set includes git, temp, and virtual environments."""

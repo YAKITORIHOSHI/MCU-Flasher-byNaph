@@ -17,7 +17,8 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QPoint, Qt, Signal
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QTabWidget
 from main.qt import posix_ai_panel as ai
 from main.qt import posix_terminal_panel as terminal
@@ -172,7 +173,8 @@ class DedicatedAssistantChecks(unittest.TestCase):
         self.assertEqual(panel._state, "choose")
         self.assertIs(panel._stack.currentWidget(), panel._chooser)
         self.assertEqual(FakePty.instances, [], "Opening the assistant only offers the list")
-        panel._chooser.primary.click()
+        # One click on the agent starts it; there is no Start button to press after it.
+        QTest.mouseClick(panel._chooser.row("opencode"), Qt.MouseButton.LeftButton, pos=QPoint(30, 20))
         self.wait_for(lambda: panel._session is not None)
         session, view = panel._session, panel._view
         session.start()
@@ -262,7 +264,7 @@ class DedicatedAssistantChecks(unittest.TestCase):
         self.assertTrue(panel._chooser.isEnabled())
         panel._chooser.select("codex")
         panel._chooser.set_installed({"codex": "/fixture/codex"})
-        panel._chooser.primary.click()
+        panel._chooser.row("codex").click()
         self.wait_for(lambda: panel._session is not None)
         self.assertEqual(panel._session.executable, "/fixture/codex")
         self.assertFalse(panel._chooser.isEnabled(), "A covered list must not take keys")
@@ -595,7 +597,7 @@ while True:
                 panel.show()
                 panel.ensure_started()
             assert panel._state == "choose", "Opening the assistant offers the list"
-            panel._chooser.primary.click()
+            panel._chooser.row("opencode").click()      # One click on the agent starts it.
             wait_for(lambda: panel._state == "active", "rendered OpenCode fixture")
             session, view = panel._session, panel._view
             first = session._child

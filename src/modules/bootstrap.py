@@ -119,8 +119,6 @@ BOOTSTRAP_CONFIG_FILE = (
     else SCRIPT_DIR / "bootstrap_config.json"
 )
 _ORIGINAL_PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
-# Updates are on unless Skip Updates is chosen; they never ask first.
-DEFAULT_SKIP_UPDATES = False
 _BOOTSTRAP_LOG_LOCK = threading.Lock()
 _BOOTSTRAP_LOG_FILE = (
     SCRIPT_DIR
@@ -259,33 +257,13 @@ def save_bootstrap_config(cfg: dict) -> bool:
 def _update_check_skip_reason(gui=None) -> str | None:
     """Return the active update-skip reason, or None when checks are enabled.
 
-    An explicit environment setting is intentionally strongest because it is
-    useful for offline deployments. Otherwise the live checkbox is the source
-    of truth for this run; this lets an unchecked control recover from an old
-    or unwritable JSON value instead of silently staying disabled.
+    Updates always install by themselves. Only an explicit environment setting,
+    for offline deployments, skips them; a ``skip_updates`` value an older
+    version saved is ignored, since nothing could turn it off again.
     """
     env_value = os.environ.get("MCU_FLASH_GUI_SKIP_UPDATES", "").strip()
     if env_value.lower() in ("1", "true", "yes"):
         return "MCU_FLASH_GUI_SKIP_UPDATES is enabled"
-
-    active_gui = gui if gui is not None else _gui
-    if active_gui is not None:
-        skip_val = getattr(active_gui, "_skip_updates", None)
-        if isinstance(skip_val, bool):
-            if skip_val:
-                return "the Skip Updates checkbox is selected"
-            return None
-        skip_var = getattr(active_gui, "_skip_updates_var", None)
-        if skip_var is not None:
-            try:
-                if skip_var.get():
-                    return "the Skip Updates checkbox is selected"
-                return None
-            except Exception:
-                pass
-
-    if load_bootstrap_config().get("skip_updates", DEFAULT_SKIP_UPDATES):
-        return "bootstrap_config.json has skip_updates set to true"
     return None
 
 
@@ -1418,8 +1396,6 @@ class BootstrapGUI:
         self._console_step_failed = False
         self._theme_mode = _BOOTSTRAP_THEME_MODE
 
-        cfg = load_bootstrap_config()
-        self._skip_updates = cfg.get("skip_updates", DEFAULT_SKIP_UPDATES)
 
         from src.modules.bootstrap_dispatch import BootstrapDispatcher
         self._signals = BootstrapDispatcher()
@@ -2124,14 +2100,15 @@ def run_update_checks():
     """
     Check all managed utilities for updates, using a small bounded worker pool.
 
-    Startup enters a distinct update stage and then honors the Skip Updates
-    policy. The work uses at most three network threads and reads the target
-    environment's fresh metadata in process, without importing its packages or
-    spawning a process for every version check.
+    Startup enters a distinct update stage. The work uses at most three
+    network threads and reads the target environment's fresh metadata in
+    process, without importing its packages or spawning a process for every
+    version check.
 
     Updates it finds are installed straight away, without asking: they are
-    verified versions of components the app already uses. Skip Updates is the
-    only opt-out and is rechecked before each install.
+    verified versions of components the app already uses, and the app offers
+    no way to turn them off. Only MCU_FLASH_GUI_SKIP_UPDATES, for offline
+    deployments, skips them; it is rechecked before each install.
     """
     if _gui:
         _gui.root.after(0, _gui.log_section, "Checking for updates")
@@ -2223,8 +2200,9 @@ def run_update_checks():
     # ── Display results (always shows per-package summary block) ──
     updates_found = _render_update_summary_block(results)
 
-    if _update_check_skip_reason():
-        warn("Optional updates skipped by the current Skip Updates choice.")
+    skip_reason = _update_check_skip_reason()
+    if skip_reason:
+        warn(f"Optional updates skipped: {skip_reason}.")
         return "skipped"
 
     if not updates_found:
@@ -2241,15 +2219,17 @@ def run_update_checks():
     cli_updates    = [r for r in updates_found if r["name"] == "arduino-cli"]
     python_updates = [r for r in updates_found if r["name"] == "python"]
 
-    # Updates install without a question. Skip Updates is the only opt-out, and a
-    # change to it during the installs below still stops the remaining ones.
-    if _update_check_skip_reason():
-        warn("Optional updates skipped by the current Skip Updates choice.")
+    # Updates install without a question. Only the environment's opt-out skips
+    # them, and it is read again before each install below.
+    skip_reason = _update_check_skip_reason()
+    if skip_reason:
+        warn(f"Optional updates skipped: {skip_reason}.")
         return "skipped"
     status(f"Installing {len(updates_found)} update{'' if len(updates_found) == 1 else 's'}…")
     for r in pip_updates:
-        if _update_check_skip_reason():
-            warn("Remaining optional updates skipped by the current Skip Updates choice.")
+        skip_reason = _update_check_skip_reason()
+        if skip_reason:
+            warn(f"Remaining optional updates skipped: {skip_reason}.")
             return "skipped"
         status(f"Upgrading {r['name']} {r['installed']} → {r['latest']}...")
         if _pip_upgrade(r["name"]):
@@ -11439,6 +11419,17 @@ def _run_setup_in_thread(gui: BootstrapGUI):
         # not one Python subprocess per package. The skip policy and any
         # override are logged inside run_update_checks().
         run_update_checks()
+
+        # ── Start menu entry (Windows) ───────────────────────────────
+        if sys.platform == "win32":
+            # Start and Windows Search then find the app by name wherever its folder is;
+            # each run writes it again, so a moved folder is followed. Never a reason to stop.
+            try:
+                from src.modules.start_menu import ensure_entry
+                entry_ok, entry_message = ensure_entry(SCRIPT_DIR)
+            except Exception as exc:
+                entry_ok, entry_message = False, f"The Start menu entry could not be written: {exc}"
+            gui.root.after(0, lambda: gui.log_ok(entry_message) if entry_ok else gui.log_warn(entry_message))
 
         # ── Summary & launch ─────────────────────────────────────────
         def _finish():

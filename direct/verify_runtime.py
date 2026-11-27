@@ -921,14 +921,17 @@ def qt_smoke(app, render_dir=None):
             settings = SettingsDialog(backend, window)
             assert settings.findChild(QWidget, "editor-engine-label").text() == "Offline Monaco"
             assert not hasattr(settings, "editor_combo"), "Settings must not offer an unused editor engine"
+            from main.core.theme import DEFAULT_THEME
             with patch.object(settings, "_save_and_apply") as save, patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
-                settings.theme_combo.setCurrentText(settings._theme_rev["light"])
+                # Reset Defaults returns any other theme to the default one (Frost White).
+                other = next(theme for theme in settings._theme_rev if theme != DEFAULT_THEME)
+                settings.theme_combo.setCurrentText(settings._theme_rev[other])
                 settings._reset_defaults()
-                assert settings._theme_map[settings.theme_combo.currentText()] == "default"
+                assert settings._theme_map[settings.theme_combo.currentText()] == DEFAULT_THEME
                 save.assert_called_once()
                 settings._last_manual_theme = "unknown-theme"
                 settings._on_theme_system_toggled(False)
-                assert settings._theme_map[settings.theme_combo.currentText()] == "default"
+                assert settings._theme_map[settings.theme_combo.currentText()] == DEFAULT_THEME
             settings.close()
             if render_dir:
                 render_dir.mkdir(parents=True, exist_ok=True)

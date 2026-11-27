@@ -54,6 +54,16 @@ evidence, not physical Pi USB/graphics verification. Keep Ubuntu's Click
 deprecated parsing API. Existing incompatible versions must enter Bootstrap
 repair; do not suppress deprecations or change Windows dependency ranges.
 
+The AI Assistant's agent list starts an agent on one click; right-click offers
+Uninstall only for installs `src/modules/agent_removal.py` recognizes, never while
+the agent runs, keeping its settings and sign-ins, and the circled i opens a
+disclaimer panel over the list. AI Changes gives each AI session its own section.
+Monitor baud menus are the Arduino IDE's rates plus 1500000; ESP uploads offer
+115200 to 2000000 and ask before 2000000. Windows Setup writes a Start menu entry
+(`src/modules/start_menu.py`). Updates are always on, with no Skip Updates box.
+Following logs (`main/qt/log_follow.py`) stay at the end through resizes. Verify
+with `verify_ai_agents`, `verify_agent_maintenance`, `verify_ai_changes`,
+`verify_baud_rates`, `verify_start_menu` and `verify_controls`.
 
 Cloud folder safety must reject Windows junctions on Python 3.11 too, using
 the lstat mount-point tag only when `Path.is_junction` is unavailable. Preserve
@@ -239,7 +249,7 @@ MCU Flasher by Naph/
 │   │   └── xterm/                   # xterm.js assets for terminal/AI panels
 │   │
 │   └── dbs/                         # Persistent JSON Databases & Notification Stores
-│       ├── bootstrap_config.json    # Bootstrap update/skip config
+│       ├── bootstrap_config.json    # Bootstrap settings (updates are always on)
 │       ├── arduino_browser_settings.json # Board browser user preferences
 │       ├── arduino_cli_path.txt     # Cached Arduino CLI binary path
 │       ├── dbs_notif.json           # Global notification fallback store
