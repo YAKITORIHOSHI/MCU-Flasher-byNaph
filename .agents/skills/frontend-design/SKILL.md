@@ -160,8 +160,8 @@ including older stored cautions; never infer severity from an empty prefix.
 Log status marks paint beside literal text and never enter copied journals.
 Preserve user Unicode in sketches and serial/terminal input/output.
 Verify `direct/verify_svg_icons.py` and `--native-tk`, plus theme, panel, build,
-setup, downloader and editor fixtures. Native CI covers Windows Qt ranges and
-Ubuntu at 100/125/150/175/200% scale; Linux mocks are not Windows execution.
+setup, downloader and editor fixtures. Windows Qt ranges and native Ubuntu at
+100/125/150/175/200% scale need those hosts (no CI); Linux mocks are not Windows execution.
 
 ## Native browser material
 

@@ -132,4 +132,4 @@ launcher permissions inside the ZIP.
   physical hardware.
 - macOS builds are not notarized; the first open needs Control-click → Open.
 - Keyboard handoff on native Windows 11 has so far been verified only on hosted
-  Windows CI.
+  Windows test runners, not yet on a Windows 11 PC.

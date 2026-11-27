@@ -14,7 +14,8 @@ installed-library declarations before a first compile. Native Windows 11
 keyboard-routing verification remains pending until tested there.
 Auto-Save delay must retain a full-width native text editor without spin-button
 hit areas; styled `NoButtons` alone can hide its text. Verify mouse editing and
-saved values in every theme. Keep app and CI work on `main`.
+saved values in every theme. Keep app work on `main`; the repository has no CI
+(its workflows were removed for good on 2026-11-27), so never add one back.
 
 Use this skill when developing, debugging, or extending the **MCU Flash GUI** desktop application (`mcu_flash_gui.py`, `main/mcu_flash_gui.py`, `main/qt/`, `main/web_bridge.py`) and its supporting execution ecosystem on Windows 10/11.
 
@@ -46,7 +47,7 @@ the existing Bash Bootstrap path. `build_launcher.sh` rebuilds those filenames
 by default, accepts an explicit output path and rejects Windows `.exe` outputs.
 The Bash fallback and desktop shortcut remain available. Keep Windows paths
 and dependency ranges unchanged. See canonical guidance for the narrow ARM Qt5
-bridge, copied-runtime repair, ELF checks and native ARM64 CI. Source `afe091a`
+bridge, copied-runtime repair, ELF checks and native ARM64 checks. Source `afe091a`
 verified the shipped native executables through fresh Bootstrap, warm GUI launch
 and ESP32 compilation on both Ubuntu LTS ARM64 runners. This is hosted CPU
 evidence, not physical Pi USB/graphics verification. Keep Ubuntu's Click
@@ -79,8 +80,8 @@ cmd_directory and combo_popups verifiers for the exact contracts.
 
 ## Platform Scope
 
-For native UI layout verification, use `direct/verify_ui_layout.py` and
-`.github/workflows/ui-layout.yml`. Include shown/hidden validation and long
+For native UI layout verification, use `direct/verify_ui_layout.py`
+(there is no CI workflow any more). Include shown/hidden validation and long
 feedback in Developer Access create/edit, login and connection forms. Field
 contents remain top-aligned; category feedback spans the group below them.
 Follow the canonical skill's queued measurement and bounded reading rules.

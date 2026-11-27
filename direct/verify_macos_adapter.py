@@ -2,8 +2,8 @@
 """macOS host adapters, with fabricated binaries and fake system tools only.
 
 Runs on any POSIX host and never downloads, installs, opens a dialog, reads a real
-Keychain or starts the application. other-platforms.yml runs the real first launch
-on Intel and Apple Silicon Macs.
+Keychain or starts the application. The real first launch needs an Intel or Apple
+Silicon Mac; no CI runs it any more.
 """
 from __future__ import annotations
 

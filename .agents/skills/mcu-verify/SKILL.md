@@ -1,9 +1,16 @@
 ---
 name: mcu-verify
-description: "Verify serial unplug and replug, one row per board, the assistant list, AI edit reverts, Windows component sources, release installer selection and prompts, Lite's remembered window, picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native CI fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native CI checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
+description: "Verify serial unplug and replug, one row per board, the assistant list, AI edit reverts, Windows component sources, release installer selection and prompts, Lite's remembered window, picker action visibility through resize, sketch routing, ticket field alignment, settled native editor viewports, SMB release packaging and source saves, automatic Lite board targets, editable Auto-Save geometry, portable native fixtures, deleted-view cleanup, Bootstrap console encoding and shared main/Lite packages, conservative cleanup, progress replacement, Bootstrap routing, resources, sample viewing and short ticket dashboards. Run MCU Flasher hardware-free and isolated native checks, including Lite multi-window/port-sharing, modal dialog, renderer/cancellation/visibility gates, keyboard routing, semantic navigation, pairing, save races, cross-device ticket deletion and installation; distinguish regressions from baseline failures and preserve Windows 11 verification limits. Verify the quick Bootstrap board stage and first-compile board tools without downloads."
 ---
 
 # Verify MCU Flasher changes
+
+**No CI.** The owner removed the GitHub Actions workflows for good on 2026-11-27: nothing
+runs on push or pull request, so verify locally, one verifier at a time, and never add a
+workflow back. Mentions of CI runs, runners or `.yml` files below are history. What only
+those runners did stays unverified until tried on a real machine: a GUI first launch under
+Xvfb, native Windows, macOS and ARM64 hosts, and the `--native` modes, which still refuse to
+run outside an isolated Actions runner so that they never open windows on a desktop.
 
 New in the sweep: `verify_port_replug` (hotplug, handle ownership and noise),
 `verify_board_labels`, `verify_windows_components` (mocked hosts; native Windows
@@ -197,7 +204,7 @@ to end before sampling resting pixels; the monitor matrix waits for compact tab
 reveals and allows only the tab strip itself to change width. After each resize
 or assistant toggle it waits, within a bound, until the workspace stops moving and
 its fit timers are idle: a fixed delay was too short on the Intel macOS runner.
-Windows CI at 200% clamps the project selector below its advisory minimum; only
+Windows at 200% clamps the project selector below its advisory minimum; only
 the Cloud scroll viewport may yield there. Timer tests keep 150 ms of margin. Half-height window
 requests must be refused (three quarters is the minimum).
 
@@ -215,7 +222,8 @@ read-only previews and acknowledged-save races. Installation checks mock all
 runtime/package work and menu publication. No live install or account is used.
 The POSIX cold-setup fixture embeds its exact owned sandbox home as a fallback
 for later host verifiers that reuse the copy without its launch environment.
-editor-improvements.yml runs these checks on Windows and Ubuntu. The explicit
+The removed editor-improvements workflow ran these checks on Windows and Ubuntu; run them
+locally now. The explicit
 verify_native_input.py --native gate creates only owned fixture windows and
 injects keys on an isolated Actions runner, checking actual foreign-process
 keyboard queues. Record the runner OS; Windows Server leaves Windows 11 pending.
@@ -233,7 +241,8 @@ The runner removes `DISPLAY` and `WAYLAND_DISPLAY`. When running one verifier di
 on a desktop, do the same with `env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen`:
 refusal and notice fixtures use deliberately wrong release data and would otherwise
 open real dialogs on the user's screen.
-`--native` is restricted to isolated GitHub Actions runners. It retains that
+`--native` is restricted to isolated GitHub Actions runners, so with CI removed it does not
+run. It retains that
 runner's native display when comparing a platform-specific failure with the
 same baseline; it must never be used to open fixtures on a developer's desktop.
 
@@ -266,7 +275,7 @@ failure pre-existing. Name fragments select verifiers by file name.
   The SMB fixture owns its share and skips explicitly if the runner cannot create it.
 - Host admission or setup: `ubuntu_release linux_distributions macos_adapter launcher_folder`.
   `direct/verify_ubuntu_first_run.py --execute` is the real cold-start proof on any POSIX
-  host, and `other-platforms.yml` runs it on real Fedora, Mint and macOS.
+  host; run it on a real Fedora, Mint or macOS machine, since no CI does any more.
 - Editor changes: `editor` plus the JavaScript `direct/verify_editor_*.js` checks.
 
 ## Reading results
@@ -278,5 +287,5 @@ failure pre-existing. Name fragments select verifiers by file name.
 - No verifier may open a port, install anything, touch live caches or open a real
   window. Windows, macOS, Fedora, Mint and ARM results need their own hosts; a pass
   here does not qualify them. `verify_terminal_startup` is Windows-only.
-- `verify_ubuntu_launcher` needs the root launcher CI builds with
+- `verify_ubuntu_launcher` needs the root launcher built first with
   `direct/ubuntu/build_launcher.sh`; remove it afterward.

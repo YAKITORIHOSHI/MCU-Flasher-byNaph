@@ -1,5 +1,8 @@
 # Ubuntu setup and platform behavior
 
+> The repository's CI was removed on 2026-11-27. Mentions of CI jobs and workflows below
+> record how things were verified before then; today they need a real machine.
+
 ## Persistent per-user installation
 
 Ubuntu Bootstrap copies verified application sources to

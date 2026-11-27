@@ -1,5 +1,8 @@
 # Rust/Tauri migration prototype
 
+> The repository's CI was removed on 2026-11-27. Mentions of CI jobs and workflows below
+> record how things were verified before then; today they need a real machine.
+
 The final UI requirement changed on 20 October 2026: native Rust widgets with
 Monaco and xterm embedded, plus a Rust application backend. This Tauri web shell
 is retained as a prototype and service/contract reference; it does not fulfill

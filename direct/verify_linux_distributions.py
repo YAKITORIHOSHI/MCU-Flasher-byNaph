@@ -2,7 +2,7 @@
 """Linux distribution adapters, with fake package managers only.
 
 Never installs a package, authenticates, opens a dialog or starts the application.
-Real Fedora and Linux Mint userlands run the same code in other-platforms.yml.
+Real Fedora and Linux Mint userlands need a real machine; no CI runs them any more.
 """
 from __future__ import annotations
 

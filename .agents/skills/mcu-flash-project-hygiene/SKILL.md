@@ -355,7 +355,7 @@ no AI agent downloaded and no dependency prepared.
    `direct/verify_release_sources.py`: no `.ai-agents`, environments, settings or logs.
 
 Push and publish only after it passes, and say what could not run here (the GUI
-first run needs Xvfb, which only CI has).
+first run needs a display or Xvfb; this machine has neither, and there is no CI).
 
 ## File distribution conventions
 
@@ -416,7 +416,7 @@ The public `LAUNCHER/` folder contains `WINDOWS.exe`, `UBUNTU`, `UBUNTU_ARM64`,
 GUI PE headers. Fedora and Mint entries dispatch to the same guarded `run.sh`, and
 `MacOS.command` to `direct/macos/run.sh`; keep it `#!/bin/bash` and bash 3.2 compatible.
 Rebuild every Linux entry on its native CPU from the same source and commit those
-bytes together; `other-platforms.yml` retains them as `launcher-binaries-*`. Windows
+bytes together. Windows
 ARM64 stays refused. Record per-host evidence in `audit/PLATFORM_VERIFICATION.md`;
 USB upload on Mint, Fedora and macOS is unqualified. The shipping GUI
 is Python/PySide6; native Rust preview receipts do not expand shipping support.
